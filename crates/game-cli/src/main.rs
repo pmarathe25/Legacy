@@ -28,7 +28,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             _ => return Err(format!("unknown option {arg}").into()),
         }
     }
-    let mut sim = Simulation::new(&scenario, seed, execution.clone())?;
+    let sim = Simulation::new(&scenario, seed, execution.clone())?;
+    let session = game_sim::session::Session::spawn(sim)?;
     let interactive = script.is_none() && io::stdin().is_terminal();
     let reader: Box<dyn BufRead> = if let Some(path) = script {
         Box::new(io::BufReader::new(std::fs::File::open(path)?))
@@ -46,9 +47,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
         if !line.trim_start().starts_with('#') {
-            match game_cli::execute(&mut sim, &line, &execution) {
-                Ok(output) if !output.is_empty() => println!("{output}"),
-                Ok(_) => {}
+            match game_cli::execute_session(&session, &line) {
+                Ok(game_cli::SessionOutput::Text(output)) => {
+                    if !output.is_empty() {
+                        println!("{output}");
+                    }
+                }
+                Ok(game_cli::SessionOutput::Advancing(handle)) if interactive => {
+                    std::thread::spawn(move || match handle.wait() {
+                        Ok(result) => println!(
+                            "{}",
+                            serde_json::to_string(&result).expect("advance result JSON")
+                        ),
+                        Err(error) => eprintln!("error: {error}"),
+                    });
+                }
+                Ok(game_cli::SessionOutput::Advancing(handle)) => {
+                    println!("{}", serde_json::to_string(&handle.wait()?)?)
+                }
                 Err(error) if interactive => eprintln!("error: {error}"),
                 Err(error) => return Err(error),
             }

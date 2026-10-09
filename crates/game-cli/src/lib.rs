@@ -8,30 +8,16 @@ pub fn execute(
     execution: &Execution,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let words: Vec<_> = line.split_whitespace().collect();
+    if let Some(command) = parse_game_command(&words)? {
+        return submit(sim, command);
+    }
     match words.as_slice() {
         [] => Ok(String::new()),
         ["status"] => Ok(serde_json::to_string(&sim.observe())?),
+        ["combat"] => Ok(serde_json::to_string(&sim.observe().combat)?),
+        ["pause"] => Ok(serde_json::to_string(&sim.observe())?),
         ["debug"] => Ok(format!("DEBUG OMNISCIENT {}", serde_json::to_string(sim.canonical_state())?)),
         ["run", duration] => Ok(serde_json::to_string(&sim.advance(parse_duration(duration)?)?)?),
-        ["move", area] => {
-            let receipt = sim.submit(Submission { caller_sequence: sim.next_caller_sequence()?, command: Command::Move { destination: AreaId(area.parse()?) } })?;
-            Ok(serde_json::to_string(&receipt)?)
-        }
-        ["engage", target] => submit(sim, Command::Engage { target: PersonId(target.parse()?) }),
-        ["combat"] => Ok(serde_json::to_string(&sim.observe().combat)?),
-        ["free", target] => submit(sim, Command::FreeCaptive { target:PersonId(target.parse()?) }),
-        ["turn", encounter, action, args @ ..] => {
-            let (movement, action) = parse_combat_turn(action, args)?;
-            submit(sim, Command::CombatTurn { encounter:EncounterId(encounter.parse()?), movement, action })
-        }
-        ["rest"] => submit(sim, Command::Rest),
-        ["conceive", partner] => submit(sim, Command::Conceive { partner: PersonId(partner.parse()?) }),
-        ["care", child, source] => submit(sim, Command::Care { child: PersonId(child.parse()?), source: InventoryId(source.parse()?) }),
-        ["cancel"] => submit(sim, Command::Cancel),
-        ["eat", source] => submit(sim, Command::Eat { source: InventoryId(source.parse()?) }),
-        ["load", source, destination, quantity] => submit(sim, Command::Load { source: InventoryId(source.parse()?), destination: InventoryId(destination.parse()?), quantity: Quantity(quantity.parse()?) }),
-        ["work", site] => submit(sim, Command::Work { site: SiteId(site.parse()?) }),
-        ["tell", recipient, inventory] => submit(sim, Command::Tell { recipient: PersonId(recipient.parse()?), inventory: InventoryId(inventory.parse()?) }),
         ["save", path] => {
             let path = std::path::Path::new(path);
             save_file(path, &sim.save()?)?;
@@ -42,7 +28,7 @@ pub fn execute(
             *sim = loaded;
             Ok("loaded".into())
         }
-        ["help"] => Ok("status | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | conceive <partner> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
+        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | conceive <partner> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
 }
@@ -152,4 +138,82 @@ fn parse_combat_turn(
         _ => return Err("movement needs both coordinates".into()),
     };
     Ok((movement, action))
+}
+
+fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::error::Error>> {
+    let command = match words {
+        ["move", area] => Command::Move {
+            destination: AreaId(area.parse()?),
+        },
+        ["rest"] => Command::Rest,
+        ["cancel"] => Command::Cancel,
+        ["engage", target] => Command::Engage {
+            target: PersonId(target.parse()?),
+        },
+        ["free", target] => Command::FreeCaptive {
+            target: PersonId(target.parse()?),
+        },
+        ["conceive", partner] => Command::Conceive {
+            partner: PersonId(partner.parse()?),
+        },
+        ["care", child, source] => Command::Care {
+            child: PersonId(child.parse()?),
+            source: InventoryId(source.parse()?),
+        },
+        ["eat", source] => Command::Eat {
+            source: InventoryId(source.parse()?),
+        },
+        ["load", source, destination, quantity] => Command::Load {
+            source: InventoryId(source.parse()?),
+            destination: InventoryId(destination.parse()?),
+            quantity: Quantity(quantity.parse()?),
+        },
+        ["work", site] => Command::Work {
+            site: SiteId(site.parse()?),
+        },
+        ["tell", recipient, inventory] => Command::Tell {
+            recipient: PersonId(recipient.parse()?),
+            inventory: InventoryId(inventory.parse()?),
+        },
+        ["turn", encounter, action, args @ ..] => {
+            let (movement, action) = parse_combat_turn(action, args)?;
+            Command::CombatTurn {
+                encounter: EncounterId(encounter.parse()?),
+                movement,
+                action,
+            }
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(command))
+}
+
+pub enum SessionOutput {
+    Text(String),
+    Advancing(game_sim::session::RunHandle),
+}
+
+pub fn execute_session(
+    session: &game_sim::session::Session,
+    line: &str,
+) -> Result<SessionOutput, Box<dyn std::error::Error>> {
+    let words: Vec<_> = line.split_whitespace().collect();
+    if let Some(command) = parse_game_command(&words)? {
+        return Ok(SessionOutput::Text(serde_json::to_string(
+            &session.submit_command(command)?,
+        )?));
+    }
+    let text = match words.as_slice() {
+        [] => String::new(),
+        ["status"] => serde_json::to_string(&session.observe()?)?,
+        ["combat"] => serde_json::to_string(&session.observe()?.combat)?,
+        ["pause"] => serde_json::to_string(&session.pause()?)?,
+        ["debug"] => format!("DEBUG OMNISCIENT {}",session.debug_json()?),
+        ["run",duration] => return Ok(SessionOutput::Advancing(session.run(parse_duration(duration)?)?)),
+        ["save",path] => { save_file(std::path::Path::new(path),&session.save()?)?; "saved".into() },
+        ["load",path] => { session.load(std::fs::read(path)?)?; "loaded".into() },
+        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | conceive <partner> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
+        _ => return Err("unknown command; use help".into()),
+    };
+    Ok(SessionOutput::Text(text))
 }

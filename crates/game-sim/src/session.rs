@@ -7,9 +7,12 @@ type Reply<T> = Sender<Result<T, Error>>;
 enum Request {
     Observe(Reply<PlayerView>),
     Submit(Submission, Reply<CommandReceipt>),
+    Command(Command, Reply<CommandReceipt>),
     Run(SimDuration, Reply<AdvanceResult>),
     Pause(Reply<PlayerView>),
     Save(Reply<Vec<u8>>),
+    Load(Vec<u8>, Reply<PlayerView>),
+    Debug(Reply<String>),
     Shutdown,
 }
 pub struct Session {
@@ -47,12 +50,58 @@ impl Session {
                     };
                     if let Some(request) = request {
                         match request {
-                            Request::Shutdown => break,
+                            Request::Shutdown => {
+                                if let Some((requested, reply)) = active.take() {
+                                    let _ = reply.send(Ok(AdvanceResult {
+                                        requested,
+                                        reached: simulation.time(),
+                                        revision: simulation.revision,
+                                        reason: StopReason::Paused,
+                                    }));
+                                }
+                                break;
+                            }
                             Request::Observe(reply) => {
                                 let _ = reply.send(Ok(simulation.observe()));
                             }
                             Request::Submit(command, reply) => {
                                 let _ = reply.send(simulation.submit(command));
+                            }
+                            Request::Command(command, reply) => {
+                                let result =
+                                    simulation
+                                        .next_caller_sequence()
+                                        .and_then(|caller_sequence| {
+                                            simulation.submit(Submission {
+                                                caller_sequence,
+                                                command,
+                                            })
+                                        });
+                                let _ = reply.send(result);
+                            }
+                            Request::Debug(reply) => {
+                                let result = serde_json::to_string(simulation.canonical_state())
+                                    .map_err(|e| Error::InvalidSave(e.to_string()));
+                                let _ = reply.send(result);
+                            }
+                            Request::Load(bytes, reply) => {
+                                match Simulation::load(&bytes, simulation.execution.clone()) {
+                                    Ok(loaded) => {
+                                        if let Some((requested, run_reply)) = active.take() {
+                                            let _ = run_reply.send(Ok(AdvanceResult {
+                                                requested,
+                                                reached: simulation.time(),
+                                                revision: simulation.revision,
+                                                reason: StopReason::Paused,
+                                            }));
+                                        }
+                                        simulation = loaded;
+                                        let _ = reply.send(Ok(simulation.observe()));
+                                    }
+                                    Err(error) => {
+                                        let _ = reply.send(Err(error));
+                                    }
+                                }
                             }
                             Request::Save(reply) => {
                                 let _ = reply.send(simulation.save());
@@ -124,6 +173,15 @@ impl Session {
     }
     pub fn submit(&self, command: Submission) -> Result<CommandReceipt, Error> {
         self.ask(|r| Request::Submit(command, r))
+    }
+    pub fn submit_command(&self, command: Command) -> Result<CommandReceipt, Error> {
+        self.ask(|r| Request::Command(command, r))
+    }
+    pub fn load(&self, bytes: Vec<u8>) -> Result<PlayerView, Error> {
+        self.ask(|r| Request::Load(bytes, r))
+    }
+    pub fn debug_json(&self) -> Result<String, Error> {
+        self.ask(Request::Debug)
     }
     pub fn pause(&self) -> Result<PlayerView, Error> {
         self.ask(Request::Pause)

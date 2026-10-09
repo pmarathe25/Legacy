@@ -184,3 +184,82 @@ fn an_encounter_is_playable_through_the_text_client_and_ordinary_views() {
             .contains_key(&target)
     );
 }
+
+#[test]
+fn hosted_text_commands_pause_long_runs_and_restore_committed_saves() {
+    use game_cli::SessionOutput;
+    let execution = Execution {
+        workers: 4,
+        reverse_jobs: true,
+    };
+    let sim = Simulation::kernel_fixture(1, 10_000, execution.clone()).unwrap();
+    let session = game_sim::session::Session::spawn(sim).unwrap();
+    let SessionOutput::Advancing(run) = game_cli::execute_session(&session, "run 3650d").unwrap()
+    else {
+        panic!("expected an advance handle")
+    };
+    game_cli::execute_session(&session, "move 2").unwrap();
+    let SessionOutput::Text(status) = game_cli::execute_session(&session, "status").unwrap() else {
+        panic!("expected a view")
+    };
+    let view: PlayerView = serde_json::from_str(&status).unwrap();
+    assert!(view.time.0 < 3650 * 86_400_000);
+    let SessionOutput::Text(paused) = game_cli::execute_session(&session, "pause").unwrap() else {
+        panic!("expected a view")
+    };
+    let paused: PlayerView = serde_json::from_str(&paused).unwrap();
+    let result = run.wait().unwrap();
+    assert_eq!(result.reason, StopReason::Paused);
+    assert_eq!(result.reached, paused.time);
+    let bytes = session.save().unwrap();
+    let saved = Simulation::load(&bytes, execution).unwrap();
+    assert_eq!(saved.time(), paused.time);
+    assert!(session.load(b"invalid".to_vec()).is_err());
+    assert_eq!(session.observe().unwrap().time, paused.time);
+    session
+        .submit_command(Command::Move {
+            destination: AreaId(3),
+        })
+        .unwrap();
+    session.load(bytes).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&session.debug_json().unwrap()).unwrap(),
+        serde_json::to_value(saved.canonical_state()).unwrap()
+    );
+}
+
+#[test]
+fn a_hosted_combat_run_returns_input_requests_instead_of_spinning() {
+    let sim = Simulation::combat_fixture(1, Execution::default()).unwrap();
+    let target = sim
+        .observe()
+        .nearby_people
+        .iter()
+        .find(|(_, role)| *role == Role::Citizen)
+        .unwrap()
+        .0;
+    let session = game_sim::session::Session::spawn(sim).unwrap();
+    session.submit_command(Command::Engage { target }).unwrap();
+    let encounter = session.observe().unwrap().combat.unwrap().encounter;
+    let result = session
+        .run(SimDuration(86_400_000))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(result.reason, StopReason::CombatInput { encounter });
+    assert_eq!(result.reached, SimTime(0));
+    session
+        .submit_command(Command::CombatTurn {
+            encounter,
+            movement: None,
+            action: CombatAction::Defend,
+        })
+        .unwrap();
+    let result = session
+        .run(SimDuration(86_400_000))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(result.reached, SimTime(6_000));
+    assert_eq!(result.reason, StopReason::CombatInput { encounter });
+}
