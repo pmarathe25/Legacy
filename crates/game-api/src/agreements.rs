@@ -4,6 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgreementTerm {
+    ConstructionLabor {
+        debtor: PersonId,
+        creditor: PersonId,
+        project: ProjectId,
+        millis: u64,
+        deadline: SimTime,
+    },
     Delivery {
         debtor: PersonId,
         creditor: PersonId,
@@ -29,7 +36,10 @@ pub enum AgreementTerm {
 impl AgreementTerm {
     pub fn parties(&self) -> [PersonId; 2] {
         match *self {
-            Self::Delivery {
+            Self::ConstructionLabor {
+                debtor, creditor, ..
+            }
+            | Self::Delivery {
                 debtor, creditor, ..
             }
             | Self::Labor {
@@ -43,13 +53,15 @@ impl AgreementTerm {
     pub fn amount(&self) -> u64 {
         match *self {
             Self::Delivery { quantity, .. } => quantity.0,
-            Self::Labor { millis, .. } => millis,
+            Self::Labor { millis, .. } | Self::ConstructionLabor { millis, .. } => millis,
             Self::Access { .. } => 1,
         }
     }
     pub fn deadline(&self) -> Option<SimTime> {
         match *self {
-            Self::Delivery { deadline, .. } | Self::Labor { deadline, .. } => Some(deadline),
+            Self::Delivery { deadline, .. }
+            | Self::Labor { deadline, .. }
+            | Self::ConstructionLabor { deadline, .. } => Some(deadline),
             Self::Access { .. } => None,
         }
     }

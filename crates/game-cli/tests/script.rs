@@ -698,3 +698,70 @@ fn institution_charters_and_supported_offices_have_real_access_effects_through_c
     assert_eq!(sim.observe().ruler, ruler);
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
 }
+
+#[test]
+fn carrying_a_new_good_creates_only_an_empty_compartment_then_loads_real_stock() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("survival-fixture", 1, execution.clone()).unwrap();
+    let view = sim.observe();
+    let tool = view
+        .physical
+        .unwrap()
+        .local_stocks
+        .iter()
+        .find(|s| s.good == Good::Tool && s.can_access)
+        .unwrap()
+        .id;
+    game_cli::execute(&mut sim, &format!("carry {} 1000", tool.0), &execution).unwrap();
+    assert_eq!(
+        sim.observe()
+            .physical
+            .unwrap()
+            .local_stocks
+            .iter()
+            .find(|s| s.good == Good::Tool && s.position == StockPosition::Carried(view.ruler))
+            .unwrap()
+            .quantity,
+        Quantity(0)
+    );
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    assert_eq!(
+        sim.canonical_state().inventories[&tool].quantity,
+        Quantity(0)
+    );
+    assert_eq!(
+        sim.observe()
+            .physical
+            .unwrap()
+            .local_stocks
+            .iter()
+            .find(|s| s.good == Good::Tool && s.position == StockPosition::Carried(view.ruler))
+            .unwrap()
+            .quantity,
+        Quantity(1_000)
+    );
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}
+
+#[test]
+fn the_ordinary_text_view_observes_a_completed_autonomous_workshop_without_private_accounts() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("project-fixture", 1, execution.clone()).unwrap();
+    game_cli::execute(&mut sim, "run 25m", &execution).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    assert!(
+        view.projects
+            .projects
+            .iter()
+            .any(|project| project.status == ProjectStatus::Completed)
+    );
+    assert!(!view.projects.enterprises.is_empty());
+    assert!(
+        view.projects
+            .enterprises
+            .iter()
+            .all(|enterprise| enterprise.accounts.is_none())
+    );
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}

@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 11;
+const SAVE_VERSION: u32 = 12;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -74,6 +74,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "property-fixture"
             | "institution-fixture"
             | "skills-fixture"
+            | "project-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -89,6 +90,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "property-fixture"
                 | "institution-fixture"
                 | "skills-fixture"
+                | "project-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
@@ -107,13 +109,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         || (s.scenario.id == "farming-fixture") != s.environment.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "agreement-fixture" | "property-fixture" | "institution-fixture"
+            "agreement-fixture" | "property-fixture" | "institution-fixture" | "project-fixture"
         ) != s.agreements.is_some()
         || matches!(s.scenario.id.as_str(), "lineage-fixture" | "skills-fixture")
             != s.lineage.is_some()
         || (s.scenario.id == "property-fixture") != s.property.is_some()
         || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
         || (s.scenario.id == "skills-fixture" && s.skills.is_none())
+        || (s.scenario.id == "project-fixture") != s.projects.is_some()
     {
         return Err(fail());
     }
@@ -132,6 +135,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if let Some(world) = &s.physical {
         for id in world.sites.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.projects {
+        for id in world
+            .projects
+            .keys()
+            .map(|id| id.0)
+            .chain(world.enterprises.keys().map(|id| id.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
@@ -278,7 +293,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -605,6 +620,83 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s.inventories.contains_key(&source)
                     || quantity.0 == 0
                 {
+                    return Err(fail());
+                }
+            }
+            EventKind::ProjectProposed { project, sponsor } => {
+                if !people.contains_key(&sponsor)
+                    || !s
+                        .projects
+                        .as_ref()
+                        .is_some_and(|w| w.projects.contains_key(&project))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ProjectSupported {
+                project,
+                actor,
+                agreement,
+            } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .projects
+                        .as_ref()
+                        .is_some_and(|w| w.projects.contains_key(&project))
+                    || !s
+                        .agreements
+                        .as_ref()
+                        .is_some_and(|w| w.agreements.contains_key(&agreement))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ConstructionStarted { project, actor }
+            | EventKind::ProjectCancelled { project, actor } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .projects
+                        .as_ref()
+                        .is_some_and(|w| w.projects.contains_key(&project))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ProjectFailed { project } => {
+                if !s
+                    .projects
+                    .as_ref()
+                    .is_some_and(|w| w.projects.contains_key(&project))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ProjectCompleted {
+                project,
+                enterprise,
+                site,
+            } => {
+                if !s.projects.as_ref().is_some_and(|w| {
+                    w.projects.contains_key(&project)
+                        && w.enterprises
+                            .get(&enterprise)
+                            .is_some_and(|e| e.site == site)
+                }) || !s
+                    .physical
+                    .as_ref()
+                    .is_some_and(|w| w.sites.contains_key(&site))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::EnterpriseInputUsed {
+                enterprise, site, ..
+            } => {
+                if !s.projects.as_ref().is_some_and(|w| {
+                    w.enterprises
+                        .get(&enterprise)
+                        .is_some_and(|e| e.site == site)
+                }) {
                     return Err(fail());
                 }
             }
@@ -975,6 +1067,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     property::validate(s)?;
     institutions::validate(s)?;
     skills::validate(s)?;
+    projects::validate(s)?;
     Ok(())
 }
 
@@ -1043,7 +1136,11 @@ fn validate_physical(
             return Err(fail());
         }
         if let Some(job) = &actor.job
-            && (job.rate.denominator != 1_000
+            && (job.tool.is_some_and(|tool| {
+                !s.inventories
+                    .get(&tool)
+                    .is_some_and(|i| i.good == Good::Tool)
+            }) || job.rate.denominator != 1_000
                 || job.rate.numerator < 1_000
                 || job.rate.numerator > 2_000
                 || job.work_remainder >= job.rate.denominator
@@ -1065,6 +1162,7 @@ fn validate_physical(
                 | Activity::Comfort { .. }
                 | Activity::Express { .. }
                 | Activity::Play { .. }
+                | Activity::Construct { .. }
                 | Activity::Lesson { .. }
                 | Activity::Take { .. }
                 | Activity::ReportIncident { .. }

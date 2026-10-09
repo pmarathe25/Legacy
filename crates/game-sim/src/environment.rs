@@ -573,7 +573,7 @@ impl Simulation {
                     && self.unreserved_stock(id, actor) >= quantity
             })
         };
-        if !usable(field.tool, Good::Tool, 1_000) {
+        if !usable(field.tool, Good::Tool, 1_000) || !self.tool_available_for(actor, field.tool) {
             return false;
         }
         match operation {
@@ -714,6 +714,11 @@ impl Simulation {
     }
 
     pub(crate) fn complete_cultivation(&mut self, actor: PersonId) {
+        if !self.cultivation_equipment_available(actor) {
+            self.interrupt_physical(actor);
+            self.emit(EventKind::Interrupted { actor });
+            return;
+        }
         let Some(job) = self
             .state
             .environment

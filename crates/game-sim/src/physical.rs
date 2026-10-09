@@ -23,6 +23,8 @@ pub struct Job {
     pub rate: SkillRate,
     #[serde(default)]
     pub work_remainder: u64,
+    #[serde(default)]
+    pub tool: Option<InventoryId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,6 +270,12 @@ impl Simulation {
             self.reconcile_institutions()?;
             self.revision += 1;
             return Ok(());
+        }
+        if let Command::Carry { source, quantity } = command {
+            return self.carry_good(actor, source, quantity);
+        }
+        if let Command::Project { action } = command {
+            return self.debug_project_action(actor, action);
         }
         if let Command::Learn { teacher, topic } = command {
             return self.start_lesson(actor, teacher, topic);
@@ -602,7 +610,10 @@ impl Simulation {
                 }
                 let site_record = world.sites.get(&site).ok_or(Error::Unavailable)?;
                 let input = &self.state.inventories[&site_record.input];
-                let tool = &self.state.inventories[&site_record.tool];
+                let tool_id = self
+                    .select_work_tool(actor, site)
+                    .ok_or(Error::Unavailable)?;
+                let tool = &self.state.inventories[&tool_id];
                 let output = &self.state.inventories[&site_record.output];
                 if site_record.area != area || !site_record.access.contains(&actor) || !self.can_use(actor, tool) || tool.quantity.0 < 1_000
                     || a.vitals.fatigue >= rules.fatigue_limit
@@ -624,6 +635,7 @@ impl Simulation {
                             remaining: site_record.duration.0,
                             rate: self.effective_work_rate(actor, Skill::Craft),
                             work_remainder: 0,
+                            tool: Some(tool_id),
                         }),
                         Some((site_record.input, site_record.input_quantity)),
                     )
@@ -631,7 +643,12 @@ impl Simulation {
             }
             _ => return Err(Error::Unavailable),
         };
-        self.ensure_event_capacity(2)?;
+        if let Command::Work { site } = command
+            && let Some((_, quantity)) = &consume
+        {
+            self.preflight_enterprise_input(site, *quantity)?;
+        }
+        self.ensure_event_capacity(3)?;
         self.interrupt_physical(actor);
         if let Some((source, quantity)) = consume {
             self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
@@ -640,7 +657,15 @@ impl Simulation {
                 source,
                 quantity,
             });
+            if let Command::Work { site } = command {
+                self.record_enterprise_input(site, quantity);
+            }
         }
+        let resumed_tool = if let Command::Work { site } = command {
+            self.select_work_tool(actor, site)
+        } else {
+            None
+        };
         let a = self
             .state
             .physical
@@ -666,6 +691,11 @@ impl Simulation {
         }
         if let Some(job) = new_job {
             a.job = Some(job);
+        }
+        if let Some(tool) = resumed_tool
+            && let Some(job) = &mut a.job
+        {
+            job.tool = Some(tool);
         }
         if matches!(command, Command::Cancel) {
             a.job = None;
@@ -696,6 +726,7 @@ impl Simulation {
     }
 
     pub(crate) fn interrupt_physical(&mut self, actor: PersonId) {
+        self.interrupt_construction(actor);
         self.interrupt_lesson(actor);
         self.interrupt_property_action(actor);
         self.interrupt_cultivation(actor);
@@ -797,6 +828,7 @@ impl Simulation {
                 Activity::Work { .. }
                     | Activity::Load { .. }
                     | Activity::Take { .. }
+                    | Activity::Construct { .. }
                     | Activity::Play { .. }
                     | Activity::Cultivate { .. }
             ) {
@@ -819,6 +851,7 @@ impl Simulation {
         let Some(world) = &self.state.physical else {
             return Ok(Vec::new());
         };
+        let equipment = self.equipment_availability();
         let work = |(id, a): (&PersonId, &Actor)| -> Result<Outcome, Error> {
             let p = &self.state.people[self.person_index[id]];
             let mut vitals = a.vitals.clone();
@@ -834,6 +867,7 @@ impl Simulation {
                     Activity::Work { .. }
                         | Activity::Load { .. }
                         | Activity::Take { .. }
+                        | Activity::Construct { .. }
                         | Activity::Combat { .. }
                         | Activity::Play { .. }
                         | Activity::Cultivate { .. }
@@ -864,7 +898,9 @@ impl Simulation {
                 }
             }
             let (remaining, work_remainder) = if let Some(job) = &a.job {
-                if matches!(a.activity, Activity::Work { .. }) {
+                if matches!(a.activity, Activity::Work { .. })
+                    && equipment.get(id).copied().unwrap_or(false)
+                {
                     let (work, remainder) =
                         skills::advance_work(elapsed, job.rate, job.work_remainder)?;
                     (Some(job.remaining.saturating_sub(work)), Some(remainder))
@@ -895,6 +931,10 @@ impl Simulation {
             .activity
             .clone();
         let mut success = false;
+        if matches!(activity, Activity::Construct { .. }) {
+            self.complete_construction(actor);
+            return;
+        }
         if matches!(activity, Activity::Lesson { .. }) {
             self.complete_lesson(actor);
             return;
@@ -1146,6 +1186,7 @@ impl Simulation {
     }
 
     pub(crate) fn commit_physical(&mut self, outcomes: Vec<Outcome>) {
+        let equipment = self.equipment_availability();
         for out in outcomes {
             let actor = out.id;
             let world = self.state.physical.as_ref().unwrap();
@@ -1169,15 +1210,18 @@ impl Simulation {
             }
             let job_done =
                 out.remaining == Some(0) && matches!(previous.activity, Activity::Work { .. });
-            let interrupted = vitals.fatigue >= rules.fatigue_limit
-                && matches!(
-                    previous.activity,
-                    Activity::Work { .. }
-                        | Activity::Load { .. }
-                        | Activity::Take { .. }
-                        | Activity::Play { .. }
-                        | Activity::Cultivate { .. }
-                );
+            let interrupted = (matches!(previous.activity, Activity::Work { .. })
+                && !equipment.get(&actor).copied().unwrap_or(false))
+                || vitals.fatigue >= rules.fatigue_limit
+                    && matches!(
+                        previous.activity,
+                        Activity::Work { .. }
+                            | Activity::Load { .. }
+                            | Activity::Take { .. }
+                            | Activity::Construct { .. }
+                            | Activity::Play { .. }
+                            | Activity::Cultivate { .. }
+                    );
             let a = self
                 .state
                 .physical
@@ -1191,7 +1235,7 @@ impl Simulation {
                 job.remaining = remaining;
                 job.work_remainder = out.work_remainder.unwrap();
             }
-            if job_done {
+            if job_done && equipment.get(&actor).copied().unwrap_or(false) {
                 let site_id = a.job.as_ref().unwrap().site;
                 let site = self.state.physical.as_ref().unwrap().sites[&site_id].clone();
                 let output = self.state.inventories.get_mut(&site.output).unwrap();

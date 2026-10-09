@@ -7,10 +7,12 @@ pub mod compute;
 pub mod decisions;
 pub mod development;
 pub mod environment;
+mod equipment;
 pub mod institutions;
 pub mod lineage;
 mod persistence;
 pub mod physical;
+pub mod projects;
 pub mod property;
 pub mod session;
 pub mod skills;
@@ -142,6 +144,8 @@ pub struct CanonicalState {
     pub institutions: Option<institutions::World>,
     #[serde(default)]
     pub skills: Option<skills::World>,
+    #[serde(default)]
+    pub projects: Option<projects::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -223,11 +227,19 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "project-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "project-fixture" {
+            return Self::project_fixture(seed, execution);
+        }
         if scenario == "skills-fixture" {
             return Self::skills_fixture(seed, execution);
         }
@@ -301,6 +313,7 @@ impl Simulation {
             property: None,
             institutions: None,
             skills: None,
+            projects: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -619,6 +632,7 @@ impl Simulation {
         available_commands.extend(self.available_property_commands(ruler.id));
         available_commands.extend(self.available_institution_commands(ruler.id));
         available_commands.extend(self.available_lesson_commands(ruler.id));
+        available_commands.extend(self.available_project_commands(ruler.id));
         if self.in_combat(ruler.id) {
             available_commands.clear();
             if let Some(view) = self.tactical_view()
@@ -670,6 +684,7 @@ impl Simulation {
             }
         }
         PlayerView {
+            projects: self.project_view(ruler.id),
             skills: self.own_skill_view(ruler.id),
             institutions: self.institution_view(ruler.id),
             social_cases: self.social_case_view(ruler.id),
@@ -981,7 +996,8 @@ impl Simulation {
                 .unwrap_or(requested)
                 .min(requested);
             let next = next.min(self.next_agreement_deadline().unwrap_or(next));
-            let next = self.environment_boundary(self.physical_boundary(next));
+            let next =
+                self.project_boundary(self.environment_boundary(self.physical_boundary(next)));
             let controlled = self.state.ruler;
             self.step(next)?;
             if controlled != self.state.ruler {
@@ -1006,6 +1022,7 @@ impl Simulation {
     fn step(&mut self, next: SimTime) -> Result<(), Error> {
         let started = Instant::now();
         let elapsed = next.0 - self.state.time.0;
+        let equipment = self.equipment_availability();
         let input: Vec<_> = self
             .state
             .people
@@ -1015,6 +1032,7 @@ impl Simulation {
                 remainder: p.work_remainder,
                 units_per_minute: if matches!(p.location, Location::AtArea(_))
                     && self.physically_working(p.id)
+                    && equipment.get(&p.id).copied().unwrap_or(true)
                 {
                     p.work_rate
                 } else {
@@ -1026,6 +1044,7 @@ impl Simulation {
         let output = compute::evaluate(&self.pool, &input, self.execution.reverse_jobs)?;
         let physical_output = self.evaluate_physical(elapsed)?;
         let skill_output = self.evaluate_skills(next)?;
+        let project_output = self.evaluate_projects(next)?;
         let environment_output = self.evaluate_environment(next)?;
         self.profile.evaluation_ns += started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
@@ -1072,6 +1091,16 @@ impl Simulation {
                 _ => {}
             }
         }
+        let construction_ids = self.state.projects.as_ref().map_or(0, |w| {
+            w.jobs.values().filter(|job| job.completes == next).count()
+        }) as u64
+            * 2;
+        let birth_ids = due.iter().filter(|d| matches!(d, Due::Birth(_))).count() as u64 * 3;
+        self.state
+            .next_id
+            .checked_add(construction_ids)
+            .and_then(|id| id.checked_add(birth_ids))
+            .ok_or(Error::Overflow)?;
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
         self.preflight_agreements()?;
@@ -1138,6 +1167,16 @@ impl Simulation {
         for (actor, site) in actual_work {
             self.record_agreement_work(actor, site, elapsed);
         }
+        let builders: Vec<_> = self.state.projects.as_ref().map_or_else(Vec::new, |w| {
+            w.jobs
+                .iter()
+                .map(|(actor, job)| (*actor, job.project))
+                .collect()
+        });
+        for (actor, project) in builders {
+            self.record_agreement_construction(actor, project, elapsed);
+        }
+        self.commit_projects(project_output);
         self.commit_environment(environment_output);
         self.state.due.remove(&next);
         for event in due {
@@ -1220,6 +1259,7 @@ impl Simulation {
                 self.complete_development(event);
             }
         }
+        self.update_projects()?;
         self.update_property_events();
         self.reconcile_agreements()?;
         self.reconcile_institutions()?;

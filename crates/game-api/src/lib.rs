@@ -9,6 +9,8 @@ pub mod institutions;
 pub use institutions::*;
 pub mod skills;
 pub use skills::*;
+pub mod projects;
+pub use projects::*;
 
 macro_rules! id {
     ($($name:ident),*) => {$(
@@ -23,6 +25,8 @@ id!(
     SiteId,
     ConceptId,
     AgreementId,
+    ProjectId,
+    EnterpriseId,
     InstitutionId,
     RuleProposalId,
     CaseId,
@@ -43,6 +47,13 @@ pub const MINUTE: SimDuration = SimDuration(60_000);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Carry {
+        source: InventoryId,
+        quantity: Quantity,
+    },
+    Project {
+        action: ProjectAction,
+    },
     Institution {
         action: InstitutionAction,
     },
@@ -174,6 +185,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub projects: ProjectsView,
     pub skills: Vec<SkillView>,
     pub institutions: Vec<InstitutionView>,
     pub social_cases: Vec<SocialCaseView>,
@@ -218,6 +230,10 @@ pub struct Vitals {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Construct {
+        project: ProjectId,
+        completes: SimTime,
+    },
     Lesson {
         teacher: PersonId,
         student: PersonId,
@@ -334,6 +350,36 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    ProjectProposed {
+        project: ProjectId,
+        sponsor: PersonId,
+    },
+    ProjectSupported {
+        project: ProjectId,
+        actor: PersonId,
+        agreement: AgreementId,
+    },
+    ConstructionStarted {
+        project: ProjectId,
+        actor: PersonId,
+    },
+    ProjectCompleted {
+        project: ProjectId,
+        enterprise: EnterpriseId,
+        site: SiteId,
+    },
+    ProjectCancelled {
+        project: ProjectId,
+        actor: PersonId,
+    },
+    ProjectFailed {
+        project: ProjectId,
+    },
+    EnterpriseInputUsed {
+        enterprise: EnterpriseId,
+        site: SiteId,
+        quantity: Quantity,
+    },
     InstitutionProposed {
         institution: InstitutionId,
         proposer: PersonId,

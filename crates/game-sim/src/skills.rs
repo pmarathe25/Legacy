@@ -167,6 +167,7 @@ impl Simulation {
         let (Some(skills), Some(physical)) = (&self.state.skills, &self.state.physical) else {
             return Ok(Vec::new());
         };
+        let equipment = self.equipment_availability();
         let mut pending = Vec::new();
         for (actor, body) in &physical.actors {
             if elapsed == 0
@@ -180,8 +181,13 @@ impl Simulation {
                 continue;
             }
             let (skill, cap) = match body.activity {
-                Activity::Work { .. } => (Skill::Craft, None),
-                Activity::Cultivate { .. } => (Skill::Farming, None),
+                Activity::Work { .. } if equipment.get(actor).copied().unwrap_or(false) => {
+                    (Skill::Craft, None)
+                }
+                Activity::Cultivate { .. } if equipment.get(actor).copied().unwrap_or(false) => {
+                    (Skill::Farming, None)
+                }
+                Activity::Construct { .. } => (Skill::Craft, None),
                 Activity::Play {
                     interest: ChildhoodInterest::Craft,
                     ..

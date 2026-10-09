@@ -343,11 +343,13 @@ impl Simulation {
             return Ok(());
         };
         self.observe_local_facts();
+        self.observe_projects();
         self.observe_property();
         self.review_property_sharing();
         self.review_lineage()?;
         self.review_agreements()?;
         self.review_institutions()?;
+        self.review_projects()?;
         self.review_conception()?;
         let world = self.state.decisions.as_ref().unwrap();
         let evaluate =
@@ -449,6 +451,7 @@ impl Simulation {
                 | Activity::Take { .. }
                 | Activity::ReportIncident { .. }
                 | Activity::Lesson { .. }
+                | Activity::Construct { .. }
         ) || matches!(actor.activity, Activity::Work { .. }) && !urgent
         {
             return none();
@@ -467,6 +470,15 @@ impl Simulation {
                 },
             ))
         };
+        if let Some(command) = self.project_candidate(id) {
+            add(
+                command,
+                Goal::Practice,
+                0,
+                i64::from(mind.personality.ambition) + 200,
+                0,
+            );
+        }
         if let Some(command) = self.property_candidate(id) {
             add(command, Goal::Survival, 9_000, 0, 0);
         }

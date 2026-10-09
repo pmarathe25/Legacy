@@ -50,6 +50,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
                 }),
             AgreementTerm::Labor { site, .. } => physical.sites.contains_key(site),
+            AgreementTerm::ConstructionLabor { project, .. } => s
+                .projects
+                .as_ref()
+                .is_some_and(|w| w.projects.contains_key(project)),
             AgreementTerm::Access {
                 grantor, inventory, ..
             } => {
@@ -122,8 +126,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     if w.pending_work.iter().any(|(id, quantity)| {
         w.obligations.get(id).is_none_or(|o| {
-            !matches!(o.term, AgreementTerm::Labor { .. })
-                || *quantity == 0
+            !matches!(
+                o.term,
+                AgreementTerm::Labor { .. } | AgreementTerm::ConstructionLabor { .. }
+            ) || *quantity == 0
                 || *quantity > o.performed
         })
     }) {
@@ -771,6 +777,16 @@ impl Simulation {
                         return Err(Error::Unavailable);
                     }
                 }
+                AgreementTerm::ConstructionLabor { project, .. } => {
+                    if !self
+                        .state
+                        .projects
+                        .as_ref()
+                        .is_some_and(|w| w.projects.contains_key(project))
+                    {
+                        return Err(Error::Unavailable);
+                    }
+                }
                 AgreementTerm::Labor { site, .. } => {
                     if !self
                         .state
@@ -935,6 +951,18 @@ impl Simulation {
                         ..
                     },
                 ) => ad == bd && asite == bsite,
+                (
+                    AgreementTerm::ConstructionLabor {
+                        debtor: a,
+                        project: ap,
+                        ..
+                    },
+                    AgreementTerm::ConstructionLabor {
+                        debtor: b,
+                        project: bp,
+                        ..
+                    },
+                ) => a == b && ap == bp,
                 _ => false,
             };
             o.performed = if immediate == 1 {
@@ -1063,6 +1091,48 @@ impl Simulation {
         }
     }
 
+    pub(crate) fn record_agreement_construction(
+        &mut self,
+        actor: PersonId,
+        project: ProjectId,
+        elapsed: u64,
+    ) {
+        let Some(world) = self.state.agreements.as_mut() else {
+            return;
+        };
+        let mut remaining = elapsed;
+        let mut records = Vec::new();
+        for o in world.obligations.values_mut() {
+            if let AgreementTerm::ConstructionLabor {
+                debtor,
+                project: promised,
+                millis,
+                ..
+            } = o.term
+                && debtor == actor
+                && promised == project
+            {
+                let credit = remaining.min(millis - o.performed);
+                o.performed += credit;
+                remaining -= credit;
+                if credit > 0 {
+                    records.push((o.id, o.agreement, credit));
+                }
+            }
+        }
+        for (obligation, agreement, quantity) in records {
+            *self
+                .state
+                .agreements
+                .as_mut()
+                .unwrap()
+                .pending_work
+                .entry(obligation)
+                .or_default() += quantity;
+            self.refresh_agreement_status(agreement);
+        }
+    }
+
     fn flush_agreement_work(&mut self) {
         let pending = std::mem::take(&mut self.state.agreements.as_mut().unwrap().pending_work);
         for (obligation, quantity) in pending {
@@ -1091,9 +1161,13 @@ impl Simulation {
             .cloned()
             .collect();
         let flush_work = self.state.time.0.is_multiple_of(60_000)
-            || events
-                .iter()
-                .any(|e| e.time == self.state.time && matches!(e.kind, EventKind::Produced { .. }))
+            || events.iter().any(|e| {
+                e.time == self.state.time
+                    && matches!(
+                        e.kind,
+                        EventKind::Produced { .. } | EventKind::ProjectCompleted { .. }
+                    )
+            })
             || world
                 .obligations
                 .values()
@@ -1361,7 +1435,7 @@ impl Simulation {
 
     fn agreement_offer_score(&self, actor: PersonId, terms: &[AgreementTerm]) -> i64 {
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
-        let mut score = 0_i64;
+        let mut score = self.project_financing_utility(actor, terms);
         for term in terms {
             match *term {
                 AgreementTerm::Delivery {
@@ -1397,6 +1471,22 @@ impl Simulation {
                     ..
                 } if debtor == actor => {
                     if !mind.sites.get(&site).is_some_and(|s| s.access)
+                        || deadline.0.saturating_sub(self.state.time.0) < millis
+                    {
+                        score -= 10_000;
+                    }
+                    score -= i64::try_from(millis / 60)
+                        .unwrap_or(i64::MAX / 32)
+                        .min(100_000);
+                }
+                AgreementTerm::ConstructionLabor {
+                    debtor,
+                    project,
+                    millis,
+                    deadline,
+                    ..
+                } if debtor == actor => {
+                    if !self.project_is_known(actor, project)
                         || deadline.0.saturating_sub(self.state.time.0) < millis
                     {
                         score -= 10_000;
@@ -1550,6 +1640,11 @@ impl Simulation {
                 continue;
             }
             let command = match o.term {
+                AgreementTerm::ConstructionLabor { project, .. } => self
+                    .construction_possible(debtor, project)
+                    .then_some(Command::Project {
+                        action: ProjectAction::Work { project },
+                    }),
                 AgreementTerm::Labor { site, .. } => {
                     mind.sites.get(&site).filter(|s| s.access).and_then(|s| {
                         if s.area == area {
