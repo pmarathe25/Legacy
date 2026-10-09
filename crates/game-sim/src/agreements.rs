@@ -1,6 +1,154 @@
 //! Voluntary local bargaining, chosen amendment procedures, and physical performance.
 use crate::*;
 
+fn site_exists(state: &CanonicalState, site: SiteId) -> bool {
+    state
+        .physical
+        .as_ref()
+        .is_some_and(|w| w.sites.contains_key(&site))
+        || state
+            .environment
+            .as_ref()
+            .is_some_and(|w| w.fields.contains_key(&site))
+        || state
+            .ecology
+            .as_ref()
+            .is_some_and(|w| w.plots.contains_key(&site))
+}
+fn site_custodian(state: &CanonicalState, site: SiteId) -> Option<PersonId> {
+    state
+        .environment
+        .as_ref()
+        .and_then(|w| w.fields.get(&site))
+        .and_then(|f| f.custodian)
+        .or_else(|| {
+            state
+                .ecology
+                .as_ref()
+                .and_then(|w| w.plots.get(&site))
+                .and_then(|p| p.custodian)
+        })
+}
+fn output_source(state: &CanonicalState, site: SiteId, good: Good) -> Option<InventoryId> {
+    state
+        .environment
+        .as_ref()
+        .and_then(|w| w.fields.get(&site))
+        .and_then(|f| match good {
+            Good::Food => Some(f.food),
+            Good::Seed => Some(f.seed),
+            _ => None,
+        })
+        .or_else(|| {
+            state
+                .projects
+                .as_ref()
+                .and_then(|w| {
+                    w.projects
+                        .values()
+                        .find(|p| matches!(p.kind,ProjectKind::Farm {plot,..} if plot==site))
+                })
+                .and_then(|p| match good {
+                    Good::Food => Some(p.output),
+                    Good::Seed => Some(p.input),
+                    _ => None,
+                })
+        })
+        .or_else(|| {
+            state
+                .physical
+                .as_ref()
+                .and_then(|w| w.sites.get(&site))
+                .and_then(|s| (state.inventories[&s.output].good == good).then_some(s.output))
+        })
+}
+fn output_share_valid(state: &CanonicalState, term: &AgreementTerm) -> bool {
+    let AgreementTerm::OutputShare {
+        site,
+        good,
+        numerator,
+        denominator,
+        destination,
+        pay_by,
+        ends_at,
+        ..
+    } = term
+    else {
+        return false;
+    };
+    *numerator > 0
+        && *denominator > 0
+        && numerator <= denominator
+        && pay_by >= ends_at
+        && output_source(state, *site, *good).is_some_and(|source| source != *destination)
+        && state
+            .inventories
+            .get(destination)
+            .is_some_and(|i| i.good == *good)
+}
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    a
+}
+/// A changed future share never rewrites the fraction already owed.
+fn accrue_share(
+    amount: u64,
+    remainder: u64,
+    scale: u64,
+    numerator: u64,
+    denominator: u64,
+    quantity: u128,
+) -> Result<(u64, u64, u64), Error> {
+    let product = quantity
+        .checked_mul(u128::from(numerator))
+        .ok_or(Error::Overflow)?;
+    let whole = u64::try_from(product / u128::from(denominator)).map_err(|_| Error::Overflow)?;
+    let fraction = (product % u128::from(denominator)) as u64;
+    let scale = if remainder == 0 {
+        1
+    } else if scale == 0 {
+        denominator
+    } else {
+        scale
+    };
+    let divisor = gcd(remainder, scale);
+    let old_remainder = remainder / divisor;
+    let old_scale = scale / divisor;
+    if fraction == 0 {
+        return Ok((
+            amount.checked_add(whole).ok_or(Error::Overflow)?,
+            old_remainder,
+            old_scale,
+        ));
+    }
+    let divisor = gcd(fraction, denominator);
+    let fraction = fraction / divisor;
+    let denominator = denominator / divisor;
+    let common = (old_scale / gcd(old_scale, denominator))
+        .checked_mul(denominator)
+        .ok_or(Error::Overflow)?;
+    let total = u128::from(old_remainder) * u128::from(common / old_scale)
+        + u128::from(fraction) * u128::from(common / denominator);
+    let extra = u64::try_from(total / u128::from(common)).map_err(|_| Error::Overflow)?;
+    let remaining = (total % u128::from(common)) as u64;
+    let divisor = gcd(remaining, common);
+    Ok((
+        amount
+            .checked_add(whole)
+            .and_then(|v| v.checked_add(extra))
+            .ok_or(Error::Overflow)?,
+        remaining / divisor,
+        common / divisor,
+    ))
+}
+fn stream_ended(term: &AgreementTerm, time: SimTime) -> bool {
+    !matches!(term,AgreementTerm::OutputShare {ends_at,..} if *ends_at>time)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Agreement {
     pub id: AgreementId,
@@ -24,7 +172,7 @@ fn refresh_known_status(view: &mut AgreementView) {
             && view
                 .obligations
                 .iter()
-                .all(|o| o.performed == o.term.amount())
+                .all(|o| o.performed == o.amount() && stream_ended(&o.term, view.observed_at))
         {
             AgreementStatus::Fulfilled
         } else if view.obligations.iter().any(|o| o.defaulted) {
@@ -71,7 +219,24 @@ fn same_duty(a: &AgreementTerm, b: &AgreementTerm) -> bool {
                 ..
             },
         ) => a == b && x == y,
-        (AgreementTerm::Access { .. }, AgreementTerm::Access { .. }) => a == b,
+        (AgreementTerm::Access { .. }, AgreementTerm::Access { .. })
+        | (AgreementTerm::SiteAccess { .. }, AgreementTerm::SiteAccess { .. }) => a == b,
+        (
+            AgreementTerm::OutputShare {
+                debtor: a,
+                site: x,
+                good: g,
+                destination: y,
+                ..
+            },
+            AgreementTerm::OutputShare {
+                debtor: b,
+                site: u,
+                good: h,
+                destination: v,
+                ..
+            },
+        ) => a == b && x == u && g == h && y == v,
         _ => false,
     }
 }
@@ -155,7 +320,11 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 .is_some_and(|(a, b)| {
                     a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
                 }),
-            AgreementTerm::Labor { site, .. } => physical.sites.contains_key(site),
+            AgreementTerm::Labor { site, .. } => site_exists(s, *site),
+            AgreementTerm::SiteAccess { grantor, site, .. } => {
+                site_custodian(s, *site) == Some(*grantor)
+            }
+            AgreementTerm::OutputShare { .. } => output_share_valid(s, term),
             AgreementTerm::ConstructionLabor { project, .. } => s
                 .projects
                 .as_ref()
@@ -205,6 +374,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         );
         if a.terms.iter().enumerate().any(|(index, term)| {
             term.amount() == 0
+                && !matches!(term, AgreementTerm::OutputShare { .. })
                 && (!active
                     || !w.amendments.values().any(|amendment| {
                         amendment.agreement == a.id
@@ -226,10 +396,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
         if active {
-            let fulfilled = a
-                .obligations
-                .iter()
-                .all(|id| w.obligations[id].performed == w.obligations[id].term.amount());
+            let fulfilled = a.obligations.iter().all(|id| {
+                w.obligations[id].performed == w.obligations[id].amount()
+                    && stream_ended(&w.obligations[id].term, s.time)
+            });
             let breached = a.obligations.iter().any(|id| w.obligations[id].defaulted);
             if (a.status == AgreementStatus::Fulfilled) != fulfilled
                 || (!fulfilled && (a.status == AgreementStatus::Breached) != breached)
@@ -255,16 +425,31 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     for (id, o) in &w.obligations {
         if *id != o.id
             || id.0 >= s.next_id
-            || o.performed > o.term.amount()
-            || o.term.amount() == 0 && o.defaulted
+            || o.performed > o.amount()
+            || o.amount() == 0 && o.defaulted
+            || match o.term {
+                AgreementTerm::OutputShare { denominator, .. } => {
+                    o.share_remainder
+                        >= if o.share_scale == 0 {
+                            denominator
+                        } else {
+                            o.share_scale
+                        }
+                }
+                _ => o.accrued != 0 || o.share_remainder != 0 || o.share_scale != 0,
+            }
             || (o.defaulted && !o.term.deadline().is_some_and(|d| d <= s.time))
         {
             return Err(fail());
         }
         let mut total = 0_u64;
         for (inventory, quantity) in &o.cargo {
-            let AgreementTerm::Delivery { debtor, source, .. } = o.term else {
-                return Err(fail());
+            let (debtor, source) = match o.term {
+                AgreementTerm::Delivery { debtor, source, .. } => (debtor, source),
+                AgreementTerm::OutputShare {
+                    debtor, site, good, ..
+                } => (debtor, output_source(s, site, good).ok_or_else(fail)?),
+                _ => return Err(fail()),
             };
             let stock = s.inventories.get(inventory).ok_or_else(fail)?;
             if *quantity == 0
@@ -277,7 +462,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             let sum = cargo_totals.entry(*inventory).or_default();
             *sum = sum.checked_add(*quantity).ok_or_else(fail)?;
         }
-        if total > o.term.amount() - o.performed {
+        if total > o.amount() - o.performed {
             return Err(fail());
         }
     }
@@ -369,9 +554,9 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
                     && state.inventories.contains_key(source)
                     && state.inventories.contains_key(destination)
             }
-            AgreementTerm::Labor { site, .. } => {
-                state.physical.as_ref().unwrap().sites.contains_key(site)
-            }
+            AgreementTerm::Labor { site, .. } => site_exists(state, *site),
+            AgreementTerm::SiteAccess { site, .. } => site_exists(state, *site),
+            AgreementTerm::OutputShare { .. } => output_share_valid(state, term),
             AgreementTerm::ConstructionLabor { project, .. } => state
                 .projects
                 .as_ref()
@@ -390,7 +575,22 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
                 .get(&obligation.id)
                 .is_some_and(|o| o.agreement == view.id)
             || !valid_term(&obligation.term)
-            || obligation.performed > obligation.term.amount()
+            || obligation.performed > obligation.amount()
+            || match obligation.term {
+                AgreementTerm::OutputShare { denominator, .. } => {
+                    obligation.share_remainder
+                        >= if obligation.share_scale == 0 {
+                            denominator
+                        } else {
+                            obligation.share_scale
+                        }
+                }
+                _ => {
+                    obligation.accrued != 0
+                        || obligation.share_remainder != 0
+                        || obligation.share_scale != 0
+                }
+            }
             || obligation.observed_at > obligation.learned_at
             || obligation.learned_at > state.time
             || !source_valid(&obligation.source)
@@ -407,7 +607,7 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
                 .cargo
                 .values()
                 .try_fold(0_u64, |sum, qty| sum.checked_add(*qty))
-                .is_none_or(|sum| sum > obligation.term.amount() - obligation.performed)
+                .is_none_or(|sum| sum > obligation.amount() - obligation.performed)
         {
             return false;
         }
@@ -441,9 +641,24 @@ pub struct Obligation {
     pub agreement: AgreementId,
     pub term: AgreementTerm,
     pub performed: u64,
+    #[serde(default)]
+    pub accrued: u64,
+    #[serde(default)]
+    pub share_remainder: u64,
+    #[serde(default)]
+    pub share_scale: u64,
     pub defaulted: bool,
     /// Conserved cargo loaded from the agreed source, attributed once.
     pub cargo: BTreeMap<InventoryId, u64>,
+}
+impl Obligation {
+    pub fn amount(&self) -> u64 {
+        if matches!(self.term, AgreementTerm::OutputShare { .. }) {
+            self.accrued
+        } else {
+            self.term.amount()
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Amendment {
@@ -550,6 +765,9 @@ impl Simulation {
                 .map(|id| {
                     let o = &world.obligations[id];
                     ObligationView {
+                        accrued: o.accrued,
+                        share_remainder: o.share_remainder,
+                        share_scale: o.share_scale,
                         id: *id,
                         term: o.term.clone(),
                         performed: o.performed,
@@ -615,9 +833,15 @@ impl Simulation {
                 .as_ref()
                 .and_then(|old| old.obligations.iter().find(|o| o.id == obligation.id));
             if let Some(prior) = prior {
+                obligation.accrued = prior.accrued;
+                obligation.share_remainder = prior.share_remainder;
+                obligation.share_scale = prior.share_scale;
                 obligation.performed = if same_duty(&prior.term, &obligation.term) {
-                    prior.performed.min(obligation.term.amount())
-                } else if matches!(obligation.term, AgreementTerm::Access { .. }) {
+                    prior.performed.min(obligation.amount())
+                } else if matches!(
+                    obligation.term,
+                    AgreementTerm::Access { .. } | AgreementTerm::SiteAccess { .. }
+                ) {
                     1
                 } else {
                     0
@@ -625,7 +849,7 @@ impl Simulation {
                 obligation.defaulted = if prior.term == obligation.term {
                     prior.defaulted
                 } else {
-                    obligation.performed < obligation.term.amount()
+                    obligation.performed < obligation.amount()
                         && obligation
                             .term
                             .deadline()
@@ -637,7 +861,7 @@ impl Simulation {
                 } else {
                     BTreeMap::new()
                 };
-                let mut remaining = obligation.term.amount() - obligation.performed;
+                let mut remaining = obligation.amount() - obligation.performed;
                 for quantity in obligation.cargo.values_mut() {
                     *quantity = (*quantity).min(remaining);
                     remaining -= *quantity;
@@ -652,7 +876,13 @@ impl Simulation {
                     obligation.source = Some(KnowledgeSource::Observed(actor));
                 }
             } else {
-                obligation.performed = if matches!(obligation.term, AgreementTerm::Access { .. }) {
+                obligation.accrued = 0;
+                obligation.share_remainder = 0;
+                obligation.share_scale = 0;
+                obligation.performed = if matches!(
+                    obligation.term,
+                    AgreementTerm::Access { .. } | AgreementTerm::SiteAccess { .. }
+                ) {
                     obligation.performed
                 } else {
                     0
@@ -810,7 +1040,10 @@ impl Simulation {
                 {
                     self.local_agreement_notice(agreement, actor, None);
                 }
-                EventKind::ObligationPerformed {
+                EventKind::ObligationAccrued {
+                    obligation, actor, ..
+                }
+                | EventKind::ObligationPerformed {
                     obligation, actor, ..
                 } => {
                     self.observe_obligation_fact(obligation, actor, event.time);
@@ -948,6 +1181,9 @@ impl Simulation {
             if fact.term != actual.term {
                 continue;
             }
+            fact.accrued = actual.accrued;
+            fact.share_remainder = actual.share_remainder;
+            fact.share_scale = actual.share_scale;
             fact.performed = actual.performed;
             fact.defaulted = actual.defaulted;
             fact.cargo = if actual.term.parties()[0] == actor {
@@ -958,6 +1194,8 @@ impl Simulation {
             fact.observed_at = at;
             fact.learned_at = self.state.time;
             fact.source = Some(KnowledgeSource::Observed(actor));
+            view.observed_at = at;
+            view.learned_at = self.state.time;
             refresh_known_status(&mut view);
             self.store_agreement_knowledge(actor, view);
         }
@@ -1131,15 +1369,21 @@ impl Simulation {
             return false;
         }
         w.obligations.values().any(|o| {
-            let AgreementTerm::Delivery {
-                debtor,
-                creditor,
-                destination: goal,
-                quantity: promised,
-                ..
-            } = o.term
-            else {
-                return false;
+            let (debtor, creditor, goal, promised) = match o.term {
+                AgreementTerm::Delivery {
+                    debtor,
+                    creditor,
+                    destination,
+                    quantity,
+                    ..
+                } => (debtor, creditor, destination, quantity.0),
+                AgreementTerm::OutputShare {
+                    debtor,
+                    creditor,
+                    destination,
+                    ..
+                } => (debtor, creditor, destination, o.accrued),
+                _ => return false,
             };
             debtor == actor
                 && goal == destination
@@ -1147,7 +1391,7 @@ impl Simulation {
                     w.agreements[&o.agreement].status,
                     AgreementStatus::Active | AgreementStatus::Breached
                 )
-                && quantity.0 <= promised.0 - o.performed
+                && quantity.0 <= promised - o.performed
                 && (inventory.location == InventoryLocation::Carried(creditor)
                     || w.custodians.get(&destination) == Some(&creditor))
         })
@@ -1503,6 +1747,41 @@ impl Simulation {
         Ok(())
     }
 
+    pub(crate) fn preflight_output_shares(
+        &self,
+        production: &[(SiteId, Good, Quantity)],
+    ) -> Result<(), Error> {
+        let Some(world) = &self.state.agreements else {
+            return Ok(());
+        };
+        for obligation in world.obligations.values() {
+            if let AgreementTerm::OutputShare {
+                site,
+                good,
+                numerator,
+                denominator,
+                ..
+            } = obligation.term
+            {
+                let total = production
+                    .iter()
+                    .filter(|(s, g, _)| *s == site && *g == good)
+                    .try_fold(0_u128, |total, (_, _, q)| {
+                        total.checked_add(u128::from(q.0))
+                    })
+                    .ok_or(Error::Overflow)?;
+                accrue_share(
+                    obligation.accrued,
+                    obligation.share_remainder,
+                    obligation.share_scale,
+                    numerator,
+                    denominator,
+                    total,
+                )?;
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn preflight_agreements(&self) -> Result<(), Error> {
         if let Some(w) = &self.state.agreements {
             let maximum = (w.obligations.len() as u64)
@@ -1590,7 +1869,9 @@ impl Simulation {
             if a == b
                 || !parties.contains(&a)
                 || !parties.contains(&b)
-                || future && term.amount() == 0
+                || future
+                    && term.amount() == 0
+                    && !matches!(term, AgreementTerm::OutputShare { .. })
                 || (future && term.deadline().is_some_and(|d| d <= self.state.time))
             {
                 return Err(Error::Unavailable);
@@ -1629,15 +1910,20 @@ impl Simulation {
                         return Err(Error::Unavailable);
                     }
                 }
-                AgreementTerm::Labor { site, .. } => {
-                    if !self
-                        .state
-                        .physical
-                        .as_ref()
-                        .unwrap()
-                        .sites
-                        .contains_key(site)
+                AgreementTerm::SiteAccess { grantor, site, .. } => {
+                    if site_custodian(&self.state, *site) != Some(*grantor) {
+                        return Err(Error::Unavailable);
+                    }
+                }
+                AgreementTerm::OutputShare { ends_at, .. } => {
+                    if !output_share_valid(&self.state, term)
+                        || future && *ends_at <= self.state.time
                     {
+                        return Err(Error::Unavailable);
+                    }
+                }
+                AgreementTerm::Labor { site, .. } => {
+                    if !site_exists(&self.state, *site) {
                         return Err(Error::Unavailable);
                     }
                 }
@@ -1673,6 +1959,9 @@ impl Simulation {
                     term,
                     performed,
                     defaulted: false,
+                    accrued: 0,
+                    share_remainder: 0,
+                    share_scale: 0,
                     cargo: BTreeMap::new(),
                 },
             );
@@ -1697,6 +1986,35 @@ impl Simulation {
     }
 
     fn apply_agreement_access(&mut self, term: &AgreementTerm) -> u64 {
+        if let AgreementTerm::SiteAccess {
+            grantee,
+            site,
+            allowed,
+            ..
+        } = term
+        {
+            let access = self
+                .state
+                .environment
+                .as_mut()
+                .and_then(|w| w.fields.get_mut(site))
+                .map(|f| &mut f.access)
+                .or_else(|| {
+                    self.state
+                        .ecology
+                        .as_mut()
+                        .and_then(|w| w.plots.get_mut(site))
+                        .map(|p| &mut p.access)
+                });
+            if let Some(access) = access {
+                if *allowed {
+                    access.insert(*grantee);
+                } else {
+                    access.remove(grantee);
+                }
+            }
+            return 1;
+        }
         if let AgreementTerm::Access {
             grantee,
             inventory,
@@ -1766,66 +2084,75 @@ impl Simulation {
             let world = self.state.agreements.as_mut().unwrap();
             let o = world.obligations.get_mut(&obligation).unwrap();
             // A changed physical duty starts fresh; unchanged duty retains actual performance.
-            let same_kind = match (&o.term, &term) {
-                (
-                    AgreementTerm::Delivery {
-                        debtor: ad,
-                        source: asrc,
-                        destination: adst,
-                        ..
-                    },
-                    AgreementTerm::Delivery {
-                        debtor: bd,
-                        source: bsrc,
-                        destination: bdst,
-                        ..
-                    },
-                ) => ad == bd && asrc == bsrc && adst == bdst,
-                (
-                    AgreementTerm::Labor {
-                        debtor: ad,
-                        site: asite,
-                        ..
-                    },
-                    AgreementTerm::Labor {
-                        debtor: bd,
-                        site: bsite,
-                        ..
-                    },
-                ) => ad == bd && asite == bsite,
-                (
-                    AgreementTerm::ConstructionLabor {
-                        debtor: a,
-                        project: ap,
-                        ..
-                    },
-                    AgreementTerm::ConstructionLabor {
-                        debtor: b,
-                        project: bp,
-                        ..
-                    },
-                ) => a == b && ap == bp,
-                _ => false,
-            };
+            let same_kind = same_duty(&o.term, &term)
+                || match (&o.term, &term) {
+                    (
+                        AgreementTerm::Delivery {
+                            debtor: ad,
+                            source: asrc,
+                            destination: adst,
+                            ..
+                        },
+                        AgreementTerm::Delivery {
+                            debtor: bd,
+                            source: bsrc,
+                            destination: bdst,
+                            ..
+                        },
+                    ) => ad == bd && asrc == bsrc && adst == bdst,
+                    (
+                        AgreementTerm::Labor {
+                            debtor: ad,
+                            site: asite,
+                            ..
+                        },
+                        AgreementTerm::Labor {
+                            debtor: bd,
+                            site: bsite,
+                            ..
+                        },
+                    ) => ad == bd && asite == bsite,
+                    (
+                        AgreementTerm::ConstructionLabor {
+                            debtor: a,
+                            project: ap,
+                            ..
+                        },
+                        AgreementTerm::ConstructionLabor {
+                            debtor: b,
+                            project: bp,
+                            ..
+                        },
+                    ) => a == b && ap == bp,
+                    _ => false,
+                };
             o.performed = if immediate == 1 {
                 1
             } else if same_kind {
-                o.performed.min(term.amount())
+                o.performed
+                    .min(if matches!(term, AgreementTerm::OutputShare { .. }) {
+                        o.accrued
+                    } else {
+                        term.amount()
+                    })
             } else {
                 0
             };
             if !same_kind {
+                o.accrued = 0;
+                o.share_remainder = 0;
+                o.share_scale = 0;
                 o.cargo.clear();
             }
             o.term = term.clone();
-            let mut remaining_cargo = term.amount() - o.performed;
+            let mut remaining_cargo = o.amount() - o.performed;
             for quantity in o.cargo.values_mut() {
                 *quantity = (*quantity).min(remaining_cargo);
                 remaining_cargo -= *quantity;
             }
             o.cargo.retain(|_, quantity| *quantity > 0);
-            o.defaulted = o.performed < term.amount()
-                && term.deadline().is_some_and(|d| d <= self.state.time);
+            o.defaulted =
+                o.performed < o.amount() && term.deadline().is_some_and(|d| d <= self.state.time);
             world.agreements.get_mut(&a.id).unwrap().terms[index as usize] = term;
         }
         self.state
@@ -1870,10 +2197,10 @@ impl Simulation {
     fn refresh_agreement_status(&mut self, id: AgreementId) {
         let world = self.state.agreements.as_mut().unwrap();
         let ids = &world.agreements[&id].obligations;
-        let status = if ids
-            .iter()
-            .all(|id| world.obligations[id].performed >= world.obligations[id].term.amount())
-        {
+        let status = if ids.iter().all(|id| {
+            world.obligations[id].performed >= world.obligations[id].amount()
+                && stream_ended(&world.obligations[id].term, self.state.time)
+        }) {
             AgreementStatus::Fulfilled
         } else if ids.iter().any(|id| world.obligations[id].defaulted) {
             AgreementStatus::Breached
@@ -1889,8 +2216,19 @@ impl Simulation {
             .as_ref()?
             .obligations
             .values()
-            .filter(|o| !o.defaulted && o.performed < o.term.amount())
-            .filter_map(|o| o.term.deadline())
+            .flat_map(|o| {
+                [
+                    (!o.defaulted && o.performed < o.amount())
+                        .then(|| o.term.deadline())
+                        .flatten(),
+                    match o.term {
+                        AgreementTerm::OutputShare { ends_at, .. } => Some(ends_at),
+                        _ => None,
+                    },
+                ]
+                .into_iter()
+                .flatten()
+            })
             .filter(|d| *d > self.state.time)
             .min()
     }
@@ -2016,7 +2354,79 @@ impl Simulation {
                 .any(|o| o.term.deadline() == Some(self.state.time));
         let last_event = self.state.next_event - 1;
         let mut credits = Vec::new();
+        let mut accruals = Vec::new();
+        let share_origins = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .obligations
+            .values()
+            .filter_map(|o| match o.term {
+                AgreementTerm::OutputShare { site, good, .. } => {
+                    output_source(&self.state, site, good).map(|i| (o.id, i))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
         for e in events {
+            let productions = match e.kind {
+                EventKind::Produced {
+                    actor,
+                    site,
+                    output,
+                    quantity,
+                } => vec![(actor, site, self.state.inventories[&output].good, quantity)],
+                EventKind::CropHarvested {
+                    actor,
+                    field,
+                    food,
+                    seed,
+                } => vec![
+                    (actor, field, Good::Food, food),
+                    (actor, field, Good::Seed, seed),
+                ],
+                _ => Vec::new(),
+            };
+            for (producer, site, good, quantity) in productions {
+                for o in self
+                    .state
+                    .agreements
+                    .as_mut()
+                    .unwrap()
+                    .obligations
+                    .values_mut()
+                {
+                    if let AgreementTerm::OutputShare {
+                        site: target,
+                        good: wanted,
+                        numerator,
+                        denominator,
+                        ends_at,
+                        ..
+                    } = o.term
+                        && target == site
+                        && wanted == good
+                        && e.time < ends_at
+                    {
+                        let (amount, remainder, scale) = accrue_share(
+                            o.accrued,
+                            o.share_remainder,
+                            o.share_scale,
+                            numerator,
+                            denominator,
+                            u128::from(quantity.0),
+                        )?;
+                        let credit = amount - o.accrued;
+                        o.accrued = amount;
+                        o.share_remainder = remainder;
+                        o.share_scale = scale;
+                        if credit > 0 {
+                            accruals.push((o.id, producer, credit));
+                        }
+                    }
+                }
+            }
             match e.kind {
                 EventKind::Transferred {
                     actor,
@@ -2029,15 +2439,20 @@ impl Simulation {
                     let mut unallocated = quantity.0;
                     let world = self.state.agreements.as_mut().unwrap();
                     for o in world.obligations.values_mut() {
-                        let AgreementTerm::Delivery {
-                            debtor,
-                            source: origin,
-                            destination: goal,
-                            quantity: promised,
-                            ..
-                        } = o.term
-                        else {
-                            continue;
+                        let (debtor, origin, goal, promised) = match o.term {
+                            AgreementTerm::Delivery {
+                                debtor,
+                                source,
+                                destination,
+                                quantity,
+                                ..
+                            } => (debtor, source, destination, quantity.0),
+                            AgreementTerm::OutputShare {
+                                debtor,
+                                destination,
+                                ..
+                            } => (debtor, share_origins[&o.id], destination, o.accrued),
+                            _ => continue,
                         };
                         let source_cargo = o.cargo.remove(&source).unwrap_or(0);
                         let from_cargo = source_cargo.min(unallocated);
@@ -2047,7 +2462,7 @@ impl Simulation {
                         unallocated -= from_cargo;
                         let direct = source == origin && actor == debtor;
                         let eligible = if direct { unallocated } else { from_cargo };
-                        let outstanding = promised.0 - o.performed;
+                        let outstanding = promised - o.performed;
                         if actor == debtor && destination == goal {
                             let credit = eligible.min(outstanding);
                             o.performed += credit;
@@ -2100,6 +2515,13 @@ impl Simulation {
             }
         }
         self.state.agreements.as_mut().unwrap().last_event = last_event;
+        for (obligation, actor, quantity) in accruals {
+            self.emit(EventKind::ObligationAccrued {
+                obligation,
+                actor,
+                quantity: Quantity(quantity),
+            });
+        }
         if flush_work {
             self.flush_agreement_work();
         }
@@ -2111,6 +2533,24 @@ impl Simulation {
             });
             self.refresh_agreement_status(agreement);
         }
+        let streams = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .agreements
+            .values()
+            .filter(|a| {
+                a.terms
+                    .iter()
+                    .any(|t| matches!(t, AgreementTerm::OutputShare { .. }))
+                    && !a.obligations.is_empty()
+            })
+            .map(|a| a.id)
+            .collect::<Vec<_>>();
+        for id in streams {
+            self.refresh_agreement_status(id);
+        }
         let defaults: Vec<_> = self
             .state
             .agreements
@@ -2120,7 +2560,7 @@ impl Simulation {
             .values()
             .filter(|o| {
                 !o.defaulted
-                    && o.performed < o.term.amount()
+                    && o.performed < o.amount()
                     && o.term.deadline().is_some_and(|d| d <= self.state.time)
             })
             .map(|o| (o.id, o.agreement))
@@ -2270,10 +2710,75 @@ impl Simulation {
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
         let mut score = self.project_financing_utility(actor, terms);
         for term in terms {
-            if term.amount() == 0 {
+            if term.amount() == 0 && !matches!(term, AgreementTerm::OutputShare { .. }) {
                 continue;
             }
             match *term {
+                AgreementTerm::OutputShare {
+                    creditor,
+                    debtor,
+                    site,
+                    numerator,
+                    denominator,
+                    ..
+                } => {
+                    let fertility = self
+                        .state
+                        .ecology
+                        .as_ref()
+                        .and_then(|w| w.known_plots.get(&actor))
+                        .and_then(|k| k.get(&site))
+                        .map(|p| p.soil_fertility);
+                    let remembered_plan = self
+                        .state
+                        .projects
+                        .as_ref()
+                        .and_then(|w| w.known_projects.get(&actor))
+                        .is_some_and(|k| {
+                            k.values()
+                                .any(|p| matches!(p.kind,ProjectKind::Farm {plot,..} if plot==site))
+                        });
+                    let value = if let Some(fertility) = fertility.filter(|_| remembered_plan) {
+                        let crop = &self.state.environment.as_ref().unwrap().crop;
+                        let expected = u128::from(crop.food_yield.0)
+                            * u128::from(fertility)
+                            * u128::from(numerator)
+                            / u128::from(denominator)
+                            / 1_000;
+                        // A known plan is a risky future food prospect, not a guarantee.
+                        let estimate = (expected / 100).min(20_000) as i64;
+                        estimate * i64::from(mind.personality.risk_tolerance) / 1_000
+                    } else if self
+                        .state
+                        .projects
+                        .as_ref()
+                        .and_then(|w| w.known_enterprises.get(&actor))
+                        .is_some_and(|k| k.values().any(|e| e.site == site))
+                        || self.state.environment.as_ref().is_some_and(|w| {
+                            w.fields.get(&site).is_some_and(|f| {
+                                self.state.people[self.person_index[&actor]].location
+                                    == Location::AtArea(f.area)
+                            })
+                        })
+                    {
+                        (numerator.saturating_mul(
+                            u64::from(mind.personality.ambition)
+                                + u64::from(mind.personality.hedonism),
+                        ) / denominator)
+                            .min(2_000) as i64
+                    } else {
+                        -2_000
+                    };
+                    if creditor == actor {
+                        score += value;
+                    }
+                    if debtor == actor {
+                        score -= value / 2;
+                    }
+                }
+                AgreementTerm::SiteAccess {
+                    grantee, allowed, ..
+                } if grantee == actor => score += if allowed { 1_000 } else { -1_000 },
                 AgreementTerm::Delivery {
                     debtor,
                     creditor,
@@ -2489,7 +2994,7 @@ impl Simulation {
                             .filter(move |o| o.term.parties()[0] == *actor)
                     })
             })
-            .filter(|o| o.performed < o.term.amount())
+            .filter(|o| o.performed < o.amount())
             .cloned()
             .collect();
         for o in &obligations {
@@ -2514,24 +3019,59 @@ impl Simulation {
             {
                 continue;
             }
-            let command = match o.term {
+            let task = match o.term {
+                AgreementTerm::OutputShare {
+                    debtor,
+                    creditor,
+                    site,
+                    good,
+                    destination,
+                    pay_by,
+                    ..
+                } => {
+                    let Some(source) = output_source(&self.state, site, good) else {
+                        continue;
+                    };
+                    AgreementTerm::Delivery {
+                        debtor,
+                        creditor,
+                        source,
+                        destination,
+                        quantity: Quantity(o.accrued),
+                        deadline: pay_by,
+                    }
+                }
+                ref term => term.clone(),
+            };
+            let command = match task {
                 AgreementTerm::ConstructionLabor { project, .. } => self
                     .construction_possible(debtor, project)
                     .then_some(Command::Project {
                         action: ProjectAction::Work { project },
                     }),
                 AgreementTerm::Labor { site, .. } => {
-                    mind.sites.get(&site).filter(|s| s.access).and_then(|s| {
-                        if s.area == area {
-                            Some(Command::Work { site })
-                        } else {
-                            decisions::known_path(&mind.routes, area, s.area)
-                                .ok()
-                                .map(|_| Command::Move {
-                                    destination: s.area,
-                                })
-                        }
-                    })
+                    if self
+                        .state
+                        .environment
+                        .as_ref()
+                        .is_some_and(|w| w.fields.contains_key(&site))
+                    {
+                        self.available_cultivation(debtor)
+                            .into_iter()
+                            .find(|c| matches!(c,Command::Cultivate {field,..} if *field==site))
+                    } else {
+                        mind.sites.get(&site).filter(|s| s.access).and_then(|s| {
+                            if s.area == area {
+                                Some(Command::Work { site })
+                            } else {
+                                decisions::known_path(&mind.routes, area, s.area)
+                                    .ok()
+                                    .map(|_| Command::Move {
+                                        destination: s.area,
+                                    })
+                            }
+                        })
+                    }
                 }
                 AgreementTerm::Delivery {
                     source,
@@ -2612,5 +3152,31 @@ impl Simulation {
                 let _ = self.debug_physical_command(actor, command);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod share_tests {
+    use super::*;
+    #[test]
+    fn changing_future_fraction_retains_the_fraction_already_owed() {
+        let (amount, remainder, scale) = accrue_share(0, 0, 0, 1, 3, 1).unwrap();
+        assert_eq!((amount, remainder, scale), (0, 1, 3));
+        let (amount, remainder, scale) = accrue_share(amount, remainder, scale, 1, 2, 1).unwrap();
+        assert_eq!((amount, remainder, scale), (0, 5, 6));
+        assert_eq!(
+            accrue_share(amount, remainder, scale, 1, 2, 1).unwrap(),
+            (1, 1, 3)
+        );
+    }
+    #[test]
+    fn many_small_physical_batches_owe_the_same_share_as_one_batch() {
+        let mut split = (0, 0, 0);
+        for quantity in [7, 1, 3, 8, 2] {
+            split = accrue_share(split.0, split.1, split.2, 2, 7, quantity).unwrap();
+        }
+        assert_eq!(split, accrue_share(0, 0, 0, 2, 7, 21).unwrap());
+        assert_eq!(split, (6, 0, 1));
+        assert_eq!(accrue_share(u64::MAX, 0, 0, 1, 1, 1), Err(Error::Overflow));
     }
 }

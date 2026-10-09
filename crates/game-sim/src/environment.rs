@@ -53,7 +53,7 @@ impl Climate {
             rainfall_variation: 3,
         }
     }
-    fn weather(&self, seed: u64, day: u64, season: usize) -> Weather {
+    pub(crate) fn weather(&self, seed: u64, day: u64, season: usize) -> Weather {
         let random = mix(seed ^ day.wrapping_mul(0x9e3779b97f4a7c15));
         let temperature_width = u64::from(self.temperature_variation) * 2 + 1;
         let rain_width = u64::from(self.rainfall_variation) * 2 + 1;
@@ -95,6 +95,16 @@ pub struct CropRules {
     pub food_yield: Quantity,
     pub seed_yield: Quantity,
     pub soil_depletion: u16,
+    #[serde(default = "default_soil_recovery")]
+    pub soil_recovery: u16,
+    #[serde(default = "default_fallow_labor")]
+    pub fallow_labor: SimDuration,
+}
+fn default_soil_recovery() -> u16 {
+    1
+}
+fn default_fallow_labor() -> SimDuration {
+    SimDuration(3_600_000)
 }
 impl CropRules {
     pub fn grain() -> Self {
@@ -117,10 +127,13 @@ impl CropRules {
             food_yield: Quantity(6_000_000),
             seed_yield: Quantity(2_000),
             soil_depletion: 20,
+            soil_recovery: default_soil_recovery(),
+            fallow_labor: default_fallow_labor(),
         }
     }
     fn labor(&self, operation: FarmOperation) -> u64 {
         match operation {
+            FarmOperation::Fallow => self.fallow_labor.0,
             FarmOperation::Prepare => self.prepare_labor.0,
             FarmOperation::Plant => self.plant_labor.0,
             FarmOperation::Tend => self.tend_labor.0,
@@ -144,6 +157,8 @@ pub struct Field {
     pub id: SiteId,
     pub area: AreaId,
     pub access: BTreeSet<PersonId>,
+    #[serde(default)]
+    pub custodian: Option<PersonId>,
     pub seed: InventoryId,
     pub tool: InventoryId,
     pub water: InventoryId,
@@ -230,6 +245,8 @@ impl Config {
             .contains(&0)
             || crop.ripe_degree_days > u64::MAX / 1_000
             || crop.soil_depletion > 1_000
+            || crop.soil_recovery > 1_000
+            || crop.fallow_labor.0 == 0
             || !(-100..=100).contains(&crop.base_temperature)
             || crop.food_yield.0 > u64::MAX - 3_000_000
             || crop.seed_yield.0 > u64::MAX - 10_000
@@ -385,6 +402,7 @@ impl Simulation {
             fields: BTreeMap::from([(
                 id,
                 Field {
+                    custodian: None,
                     id,
                     area: farm,
                     access: people,
@@ -419,6 +437,7 @@ impl Simulation {
         private_field.id = private_field_id;
         private_field.tool = private_tool;
         private_field.access = BTreeSet::from([sim.state.ruler]);
+        private_field.custodian = Some(sim.state.ruler);
         sim.state
             .environment
             .as_mut()
@@ -516,7 +535,7 @@ impl Simulation {
         }
     }
 
-    fn cultivation_possible(
+    pub(crate) fn cultivation_possible(
         &self,
         actor: PersonId,
         field: SiteId,
@@ -568,7 +587,7 @@ impl Simulation {
         let usable = |id: InventoryId, good: Good, quantity: u64| {
             self.state.inventories.get(&id).is_some_and(|stock| {
                 stock.good == good
-                    && stock.access.contains(&actor)
+                    && self.has_stock_access(actor, stock)
                     && self.inventory_area(stock) == Some(field.area)
                     && self.unreserved_stock(id, actor) >= quantity
             })
@@ -577,6 +596,7 @@ impl Simulation {
             return false;
         }
         match operation {
+            FarmOperation::Fallow => field.phase != CropPhase::Fallow,
             FarmOperation::Prepare => {
                 matches!(field.phase, CropPhase::Fallow | CropPhase::Failed)
                     && world.weather.temperature > 0
@@ -653,10 +673,14 @@ impl Simulation {
             FarmOperation::Irrigate => Some((land.water, world.crop.irrigation_input)),
             _ => None,
         };
+        if let Some((source, quantity)) = consume {
+            self.preflight_farm_input(field, source, quantity)?;
+        }
         self.ensure_event_capacity(2)?;
         self.interrupt_physical(actor);
         if let Some((source, quantity)) = consume {
             self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
+            self.record_farm_input(field, source, quantity);
             self.emit(EventKind::Consumed {
                 actor,
                 source,
@@ -739,6 +763,15 @@ impl Simulation {
         let field = world.fields.get_mut(&job.field).unwrap();
         let mut harvested = None;
         match job.operation {
+            FarmOperation::Fallow => {
+                field.phase = CropPhase::Fallow;
+                field.preparation_ms = 0;
+                field.planting_ms = 0;
+                field.harvest_ms = 0;
+                field.degree_days_milli = 0;
+                field.stress_days = 0;
+                field.tending = 0;
+            }
             FarmOperation::Prepare => {
                 field.phase = CropPhase::Prepared;
                 field.preparation_ms = crop.prepare_labor.0;
@@ -858,6 +891,7 @@ impl Simulation {
                     FarmOperation::Tend,
                     FarmOperation::Irrigate,
                     FarmOperation::Harvest,
+                    FarmOperation::Fallow,
                 ]
                 .into_iter()
                 .filter_map(|operation| {
@@ -875,25 +909,30 @@ impl Simulation {
     /// still rechecks physical stocks, access, and competition at commit time.
     pub(crate) fn autonomous_cultivation(&self, actor: PersonId) -> Option<Command> {
         let world = self.state.environment.as_ref()?;
-        for field in world.fields.values() {
-            let operation = match field.phase {
-                CropPhase::Fallow | CropPhase::Failed => FarmOperation::Prepare,
-                CropPhase::Prepared | CropPhase::Planting => FarmOperation::Plant,
-                CropPhase::Ripe => FarmOperation::Harvest,
-                CropPhase::Growing if field.soil_water < world.crop.optimal_water / 2 => {
-                    FarmOperation::Irrigate
-                }
-                CropPhase::Growing if field.tending < 1_000 => FarmOperation::Tend,
-                _ => continue,
-            };
-            if self.cultivation_possible(actor, field.id, operation) {
-                return Some(Command::Cultivate {
-                    field: field.id,
-                    operation,
-                });
+        world
+            .fields
+            .keys()
+            .find_map(|field| self.autonomous_field_cultivation(actor, *field))
+    }
+    pub(crate) fn autonomous_field_cultivation(
+        &self,
+        actor: PersonId,
+        field: SiteId,
+    ) -> Option<Command> {
+        let world = self.state.environment.as_ref()?;
+        let land = world.fields.get(&field)?;
+        let operation = match land.phase {
+            CropPhase::Fallow | CropPhase::Failed => FarmOperation::Prepare,
+            CropPhase::Prepared | CropPhase::Planting => FarmOperation::Plant,
+            CropPhase::Ripe => FarmOperation::Harvest,
+            CropPhase::Growing if land.soil_water < world.crop.optimal_water / 2 => {
+                FarmOperation::Irrigate
             }
-        }
-        None
+            CropPhase::Growing if land.tending < 1_000 => FarmOperation::Tend,
+            _ => return None,
+        };
+        self.cultivation_possible(actor, field, operation)
+            .then_some(Command::Cultivate { field, operation })
     }
 
     pub(crate) fn validate_environment(&self) -> Result<(), Error> {
@@ -929,6 +968,9 @@ impl Simulation {
                     .as_ref()
                     .is_none_or(|w| w.sites.contains_key(id))
                 || !self.state.areas.iter().any(|a| a.id == field.area)
+                || field
+                    .custodian
+                    .is_some_and(|id| !self.person_index.contains_key(&id))
                 || field.soil_fertility > 1_000
                 || field.tending > 1_000
                 || field.water_capacity == 0
@@ -1024,6 +1066,7 @@ impl Simulation {
                 return Err(invalid());
             }
             let phase_valid = match job.operation {
+                FarmOperation::Fallow => field.phase != CropPhase::Fallow,
                 FarmOperation::Prepare => field.phase == CropPhase::Fallow,
                 FarmOperation::Plant => field.phase == CropPhase::Planting,
                 FarmOperation::Tend | FarmOperation::Irrigate => {
@@ -1073,6 +1116,15 @@ fn grow(field: &mut Field, crop: &CropRules, weather: &Weather) -> Result<(), Er
         })
         .min(field.water_capacity)
         .saturating_sub(weather.evaporation);
+    if field.phase == CropPhase::Fallow
+        && weather.temperature > crop.base_temperature
+        && field.soil_water > 0
+    {
+        field.soil_fertility = field
+            .soil_fertility
+            .saturating_add(crop.soil_recovery)
+            .min(1_000);
+    }
     if field.phase != CropPhase::Growing {
         return Ok(());
     }
@@ -1170,6 +1222,37 @@ mod tests {
         perform(sim, field, FarmOperation::Plant);
     }
 
+    #[test]
+    fn deliberate_fallow_loses_planted_seed_and_warm_wet_soil_recovers_without_harvest() {
+        let (mut sim, field) = compact(1);
+        sim.state.environment.as_mut().unwrap().crop.fallow_labor = SimDuration(5_000);
+        sim.state.environment.as_mut().unwrap().crop.soil_recovery = 5;
+        plant(&mut sim, field);
+        let land = sim.state.environment.as_ref().unwrap().fields[&field].clone();
+        let consumed = sim.state.inventories[&land.seed].quantity;
+        let food = sim.state.inventories[&land.food].quantity;
+        sim.state
+            .environment
+            .as_mut()
+            .unwrap()
+            .fields
+            .get_mut(&field)
+            .unwrap()
+            .soil_fertility = 500;
+        perform(&mut sim, field, FarmOperation::Fallow);
+        assert_eq!(sim.state.inventories[&land.seed].quantity, consumed);
+        assert_eq!(sim.state.inventories[&land.food].quantity, food);
+        assert_eq!(
+            sim.state.environment.as_ref().unwrap().fields[&field].phase,
+            CropPhase::Fallow
+        );
+        sim.advance(SimDuration(600_000)).unwrap();
+        assert_eq!(
+            sim.state.environment.as_ref().unwrap().fields[&field].soil_fertility,
+            505
+        );
+        sim.validate_environment().unwrap();
+    }
     #[test]
     fn full_cycle_consumes_seed_and_credits_only_real_labor_and_harvest() {
         let (mut sim, field) = compact(1);

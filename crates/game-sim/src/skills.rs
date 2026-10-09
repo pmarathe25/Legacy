@@ -184,7 +184,9 @@ impl Simulation {
                 Activity::Work { .. } if equipment.get(actor).copied().unwrap_or(false) => {
                     (Skill::Craft, None)
                 }
-                Activity::Cultivate { .. } if equipment.get(actor).copied().unwrap_or(false) => {
+                Activity::Gather { .. } | Activity::Cultivate { .. }
+                    if equipment.get(actor).copied().unwrap_or(false) =>
+                {
                     (Skill::Farming, None)
                 }
                 Activity::Construct { .. } => (Skill::Craft, None),

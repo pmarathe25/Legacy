@@ -29,7 +29,7 @@ pub fn execute(
             *sim = loaded;
             Ok("loaded".into())
         }
-        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site|food source quantity> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | invocation <JSON action> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | escape | restrain <person> | yield <captor> | withdraw-yield | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
+        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest|fallow> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site|food source quantity> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | command <JSON Command> | ecology <JSON action> | mission <JSON action> | invocation <JSON action> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | escape | restrain <person> | yield <captor> | withdraw-yield | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
 }
@@ -150,6 +150,13 @@ fn parse_line_command(
         .split_once(char::is_whitespace)
         .unwrap_or((trimmed, ""));
     let command = match verb {
+        "command" => Some(serde_json::from_str(body)?),
+        "ecology" => Some(Command::Ecology {
+            action: serde_json::from_str(body)?,
+        }),
+        "mission" => Some(Command::Mission {
+            action: serde_json::from_str(body)?,
+        }),
         "invocation" => Some(Command::Invocation {
             action: serde_json::from_str(body)?,
         }),
@@ -295,6 +302,7 @@ fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::er
         ["farm", field, operation] => Command::Cultivate {
             field: SiteId(field.parse()?),
             operation: match *operation {
+                "fallow" => FarmOperation::Fallow,
                 "prepare" => FarmOperation::Prepare,
                 "plant" => FarmOperation::Plant,
                 "tend" => FarmOperation::Tend,
@@ -348,7 +356,7 @@ pub fn execute_session(
         ["run",duration] => return Ok(SessionOutput::Advancing(session.run(parse_duration(duration)?)?)),
         ["save",path] => { save_file(std::path::Path::new(path),&session.save()?)?; "saved".into() },
         ["load",path] => { session.load(std::fs::read(path)?)?; "loaded".into() },
-        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site|food source quantity> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | invocation <JSON action> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | escape | restrain <person> | yield <captor> | withdraw-yield | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
+        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest|fallow> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site|food source quantity> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | command <JSON Command> | ecology <JSON action> | mission <JSON action> | invocation <JSON action> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | escape | restrain <person> | yield <captor> | withdraw-yield | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
         _ => return Err("unknown command; use help".into()),
     };
     Ok(SessionOutput::Text(text))

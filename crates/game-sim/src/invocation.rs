@@ -1274,6 +1274,8 @@ impl Simulation {
         let exerting = matches!(
             body.activity,
             Activity::Work { .. }
+                | Activity::Gather { .. }
+                | Activity::Construct { .. }
                 | Activity::Load { .. }
                 | Activity::Take { .. }
                 | Activity::Combat { .. }

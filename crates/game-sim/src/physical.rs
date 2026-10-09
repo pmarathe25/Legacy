@@ -265,6 +265,15 @@ impl Simulation {
     ) -> Result<(), Error> {
         self.preflight_agreements()?;
         self.preflight_institutions()?;
+        if let Command::Ecology { ref action } = command {
+            return self.debug_ecology_action(actor, action);
+        }
+        if let Command::Mission { ref action } = command {
+            self.mission_command(actor, action)?;
+            self.observe_agreement_events();
+            self.revision += 1;
+            return Ok(());
+        }
         match command {
             Command::Escape => return self.start_escape(actor),
             Command::Restrain { target } => return self.start_restraint(actor, target),
@@ -751,6 +760,8 @@ impl Simulation {
     }
 
     pub(crate) fn interrupt_physical(&mut self, actor: PersonId) {
+        self.interrupt_ecology(actor);
+        self.cancel_mission_talk(actor);
         self.interrupt_force(actor);
         self.cancel_invocation_action(actor);
         self.interrupt_construction(actor);
@@ -852,7 +863,8 @@ impl Simulation {
             }
             if matches!(
                 a.activity,
-                Activity::Work { .. }
+                Activity::Gather { .. }
+                    | Activity::Work { .. }
                     | Activity::Load { .. }
                     | Activity::Take { .. }
                     | Activity::Construct { .. }
@@ -896,6 +908,7 @@ impl Simulation {
                 let exerting = matches!(
                     a.activity,
                     Activity::Work { .. }
+                        | Activity::Gather { .. }
                         | Activity::Load { .. }
                         | Activity::Take { .. }
                         | Activity::Construct { .. }
@@ -968,6 +981,10 @@ impl Simulation {
             .activity
             .clone();
         let mut success = false;
+        if matches!(activity, Activity::Gather { .. }) {
+            self.complete_gathering(actor);
+            return;
+        }
         if matches!(
             activity,
             Activity::Escape { .. } | Activity::Restrain { .. }
@@ -1267,6 +1284,7 @@ impl Simulation {
                     && matches!(
                         previous.activity,
                         Activity::Work { .. }
+                            | Activity::Gather { .. }
                             | Activity::Load { .. }
                             | Activity::Take { .. }
                             | Activity::Construct { .. }
@@ -1348,6 +1366,30 @@ impl Simulation {
                 self.emit(EventKind::Recovered { actor });
             }
         }
+    }
+
+    pub(crate) fn possible_work_outputs(
+        &self,
+        outcomes: &[Outcome],
+    ) -> Vec<(SiteId, Good, Quantity)> {
+        let Some(world) = &self.state.physical else {
+            return Vec::new();
+        };
+        outcomes
+            .iter()
+            .filter_map(|out| {
+                let actor = &world.actors[&out.id];
+                if out.remaining != Some(0) || !matches!(actor.activity, Activity::Work { .. }) {
+                    return None;
+                }
+                let site = &world.sites[&actor.job.as_ref()?.site];
+                Some((
+                    site.id,
+                    self.state.inventories[&site.output].good,
+                    site.output_quantity,
+                ))
+            })
+            .collect()
     }
 
     pub fn debug_add_inventory(

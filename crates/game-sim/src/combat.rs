@@ -28,6 +28,8 @@ pub struct Map {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fighter {
     pub actor: PersonId,
+    #[serde(default)]
+    pub joins_round: u64,
     pub team: u32,
     pub position: Point,
     pub surrendered: bool,
@@ -185,7 +187,7 @@ impl Simulation {
                     })
             })
     }
-    fn can_fight(&self, actor: PersonId) -> bool {
+    pub(crate) fn can_fight(&self, actor: PersonId) -> bool {
         let w = self.state.combat.as_ref().unwrap();
         let v = &self.state.physical.as_ref().unwrap().actors[&actor].vitals;
         v.alive && v.health > w.rules.incapacitation && !w.captivity.contains_key(&actor)
@@ -193,6 +195,96 @@ impl Simulation {
     fn can_combat_act(&self, actor: PersonId) -> bool {
         self.independent(actor) && (self.can_fight(actor) || self.force_can_combat_act(actor))
     }
+    pub(crate) fn admit_mission_reinforcement(
+        &mut self,
+        id: EncounterId,
+        actor: PersonId,
+        team: u32,
+        from: AreaId,
+    ) -> Result<(), Error> {
+        let world = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
+        let encounter = world.encounters.get(&id).ok_or(Error::Unavailable)?;
+        if !encounter.active
+            || encounter.fighters.contains_key(&actor)
+            || !encounter
+                .fighters
+                .values()
+                .any(|fighter| fighter.team == team)
+            || !self.can_fight(actor)
+            || self.in_combat(actor)
+            || self.state.people[self.person_index[&actor]].location
+                != Location::AtArea(encounter.area)
+        {
+            return Err(Error::Unavailable);
+        }
+        let area = encounter.area;
+        let arrived = self.state.events.iter().rev().take_while(|e| e.time == self.state.time)
+            .any(|event| matches!(event.kind, EventKind::Arrived { actor: person, area: destination } if person == actor && destination == area));
+        let departed = self.state.events.iter().rev().any(|event| matches!(event.kind,
+            EventKind::Departed { actor: person, from: origin, to, arrives } if person == actor && origin == from && to == area && arrives == self.state.time));
+        if !arrived || !departed {
+            return Err(Error::Unavailable);
+        }
+        let joins_round = encounter.round.checked_add(1).ok_or(Error::Overflow)?;
+        let map = &world.maps[&area];
+        let position = map
+            .exits
+            .iter()
+            .find(|(area, _)| *area == from)
+            .map(|(_, point)| *point)
+            .unwrap_or(Point {
+                x: 0,
+                y: map.height / 2,
+            });
+        if !map.clear(position, position) {
+            return Err(Error::Unavailable);
+        }
+        self.ensure_event_capacity(1)?;
+        self.interrupt_physical(actor);
+        self.state
+            .physical
+            .as_mut()
+            .unwrap()
+            .actors
+            .get_mut(&actor)
+            .unwrap()
+            .activity = Activity::Combat { encounter: id };
+        self.state
+            .combat
+            .as_mut()
+            .unwrap()
+            .encounters
+            .get_mut(&id)
+            .unwrap()
+            .fighters
+            .insert(
+                actor,
+                Fighter {
+                    actor,
+                    joins_round,
+                    team,
+                    position,
+                    surrendered: false,
+                    withdrawn: false,
+                    defending: false,
+                    retreat: None,
+                    known: BTreeMap::new(),
+                },
+            );
+        self.emit(EventKind::CombatReinforcement {
+            encounter: id,
+            actor,
+            joins_round,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn admit_due_mission_reinforcements(&mut self) {
+        for (encounter, actor, team, from) in self.mission_reinforcements() {
+            let _ = self.admit_mission_reinforcement(encounter, actor, team, from);
+        }
+    }
+
     pub(crate) fn awaiting_combat_input(&self) -> Option<EncounterId> {
         self.state
             .combat
@@ -432,6 +524,7 @@ impl Simulation {
                 actor,
                 Fighter {
                     actor,
+                    joins_round: 0,
                     team,
                     position,
                     surrendered: false,
@@ -471,7 +564,7 @@ impl Simulation {
         let mut order: Vec<_> = e
             .fighters
             .values()
-            .filter(|f| !f.withdrawn)
+            .filter(|f| !f.withdrawn && f.joins_round <= e.round)
             .map(|f| f.actor)
             .collect();
         order.sort_by_key(|actor| {
@@ -586,6 +679,12 @@ impl Simulation {
             })
         };
         match action {
+            CombatAction::MissionObjective {
+                mission,
+                ref objective,
+            } => {
+                self.validate_mission_combat_order(actor, mission, objective)?;
+            }
             CombatAction::Attack { target } => {
                 if target == actor
                     || !reachable(target)
@@ -675,6 +774,9 @@ impl Simulation {
             });
         }
         match action {
+            CombatAction::MissionObjective { mission, objective } => {
+                self.mission_combat_order(actor, mission, objective)?;
+            }
             CombatAction::Attack { target } => {
                 let w = self.state.combat.as_ref().unwrap();
                 let defending = w.encounters[&id].fighters[&target].defending;
@@ -843,6 +945,7 @@ impl Simulation {
                 break;
             }
             self.observe_fighter(id, actor);
+            self.review_mission_combat(id, actor);
             let w = self.state.combat.as_ref().unwrap();
             let e = &w.encounters[&id];
             let f = &e.fighters[&actor];
@@ -855,7 +958,9 @@ impl Simulation {
                     .min_by_key(|other| (distance(f.position, f.known[other]), **other))
                     .copied()
             });
-            let (movement, action) = if let Some(action) = self.force_combat_action(actor, id) {
+            let (movement, action) = if let Some(pair) = self.mission_combat_action(id, actor) {
+                pair
+            } else if let Some(action) = self.force_combat_action(actor, id) {
                 (None, action)
             } else if let Some(target) = target {
                 let destination = f.known[&target];
@@ -1191,6 +1296,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
         for (actor, f) in &e.fighters {
             if *actor != f.actor
+                || f.joins_round > e.round.saturating_add(1)
+                || (f.joins_round > e.round && e.order.contains(actor))
                 || !people.contains(actor)
                 || !map.contains(f.position)
                 || f.known
@@ -1242,4 +1349,78 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod reinforcement_tests {
+    use super::*;
+
+    #[test]
+    fn a_real_arrival_joins_at_an_entrance_and_waits_for_the_next_initiative_round() {
+        let mut sim = Simulation::combat_fixture(77, Execution::default()).unwrap();
+        let ruler = sim.state.ruler;
+        let opponent = sim.state.people[1].id;
+        let reinforcement = sim.state.people[4].id;
+        sim.state.combat.as_mut().unwrap().rules.damage = 1;
+        sim.debug_set_personality(
+            reinforcement,
+            decisions::Personality::restful(),
+            decisions::Dream::Comfort,
+        )
+        .unwrap();
+        sim.debug_move_actor(reinforcement, AreaId(2)).unwrap();
+        sim.advance(SimDuration(120_000)).unwrap();
+        sim.debug_move_actor(reinforcement, AreaId(1)).unwrap();
+        let arrival = match sim.state.people[sim.person_index[&reinforcement]].location {
+            Location::InTransit { arrives, .. } => arrives,
+            _ => panic!("reinforcements must travel"),
+        };
+        let encounter = sim
+            .debug_start_encounter(vec![(ruler, 0), (opponent, 1)])
+            .unwrap();
+        let before = sim.state.clone();
+        assert_eq!(
+            sim.admit_mission_reinforcement(encounter, reinforcement, 0, AreaId(2)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(sim.state, before);
+        while sim.time() < arrival {
+            if sim.awaiting_combat_input().is_some() {
+                sim.execute_turn(encounter, ruler, None, CombatAction::Defend)
+                    .unwrap();
+            }
+            sim.advance(SimDuration(6_000)).unwrap();
+        }
+        sim.admit_mission_reinforcement(encounter, reinforcement, 0, AreaId(2))
+            .unwrap();
+        let battle = &sim.state.combat.as_ref().unwrap().encounters[&encounter];
+        assert!(!battle.order.contains(&reinforcement));
+        assert_eq!(
+            battle.fighters[&reinforcement].joins_round,
+            battle.round + 1
+        );
+        let entrance = sim.state.combat.as_ref().unwrap().maps[&AreaId(1)]
+            .exits
+            .iter()
+            .find(|(area, _)| *area == AreaId(2))
+            .unwrap()
+            .1;
+        assert_eq!(battle.fighters[&reinforcement].position, entrance);
+        sim = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 2,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.execute_turn(encounter, ruler, None, CombatAction::Defend)
+            .unwrap();
+        sim.advance(SimDuration(6_000)).unwrap();
+        assert!(
+            sim.state.combat.as_ref().unwrap().encounters[&encounter]
+                .order
+                .contains(&reinforcement)
+        );
+    }
 }

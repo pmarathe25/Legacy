@@ -1077,6 +1077,11 @@ impl Simulation {
                     }
                     EventKind::Produced {
                         output, quantity, ..
+                    }
+                    | EventKind::ResourceCollected {
+                        destination: output,
+                        quantity,
+                        ..
                     } if output == stock.id => {
                         opening -= i128::from(quantity.0);
                     }
@@ -1205,6 +1210,11 @@ impl Simulation {
                 }
                 EventKind::Produced {
                     output, quantity, ..
+                }
+                | EventKind::ResourceCollected {
+                    destination: output,
+                    quantity,
+                    ..
                 } if quantity.0 > 0 => {
                     *self
                         .state

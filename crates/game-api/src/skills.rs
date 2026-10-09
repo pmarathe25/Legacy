@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Skill {
+    Medicine,
     Craft,
     Farming,
     Combat,
@@ -11,7 +12,8 @@ pub enum Skill {
     Leadership,
 }
 impl Skill {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
+        Self::Medicine,
         Self::Craft,
         Self::Farming,
         Self::Combat,

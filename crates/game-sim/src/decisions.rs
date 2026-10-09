@@ -349,6 +349,7 @@ impl Simulation {
         self.review_lineage()?;
         self.review_agreements()?;
         self.review_institutions()?;
+        self.review_missions()?;
         self.review_projects()?;
         self.review_conception()?;
         let world = self.state.decisions.as_ref().unwrap();
@@ -423,6 +424,7 @@ impl Simulation {
         };
         if self.in_combat(id)
             || self.lineage_handles(id)
+            || self.mission_actor_busy(id)
             || id == self.state.ruler
             || !actor.vitals.alive
             || actor.vitals.health == 0
@@ -466,6 +468,8 @@ impl Simulation {
                 | Activity::ReportIncident { .. }
                 | Activity::Lesson { .. }
                 | Activity::Construct { .. }
+                | Activity::Gather { .. }
+                | Activity::MissionTalk { .. }
                 | Activity::ReportAgreement { .. }
                 | Activity::Escape { .. }
                 | Activity::Restrain { .. }
@@ -491,6 +495,15 @@ impl Simulation {
                 },
             ))
         };
+        if let Some(command) = self.ecology_candidate(id) {
+            add(
+                command,
+                Goal::Survival,
+                if urgent { 2_000 } else { 0 },
+                200,
+                0,
+            );
+        }
         if let Some(command) = self.project_candidate(id) {
             add(
                 command,

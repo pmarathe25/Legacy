@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 14;
+const SAVE_VERSION: u32 = 16;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,26 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, SAVE_VERSION].contains(&header.version) {
+        if ![
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            SAVE_VERSION,
+        ]
+        .contains(&header.version)
+        {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -48,9 +67,10 @@ impl Simulation {
         }
         validate(&save.state)?;
         let mut sim = Self::from_state(save.state, execution, 0)?;
-        if save.version < SAVE_VERSION {
+        if save.version < 14 {
             sim.migrate_legacy_agreement_knowledge();
         }
+        sim.validate_ecology()?;
         Ok(sim)
     }
 
@@ -64,29 +84,18 @@ impl Simulation {
 
 fn validate(s: &CanonicalState) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent committed state".into());
-    if !matches!(
+    let playable = scenarios::PLAYABLE.contains(&s.scenario.id.as_str());
+    let expanded_fixture = matches!(
         s.scenario.id.as_str(),
-        "kernel-fixture"
-            | "survival-fixture"
-            | "autonomy-fixture"
-            | "life-fixture"
-            | "combat-fixture"
-            | "childhood-fixture"
-            | "farming-fixture"
-            | "agreement-fixture"
-            | "lineage-fixture"
-            | "property-fixture"
-            | "institution-fixture"
-            | "skills-fixture"
-            | "project-fixture"
-            | "invocation-fixture"
-            | "force-fixture"
-    ) || s.scenario.version != 1
-        || !s.scenario.debug_fixture
-        || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
-        || matches!(
+        "ecology-fixture" | "farm-enterprise-fixture"
+    );
+    if (!playable
+        && !expanded_fixture
+        && (!matches!(
             s.scenario.id.as_str(),
-            "autonomy-fixture"
+            "kernel-fixture"
+                | "survival-fixture"
+                | "autonomy-fixture"
                 | "life-fixture"
                 | "combat-fixture"
                 | "childhood-fixture"
@@ -99,47 +108,100 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "project-fixture"
                 | "invocation-fixture"
                 | "force-fixture"
-        ) != s.decisions.is_some()
-        || matches!(
-            s.scenario.id.as_str(),
-            "life-fixture"
-                | "combat-fixture"
-                | "childhood-fixture"
-                | "farming-fixture"
-                | "lineage-fixture"
-                | "property-fixture"
-                | "skills-fixture"
-                | "invocation-fixture"
-                | "force-fixture"
-        ) != s.development.is_some()
-        || matches!(
-            s.scenario.id.as_str(),
-            "combat-fixture"
-                | "lineage-fixture"
-                | "property-fixture"
-                | "skills-fixture"
-                | "invocation-fixture"
-                | "force-fixture"
-        ) != s.combat.is_some()
-        || (s.scenario.id == "farming-fixture") != s.environment.is_some()
-        || matches!(
-            s.scenario.id.as_str(),
-            "agreement-fixture" | "property-fixture" | "institution-fixture" | "project-fixture"
-        ) != s.agreements.is_some()
-        || matches!(
-            s.scenario.id.as_str(),
-            "lineage-fixture" | "skills-fixture" | "invocation-fixture" | "force-fixture"
-        ) != s.lineage.is_some()
-        || (s.scenario.id == "property-fixture") != s.property.is_some()
-        || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
-        || (matches!(
-            s.scenario.id.as_str(),
-            "skills-fixture" | "invocation-fixture"
-        ) && s.skills.is_none())
-        || (s.scenario.id == "project-fixture") != s.projects.is_some()
-        || (s.scenario.id == "invocation-fixture") != s.invocation.is_some()
-        || (s.scenario.id == "force-fixture" && s.force.is_none())
-        || (s.force.is_some() && s.combat.is_none())
+                | "mission-fixture"
+        ) || s.scenario.version != 1
+            || !s.scenario.debug_fixture
+            || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
+            || matches!(
+                s.scenario.id.as_str(),
+                "autonomy-fixture"
+                    | "life-fixture"
+                    | "combat-fixture"
+                    | "childhood-fixture"
+                    | "farming-fixture"
+                    | "agreement-fixture"
+                    | "lineage-fixture"
+                    | "property-fixture"
+                    | "institution-fixture"
+                    | "skills-fixture"
+                    | "project-fixture"
+                    | "invocation-fixture"
+                    | "force-fixture"
+                    | "mission-fixture"
+            ) != s.decisions.is_some()
+            || matches!(
+                s.scenario.id.as_str(),
+                "life-fixture"
+                    | "combat-fixture"
+                    | "childhood-fixture"
+                    | "farming-fixture"
+                    | "lineage-fixture"
+                    | "property-fixture"
+                    | "skills-fixture"
+                    | "invocation-fixture"
+                    | "force-fixture"
+                    | "mission-fixture"
+            ) != s.development.is_some()
+            || matches!(
+                s.scenario.id.as_str(),
+                "combat-fixture"
+                    | "lineage-fixture"
+                    | "property-fixture"
+                    | "skills-fixture"
+                    | "invocation-fixture"
+                    | "force-fixture"
+                    | "mission-fixture"
+            ) != s.combat.is_some()
+            || (s.scenario.id == "farming-fixture") != s.environment.is_some()
+            || matches!(
+                s.scenario.id.as_str(),
+                "agreement-fixture"
+                    | "property-fixture"
+                    | "institution-fixture"
+                    | "project-fixture"
+                    | "mission-fixture"
+            ) != s.agreements.is_some()
+            || matches!(
+                s.scenario.id.as_str(),
+                "lineage-fixture" | "skills-fixture" | "invocation-fixture" | "force-fixture"
+            ) != s.lineage.is_some()
+            || (s.scenario.id == "property-fixture") != s.property.is_some()
+            || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
+            || (matches!(
+                s.scenario.id.as_str(),
+                "skills-fixture" | "invocation-fixture"
+            ) && s.skills.is_none())
+            || (s.scenario.id == "project-fixture") != s.projects.is_some()
+            || (s.scenario.id == "invocation-fixture") != s.invocation.is_some()
+            || (s.scenario.id == "force-fixture" && s.force.is_none())
+            || (s.force.is_some() && s.combat.is_none())
+            || (s.scenario.id == "mission-fixture" && s.missions.is_none())
+            || (s.missions.is_some() && (s.combat.is_none() || s.agreements.is_none()))))
+        || ((playable || expanded_fixture) && s.scenario.version != 1)
+        || (playable
+            && (s.scenario.debug_fixture
+                || s.physical.is_none()
+                || s.decisions.is_none()
+                || s.development.is_none()
+                || s.combat.is_none()
+                || s.environment.is_none()
+                || s.agreements.is_none()
+                || s.lineage.is_none()
+                || s.property.is_none()
+                || s.institutions.is_none()
+                || s.skills.is_none()
+                || s.projects.is_none()
+                || s.invocation.is_none()))
+        || (expanded_fixture
+            && (!s.scenario.debug_fixture
+                || s.physical.is_none()
+                || s.decisions.is_none()
+                || s.development.is_none()
+                || s.combat.is_none()
+                || s.environment.is_none()
+                || s.ecology.is_none()))
+        || (s.scenario.id == "farm-enterprise-fixture"
+            && (s.projects.is_none() || s.agreements.is_none()))
     {
         return Err(fail());
     }
@@ -153,6 +215,30 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     {
         if id == 0 || id >= s.next_id || !ids.insert(id) {
             return Err(fail());
+        }
+    }
+    if let Some(world) = &s.ecology {
+        for id in world
+            .resources
+            .keys()
+            .map(|id| id.0)
+            .chain(world.plots.keys().map(|id| id.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.missions {
+        for id in world
+            .missions
+            .keys()
+            .map(|id| id.0)
+            .chain(world.recruitments.keys().map(|id| id.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
+                return Err(fail());
+            }
         }
     }
     if let Some(world) = &s.physical {
@@ -328,7 +414,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -429,6 +515,132 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         match event.kind {
+            EventKind::ObligationAccrued {
+                obligation, actor, ..
+            } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .agreements
+                        .as_ref()
+                        .is_some_and(|w| w.obligations.contains_key(&obligation))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ResourceAccessChanged {
+                resource,
+                actor,
+                recipient,
+                ..
+            } => {
+                if !people.contains_key(&actor)
+                    || !people.contains_key(&recipient)
+                    || !s
+                        .ecology
+                        .as_ref()
+                        .is_some_and(|w| w.resources.contains_key(&resource))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ResourceAccessRequested {
+                resource,
+                actor,
+                custodian,
+            }
+            | EventKind::ResourceAccessRefused {
+                resource,
+                actor,
+                custodian,
+            } => {
+                if !people.contains_key(&actor)
+                    || !people.contains_key(&custodian)
+                    || !s
+                        .ecology
+                        .as_ref()
+                        .is_some_and(|w| w.resources.contains_key(&resource))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::GatheringStarted {
+                resource, actor, ..
+            } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .ecology
+                        .as_ref()
+                        .is_some_and(|w| w.resources.contains_key(&resource))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ResourceCollected {
+                resource,
+                actor,
+                destination,
+                ..
+            } => {
+                if !people.contains_key(&actor)
+                    || !s.inventories.contains_key(&destination)
+                    || !s
+                        .ecology
+                        .as_ref()
+                        .is_some_and(|w| w.resources.contains_key(&resource))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::MissionProposed { mission, sponsor } => {
+                if !people.contains_key(&sponsor)
+                    || !s
+                        .missions
+                        .as_ref()
+                        .is_some_and(|w| w.missions.contains_key(&mission))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::MissionRecruitmentChanged {
+                mission, person, ..
+            }
+            | EventKind::MissionObjectiveChanged {
+                mission,
+                leader: person,
+            } => {
+                if !people.contains_key(&person)
+                    || !s
+                        .missions
+                        .as_ref()
+                        .is_some_and(|w| w.missions.contains_key(&mission))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::MissionReported {
+                mission,
+                speaker,
+                recipient,
+            } => {
+                if !people.contains_key(&speaker)
+                    || !people.contains_key(&recipient)
+                    || !s
+                        .missions
+                        .as_ref()
+                        .is_some_and(|w| w.missions.contains_key(&mission))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::MissionDeparted { mission } | EventKind::MissionFinished { mission, .. } => {
+                if !s
+                    .missions
+                    .as_ref()
+                    .is_some_and(|w| w.missions.contains_key(&mission))
+                {
+                    return Err(fail());
+                }
+            }
             EventKind::AgreementReported {
                 sender,
                 recipient,
@@ -468,6 +680,19 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&target)
                     || !s.inventories.contains_key(&binding)
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::CombatReinforcement {
+                encounter, actor, ..
+            } => {
+                if !people.contains_key(&actor)
+                    || !s.combat.as_ref().is_some_and(|w| {
+                        w.encounters
+                            .get(&encounter)
+                            .is_some_and(|e| e.fighters.contains_key(&actor))
+                    })
                 {
                     return Err(fail());
                 }
@@ -1216,6 +1441,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     projects::validate(s)?;
     invocation::validate(s)?;
     force::validate(s)?;
+    health::validate(s)?;
+    missions::validate(s)?;
     Ok(())
 }
 
@@ -1301,7 +1528,8 @@ fn validate_physical(
         }
         let timed = matches!(
             actor.activity,
-            Activity::ReportAgreement { .. }
+            Activity::Gather { .. }
+                | Activity::ReportAgreement { .. }
                 | Activity::Escape { .. }
                 | Activity::Restrain { .. }
                 | Activity::Eat { .. }

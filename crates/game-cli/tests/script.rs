@@ -974,3 +974,44 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::GuardianAccepted { guardian: actor, requester } if actor == guardian && requester == ruler)));
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
 }
+
+#[test]
+fn normal_openings_and_seeded_random_selection_launch_through_the_cli() {
+    use std::io::Write;
+    for scenario in [
+        "settlement-founder",
+        "established-ruler",
+        "child-successor",
+        "random",
+    ] {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_game-cli"))
+            .args(["--scenario", scenario, "--seed", "41"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"status\nquit\n")
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{scenario}");
+        let text = String::from_utf8(result.stdout).unwrap();
+        let actual = if scenario == "random" {
+            game_sim::scenarios::choose(41)
+        } else {
+            scenario
+        };
+        assert!(text.starts_with(&format!("opening: {actual}\n")));
+        let view: PlayerView = text
+            .lines()
+            .find_map(|line| serde_json::from_str(line).ok())
+            .unwrap();
+        assert!(view.lineage.is_some() && view.environment.is_some());
+        if actual == "child-successor" {
+            assert_eq!(view.life_stage, Some(LifeStage::Infant));
+        }
+    }
+}

@@ -4,6 +4,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectAction {
+    ProposeFarm {
+        plot: SiteId,
+        materials: InventoryId,
+        tool: InventoryId,
+        seed: InventoryId,
+        water: InventoryId,
+        food: InventoryId,
+        beneficiaries: BTreeSet<PersonId>,
+        workers: BTreeSet<PersonId>,
+        finish_by: SimTime,
+    },
     Propose {
         area: AreaId,
         materials: InventoryId,
@@ -27,6 +38,15 @@ pub enum ProjectAction {
     Operate {
         enterprise: EnterpriseId,
         agreement: AgreementId,
+    },
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectKind {
+    #[default]
+    Workshop,
+    Farm {
+        plot: SiteId,
+        water: InventoryId,
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +77,8 @@ pub enum EnterpriseStatus {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectView {
+    #[serde(default)]
+    pub kind: ProjectKind,
     pub id: ProjectId,
     pub sponsor: PersonId,
     pub area: AreaId,
@@ -77,6 +99,10 @@ pub struct ProjectView {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnterpriseAccountView {
+    #[serde(default)]
+    pub inputs: BTreeMap<Good, u64>,
+    #[serde(default)]
+    pub produced: BTreeMap<Good, u64>,
     pub timber_consumed: u64,
     pub tools_produced: u64,
     pub labor: BTreeMap<PersonId, u64>,
@@ -89,6 +115,8 @@ pub struct EnterpriseAccountView {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnterpriseView {
+    #[serde(default)]
+    pub kind: ProjectKind,
     pub id: EnterpriseId,
     pub project: ProjectId,
     pub sponsor: PersonId,

@@ -15,6 +15,10 @@ pub mod invocation;
 pub use invocation::*;
 pub mod force;
 pub use force::*;
+pub mod missions;
+pub use missions::*;
+pub mod ecology;
+pub use ecology::*;
 
 macro_rules! id {
     ($($name:ident),*) => {$(
@@ -23,6 +27,9 @@ macro_rules! id {
     )*};
 }
 id!(
+    ResourceId,
+    MissionId,
+    RecruitmentId,
     PersonId,
     AreaId,
     InventoryId,
@@ -53,6 +60,12 @@ pub const MINUTE: SimDuration = SimDuration(60_000);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Ecology {
+        action: EcologyAction,
+    },
+    Mission {
+        action: MissionAction,
+    },
     Escape,
     Restrain {
         target: PersonId,
@@ -202,6 +215,8 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub ecology: EcologyView,
+    pub missions: Vec<MissionView>,
     pub force: ForceView,
     pub invocation: Option<InvocationView>,
     pub projects: ProjectsView,
@@ -230,6 +245,7 @@ pub struct PlayerView {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Good {
+    Herb,
     Food,
     Timber,
     Tool,
@@ -250,6 +266,15 @@ pub struct Vitals {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Gather {
+        resource: ResourceId,
+        destination: InventoryId,
+        quantity: Quantity,
+        completes: SimTime,
+    },
+    MissionTalk {
+        completes: SimTime,
+    },
     Escape {
         tool: InventoryId,
         completes: SimTime,
@@ -397,6 +422,69 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    ObligationAccrued {
+        obligation: ObligationId,
+        actor: PersonId,
+        quantity: Quantity,
+    },
+    ResourceAccessChanged {
+        resource: ResourceId,
+        actor: PersonId,
+        recipient: PersonId,
+        allowed: bool,
+    },
+    ResourceAccessRequested {
+        resource: ResourceId,
+        actor: PersonId,
+        custodian: PersonId,
+    },
+    ResourceAccessRefused {
+        resource: ResourceId,
+        actor: PersonId,
+        custodian: PersonId,
+    },
+    GatheringStarted {
+        actor: PersonId,
+        resource: ResourceId,
+        unauthorized: bool,
+    },
+    ResourceCollected {
+        actor: PersonId,
+        resource: ResourceId,
+        destination: InventoryId,
+        good: Good,
+        quantity: Quantity,
+    },
+    CombatReinforcement {
+        encounter: EncounterId,
+        actor: PersonId,
+        joins_round: u64,
+    },
+    MissionProposed {
+        mission: MissionId,
+        sponsor: PersonId,
+    },
+    MissionRecruitmentChanged {
+        mission: MissionId,
+        person: PersonId,
+        status: CompanionStatus,
+    },
+    MissionDeparted {
+        mission: MissionId,
+    },
+    MissionObjectiveChanged {
+        mission: MissionId,
+        leader: PersonId,
+    },
+    MissionFinished {
+        mission: MissionId,
+        status: MissionStatus,
+    },
+    MissionReported {
+        mission: MissionId,
+        speaker: PersonId,
+        recipient: PersonId,
+    },
     AgreementReported {
         sender: PersonId,
         recipient: PersonId,
@@ -800,14 +888,28 @@ pub struct Point {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CombatAction {
-    Attack { target: PersonId },
+    MissionObjective {
+        mission: MissionId,
+        objective: MissionObjective,
+    },
+    Attack {
+        target: PersonId,
+    },
     Defend,
     Wait,
     Surrender,
-    Capture { target: PersonId },
-    Release { target: PersonId },
-    Retreat { destination: AreaId },
-    Breach { obstacle: u32 },
+    Capture {
+        target: PersonId,
+    },
+    Release {
+        target: PersonId,
+    },
+    Retreat {
+        destination: AreaId,
+    },
+    Breach {
+        obstacle: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -863,6 +965,7 @@ pub struct ScenarioInfo {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FarmOperation {
+    Fallow,
     Prepare,
     Plant,
     Tend,

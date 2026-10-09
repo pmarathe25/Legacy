@@ -6,16 +6,20 @@ pub mod combat;
 pub mod compute;
 pub mod decisions;
 pub mod development;
+pub mod ecology;
 pub mod environment;
 mod equipment;
 pub mod force;
+pub mod health;
 pub mod institutions;
 pub mod invocation;
 pub mod lineage;
+pub mod missions;
 mod persistence;
 pub mod physical;
 pub mod projects;
 pub mod property;
+pub mod scenarios;
 pub mod session;
 pub mod skills;
 #[doc(hidden)]
@@ -152,6 +156,12 @@ pub struct CanonicalState {
     pub invocation: Option<invocation::World>,
     #[serde(default)]
     pub force: Option<force::World>,
+    #[serde(default)]
+    pub missions: Option<missions::World>,
+    #[serde(default)]
+    pub ecology: Option<ecology::World>,
+    #[serde(default)]
+    pub health: Option<health::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -239,6 +249,11 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             debug_fixture: true,
         },
         ScenarioInfo {
+            id: "mission-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
             id: "force-fixture".into(),
             version: 1,
             debug_fixture: true,
@@ -248,11 +263,53 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "ecology-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
+            id: "farm-enterprise-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
+            id: "settlement-founder".into(),
+            version: 1,
+            debug_fixture: false,
+        },
+        ScenarioInfo {
+            id: "established-ruler".into(),
+            version: 1,
+            debug_fixture: false,
+        },
+        ScenarioInfo {
+            id: "child-successor".into(),
+            version: 1,
+            debug_fixture: false,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenarios::PLAYABLE.contains(&scenario) || scenario == "random" {
+            return Self::playable_scenario(
+                scenario,
+                seed,
+                execution,
+                scenarios::Config::default(),
+            );
+        }
+        if scenario == "ecology-fixture" {
+            return Self::ecology_fixture(seed, execution);
+        }
+        if scenario == "farm-enterprise-fixture" {
+            return Self::farm_enterprise_fixture(seed, execution);
+        }
+        if scenario == "mission-fixture" {
+            return Self::mission_fixture(seed, execution);
+        }
         if scenario == "force-fixture" {
             return Self::force_fixture(seed, execution);
         }
@@ -338,6 +395,9 @@ impl Simulation {
             projects: None,
             invocation: None,
             force: None,
+            missions: None,
+            ecology: None,
+            health: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -708,11 +768,15 @@ impl Simulation {
                 }
             }
         }
+        available_commands.extend(self.available_ecology_commands(ruler.id));
         available_commands.extend(self.available_force_commands(ruler.id));
+        available_commands.extend(self.available_mission_commands(ruler.id));
         if self.controls_actor(ruler.id) {
             available_commands.clear();
         }
         PlayerView {
+            ecology: self.ecology_view(ruler.id),
+            missions: self.mission_view(ruler.id),
             force: self.force_view(self.state.ruler),
             invocation: self.invocation_view(),
             projects: self.project_view(ruler.id),
@@ -1052,7 +1116,7 @@ impl Simulation {
             let next = next.min(self.next_agreement_deadline().unwrap_or(next));
             let next =
                 self.project_boundary(self.environment_boundary(self.physical_boundary(next)));
-            let next = self.invocation_boundary(next);
+            let next = self.mission_boundary(self.invocation_boundary(next));
             let controlled = self.state.ruler;
             self.step(next)?;
             if controlled != self.state.ruler {
@@ -1110,6 +1174,7 @@ impl Simulation {
         let project_output = self.evaluate_projects(next)?;
         let invocation_output = self.evaluate_invocation(next)?;
         let environment_output = self.evaluate_environment(next)?;
+        let ecology_output = self.evaluate_ecology(next)?;
         self.profile.evaluation_ns += started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
         let mut due = self.state.due.get(&next).cloned().unwrap_or_default();
@@ -1155,6 +1220,22 @@ impl Simulation {
                 _ => {}
             }
         }
+        let mut possible_outputs = self.possible_work_outputs(&physical_output);
+        if let Some(environment) = &self.state.environment {
+            for deadline in &due {
+                if let Due::Physical(actor) = deadline
+                    && let Activity::Cultivate {
+                        field,
+                        operation: FarmOperation::Harvest,
+                        ..
+                    } = self.state.physical.as_ref().unwrap().actors[actor].activity
+                {
+                    possible_outputs.push((field, Good::Food, environment.crop.food_yield));
+                    possible_outputs.push((field, Good::Seed, environment.crop.seed_yield));
+                }
+            }
+        }
+        self.preflight_output_shares(&possible_outputs)?;
         let construction_ids = self.state.projects.as_ref().map_or(0, |w| {
             w.jobs.values().filter(|job| job.completes == next).count()
         }) as u64
@@ -1166,10 +1247,12 @@ impl Simulation {
             .and_then(|id| id.checked_add(birth_ids))
             .and_then(|id| id.checked_add(self.invocation_allocation_bound(next)))
             .and_then(|id| id.checked_add(self.force_allocation_bound(&due)))
+            .and_then(|id| id.checked_add(self.mission_allocation_bound()))
             .ok_or(Error::Overflow)?;
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
         self.preflight_force(&due)?;
+        self.preflight_missions()?;
         self.preflight_agreements()?;
         self.preflight_institutions_at(next)?;
         let event_bound: usize = due
@@ -1184,6 +1267,7 @@ impl Simulation {
             })
             .sum::<usize>()
             + self.state.people.len() * 2
+            + self.mission_event_bound()
             + self
                 .state
                 .environment
@@ -1226,7 +1310,17 @@ impl Simulation {
                 .iter()
                 .filter_map(|(actor, body)| {
                     if let Activity::Work { site } = body.activity {
-                        Some((*actor, site))
+                        equipment
+                            .get(actor)
+                            .copied()
+                            .unwrap_or(false)
+                            .then_some((*actor, site))
+                    } else if let Activity::Cultivate { field, .. } = body.activity {
+                        equipment
+                            .get(actor)
+                            .copied()
+                            .unwrap_or(false)
+                            .then_some((*actor, field))
                     } else {
                         None
                     }
@@ -1247,6 +1341,7 @@ impl Simulation {
         }
         self.commit_projects(project_output);
         self.commit_environment(environment_output);
+        self.commit_ecology(ecology_output);
         self.state.due.remove(&next);
         for event in due {
             match event {
@@ -1277,7 +1372,9 @@ impl Simulation {
                     if self.state.physical.as_ref().is_some_and(|w| {
                         matches!(
                             w.actors[&actor].activity,
-                            Activity::Cultivate { .. } | Activity::Construct { .. }
+                            Activity::Gather { .. }
+                                | Activity::Cultivate { .. }
+                                | Activity::Construct { .. }
                         )
                     }) {
                         production_completions.push(actor);
@@ -1363,17 +1460,25 @@ impl Simulation {
         self.observe_invocation_deaths()?;
         self.commit_invocation(invocation_output)?;
         self.observe_lineage_deaths();
+        for event in lifecycle
+            .iter()
+            .filter(|d| !matches!(d, Due::CombatRound(_)))
+        {
+            self.complete_development(event.clone());
+        }
+        self.reconcile_missions()?;
+        self.admit_due_mission_reinforcements();
         for event in lifecycle {
             if let Due::CombatRound(encounter) = event {
                 self.finish_combat_round(encounter)?;
-            } else {
-                self.complete_development(event);
             }
         }
         self.observe_invocation_deaths()?;
         self.update_force();
+        self.reconcile_missions()?;
         self.update_projects()?;
         self.update_property_events();
+        self.observe_ecology();
         self.reconcile_agreements()?;
         self.observe_agreement_events();
         self.reconcile_institutions()?;
@@ -1552,6 +1657,7 @@ impl Simulation {
             .map(|_| ())
     }
     fn emit(&mut self, kind: EventKind) {
+        self.update_water_event(&kind);
         self.witness_lineage_event(&kind);
         self.on_skill_event(&kind);
         if let EventKind::Transferred {

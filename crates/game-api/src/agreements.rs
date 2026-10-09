@@ -4,6 +4,23 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgreementTerm {
+    SiteAccess {
+        grantor: PersonId,
+        grantee: PersonId,
+        site: SiteId,
+        allowed: bool,
+    },
+    OutputShare {
+        debtor: PersonId,
+        creditor: PersonId,
+        site: SiteId,
+        good: Good,
+        numerator: u64,
+        denominator: u64,
+        destination: InventoryId,
+        pay_by: SimTime,
+        ends_at: SimTime,
+    },
     ConstructionLabor {
         debtor: PersonId,
         creditor: PersonId,
@@ -36,7 +53,10 @@ pub enum AgreementTerm {
 impl AgreementTerm {
     pub fn parties(&self) -> [PersonId; 2] {
         match *self {
-            Self::ConstructionLabor {
+            Self::OutputShare {
+                debtor, creditor, ..
+            }
+            | Self::ConstructionLabor {
                 debtor, creditor, ..
             }
             | Self::Delivery {
@@ -45,24 +65,31 @@ impl AgreementTerm {
             | Self::Labor {
                 debtor, creditor, ..
             } => [debtor, creditor],
-            Self::Access {
+            Self::SiteAccess {
+                grantor, grantee, ..
+            }
+            | Self::Access {
                 grantor, grantee, ..
             } => [grantor, grantee],
         }
     }
     pub fn amount(&self) -> u64 {
         match *self {
+            Self::OutputShare { .. } => 0,
             Self::Delivery { quantity, .. } => quantity.0,
             Self::Labor { millis, .. } | Self::ConstructionLabor { millis, .. } => millis,
-            Self::Access { .. } => 1,
+            Self::Access { .. } | Self::SiteAccess { .. } => 1,
         }
     }
     pub fn deadline(&self) -> Option<SimTime> {
         match *self {
-            Self::Delivery { deadline, .. }
+            Self::OutputShare {
+                pay_by: deadline, ..
+            }
+            | Self::Delivery { deadline, .. }
             | Self::Labor { deadline, .. }
             | Self::ConstructionLabor { deadline, .. } => Some(deadline),
-            Self::Access { .. } => None,
+            Self::Access { .. } | Self::SiteAccess { .. } => None,
         }
     }
 }
@@ -134,6 +161,12 @@ pub struct ObligationView {
     pub id: ObligationId,
     pub term: AgreementTerm,
     pub performed: u64,
+    #[serde(default)]
+    pub accrued: u64,
+    #[serde(default)]
+    pub share_remainder: u64,
+    #[serde(default)]
+    pub share_scale: u64,
     pub defaulted: bool,
     #[serde(default)]
     pub cargo: BTreeMap<InventoryId, u64>,
@@ -174,4 +207,14 @@ pub struct AmendmentView {
     pub status: AmendmentStatus,
     #[serde(default)]
     pub base_revision: u64,
+}
+
+impl ObligationView {
+    pub fn amount(&self) -> u64 {
+        if matches!(self.term, AgreementTerm::OutputShare { .. }) {
+            self.accrued
+        } else {
+            self.term.amount()
+        }
+    }
 }

@@ -950,6 +950,8 @@ impl Simulation {
                     "The encounter must be resolved before the guardian can continue".into(),
                     None,
                 )
+            } else if self.mission_actor_busy(id) {
+                (GuardianGoal::Searching, "Following an accepted objective while retaining responsibility for the incarnation".into(), None)
             } else if pending {
                 (
                     GuardianGoal::Mentoring,

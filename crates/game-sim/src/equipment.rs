@@ -25,6 +25,7 @@ impl Simulation {
                     .as_ref()
                     .and_then(|world| world.fields.get(&field))
                     .map(|field| field.tool),
+                Activity::Gather { .. } => self.ecology_job_tool(*actor),
                 Activity::Construct { project, .. } => self
                     .state
                     .projects
@@ -63,12 +64,19 @@ impl Simulation {
                 matches!(
                     body.activity,
                     Activity::Work { .. }
+                        | Activity::Gather { .. }
                         | Activity::Cultivate { .. }
                         | Activity::Construct { .. }
                         | Activity::WritingMemory { .. }
                 )
             })
-            .map(|(actor, _)| (*actor, false))
+            .map(|(actor, body)| {
+                (
+                    *actor,
+                    matches!(body.activity, Activity::Gather { .. })
+                        && self.ecology_job_tool(*actor).is_none(),
+                )
+            })
             .collect();
         for (tool, users) in self.tool_users() {
             let slots = usize::try_from(self.state.inventories[&tool].quantity.0 / 1_000)
