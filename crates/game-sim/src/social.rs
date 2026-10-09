@@ -124,7 +124,7 @@ impl Simulation {
         let mind = &self.state.decisions.as_ref().unwrap().minds[&recipient];
         let relation = self.relationship(recipient, sender);
         let body = &self.state.physical.as_ref().unwrap().actors[&recipient];
-        let physical = &self.state.physical.as_ref().unwrap().rules;
+        let physical = self.body_rules(recipient);
         game_characters::social::conversation_willing(
             topic,
             ConversationInput {
@@ -211,7 +211,7 @@ impl Simulation {
             && world
                 .actors
                 .get(&actor)
-                .is_some_and(|body| body.vitals.fatigue < world.rules.fatigue_limit)
+                .is_some_and(|body| body.vitals.fatigue < self.body_rules(actor).fatigue_limit)
     }
     fn social_material(
         &self,
@@ -1893,6 +1893,7 @@ mod generations {
     #[test]
     fn observed_upbringing_chosen_peer_plans_and_actual_permissions_allow_another_generation() {
         let config = scenarios::Config {
+            genetics: None,
             biology: development::Rules {
                 conception_time: MINUTE,
                 gestation: SimDuration(180_000),

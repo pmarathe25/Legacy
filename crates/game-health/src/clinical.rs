@@ -51,6 +51,35 @@ pub struct ExposureInput {
     pub insulation: u16,
     pub infectious_contacts: [u64; 2],
 }
+/// Individual biological thresholds, derived from static scenario rules and
+/// expressed traits. They do not alter the shared rules or stored exposure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClinicalPhysiology {
+    pub thirst_harm: u64,
+    pub drink_relief: u64,
+    pub cold_tolerance_centi: i16,
+}
+pub fn clinical_physiology(
+    rules: &Rules,
+    metabolism_milli: u16,
+    cold_tolerance_centi: i16,
+) -> Result<ClinicalPhysiology, Error> {
+    if metabolism_milli == 0 {
+        return Err(Error::InvalidConfiguration(
+            "zero clinical metabolism".into(),
+        ));
+    }
+    let scale = |duration: u64| {
+        (u128::from(duration) * 1_000 / u128::from(metabolism_milli))
+            .min(u128::from(u64::MAX))
+            .max(1) as u64
+    };
+    Ok(ClinicalPhysiology {
+        thirst_harm: scale(rules.thirst_harm),
+        drink_relief: scale(rules.drink_relief),
+        cold_tolerance_centi,
+    })
+}
 /// Opening facts for one actor. Contact counts and environment are supplied by
 /// the coordinator; the domain cannot query another actor or the world.
 #[derive(Clone, Copy, Debug)]
@@ -63,6 +92,7 @@ pub struct ClinicalInput<'a> {
     pub thirst_enabled: bool,
     pub resting: bool,
     pub exposure: ExposureInput,
+    pub physiology: ClinicalPhysiology,
 }
 impl ClinicalInput<'_> {
     fn elapsed(&self) -> Result<u64, Error> {
@@ -74,8 +104,10 @@ pub struct HealthDelta {
     pub health_milli: i128,
     pub fatigue_milli: i128,
 }
-pub fn cold_rate(rules: &Rules, temperature_c: i32, insulation: u16) -> i128 {
-    let effective = i128::from(temperature_c) * 1_000 + i128::from(insulation) * 20;
+pub fn cold_rate(rules: &Rules, temperature_c: i32, insulation: u16, tolerance_centi: i16) -> i128 {
+    let effective = i128::from(temperature_c) * 1_000
+        + i128::from(insulation) * 20
+        + i128::from(tolerance_centi) * 10;
     let deficit = i128::from(rules.cold_threshold_c) * 1_000 - effective;
     if deficit > 0 {
         deficit * i128::from(rules.cold_accumulation) / 1_000
@@ -99,7 +131,7 @@ pub fn clinical_contribution(input: ClinicalInput<'_>) -> Result<HealthDelta, Er
     let rules = input.rules;
     let mut damage = 0i128;
     let mut fatigue = 0i128;
-    if input.thirst_enabled && state.thirst >= rules.thirst_harm {
+    if input.thirst_enabled && state.thirst >= input.physiology.thirst_harm {
         damage += i128::from(rules.thirst_damage);
     }
     if state.cold >= rules.cold_harm {
@@ -149,6 +181,7 @@ pub fn advance_clinical(input: ClinicalInput<'_>) -> Result<Clinical, Error> {
             input.rules,
             input.exposure.temperature_c,
             input.exposure.insulation,
+            input.physiology.cold_tolerance_centi,
         )
         .checked_mul(i128::from(elapsed))
         .ok_or(Error::Overflow)?;
@@ -251,6 +284,7 @@ pub fn reconcile_clinical(
 pub fn receive_water(
     before: &Clinical,
     rules: &Rules,
+    physiology: ClinicalPhysiology,
     now: SimTime,
     source: InventoryId,
     quantity: Quantity,
@@ -258,7 +292,7 @@ pub fn receive_water(
 ) -> Result<Clinical, Error> {
     validate_rules(rules)?;
     let mut state = before.clone();
-    let relief = (u128::from(rules.drink_relief) * u128::from(quantity.0)
+    let relief = (u128::from(physiology.drink_relief) * u128::from(quantity.0)
         / u128::from(rules.drink_quantity.0))
     .min(u128::from(u64::MAX)) as u64;
     state.thirst = state.thirst.saturating_sub(relief);
@@ -323,8 +357,8 @@ pub fn clinical_boundary(input: ClinicalInput<'_>, limit: SimTime) -> Result<Sim
             .map(SimTime)
     };
     if input.thirst_enabled
-        && state.thirst < rules.thirst_harm
-        && let Some(next) = at(u128::from(rules.thirst_harm - state.thirst))
+        && state.thirst < input.physiology.thirst_harm
+        && let Some(next) = at(u128::from(input.physiology.thirst_harm - state.thirst))
     {
         boundary = boundary.min(next);
     }
@@ -332,6 +366,7 @@ pub fn clinical_boundary(input: ClinicalInput<'_>, limit: SimTime) -> Result<Sim
         rules,
         input.exposure.temperature_c,
         input.exposure.insulation,
+        input.physiology.cold_tolerance_centi,
     );
     let current = u128::from(state.cold) * 1_000 + u128::from(state.cold_remainder);
     let threshold = u128::from(rules.cold_harm) * 1_000;

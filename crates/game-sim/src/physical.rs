@@ -20,6 +20,7 @@ pub struct Job {
     pub site: SiteId,
     pub remaining: u64,
     pub rate: SkillRate,
+    pub body_rate: SkillRate,
     pub work_remainder: u64,
     pub tool: Option<InventoryId>,
 }
@@ -65,6 +66,37 @@ pub(crate) struct Outcome {
 }
 
 impl Simulation {
+    pub(crate) fn body_rules(&self, actor: PersonId) -> Rules {
+        rules_for(&self.state, actor)
+    }
+    pub(crate) fn apply_genetic_body_change(
+        &mut self,
+        actor: PersonId,
+        old_health_milli: u16,
+        new_health_milli: u16,
+    ) {
+        let Some(body) = self
+            .state
+            .physical
+            .as_mut()
+            .and_then(|world| world.actors.get_mut(&actor))
+        else {
+            return;
+        };
+        if old_health_milli == 0 {
+            return;
+        }
+        let health = (u128::from(body.vitals.health) * 1_000 + u128::from(body.health_remainder))
+            * u128::from(new_health_milli)
+            / u128::from(old_health_milli);
+        body.vitals.health = (health / 1_000).min(u128::from(u64::MAX)) as u64;
+        body.health_remainder = (health % 1_000) as u16;
+        // Changing expression preserves existing injury and never revives death.
+        if !body.vitals.alive {
+            body.vitals.health = 0;
+            body.health_remainder = 0;
+        }
+    }
     pub fn survival_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::kernel_fixture(seed, 15, execution)?;
         sim.state.scenario = scenarios().remove(1);
@@ -584,6 +616,10 @@ impl Simulation {
                             site,
                             remaining: site_record.duration.0,
                             rate: self.effective_work_rate(actor, Skill::Craft),
+                            body_rate: SkillRate {
+                                numerator: u64::from(self.genetic_strength_milli(actor)),
+                                denominator: 1_000,
+                            },
                             work_remainder: 0,
                             tool: Some(tool_id),
                         }),
@@ -719,9 +755,9 @@ impl Simulation {
     }
 
     pub(crate) fn transfer_capacity(&self, destination: InventoryId, amount: u64) -> bool {
-        let Some(world) = &self.state.physical else {
+        if self.state.physical.is_none() {
             return true;
-        };
+        }
         let inventory = &self.state.inventories[&destination];
         if let InventoryLocation::Carried(actor) = inventory.location {
             let carried: u128 = self
@@ -731,7 +767,7 @@ impl Simulation {
                 .flatten()
                 .map(|id| u128::from(self.state.inventories[id].quantity.0))
                 .sum();
-            carried + u128::from(amount) <= u128::from(world.rules.carrying_capacity.0)
+            carried + u128::from(amount) <= u128::from(self.body_rules(actor).carrying_capacity.0)
         } else {
             true
         }
@@ -752,7 +788,7 @@ impl Simulation {
                 dt = dt.min(
                     skills::work_duration(
                         job.remaining,
-                        self.invocation_work_rate(*id, job.rate),
+                        self.invocation_work_rate(*id, job.rate, job.body_rate),
                         job.work_remainder,
                     )
                     .expect("validated frozen skill rate"),
@@ -777,6 +813,7 @@ impl Simulation {
     > {
         let world = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let body = &world.actors[&actor];
+        let rules = self.body_rules(actor);
         let person = &self.state.people[self.person_index[&actor]];
         let exerting = matches!(
             body.activity,
@@ -799,9 +836,9 @@ impl Simulation {
                 health_remainder: body.health_remainder,
             },
             game_physiology::BodyLimits {
-                hunger_harm: world.rules.hunger_harm,
-                fatigue_limit: world.rules.fatigue_limit,
-                max_health: world.rules.max_health,
+                hunger_harm: rules.hunger_harm,
+                fatigue_limit: rules.fatigue_limit,
+                max_health: rules.max_health,
             },
             game_physiology::ActivityFlags { exerting, resting },
             person.hunger_exempt,
@@ -861,8 +898,9 @@ impl Simulation {
         // an earlier boundary at the interval endpoint.
         for (actor, body) in &world.actors {
             let exempt = self.state.people[self.person_index[actor]].hunger_exempt;
-            if body.vitals.alive && !exempt && body.vitals.hunger < world.rules.hunger_harm {
-                let remaining = world.rules.hunger_harm - body.vitals.hunger;
+            let rules = self.body_rules(*actor);
+            if body.vitals.alive && !exempt && body.vitals.hunger < rules.hunger_harm {
+                let remaining = rules.hunger_harm - body.vitals.hunger;
                 if remaining < next.0 - self.state.time.0 {
                     next = SimTime(self.state.time.0 + remaining);
                 }
@@ -874,6 +912,7 @@ impl Simulation {
             }
             let elapsed = next.0 - self.state.time.0;
             let before = &body.vitals;
+            let rules = self.body_rules(*actor);
             let incapacitation = self.state.combat.as_ref().map(|w| w.rules.incapacitation);
             let crossed = |dt| {
                 let (after, _, _) = self.integrated_vitals(*actor, dt)?;
@@ -881,8 +920,7 @@ impl Simulation {
                     || before.fatigue < world.rules.fatigue_limit
                         && after.fatigue >= world.rules.fatigue_limit
                     || before.fatigue > 0 && after.fatigue == 0
-                    || before.health < world.rules.max_health
-                        && after.health >= world.rules.max_health
+                    || before.health < rules.max_health && after.health >= rules.max_health
                     || incapacitation.is_some_and(|threshold| {
                         (before.health > threshold) != (after.health > threshold)
                     }))
@@ -908,7 +946,7 @@ impl Simulation {
                 {
                     let (work, remainder) = skills::advance_work(
                         elapsed,
-                        self.invocation_work_rate(*id, job.rate),
+                        self.invocation_work_rate(*id, job.rate, job.body_rate),
                         job.work_remainder,
                     )?;
                     (Some(job.remaining.saturating_sub(work)), Some(remainder))
@@ -1245,8 +1283,8 @@ impl Simulation {
             let world = self.state.physical.as_ref().unwrap();
             let previous = &world.actors[&actor];
             let previously_alive = previous.vitals.alive;
-            let previously_injured = previous.vitals.health < world.rules.max_health;
-            let rules = world.rules.clone();
+            let rules = self.body_rules(actor);
+            let previously_injured = previous.vitals.health < rules.max_health;
             let mut vitals = out.vitals;
             let ate = self
                 .state
@@ -1427,8 +1465,9 @@ impl Simulation {
                 .flatten()
                 .map(|id| u128::from(self.state.inventories[id].quantity.0))
                 .sum();
-            if self.state.physical.as_ref().is_some_and(|w| {
-                held + u128::from(quantity.0) > u128::from(w.rules.carrying_capacity.0)
+            if self.state.physical.as_ref().is_some_and(|_| {
+                held + u128::from(quantity.0)
+                    > u128::from(self.body_rules(actor).carrying_capacity.0)
             }) {
                 return Err(Error::InvalidFixture("carrying capacity exceeded".into()));
             }
@@ -1512,4 +1551,45 @@ impl Simulation {
         self.observe_invocation_deaths()?;
         Ok(())
     }
+}
+
+pub(crate) fn rules_for(state: &CanonicalState, actor: PersonId) -> Rules {
+    let mut rules = state
+        .physical
+        .as_ref()
+        .expect("physical body rules")
+        .rules
+        .clone();
+    if let Some(phenotype) = state
+        .genetics
+        .as_ref()
+        .and_then(|world| world.phenotype(actor).ok())
+    {
+        let scale = |value: u64, numerator: u64, denominator: u64| {
+            (u128::from(value) * u128::from(numerator) / u128::from(denominator))
+                .min(u128::from(u64::MAX)) as u64
+        };
+        rules.max_health = scale(
+            rules.max_health,
+            u64::from(phenotype.max_health_milli),
+            1_000,
+        )
+        .max(1);
+        rules.carrying_capacity.0 = scale(
+            rules.carrying_capacity.0,
+            u64::from(phenotype.strength_milli),
+            1_000,
+        );
+        rules.hunger_harm = scale(
+            rules.hunger_harm,
+            1_000,
+            u64::from(phenotype.metabolism_milli),
+        );
+        rules.meal_relief = scale(
+            rules.meal_relief,
+            1_000,
+            u64::from(phenotype.metabolism_milli),
+        );
+    }
+    rules
 }

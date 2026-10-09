@@ -15,6 +15,12 @@ pub struct Config {
     pub health: HealthRules,
     #[serde(default)]
     pub social: social::Rules,
+    #[serde(default = "default_genetics")]
+    pub genetics: Option<genetics::Rules>,
+}
+
+fn default_genetics() -> Option<genetics::Rules> {
+    Some(genetics::Rules::default())
 }
 
 impl Default for Config {
@@ -34,6 +40,7 @@ impl Default for Config {
             invocation: invocation::Rules::human(),
             health: HealthRules::human(),
             social: social::Rules::default(),
+            genetics: default_genetics(),
         }
     }
 }
@@ -102,9 +109,12 @@ impl Simulation {
         sim.state.areas[2].name = "North wood".into();
         sim.prepare_playable_people(&config)?;
         sim.install_playable_domains(&config)?;
-        sim.initialize_social(config.social.clone())?;
         sim.seed_playable_resources()?;
         sim.seed_playable_workshop(id != "settlement-founder")?;
+        if let Some(rules) = config.genetics.clone() {
+            sim.initialize_genetics(rules)?;
+        }
+        sim.initialize_social(config.social.clone())?;
         sim.seed_playable_family_plans()?;
         sim.establish_starting_custom(id != "settlement-founder")?;
         if id == "child-successor" {
@@ -1125,6 +1135,14 @@ impl Simulation {
         // This authored interval ends all previously active social tasks. Its
         // scheduler epoch begins at this snapshot, as do the rebuilt physical
         // deadlines; it does not replay unobserved prenatal interactions.
+        if let Some(genetics) = &mut self.state.genetics {
+            genetics.next_expression = SimTime(
+                death_at
+                    .0
+                    .checked_add(genetics.rules.expression_period_ms)
+                    .ok_or(Error::Overflow)?,
+            );
+        }
         if let Some(social) = &mut self.state.social {
             social.interactions.clear();
             social.participants.clear();
@@ -1181,7 +1199,7 @@ impl Simulation {
             environment.calendar.season(self.state.time),
         );
         let old = self.state.ruler;
-        self.debug_injure(old, self.state.physical.as_ref().unwrap().rules.max_health)?;
+        self.debug_injure(old, self.body_rules(old).max_health)?;
         self.observe_invocation_deaths()?;
         // The existing council chooses a living steward. The successor child
         // receives neither this office nor the previous character's assets.

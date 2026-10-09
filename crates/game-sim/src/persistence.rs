@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 18;
+const SAVE_VERSION: u32 = 19;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -50,39 +50,23 @@ impl Simulation {
 }
 
 fn validate(s: &CanonicalState) -> Result<(), Error> {
+    genetics::validate(s)?;
     let fail = || Error::InvalidSave("inconsistent committed state".into());
     let playable = scenarios::PLAYABLE.contains(&s.scenario.id.as_str());
+    let enforcement_fixture = s.scenario.id == "enforcement-fixture";
     let expanded_fixture = matches!(
         s.scenario.id.as_str(),
         "ecology-fixture" | "farm-enterprise-fixture"
     );
-    if (!playable
-        && !expanded_fixture
-        && (!matches!(
-            s.scenario.id.as_str(),
-            "kernel-fixture"
-                | "survival-fixture"
-                | "autonomy-fixture"
-                | "life-fixture"
-                | "combat-fixture"
-                | "childhood-fixture"
-                | "farming-fixture"
-                | "agreement-fixture"
-                | "lineage-fixture"
-                | "property-fixture"
-                | "institution-fixture"
-                | "skills-fixture"
-                | "health-fixture"
-                | "project-fixture"
-                | "invocation-fixture"
-                | "force-fixture"
-                | "mission-fixture"
-        ) || s.scenario.version != 1
-            || !s.scenario.debug_fixture
-            || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
-            || matches!(
+    if (s.scenario.id == "genetics-fixture" && s.genetics.is_none())
+        || (!playable
+            && !expanded_fixture
+            && !enforcement_fixture
+            && (!matches!(
                 s.scenario.id.as_str(),
-                "autonomy-fixture"
+                "kernel-fixture"
+                    | "survival-fixture"
+                    | "autonomy-fixture"
                     | "life-fixture"
                     | "combat-fixture"
                     | "childhood-fixture"
@@ -93,66 +77,91 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     | "institution-fixture"
                     | "skills-fixture"
                     | "health-fixture"
+                    | "genetics-fixture"
                     | "project-fixture"
                     | "invocation-fixture"
                     | "force-fixture"
                     | "mission-fixture"
-            ) != s.decisions.is_some()
-            || matches!(
-                s.scenario.id.as_str(),
-                "life-fixture"
-                    | "combat-fixture"
-                    | "childhood-fixture"
-                    | "farming-fixture"
-                    | "lineage-fixture"
-                    | "property-fixture"
-                    | "skills-fixture"
-                    | "health-fixture"
-                    | "invocation-fixture"
-                    | "force-fixture"
-                    | "mission-fixture"
-            ) != s.development.is_some()
-            || matches!(
-                s.scenario.id.as_str(),
-                "combat-fixture"
-                    | "lineage-fixture"
-                    | "property-fixture"
-                    | "skills-fixture"
-                    | "health-fixture"
-                    | "invocation-fixture"
-                    | "force-fixture"
-                    | "mission-fixture"
-            ) != s.combat.is_some()
-            || (s.scenario.id == "farming-fixture") != s.environment.is_some()
-            || matches!(
-                s.scenario.id.as_str(),
-                "agreement-fixture"
-                    | "property-fixture"
-                    | "institution-fixture"
-                    | "project-fixture"
-                    | "mission-fixture"
-            ) != s.agreements.is_some()
-            || matches!(
-                s.scenario.id.as_str(),
-                "lineage-fixture"
-                    | "skills-fixture"
-                    | "health-fixture"
-                    | "invocation-fixture"
-                    | "force-fixture"
-            ) != s.lineage.is_some()
-            || (s.scenario.id == "property-fixture") != s.property.is_some()
-            || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
-            || (matches!(
-                s.scenario.id.as_str(),
-                "skills-fixture" | "health-fixture" | "invocation-fixture"
-            ) && s.skills.is_none())
-            || (s.scenario.id == "project-fixture") != s.projects.is_some()
-            || (s.scenario.id == "invocation-fixture") != s.invocation.is_some()
-            || (s.scenario.id == "force-fixture" && s.force.is_none())
-            || (s.force.is_some() && s.combat.is_none())
-            || (s.scenario.id == "mission-fixture" && s.missions.is_none())
-            || (s.missions.is_some() && (s.combat.is_none() || s.agreements.is_none()))))
-        || ((playable || expanded_fixture) && s.scenario.version != 1)
+            ) || s.scenario.version != 1
+                || !s.scenario.debug_fixture
+                || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
+                || matches!(
+                    s.scenario.id.as_str(),
+                    "autonomy-fixture"
+                        | "life-fixture"
+                        | "combat-fixture"
+                        | "childhood-fixture"
+                        | "farming-fixture"
+                        | "agreement-fixture"
+                        | "lineage-fixture"
+                        | "property-fixture"
+                        | "institution-fixture"
+                        | "skills-fixture"
+                        | "health-fixture"
+                        | "genetics-fixture"
+                        | "project-fixture"
+                        | "invocation-fixture"
+                        | "force-fixture"
+                        | "mission-fixture"
+                ) != s.decisions.is_some()
+                || matches!(
+                    s.scenario.id.as_str(),
+                    "life-fixture"
+                        | "combat-fixture"
+                        | "childhood-fixture"
+                        | "farming-fixture"
+                        | "lineage-fixture"
+                        | "property-fixture"
+                        | "skills-fixture"
+                        | "health-fixture"
+                        | "genetics-fixture"
+                        | "invocation-fixture"
+                        | "force-fixture"
+                        | "mission-fixture"
+                ) != s.development.is_some()
+                || matches!(
+                    s.scenario.id.as_str(),
+                    "combat-fixture"
+                        | "lineage-fixture"
+                        | "property-fixture"
+                        | "skills-fixture"
+                        | "health-fixture"
+                        | "genetics-fixture"
+                        | "invocation-fixture"
+                        | "force-fixture"
+                        | "mission-fixture"
+                ) != s.combat.is_some()
+                || (s.scenario.id == "farming-fixture") != s.environment.is_some()
+                || matches!(
+                    s.scenario.id.as_str(),
+                    "agreement-fixture"
+                        | "property-fixture"
+                        | "institution-fixture"
+                        | "project-fixture"
+                        | "mission-fixture"
+                ) != s.agreements.is_some()
+                || matches!(
+                    s.scenario.id.as_str(),
+                    "lineage-fixture"
+                        | "skills-fixture"
+                        | "health-fixture"
+                        | "genetics-fixture"
+                        | "invocation-fixture"
+                        | "force-fixture"
+                ) != s.lineage.is_some()
+                || (s.scenario.id == "property-fixture") != s.property.is_some()
+                || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
+                || (matches!(
+                    s.scenario.id.as_str(),
+                    "skills-fixture" | "health-fixture" | "genetics-fixture" | "invocation-fixture"
+                ) && s.skills.is_none())
+                || (s.scenario.id == "project-fixture") != s.projects.is_some()
+                || (s.scenario.id == "invocation-fixture") != s.invocation.is_some()
+                || (s.scenario.id == "force-fixture" && s.force.is_none())
+                || (s.force.is_some() && s.combat.is_none())
+                || (s.scenario.id == "mission-fixture" && s.missions.is_none())
+                || (s.missions.is_some() && (s.combat.is_none() || s.agreements.is_none()))))
+        || ((playable || expanded_fixture || enforcement_fixture) && s.scenario.version != 1)
         || (playable
             && (s.scenario.debug_fixture
                 || s.physical.is_none()
@@ -167,6 +176,17 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 || s.skills.is_none()
                 || s.projects.is_none()
                 || s.invocation.is_none()))
+        || (enforcement_fixture
+            && (!s.scenario.debug_fixture
+                || s.physical.is_none()
+                || s.decisions.is_none()
+                || s.development.is_none()
+                || s.combat.is_none()
+                || s.agreements.is_none()
+                || s.property.is_none()
+                || s.institutions.is_none()
+                || s.missions.is_none()
+                || s.enforcement.is_none()))
         || (expanded_fixture
             && (!s.scenario.debug_fixture
                 || s.physical.is_none()
@@ -1669,9 +1689,9 @@ fn validate_physical(
         let carried = cargo.get(id).copied().unwrap_or(0);
         if actor.health_remainder >= 1_000
             || actor.fatigue_remainder >= 1_000
-            || actor.vitals.health > rules.max_health
+            || actor.vitals.health > physical::rules_for(s, *id).max_health
             || actor.vitals.fatigue > rules.fatigue_limit
-            || carried > u128::from(rules.carrying_capacity.0)
+            || carried > u128::from(physical::rules_for(s, *id).carrying_capacity.0)
             || (p.hunger_exempt && (actor.vitals.hunger != 0 || !actor.vitals.alive))
             || (!actor.vitals.alive && actor.vitals.health != 0)
         {
@@ -1685,9 +1705,25 @@ fn validate_physical(
                 !s.inventories
                     .get(&tool)
                     .is_some_and(|i| i.good == Good::Tool)
-            }) || job.rate.denominator != 1_000
-                || job.rate.numerator < 1_000
-                || job.rate.numerator > 2_000
+            }) || !matches!(job.rate.denominator, 1_000 | 1_000_000)
+                || job.body_rate.denominator != 1_000
+                || !(250..=2_000).contains(&job.body_rate.numerator)
+                || {
+                    let numerator = u128::from(job.rate.numerator)
+                        * u128::from(job.body_rate.denominator)
+                        * 1_000;
+                    let denominator =
+                        u128::from(job.rate.denominator) * u128::from(job.body_rate.numerator);
+                    let maximum = s.skills.as_ref().map_or(1_000, |skills| {
+                        1_000
+                            + u64::from(skills.level(*id, Skill::Craft))
+                                * u64::from(skills.rules.work_bonus_per_level)
+                    });
+                    denominator == 0
+                        || numerator % denominator != 0
+                        || numerator / denominator < 1_000
+                        || numerator / denominator > u128::from(maximum)
+                }
                 || job.work_remainder >= job.rate.denominator
                 || !world
                     .sites

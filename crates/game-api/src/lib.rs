@@ -152,6 +152,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub genetics: Option<game_genetics::Phenotype>,
     pub social: Option<SocialView>,
     pub enforcement: EnforcementView,
     pub health: Option<HealthView>,

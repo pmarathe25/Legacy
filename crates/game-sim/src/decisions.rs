@@ -104,6 +104,12 @@ impl Simulation {
         if self.state.decisions.is_none() {
             return;
         }
+        let signal_rules: BTreeMap<_, _> = self
+            .dependent_index
+            .values()
+            .flatten()
+            .map(|child| (*child, self.body_rules(*child)))
+            .collect();
         for p in &self.state.people {
             let Location::AtArea(area) = p.location else {
                 continue;
@@ -180,7 +186,7 @@ impl Simulation {
             mind.child_signals.retain(|_, signal| signal.area != area);
             for child in self.dependent_index.get(&area).into_iter().flatten() {
                 let vitals = &self.state.physical.as_ref().unwrap().actors[child].vitals;
-                let rules = &self.state.physical.as_ref().unwrap().rules;
+                let rules = &signal_rules[child];
                 let mut urgency = if vitals.hunger >= rules.hunger_harm {
                     20_000
                 } else if vitals.hunger >= rules.meal_relief {
@@ -315,6 +321,7 @@ impl Simulation {
         let p = &self.state.people[self.person_index[&id]];
         let physical = self.state.physical.as_ref().unwrap();
         let actor = &physical.actors[&id];
+        let rules = self.body_rules(id);
         let none = || Intention {
             actor: id,
             command: None,
@@ -350,7 +357,7 @@ impl Simulation {
         let Location::AtArea(area) = p.location else {
             return none();
         };
-        let urgent = actor.vitals.hunger >= physical.rules.meal_relief;
+        let urgent = actor.vitals.hunger >= rules.meal_relief;
         if matches!(
             actor.activity,
             Activity::Eat { .. }
@@ -424,9 +431,11 @@ impl Simulation {
             add(command, Goal::Survival, 9_000, 0, 0);
         }
         if !p.hunger_exempt && urgent {
-            for fact in mind.knowledge.values().filter(|f| {
-                f.good == Good::Food && f.accessible && f.quantity >= physical.rules.meal_size
-            }) {
+            for fact in mind
+                .knowledge
+                .values()
+                .filter(|f| f.good == Good::Food && f.accessible && f.quantity >= rules.meal_size)
+            {
                 let (command, travel) = if fact.area == area {
                     (
                         Command::Eat {
@@ -444,12 +453,11 @@ impl Simulation {
                 } else {
                     continue;
                 };
-                let survival_time = physical
-                    .rules
+                let survival_time = rules
                     .hunger_harm
                     .saturating_sub(actor.vitals.hunger)
                     .saturating_add(actor.vitals.health);
-                if travel.saturating_add(physical.rules.eating_time.0) > survival_time {
+                if travel.saturating_add(rules.eating_time.0) > survival_time {
                     continue;
                 }
                 add(
@@ -493,7 +501,7 @@ impl Simulation {
                 f.area == area
                     && f.good == Good::Food
                     && f.accessible
-                    && f.quantity >= physical.rules.meal_size
+                    && f.quantity >= rules.meal_size
             }) {
                 add(
                     Command::Care {
@@ -508,7 +516,7 @@ impl Simulation {
             }
         }
         let recovery = actor.vitals.fatigue as i64 / 500
-            + (physical.rules.max_health - actor.vitals.health) as i64 / 100;
+            + (rules.max_health - actor.vitals.health) as i64 / 100;
         add(
             Command::Rest,
             Goal::Recovery,
@@ -518,7 +526,7 @@ impl Simulation {
         );
         if self.state.time >= mind.retry_after
             && !urgent
-            && actor.vitals.fatigue < physical.rules.fatigue_limit
+            && actor.vitals.fatigue < rules.fatigue_limit
         {
             if let Some(command) = self.autonomous_cultivation(id) {
                 add(

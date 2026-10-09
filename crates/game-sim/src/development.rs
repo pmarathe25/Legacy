@@ -147,7 +147,7 @@ impl Simulation {
             alive: body.vitals.alive,
             health: body.vitals.health,
             hunger: body.vitals.hunger,
-            meal_relief: self.state.physical.as_ref().unwrap().rules.meal_relief,
+            meal_relief: self.body_rules(id).meal_relief,
             available: matches!(body.activity, Activity::Idle | Activity::Rest),
             wants_parenthood: mind.dream == decisions::Dream::Parenthood,
             partner_affection: relationship.map_or(0, |relation| relation.affection),
@@ -300,6 +300,8 @@ impl Simulation {
         }
         match effect {
             ConceptionEffect::Gestating { due } => {
+                self.freeze_genetic_conception(id)
+                    .expect("validated biological parent genomes");
                 self.state.due.entry(due).or_default().push(Due::Birth(id));
                 self.emit(EventKind::Conceived {
                     pregnancy: id,
@@ -548,6 +550,8 @@ impl Simulation {
         if let Location::AtArea(area) = self.state.people[self.person_index[&child]].location {
             self.index_dependent(child, area);
         }
+        self.record_genetic_birth(id, child)
+            .expect("frozen conception genome for actual birth");
         self.schedule_age(child);
         self.emit(EventKind::Born {
             pregnancy: id,

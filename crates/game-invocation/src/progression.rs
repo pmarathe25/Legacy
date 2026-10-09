@@ -582,3 +582,33 @@ pub fn active_boundary(
     }
     boundary
 }
+
+/// Compose borrowed mastery and identity costs in the frozen body's units. The
+/// denominator stays fixed so a job's work remainder survives changing consent.
+pub fn compose_work_rate(
+    own: game_core::SkillRate,
+    body: game_core::SkillRate,
+    borrowed_milli: u64,
+    identity_penalty: u64,
+) -> Result<game_core::SkillRate, Error> {
+    if own.denominator == 0 || own.numerator == 0 || body.denominator == 0 || body.numerator == 0 {
+        return Err(Error::InvalidConfiguration(
+            "invalid invocation work rate".into(),
+        ));
+    }
+    let scaled = |milli: u64| -> Result<u64, Error> {
+        let value = u128::from(milli)
+            .checked_mul(u128::from(body.numerator))
+            .ok_or(Error::Overflow)?
+            .checked_mul(u128::from(own.denominator))
+            .ok_or(Error::Overflow)?
+            / (1_000 * u128::from(body.denominator));
+        u64::try_from(value).map_err(|_| Error::Overflow)
+    };
+    let numerator = own.numerator.max(scaled(borrowed_milli)?);
+    let penalty = scaled(identity_penalty.checked_mul(5).ok_or(Error::Overflow)?)?;
+    Ok(game_core::SkillRate {
+        numerator: numerator.saturating_sub(penalty).max(scaled(1)?.max(1)),
+        denominator: own.denominator,
+    })
+}

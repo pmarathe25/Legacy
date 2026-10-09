@@ -186,7 +186,7 @@ impl Simulation {
             .values()
             .find(|e| {
                 e.active
-                    && !self.controls_actor(self.state.ruler)
+                    && !self.past_life_controls_actor(self.state.ruler)
                     && e.order.get(e.cursor) == Some(&self.state.ruler)
             })
             .map(|e| e.id)
@@ -269,6 +269,7 @@ impl Simulation {
         }
         self.update_property_events();
         self.reconcile_agreements()?;
+        self.observe_enforcement();
         let receipt = CommandReceipt {
             caller_sequence: submission.caller_sequence,
             authoritative_sequence: self.state.next_command,
@@ -522,7 +523,7 @@ impl Simulation {
             }
         }
     }
-    fn binding_stock(&self, actor: PersonId) -> Option<InventoryId> {
+    pub(crate) fn binding_stock(&self, actor: PersonId) -> Option<InventoryId> {
         self.inventory_index
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
@@ -826,7 +827,7 @@ impl Simulation {
                     .cursor += 1;
                 continue;
             }
-            if actor == self.state.ruler && !self.controls_actor(actor) {
+            if actor == self.state.ruler && !self.past_life_controls_actor(actor) {
                 break;
             }
             self.observe_fighter(id, actor);
@@ -1020,6 +1021,7 @@ impl Simulation {
                 }
             }
             self.emit(EventKind::EncounterEnded { encounter: id });
+            self.mission_react_to_encounter_end(id);
         } else {
             let ends = SimTime(
                 self.state

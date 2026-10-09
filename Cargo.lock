@@ -41,9 +41,11 @@ dependencies = [
  "game-conflict",
  "game-core",
  "game-economy",
+ "game-genetics",
  "game-health",
  "game-invocation",
  "game-lineage",
+ "game-missions",
  "game-society",
  "serde",
 ]
@@ -91,6 +93,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-genetics"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-health"
 version = "0.1.0"
 dependencies = [
@@ -118,6 +129,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-missions"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-economy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-physiology"
 version = "0.1.0"
 dependencies = [
@@ -133,9 +154,11 @@ dependencies = [
  "game-conflict",
  "game-core",
  "game-economy",
+ "game-genetics",
  "game-health",
  "game-invocation",
  "game-lineage",
+ "game-missions",
  "game-physiology",
  "game-skills",
  "game-society",

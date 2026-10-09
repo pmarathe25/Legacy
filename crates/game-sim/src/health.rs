@@ -267,8 +267,15 @@ impl Simulation {
     ) -> Result<(), Error> {
         let w = self.state.health.as_ref().unwrap();
         let state = w.clinical.get(&patient).cloned().unwrap_or_default();
-        let state =
-            game_health::receive_water(&state, &w.rules, self.state.time, source, quantity, dose)?;
+        let state = game_health::receive_water(
+            &state,
+            &w.rules,
+            self.health_physiology(patient),
+            self.state.time,
+            source,
+            quantity,
+            dose,
+        )?;
         self.state
             .health
             .as_mut()
@@ -1006,7 +1013,16 @@ impl Simulation {
             resting: self.state.physical.as_ref().unwrap().actors[&actor].activity
                 == Activity::Rest,
             exposure,
+            physiology: self.health_physiology(actor),
         }
+    }
+    fn health_physiology(&self, actor: PersonId) -> ClinicalPhysiology {
+        clinical_physiology(
+            &self.state.health.as_ref().unwrap().rules,
+            self.genetic_metabolism_milli(actor),
+            self.genetic_cold_tolerance_centi(actor),
+        )
+        .expect("validated individual metabolism")
     }
     pub(crate) fn health_body_delta(
         &self,
@@ -1449,7 +1465,7 @@ impl Simulation {
             wounded: self.state.physical.as_ref().unwrap().actors[&person]
                 .vitals
                 .health
-                < self.state.physical.as_ref().unwrap().rules.max_health / 2,
+                < self.body_rules(person).max_health / 2,
             observed_at: self.state.time,
         }
     }
@@ -1673,7 +1689,7 @@ impl Simulation {
         let traits = self
             .invocation_personality(actor)
             .unwrap_or_else(|| mind.personality.clone());
-        if clinical.thirst >= w.rules.drink_relief / 4 {
+        if clinical.thirst >= self.health_physiology(actor).drink_relief / 4 {
             let stock = mind
                 .knowledge
                 .values()
@@ -1771,13 +1787,13 @@ impl Simulation {
             .cloned()
             .collect();
         for job in jobs {
-            if job.actor == self.state.ruler && !self.controls_actor(job.actor)
+            if job.actor == self.state.ruler && !self.past_life_controls_actor(job.actor)
                 || matches!(job.work, Work::Drink { .. })
             {
                 continue;
             }
             let body = &self.state.physical.as_ref().unwrap().actors[&job.actor];
-            let physical = &self.state.physical.as_ref().unwrap().rules;
+            let physical = self.body_rules(job.actor);
             if body.vitals.fatigue >= physical.fatigue_limit / 2
                 || body.vitals.hunger >= physical.meal_relief
                 || body.vitals.health <= physical.max_health / 3
@@ -1796,7 +1812,7 @@ impl Simulation {
             .cloned()
             .collect();
         for offer in offers {
-            if offer.patient == self.state.ruler && !self.controls_actor(offer.patient)
+            if offer.patient == self.state.ruler && !self.past_life_controls_actor(offer.patient)
                 || offer.accepted
                 || self.health_area(offer.patient, false).ok()
                     != self.health_area(offer.caregiver, true).ok()
@@ -1859,10 +1875,10 @@ impl Simulation {
             let mind = &self.state.decisions.as_ref().unwrap().minds[&caregiver];
             let body = &self.state.physical.as_ref().unwrap().actors[&caregiver];
             let rules = &self.state.health.as_ref().unwrap().rules;
+            let physical = self.body_rules(caregiver);
             if mind.personality.empathy < 300
-                || body.vitals.hunger >= self.state.physical.as_ref().unwrap().rules.meal_relief
-                || body.vitals.fatigue
-                    >= self.state.physical.as_ref().unwrap().rules.fatigue_limit / 2
+                || body.vitals.hunger >= physical.meal_relief
+                || body.vitals.fatigue >= physical.fatigue_limit / 2
             {
                 continue;
             }
@@ -2221,8 +2237,9 @@ impl Simulation {
         let mind = &self.state.decisions.as_ref()?.minds[&giver];
         let body = &self.state.physical.as_ref()?.actors[&giver];
         let r = &self.state.health.as_ref()?.rules;
-        if body.vitals.hunger >= self.state.physical.as_ref()?.rules.meal_relief
-            || body.vitals.fatigue >= self.state.physical.as_ref()?.rules.fatigue_limit / 2
+        let physical = self.body_rules(giver);
+        if body.vitals.hunger >= physical.meal_relief
+            || body.vitals.fatigue >= physical.fatigue_limit / 2
             || mind.child_signals.values().any(|s| s.urgency >= 20_000)
         {
             return None;
@@ -2258,7 +2275,7 @@ impl Simulation {
 
 impl Simulation {
     fn health_mind(&self, actor: PersonId) -> Option<&decisions::Mind> {
-        if self.controls_actor(actor) {
+        if self.past_life_controls_actor(actor) {
             let w = self.state.invocation.as_ref()?;
             let active = w.active.as_ref()?;
             let life = active.dominant?;
@@ -2271,6 +2288,200 @@ impl Simulation {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    fn expressed_health_fixture() -> Simulation {
+        let mut sim = Simulation::health_fixture(57, Execution::default()).unwrap();
+        sim.initialize_genetics(game_genetics::Rules {
+            metabolism_spread: 500,
+            cold_span_centi: 400,
+            expression_period_ms: 1_000_000,
+            ..game_genetics::Rules::default()
+        })
+        .unwrap();
+        let actor = sim.state.ruler;
+        let genes = sim.state.genetics.as_mut().unwrap();
+        for locus in [
+            game_genetics::Locus::Metabolism,
+            game_genetics::Locus::ColdAdaptation,
+        ] {
+            let variant = *genes
+                .variants
+                .iter()
+                .find(|(_, variant)| variant.locus == locus && variant.effect == 1_000)
+                .unwrap()
+                .0;
+            for homolog in &mut genes.people.get_mut(&actor).unwrap().genome.autosomes[0].homologs {
+                homolog.variants[locus.index()] = variant;
+            }
+        }
+        sim
+    }
+
+    #[test]
+    fn actual_genetic_expression_changes_drinking_and_deprivation_without_rule_mutation() {
+        let mut whole = expressed_health_fixture();
+        let actor = whole.state.ruler;
+        let rules = whole.state.health.as_ref().unwrap().rules.clone();
+        let physiology = whole.health_physiology(actor);
+        assert_eq!(
+            (
+                physiology.thirst_harm,
+                physiology.drink_relief,
+                physiology.cold_tolerance_centi
+            ),
+            (120_000, 200_000, 400)
+        );
+        whole
+            .state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&actor)
+            .unwrap()
+            .thirst = 100_000;
+        let mut sliced = Simulation::load(&whole.save().unwrap(), Execution::default()).unwrap();
+        whole.advance(SimDuration(40_003)).unwrap();
+        for elapsed in [1, 19_999, 7_001, 13_002] {
+            sliced.advance(SimDuration(elapsed)).unwrap();
+        }
+        assert_eq!(whole.canonical_state(), sliced.canonical_state());
+        assert!(
+            whole.state.physical.as_ref().unwrap().actors[&actor]
+                .vitals
+                .health
+                < whole.body_rules(actor).max_health
+        );
+        assert_eq!(whole.state.health.as_ref().unwrap().rules, rules);
+
+        let area = whole.health_area(actor, true).unwrap();
+        let water = whole
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(area),
+                Quantity(1_000),
+                Quantity(1_000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        whole
+            .state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&actor)
+            .unwrap()
+            .thirst = 250_000;
+        whole
+            .debug_actor_command(
+                actor,
+                Command::Health {
+                    action: HealthAction::Drink { source: water },
+                },
+            )
+            .unwrap();
+        whole.advance(rules.drinking_time).unwrap();
+        assert_eq!(
+            whole.state.health.as_ref().unwrap().clinical[&actor].thirst,
+            60_000
+        );
+        assert_eq!(whole.state.inventories[&water].quantity, Quantity(0));
+        assert_eq!(whole.state.health.as_ref().unwrap().rules, rules);
+    }
+
+    #[test]
+    fn absent_genetics_and_neutral_traits_produce_identical_clinical_inputs() {
+        let mut sim = Simulation::health_fixture(58, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        sim.state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&actor)
+            .unwrap()
+            .thirst = 200_000;
+        let before = sim.evaluate_health(SimTime(1_003)).unwrap();
+        let before_delta = sim.health_body_delta(actor, 1_003).unwrap();
+        let before_physiology = sim.health_physiology(actor);
+        sim.initialize_genetics(game_genetics::Rules {
+            metabolism_spread: 0,
+            cold_span_centi: 0,
+            ..game_genetics::Rules::default()
+        })
+        .unwrap();
+        let after = sim.evaluate_health(SimTime(1_003)).unwrap();
+        assert_eq!(before.clinical, after.clinical);
+        assert_eq!(before.jobs, after.jobs);
+        assert_eq!(before_delta, sim.health_body_delta(actor, 1_003).unwrap());
+        assert_eq!(before_physiology, sim.health_physiology(actor));
+    }
+
+    #[test]
+    fn caregiver_self_preservation_uses_individual_metabolic_needs() {
+        let mut sim = expressed_health_fixture();
+        let actor = sim.state.ruler;
+        let area = sim.health_area(actor, true).unwrap();
+        sim.state
+            .skills
+            .as_mut()
+            .unwrap()
+            .credit(actor, Skill::Medicine, 60_000, None);
+        sim.state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&actor)
+            .unwrap()
+            .personality
+            .empathy = 900;
+        for good in [Good::Herb, Good::Water] {
+            let inventory = sim
+                .debug_add_inventory(
+                    good,
+                    InventoryLocation::Area(area),
+                    Quantity(2_000),
+                    Quantity(2_000),
+                    BTreeSet::from([actor]),
+                )
+                .unwrap();
+            sim.state
+                .decisions
+                .as_mut()
+                .unwrap()
+                .minds
+                .get_mut(&actor)
+                .unwrap()
+                .knowledge
+                .insert(
+                    inventory,
+                    StockKnowledge {
+                        inventory,
+                        area,
+                        good,
+                        quantity: Quantity(2_000),
+                        accessible: true,
+                        observed_at: sim.state.time,
+                        learned_at: sim.state.time,
+                        source: KnowledgeSource::Observed(actor),
+                    },
+                );
+        }
+        assert!(sim.willing_health_supplies(actor, actor).is_some());
+        sim.state
+            .physical
+            .as_mut()
+            .unwrap()
+            .actors
+            .get_mut(&actor)
+            .unwrap()
+            .vitals
+            .hunger = 250_000;
+        assert!(250_000 < sim.state.physical.as_ref().unwrap().rules.meal_relief);
+        assert!(250_000 > sim.body_rules(actor).meal_relief);
+        assert!(sim.willing_health_supplies(actor, actor).is_none());
+    }
     #[test]
     fn medical_learning_during_a_course_is_identical_across_time_slices() {
         let mut whole = Simulation::health_fixture(9, Execution::default()).unwrap();

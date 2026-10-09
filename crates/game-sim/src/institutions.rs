@@ -1051,7 +1051,14 @@ impl Simulation {
             None
         };
         let institution = proposal.institution;
+        let external_enforcement = matches!(
+            proposal.change,
+            InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. }
+        );
         let plan = world.prepare_resolution(id, &authority, concept)?;
+        if outcome == RuleProposalStatus::Adopted && external_enforcement {
+            self.preflight_enforcement_adoption(institution, id)?;
+        }
         plan.commit(self.state.institutions.as_mut().unwrap())?;
         if concept.is_some() {
             self.state.next_id += 1;

@@ -12,6 +12,7 @@ pub mod enforcement;
 pub mod environment;
 mod equipment;
 pub mod force;
+pub mod genetics;
 pub mod health;
 pub mod institutions;
 pub mod invocation;
@@ -124,6 +125,7 @@ enum Due {
 /// Logical state in persistent ID order; excludes host publication counters and timings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalState {
+    pub genetics: Option<game_genetics::World>,
     pub scenario: ScenarioInfo,
     pub seed: u64,
     pub time: SimTime,
@@ -281,6 +283,16 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             debug_fixture: true,
         },
         ScenarioInfo {
+            id: "enforcement-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
+            id: "genetics-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
             id: "health-fixture".into(),
             version: 1,
             debug_fixture: true,
@@ -330,6 +342,12 @@ impl Simulation {
         }
         if scenario == "project-fixture" {
             return Self::project_fixture(seed, execution);
+        }
+        if scenario == "enforcement-fixture" {
+            return Self::enforcement_fixture(seed, execution);
+        }
+        if scenario == "genetics-fixture" {
+            return Self::genetics_fixture(seed, execution);
         }
         if scenario == "health-fixture" {
             return Self::health_fixture(seed, execution);
@@ -384,6 +402,7 @@ impl Simulation {
             ));
         }
         let mut state = CanonicalState {
+            genetics: None,
             scenario: scenarios().remove(0),
             seed,
             time: SimTime(0),
@@ -795,10 +814,11 @@ impl Simulation {
             available_commands
                 .retain(|command| matches!(command, Command::Signal { .. } | Command::Cancel));
         }
-        if self.controls_actor(ruler.id) {
+        if self.past_life_controls_actor(ruler.id) {
             available_commands.clear();
         }
         PlayerView {
+            genetics: self.genetic_phenotype(ruler.id),
             social: self.social_view(ruler.id),
             enforcement: self.enforcement_view(ruler.id),
             health: self.health_view(ruler.id),
@@ -932,7 +952,7 @@ impl Simulation {
                 Err(Error::SequenceConflict)
             };
         }
-        if self.controls_actor(self.state.ruler) {
+        if self.past_life_controls_actor(self.state.ruler) {
             return Err(Error::Unavailable);
         }
         if matches!(
@@ -1147,7 +1167,7 @@ impl Simulation {
             let next = self.health_boundary(
                 self.social_boundary(self.mission_boundary(self.invocation_boundary(next))),
             )?;
-            let next = self.body_boundary(self.skill_boundary(next)?)?;
+            let next = self.body_boundary(self.skill_boundary(self.genetics_boundary(next))?)?;
             let controlled = self.state.ruler;
             self.step(next)?;
             if controlled != self.state.ruler {
@@ -1527,6 +1547,7 @@ impl Simulation {
         self.observe_agreement_events();
         self.reconcile_institutions()?;
         self.learn_from_work();
+        self.refresh_genetics()?;
         self.review_social()?;
         if self.state.time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
@@ -1592,14 +1613,16 @@ impl Simulation {
                 }
             }
         }
-        let capacity = self
-            .state
-            .physical
-            .as_ref()
-            .map_or(0, |w| w.rules.carrying_capacity.0);
         let free_capacity = carried
             .into_iter()
-            .map(|(id, qty)| (id, capacity.saturating_sub(qty)))
+            .map(|(id, qty)| {
+                let capacity = if self.state.physical.is_some() {
+                    self.body_rules(id).carrying_capacity.0
+                } else {
+                    0
+                };
+                (id, capacity.saturating_sub(qty))
+            })
             .collect();
         let requests = intents
             .into_iter()
@@ -1704,6 +1727,7 @@ impl Simulation {
     fn emit(&mut self, kind: EventKind) {
         self.on_health_event(&kind);
         self.on_social_event(&kind);
+        self.on_genetic_event(&kind);
         self.update_water_event(&kind);
         self.witness_lineage_event(&kind);
         self.on_skill_event(&kind);

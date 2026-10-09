@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-genetics.workspace = true
+game-missions.workspace = true
 game-society.workspace = true
 game-lineage.workspace = true
 game-skills.workspace = true

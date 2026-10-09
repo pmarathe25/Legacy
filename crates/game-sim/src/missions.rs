@@ -1,77 +1,64 @@
 //! Expedition commitments use real people, cargo, personal maps, and tactical bodies.
 use crate::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Companion {
-    pub person: PersonId,
-    pub recruitment: RecruitmentId,
-    pub status: CompanionStatus,
-    pub directive: MissionObjective,
-    pub received_at: SimTime,
-    pub visited: BTreeSet<AreaId>,
-    pub delivered: u64,
-    pub cargo: BTreeMap<InventoryId, u64>,
-    pub contacts: BTreeMap<PersonId, AreaId>,
-    pub last_leg_from: Option<AreaId>,
-    pub explanation: String,
-    pub declared_explanation: String,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Mission {
-    pub id: MissionId,
-    pub sponsor: PersonId,
-    pub proposal: MissionProposal,
-    pub status: MissionStatus,
-    pub members: BTreeMap<PersonId, Companion>,
-    pub created_at: SimTime,
-    pub departed_at: Option<SimTime>,
-    pub explanation: String,
-    pub succeeded: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Recruitment {
-    pub id: RecruitmentId,
-    pub mission: MissionId,
-    pub person: PersonId,
-    pub compensation: Vec<AgreementTerm>,
-    pub agreement: Option<AgreementId>,
-    pub countered: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Conversation {
-    Objective {
-        mission: MissionId,
-        leader: PersonId,
-        objective: MissionObjective,
-    },
-    Report {
-        recipient: PersonId,
-        snapshot: Box<MissionView>,
-    },
-    Retreat {
-        mission: MissionId,
-        leader: PersonId,
-    },
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingTalk {
-    pub speaker: PersonId,
-    pub listener: PersonId,
-    pub area: AreaId,
-    pub completes: SimTime,
-    pub conversation: Conversation,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub missions: BTreeMap<MissionId, Mission>,
-    pub recruitments: BTreeMap<RecruitmentId, Recruitment>,
-    pub known: BTreeMap<PersonId, BTreeMap<MissionId, MissionView>>,
-    pub talks: BTreeMap<PersonId, PendingTalk>,
-    pub last_event: u64,
-    pub last_review: SimTime,
-}
+pub use game_missions::{
+    Companion, ConfinementObservation, Conversation, Mission, PendingTalk, Recruitment, World,
+};
 
 impl Simulation {
+    pub(crate) fn preflight_mission_target_report(
+        &self,
+        proposal: &MissionProposal,
+        speaker: PersonId,
+        target: PersonId,
+        area: AreaId,
+        observed_at: SimTime,
+    ) -> Result<(), Error> {
+        if !self.person_index.contains_key(&speaker)
+            || !self.person_index.contains_key(&target)
+            || proposal.objective.target_person() != Some(target)
+            || !self.state.areas.iter().any(|place| place.id == area)
+            || observed_at > self.state.time
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    pub(crate) fn seed_mission_target_report(
+        &mut self,
+        mission: MissionId,
+        speaker: PersonId,
+        target: PersonId,
+        area: AreaId,
+        observed_at: SimTime,
+    ) -> Result<(), Error> {
+        let m = self
+            .state
+            .missions
+            .as_ref()
+            .and_then(|world| world.missions.get(&mission))
+            .ok_or(Error::Unavailable)?;
+        if m.sponsor != speaker {
+            return Err(Error::Unavailable);
+        }
+        self.preflight_mission_target_report(&m.proposal, speaker, target, area, observed_at)?;
+        // This is the sponsor's supplied report; it does not query the target's
+        // current location. Recruits are present for the proposal conversation.
+        for member in self
+            .state
+            .missions
+            .as_mut()
+            .unwrap()
+            .missions
+            .get_mut(&mission)
+            .unwrap()
+            .members
+            .values_mut()
+        {
+            member.contacts.insert(target, area);
+        }
+        Ok(())
+    }
     pub fn mission_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::combat_fixture(seed, execution)?;
         sim.state.scenario = ScenarioInfo {
@@ -199,6 +186,9 @@ impl Simulation {
             MissionObjective::Rescue { person, return_to } => {
                 self.person_index.contains_key(person) && area(return_to)
             }
+            MissionObjective::Confine { person, until } => {
+                self.person_index.contains_key(person) && *until > self.state.time
+            }
             MissionObjective::Defeat { person } => self.person_index.contains_key(person),
             MissionObjective::Patrol { areas, until } => {
                 !areas.is_empty()
@@ -236,7 +226,8 @@ impl Simulation {
                             || self.mission_membership(*id).is_some()
                     })
                     || !self.mission_objective_valid(&proposal.objective)
-                    || matches!(&proposal.objective,MissionObjective::Defeat {person} if people.contains(person)||*person==actor)
+                    || matches!(&proposal.objective,MissionObjective::Defeat {person} | MissionObjective::Confine {person,..} if people.contains(person)||*person==actor)
+                    || matches!(proposal.objective, MissionObjective::Confine { until, .. } if until > proposal.deadline)
                     || proposal.supplies.len() > 32
                     || proposal.compensation.iter().any(|(id, terms)| {
                         !people.contains(id) || !self.mission_terms(actor, *id, terms)
@@ -295,6 +286,7 @@ impl Simulation {
                     members.insert(
                         person,
                         Companion {
+                            confinement: None,
                             person,
                             recruitment,
                             status: if person == actor {
@@ -783,6 +775,7 @@ impl Simulation {
                     .values()
                     .filter_map(|m| match m.proposal.objective {
                         MissionObjective::Patrol { until, .. }
+                        | MissionObjective::Confine { until, .. }
                             if !matches!(
                                 m.status,
                                 MissionStatus::Completed
@@ -939,16 +932,6 @@ impl Simulation {
     fn recruitment_score(&self, actor: PersonId, m: &Mission, offer: &Recruitment) -> i64 {
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
         let body = &self.state.physical.as_ref().unwrap().actors[&actor];
-        if self.guardian_mission_duty(actor, m.id) {
-            return -10_000;
-        }
-        let violence = matches!(m.proposal.objective, MissionObjective::Defeat { .. });
-        let risk = if violence {
-            1_500 - i64::from(mind.personality.risk_tolerance)
-        } else {
-            300
-        };
-        let trust = i64::from(mind.relationships.get(&m.sponsor).map_or(0, |r| r.trust));
         let social_disruption = if self
             .mission_area(actor)
             .ok()
@@ -958,41 +941,28 @@ impl Simulation {
         } else {
             0
         };
-        let kin_need = if mind
-            .child_signals
-            .values()
-            .any(|signal| signal.urgency >= 20_000)
-        {
-            3_000
-        } else {
-            0
-        };
-        let mut compensation = 0;
-        for term in &offer.compensation {
-            if term.parties()[1] == actor {
-                compensation += term.amount().min(10_000) as i64;
-            } else if term.parties()[0] == actor {
-                compensation -= term.amount().min(10_000) as i64;
-            }
-        }
-        i64::from(mind.personality.ambition) / 2
-            + i64::from(mind.personality.sociability) / 2
-            + trust
-            + compensation
-            - social_disruption
-            - risk
-            - kin_need
-            - if body.vitals.hunger >= self.state.physical.as_ref().unwrap().rules.meal_relief {
-                2_000
-            } else {
-                0
-            }
-            - if violence {
-                i64::from(mind.personality.empathy) / 2
-            } else {
-                0
-            }
+        game_missions::recruitment_score(
+            game_missions::RecruitmentInput {
+                actor,
+                guardian_duty: self.guardian_mission_duty(actor, m.id),
+                violent: m.proposal.objective.requires_force(),
+                risk_tolerance: mind.personality.risk_tolerance,
+                ambition: mind.personality.ambition,
+                sociability: mind.personality.sociability,
+                empathy: mind.personality.empathy,
+                sponsor_trust: mind.relationships.get(&m.sponsor).map_or(0, |r| r.trust),
+                social_disruption,
+                urgent_care: mind
+                    .child_signals
+                    .values()
+                    .any(|signal| signal.urgency >= 20_000),
+                hungry: body.vitals.hunger
+                    >= self.state.physical.as_ref().unwrap().rules.meal_relief,
+            },
+            &offer.compensation,
+        )
     }
+
     fn mission_control_member(&mut self, id: MissionId, actor: PersonId) {
         if actor == self.state.ruler || self.in_combat(actor) {
             return;
@@ -1186,6 +1156,38 @@ impl Simulation {
                         self.start_mission_encounter(id, actor, person);
                     }
                 }
+                MissionObjective::Confine { person, until } => {
+                    if self.state.people[self.person_index[&person]].location
+                        != Location::AtArea(area)
+                    {
+                        return;
+                    }
+                    let captive = self
+                        .state
+                        .combat
+                        .as_ref()
+                        .and_then(|world| world.captivity.get(&person));
+                    if let Some(captive) = captive {
+                        if m.members.contains_key(&captive.captor) {
+                            if self.state.time >= until {
+                                let _ = self.debug_actor_command(
+                                    actor,
+                                    Command::FreeCaptive { target: person },
+                                );
+                            } else {
+                                let _ = self.debug_actor_command(actor, Command::Rest);
+                            }
+                        }
+                    } else if self.state.time < until
+                        && self.state.physical.as_ref().unwrap().actors[&person]
+                            .vitals
+                            .alive
+                        && self.start_restraint(actor, person).is_err()
+                        && self.can_fight(person)
+                    {
+                        self.start_mission_encounter(id, actor, person);
+                    }
+                }
                 MissionObjective::Rescue { person, .. } => {
                     if self.state.people[self.person_index[&person]].location
                         == Location::AtArea(area)
@@ -1253,6 +1255,46 @@ impl Simulation {
             );
         }
     }
+    pub(crate) fn mission_react_to_encounter_end(&mut self, encounter: EncounterId) {
+        let Some(encounter) = self
+            .state
+            .combat
+            .as_ref()
+            .and_then(|world| world.encounters.get(&encounter))
+        else {
+            return;
+        };
+        if encounter.active {
+            return;
+        }
+        let Some(world) = &self.state.missions else {
+            return;
+        };
+        let responses: Vec<_> = world
+            .missions
+            .values()
+            .filter(|mission| {
+                matches!(
+                    mission.status,
+                    MissionStatus::Traveling | MissionStatus::Operating
+                )
+            })
+            .flat_map(|mission| {
+                mission
+                    .members
+                    .values()
+                    .filter(|member| {
+                        member.status == CompanionStatus::Accepted
+                            && encounter.fighters.contains_key(&member.person)
+                            && matches!(member.directive, MissionObjective::Confine { .. })
+                    })
+                    .map(|member| (mission.id, member.person))
+            })
+            .collect();
+        for (mission, actor) in responses {
+            self.mission_control_member(mission, actor);
+        }
+    }
     fn mission_explain(&mut self, id: MissionId, actor: PersonId, message: &str) {
         self.state
             .missions
@@ -1300,7 +1342,9 @@ impl Simulation {
                     member.contacts.get(person).copied()
                 }
             }
-            MissionObjective::Defeat { person } => member.contacts.get(person).copied(),
+            MissionObjective::Defeat { person } | MissionObjective::Confine { person, .. } => {
+                member.contacts.get(person).copied()
+            }
             MissionObjective::Patrol { areas, .. } => areas
                 .iter()
                 .find(|area| !member.visited.contains(area))
@@ -1396,6 +1440,7 @@ impl Simulation {
             member.received_at = self.state.time;
             if willing {
                 member.directive = objective.clone();
+                member.confinement = None;
                 member.declared_explanation = "Accepted a locally communicated objective".into();
                 member.delivered = 0;
                 member.cargo.clear();
@@ -1446,10 +1491,66 @@ impl Simulation {
             .events
             .iter()
             .skip(world.last_event as usize)
-            .map(|event| event.kind.clone())
+            .map(|event| (event.time, event.kind.clone()))
             .collect();
-        for event in events {
+        for (event_time, event) in events {
             match event {
+                EventKind::Captured { actor, target, .. }
+                | EventKind::Restrained { actor, target, .. } => {
+                    if let Some(id) = self.mission_membership(actor) {
+                        let member = self
+                            .state
+                            .missions
+                            .as_mut()
+                            .unwrap()
+                            .missions
+                            .get_mut(&id)
+                            .unwrap()
+                            .members
+                            .get_mut(&actor)
+                            .unwrap();
+                        if matches!(member.directive, MissionObjective::Confine { person, .. } if person == target)
+                        {
+                            member.confinement = Some(ConfinementObservation {
+                                person: target,
+                                captured_at: event_time,
+                                released_at: None,
+                            });
+                        }
+                    }
+                }
+                EventKind::Released { actor, target } => {
+                    for mission in self
+                        .state
+                        .missions
+                        .as_mut()
+                        .unwrap()
+                        .missions
+                        .values_mut()
+                        .filter(|mission| {
+                            !matches!(
+                                mission.status,
+                                MissionStatus::Completed
+                                    | MissionStatus::Failed
+                                    | MissionStatus::Cancelled
+                            )
+                        })
+                    {
+                        let party_released = mission.members.contains_key(&actor);
+                        for member in mission.members.values_mut() {
+                            if let MissionObjective::Confine { person, until } = member.directive
+                                && person == target
+                                && let Some(record) = &mut member.confinement
+                            {
+                                if party_released && event_time >= until {
+                                    record.released_at = Some(event_time);
+                                } else {
+                                    member.confinement = None;
+                                }
+                            }
+                        }
+                    }
+                }
                 EventKind::Departed { actor, from, .. } => {
                     if let Some(id) = self.mission_membership(actor) {
                         self.state
@@ -1870,6 +1971,22 @@ impl Simulation {
                             .is_some_and(|c| m.members.contains_key(&c.captor))
                     }))
             }
+            MissionObjective::Confine { person, until } => {
+                self.state.physical.as_ref().unwrap().actors[person]
+                    .vitals
+                    .alive
+                    && self.state.time >= *until
+                    && leader_area.is_some_and(|area| {
+                        self.state.people[self.person_index[person]].location
+                            == Location::AtArea(area)
+                    })
+                    && m.members.values().any(|member| {
+                        member
+                            .confinement
+                            .as_ref()
+                            .is_some_and(|record| record.finished(*person, *until, self.state.time))
+                    })
+            }
             MissionObjective::Patrol { areas, until } => {
                 self.state.time >= *until
                     && areas
@@ -1883,6 +2000,7 @@ impl Simulation {
             && matches!(
                 m.proposal.objective,
                 MissionObjective::Defeat { .. }
+                    | MissionObjective::Confine { .. }
                     | MissionObjective::Rescue { .. }
                     | MissionObjective::Patrol { .. }
             )
@@ -2390,7 +2508,9 @@ impl Simulation {
             return Some((None, CombatAction::Surrender));
         }
         let target = match member.directive {
-            MissionObjective::Defeat { person } | MissionObjective::Rescue { person, .. }
+            MissionObjective::Defeat { person }
+            | MissionObjective::Rescue { person, .. }
+            | MissionObjective::Confine { person, .. }
                 if f.known.contains_key(&person) =>
             {
                 Some(person)
@@ -2427,6 +2547,13 @@ impl Simulation {
             && self.can_release(actor, target)
         {
             CombatAction::Release { target }
+        } else if reachable
+            && matches!(member.directive, MissionObjective::Confine { person, .. } if person == target)
+            && (e.fighters[&target].surrendered || !self.can_fight(target))
+            && self.binding_stock(actor).is_some()
+            && !w.captivity.contains_key(&target)
+        {
+            CombatAction::Capture { target }
         } else if reachable
             && e.fighters[&target].position == point
             && map.clear(from, e.fighters[&target].position)
@@ -2532,7 +2659,9 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                         a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
                     })
         }
-        MissionObjective::Defeat { person } => people.contains(person),
+        MissionObjective::Defeat { person } | MissionObjective::Confine { person, .. } => {
+            people.contains(person)
+        }
         MissionObjective::Rescue { person, return_to } => {
             people.contains(person) && areas.contains(return_to)
         }
@@ -2628,6 +2757,16 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .is_some_and(|area| !areas.contains(&area))
                 || member.explanation.len() > 4096
                 || member.declared_explanation.len() > 4096
+            {
+                return Err(fail());
+            }
+            if let Some(record) = &member.confinement
+                && (member.directive.target_person() != Some(record.person)
+                    || !matches!(member.directive, MissionObjective::Confine { .. })
+                    || record.captured_at > s.time
+                    || record
+                        .released_at
+                        .is_some_and(|at| at > s.time || at < record.captured_at))
             {
                 return Err(fail());
             }
@@ -2823,7 +2962,7 @@ impl Simulation {
             )
             || m.members[&m.proposal.leader].status != CompanionStatus::Accepted
             || !self.mission_objective_valid(objective)
-            || matches!(objective, MissionObjective::Defeat { person } if m.members.contains_key(person) || *person == m.sponsor)
+            || matches!(objective, MissionObjective::Defeat { person } | MissionObjective::Confine { person, .. } if m.members.contains_key(person) || *person == m.sponsor)
         {
             return Err(Error::Unavailable);
         }
@@ -3676,5 +3815,150 @@ mod tests {
                 .is_err()
         );
         assert_eq!(sim.state, before);
+    }
+    #[test]
+    fn confinement_requires_actual_binding_and_does_not_release_at_the_named_time() {
+        let mut sim = fixture();
+        let actor = sim.state.ruler;
+        let target = sim.state.people[3].id;
+        let home = sim.state.areas[0].id;
+        sim.interrupt_actor_activity(target);
+        sim.state.people[sim.person_index[&target]].location = Location::AtArea(home);
+        for stock in sim
+            .state
+            .inventories
+            .values_mut()
+            .filter(|stock| stock.good == Good::Tool)
+        {
+            stock.access.remove(&target);
+        }
+        let until = SimTime(30_000);
+        let id = propose(
+            &mut sim,
+            actor,
+            MissionObjective::Confine {
+                person: target,
+                until,
+            },
+            vec![],
+        );
+        sim.seed_mission_target_report(id, actor, target, home, SimTime(0))
+            .unwrap();
+        sim.mission_command(actor, &MissionAction::Depart { mission: id })
+            .unwrap();
+        sim.force_yield(target, actor).unwrap();
+        sim.start_restraint(actor, target).unwrap();
+        sim.advance(SimDuration(30_000)).unwrap();
+        assert!(
+            sim.state
+                .combat
+                .as_ref()
+                .unwrap()
+                .captivity
+                .contains_key(&target)
+        );
+        assert!(!sim.state.missions.as_ref().unwrap().missions[&id].succeeded);
+        sim.debug_actor_command(actor, Command::FreeCaptive { target })
+            .unwrap();
+        sim.advance(MINUTE).unwrap();
+        assert!(
+            !sim.state
+                .combat
+                .as_ref()
+                .unwrap()
+                .captivity
+                .contains_key(&target)
+        );
+        assert_eq!(
+            sim.state.missions.as_ref().unwrap().missions[&id].status,
+            MissionStatus::Completed
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn a_received_target_report_remains_dated_information_even_when_the_target_is_elsewhere() {
+        let mut sim = fixture();
+        let actor = sim.state.ruler;
+        let target = sim.state.people[3].id;
+        let reported_area = sim.state.areas[2].id;
+        let id = propose(
+            &mut sim,
+            actor,
+            MissionObjective::Defeat { person: target },
+            vec![],
+        );
+        let actual = sim.state.people[sim.person_index[&target]].location.clone();
+        sim.seed_mission_target_report(id, actor, target, reported_area, SimTime(0))
+            .unwrap();
+        assert_eq!(
+            sim.state.missions.as_ref().unwrap().missions[&id].members[&actor].contacts[&target],
+            reported_area
+        );
+        assert_eq!(sim.state.people[sim.person_index[&target]].location, actual);
+        let before = sim.state.clone();
+        assert_eq!(
+            sim.seed_mission_target_report(id, target, target, reported_area, SimTime(0)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(sim.state, before);
+    }
+    #[test]
+    fn an_accepted_confinement_leader_can_capture_on_its_next_turn_without_waiting_a_minute() {
+        let mut sim = fixture();
+        let leader = sim.state.people[5].id;
+        let target = sim.state.people[3].id;
+        let home = sim.state.areas[0].id;
+        sim.interrupt_actor_activity(leader);
+        sim.interrupt_actor_activity(target);
+        sim.state.people[sim.person_index[&leader]].location = Location::AtArea(home);
+        sim.state.people[sim.person_index[&target]].location = Location::AtArea(home);
+        sim.debug_add_inventory(
+            Good::Binding,
+            InventoryLocation::Carried(leader),
+            Quantity(1_000),
+            Quantity(1_000),
+            BTreeSet::from([leader]),
+        )
+        .unwrap();
+        let id = propose(
+            &mut sim,
+            leader,
+            MissionObjective::Confine {
+                person: target,
+                until: SimTime(120_000),
+            },
+            vec![],
+        );
+        accept(&mut sim, id, leader);
+        sim.mission_command(leader, &MissionAction::Depart { mission: id })
+            .unwrap();
+        sim.state.combat.as_mut().unwrap().rules.damage = 1;
+        sim.debug_start_encounter(vec![(leader, 0), (target, 1)])
+            .unwrap();
+        sim.state
+            .combat
+            .as_mut()
+            .unwrap()
+            .maps
+            .get_mut(&home)
+            .unwrap()
+            .obstacles
+            .clear();
+        let current = sim.state.physical.as_ref().unwrap().actors[&target]
+            .vitals
+            .health;
+        let incap = sim.state.combat.as_ref().unwrap().rules.incapacitation;
+        sim.debug_injure(target, current - (incap - 12_000))
+            .unwrap();
+        sim.advance(SimDuration(24_000)).unwrap();
+        assert_eq!(
+            sim.state.combat.as_ref().unwrap().captivity[&target].captor,
+            leader
+        );
+        let record = sim.state.missions.as_ref().unwrap().missions[&id].members[&leader]
+            .confinement
+            .as_ref()
+            .unwrap();
+        assert!(record.captured_at.0 < MINUTE.0);
     }
 }

@@ -380,3 +380,42 @@ fn overflow_is_detected_before_any_owned_state_changes() {
     assert_eq!(before.burden, u64::MAX);
     assert!(growth_rate(usize::MAX).is_err());
 }
+
+#[test]
+fn borrowed_work_and_identity_penalties_keep_the_frozen_body_and_fractional_units() {
+    let body = game_core::SkillRate {
+        numerator: 500,
+        denominator: 1_000,
+    };
+    let own = game_core::SkillRate {
+        numerator: 500_000,
+        denominator: 1_000_000,
+    };
+    let rate = compose_work_rate(own, body, 2_000, 100).unwrap();
+    assert_eq!(
+        rate,
+        game_core::SkillRate {
+            numerator: 750_000,
+            denominator: 1_000_000
+        }
+    );
+    assert_eq!(
+        compose_work_rate(own, body, 0, 100).unwrap().numerator,
+        250_000
+    );
+    assert_eq!(
+        compose_work_rate(own, body, 0, 1_000).unwrap().numerator,
+        500
+    );
+    let neutral = game_core::SkillRate {
+        numerator: 1_000,
+        denominator: 1_000,
+    };
+    assert_eq!(
+        compose_work_rate(neutral, neutral, 2_000, 100).unwrap(),
+        game_core::SkillRate {
+            numerator: 1_500,
+            denominator: 1_000
+        }
+    );
+}

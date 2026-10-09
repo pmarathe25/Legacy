@@ -74,6 +74,7 @@ fn input<'a>(
             insulation: 0,
             infectious_contacts: contacts,
         },
+        physiology: clinical_physiology(rules, 1_000, 0).unwrap(),
     }
 }
 #[test]
@@ -86,6 +87,7 @@ fn unsafe_water_starts_incubation_at_actual_intake_without_body_mutation() {
     let state = receive_water(
         &before,
         &rules,
+        clinical_physiology(&rules, 1_000, 0).unwrap(),
         SimTime(100),
         InventoryId(9),
         Quantity(1_000),
@@ -177,6 +179,13 @@ fn contact_threshold_and_recovery_are_domain_transitions() {
     );
 }
 fn advance_slices(chunks: &[u64]) -> (Clinical, HealthDelta, Vec<(u64, ClinicalEvent)>) {
+    advance_slices_with_physiology(chunks, 1_000, 0)
+}
+fn advance_slices_with_physiology(
+    chunks: &[u64],
+    metabolism: u16,
+    tolerance: i16,
+) -> (Clinical, HealthDelta, Vec<(u64, ClinicalEvent)>) {
     let mut rules = Rules::fixture();
     rules.cold_accumulation = 37;
     rules.cold_harm = 10_000;
@@ -189,7 +198,10 @@ fn advance_slices(chunks: &[u64]) -> (Clinical, HealthDelta, Vec<(u64, ClinicalE
     for chunk in chunks {
         let target = now + chunk;
         while now < target {
-            let context = input(&rules, &state, now, target, [0, 1]);
+            let context = ClinicalInput {
+                physiology: clinical_physiology(&rules, metabolism, tolerance).unwrap(),
+                ..input(&rules, &state, now, target, [0, 1])
+            };
             let next = clinical_boundary(context, SimTime(target)).unwrap();
             let actual = ClinicalInput { next, ..context };
             let delta = clinical_contribution(actual).unwrap();
@@ -298,6 +310,7 @@ fn invalid_water_and_rule_inputs_fail_without_partial_changes() {
         receive_water(
             &Clinical::default(),
             &rules,
+            clinical_physiology(&rules, 1_000, 0).unwrap(),
             SimTime(0),
             InventoryId(1),
             Quantity(1_000),
@@ -305,4 +318,100 @@ fn invalid_water_and_rule_inputs_fail_without_partial_changes() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn individual_metabolism_changes_deprivation_boundary_damage_and_real_intake_relief() {
+    let rules = Rules::fixture();
+    let fast = clinical_physiology(&rules, 1_500, 0).unwrap();
+    let slow = clinical_physiology(&rules, 500, 0).unwrap();
+    assert_eq!((fast.thirst_harm, fast.drink_relief), (120_000, 200_000));
+    assert_eq!((slow.thirst_harm, slow.drink_relief), (360_000, 600_000));
+    let opening = Clinical::default();
+    let mut context = input(&rules, &opening, 0, 400_000, [0; 2]);
+    context.exposure.temperature_c = 20;
+    context.physiology = fast;
+    assert_eq!(
+        clinical_boundary(context, SimTime(400_000)).unwrap(),
+        SimTime(120_000)
+    );
+    context.physiology = slow;
+    assert_eq!(
+        clinical_boundary(context, SimTime(400_000)).unwrap(),
+        SimTime(360_000)
+    );
+    let deprived = Clinical {
+        thirst: 200_000,
+        ..Clinical::default()
+    };
+    let mut context = input(&rules, &deprived, 0, 10, [0; 2]);
+    context.physiology = fast;
+    assert_eq!(
+        clinical_contribution(context).unwrap().health_milli,
+        -20_000
+    );
+    context.physiology = slow;
+    assert_eq!(clinical_contribution(context).unwrap().health_milli, 0);
+    let thirsty = Clinical {
+        thirst: 650_000,
+        ..Clinical::default()
+    };
+    let drank = |physiology| {
+        receive_water(
+            &thirsty,
+            &rules,
+            physiology,
+            SimTime(10),
+            InventoryId(2),
+            Quantity(500),
+            100,
+        )
+        .unwrap()
+    };
+    assert_eq!(drank(fast).thirst, 550_000);
+    assert_eq!(drank(slow).thirst, 350_000);
+    // Neither heredity nor the relief calculation alters the actual dose.
+    assert_eq!(drank(fast).doses, drank(slow).doses);
+    assert!(clinical_physiology(&rules, 0, 0).is_err());
+}
+
+#[test]
+fn cold_tolerance_keeps_centi_degree_effects_and_exact_fractional_progress() {
+    let rules = Rules::fixture();
+    assert_eq!(cold_rate(&rules, 0, 0, 0), 1_250);
+    assert_eq!(cold_rate(&rules, 0, 0, 125), 937);
+    assert_eq!(cold_rate(&rules, 0, 0, -125), 1_562);
+    let opening = Clinical::default();
+    let mut context = input(&rules, &opening, 0, 100_000, [0; 2]);
+    context.physiology = clinical_physiology(&rules, 1_000, 125).unwrap();
+    assert_eq!(
+        clinical_boundary(context, SimTime(100_000)).unwrap(),
+        SimTime(64_035)
+    );
+    context.next = SimTime(1);
+    let cold = advance_clinical(context).unwrap();
+    assert_eq!((cold.cold, cold.cold_remainder), (0, 937));
+    context.state = &cold;
+    context.now = SimTime(1);
+    context.next = SimTime(2);
+    let cold = advance_clinical(context).unwrap();
+    assert_eq!((cold.cold, cold.cold_remainder), (1, 874));
+}
+
+#[test]
+fn expressed_traits_preserve_exact_clinical_events_and_contributions_across_slices() {
+    for (metabolism, tolerance) in [(500, -275), (1_500, 125), (1_137, 131)] {
+        assert_eq!(
+            advance_slices_with_physiology(&[170_003], metabolism, tolerance),
+            advance_slices_with_physiology(
+                &[1, 799, 13_003, 28_717, 3, 77_001, 50_479],
+                metabolism,
+                tolerance
+            )
+        );
+    }
+    let neutral = clinical_physiology(&Rules::fixture(), 1_000, 0).unwrap();
+    assert_eq!(neutral.thirst_harm, Rules::fixture().thirst_harm);
+    assert_eq!(neutral.drink_relief, Rules::fixture().drink_relief);
+    assert_eq!(neutral.cold_tolerance_centi, 0);
 }

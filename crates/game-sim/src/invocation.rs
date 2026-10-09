@@ -506,7 +506,7 @@ impl Simulation {
                 .as_ref()
                 .is_some_and(|w| w.actors[&actor].vitals.alive)
     }
-    pub(crate) fn controls_actor(&self, actor: PersonId) -> bool {
+    pub(crate) fn past_life_controls_actor(&self, actor: PersonId) -> bool {
         let episode = self
             .state
             .invocation
@@ -686,7 +686,7 @@ impl Simulation {
         action: &InvocationAction,
     ) -> Result<(), Error> {
         let w = self.state.invocation.as_ref().ok_or(Error::Unavailable)?;
-        if self.controls_actor(actor)
+        if self.past_life_controls_actor(actor)
             || !self
                 .state
                 .physical
@@ -1125,7 +1125,7 @@ impl Simulation {
         self.refresh_temporary_invocation_costs();
         let active = self.state.invocation.as_ref().unwrap().active.clone();
         if let Some(a) = active
-            && self.controls_actor(a.actor)
+            && self.past_life_controls_actor(a.actor)
         {
             let b = self.state.invocation.as_ref().unwrap().people[&a.actor].clone();
             for (cost, band, permanent) in self.required_bands(&a.lives, &b, a.next_loss_burden)? {
@@ -1172,7 +1172,7 @@ impl Simulation {
             &w.rules,
             &before,
             &active.accepted,
-            self.controls_actor(active.actor),
+            self.past_life_controls_actor(active.actor),
         );
         self.state
             .invocation
@@ -1247,14 +1247,20 @@ impl Simulation {
             + (levels.iter().map(|v| u32::from(*v)).sum::<u32>() - u32::from(maximum)) / 2)
             .min(200) as u16
     }
-    pub(crate) fn invocation_work_rate(&self, actor: PersonId, own: SkillRate) -> SkillRate {
-        self.invocation_work_rate_for(actor, Skill::Craft, own)
+    pub(crate) fn invocation_work_rate(
+        &self,
+        actor: PersonId,
+        own: SkillRate,
+        body: SkillRate,
+    ) -> SkillRate {
+        self.invocation_work_rate_for(actor, Skill::Craft, own, body)
     }
     pub(crate) fn invocation_work_rate_for(
         &self,
         actor: PersonId,
         skill: Skill,
         own: SkillRate,
+        body: SkillRate,
     ) -> SkillRate {
         let Some(w) = &self.state.invocation else {
             return own;
@@ -1265,19 +1271,18 @@ impl Simulation {
             .skills
             .as_ref()
             .map_or(10, |s| s.rules.work_bonus_per_level);
-        let borrowed =
-            1_000 + u64::from(self.borrowed_skill_level(actor, skill)) * u64::from(bonus);
-        let borrowing = w.active.as_ref().is_some_and(|a| a.actor == actor);
-        let numerator = if borrowing {
-            own.numerator.max(borrowed)
+        let borrowing = w
+            .active
+            .as_ref()
+            .is_some_and(|active| active.actor == actor);
+        let borrowed = if borrowing {
+            1_000 + u64::from(self.borrowed_skill_level(actor, skill)) * u64::from(bonus)
         } else {
-            own.numerator
+            0
         };
         let penalty = u64::from(state.temporary_identity) + u64::from(state.permanent_identity);
-        SkillRate {
-            numerator: numerator.saturating_sub(penalty * 5).max(1),
-            denominator: own.denominator,
-        }
+        game_invocation::compose_work_rate(own, body, borrowed, penalty)
+            .expect("validated frozen body and invocation rate bounds")
     }
     pub(crate) fn invocation_combat_damage(
         &self,
@@ -1383,7 +1388,7 @@ impl Simulation {
         else {
             return Ok(());
         };
-        if !self.controls_actor(a.actor) || a.next_controller > self.state.time {
+        if !self.past_life_controls_actor(a.actor) || a.next_controller > self.state.time {
             return Ok(());
         }
         let w = self.state.invocation.as_ref().unwrap();
@@ -1684,7 +1689,7 @@ impl Simulation {
             emotional_disruption: b.emotional_disruption,
             permanent_identity: b.permanent_identity,
             lifespan_loss: SimDuration(b.lifespan_loss),
-            player_control: !self.controls_actor(actor)
+            player_control: !self.past_life_controls_actor(actor)
                 && self.state.physical.as_ref().unwrap().actors[&actor]
                     .vitals
                     .alive,
@@ -1699,7 +1704,7 @@ impl Simulation {
         let Some(w) = &self.state.invocation else {
             return Vec::new();
         };
-        if self.controls_actor(actor) {
+        if self.past_life_controls_actor(actor) {
             return Vec::new();
         }
         let mut actions = Vec::new();
@@ -2833,7 +2838,7 @@ mod tests {
         activate(&mut sim, BTreeSet::from([life]));
         let warning = approach_loss(&mut sim);
         act(&mut sim, InvocationAction::AcceptWarning { warning }).unwrap();
-        assert!(sim.controls_actor(actor));
+        assert!(sim.past_life_controls_actor(actor));
         let ends = sim
             .state
             .invocation
@@ -2868,7 +2873,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(sim.state, restored.state);
-        assert!(!sim.controls_actor(actor));
+        assert!(!sim.past_life_controls_actor(actor));
         assert!(sim.state.invocation.as_ref().unwrap().people[&actor].permanent_identity > 0);
         assert!(sim.state.invocation.as_ref().unwrap().people[&actor].lifespan_loss > 0);
     }
@@ -2909,7 +2914,7 @@ mod tests {
                     .map_or(0, |b| b.permanent_identity),
                 0
             );
-            assert!(!sim.controls_actor(sim.state.ruler));
+            assert!(!sim.past_life_controls_actor(sim.state.ruler));
         }
     }
 }

@@ -236,23 +236,28 @@ impl Simulation {
     }
 
     pub(crate) fn effective_work_rate(&self, actor: PersonId, skill: Skill) -> SkillRate {
-        self.state
+        let rate = self
+            .state
             .skills
             .as_ref()
             .map_or_else(SkillRate::default, |world| {
                 rate_for_level(self.own_skill_level(actor, skill), &world.rules)
-            })
+            });
+        self.genetic_work_rate(actor, rate)
+            .expect("validated skill and phenotype bounds")
     }
 
     pub(crate) fn effective_combat_damage(&self, actor: PersonId, base: u64) -> Result<u64, Error> {
-        let Some(world) = &self.state.skills else {
-            return Ok(base);
+        let trained = match &self.state.skills {
+            Some(world) => damage_for_level(
+                base,
+                self.own_skill_level(actor, Skill::Combat),
+                &world.rules,
+            )?,
+            None => base,
         };
-        damage_for_level(
-            base,
-            self.own_skill_level(actor, Skill::Combat),
-            &world.rules,
-        )
+        u64::try_from(u128::from(trained) * u128::from(self.genetic_strength_milli(actor)) / 1_000)
+            .map_err(|_| Error::Overflow)
     }
 }
 
