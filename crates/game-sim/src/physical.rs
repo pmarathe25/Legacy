@@ -174,6 +174,14 @@ impl Simulation {
         let world = self.state.physical.as_ref()?;
         let actor = &world.actors[&self.state.ruler];
         let ruler = &self.state.people[self.person_index[&self.state.ruler]];
+        if !actor.vitals.alive {
+            return Some(PhysicalView {
+                vitals: actor.vitals.clone(),
+                activity: actor.activity.clone(),
+                local_stocks: Vec::new(),
+                local_sites: Vec::new(),
+            });
+        }
         let area = if let Location::AtArea(a) = ruler.location {
             Some(a)
         } else {
@@ -198,6 +206,11 @@ impl Simulation {
                     good: i.good,
                     quantity: i.quantity,
                     can_access: i.access.contains(&ruler.id),
+                    capacity: i.capacity,
+                    position: match i.location {
+                        InventoryLocation::Area(id) => StockPosition::Area(id),
+                        InventoryLocation::Carried(id) => StockPosition::Carried(id),
+                    },
                 })
                 .collect(),
             local_sites: world
@@ -243,6 +256,15 @@ impl Simulation {
         actor: PersonId,
         command: Command,
     ) -> Result<(), Error> {
+        if let Command::Conceive { partner } = command {
+            return self.start_conception(actor, partner);
+        }
+        if !self.independent(actor) {
+            return Err(Error::Unavailable);
+        }
+        if self.care_index.contains_key(&actor) {
+            return Err(Error::Unavailable);
+        }
         let world = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let a = world.actors.get(&actor).ok_or(Error::Unavailable)?;
         let p = &self.state.people[self.person_index[&actor]];
@@ -256,6 +278,49 @@ impl Simulation {
         let (activity, new_job, consume) = match command {
             Command::Rest => (Activity::Rest, None, None),
             Command::Cancel => (Activity::Idle, None, None),
+            Command::Care { child, source } => {
+                let life = self
+                    .state
+                    .development
+                    .as_ref()
+                    .and_then(|w| w.lives.get(&child))
+                    .ok_or(Error::Unavailable)?;
+                let receiver = &self.state.physical.as_ref().unwrap().actors[&child];
+                let food = self
+                    .state
+                    .inventories
+                    .get(&source)
+                    .ok_or(Error::Unavailable)?;
+                if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
+                    || actor == child
+                    || !receiver.vitals.alive
+                    || !matches!(receiver.activity, Activity::Idle | Activity::Rest)
+                    || self.care_index.get(&child).is_some_and(|id| *id != actor)
+                    || self.state.people[self.person_index[&child]].location
+                        != Location::AtArea(area)
+                    || food.good != Good::Food
+                    || !self.can_use(actor, food)
+                    || self.unreserved_stock(source, actor) < rules.meal_size.0
+                {
+                    return Err(Error::Unavailable);
+                }
+                let completes = SimTime(
+                    self.state
+                        .time
+                        .0
+                        .checked_add(rules.eating_time.0)
+                        .ok_or(Error::Overflow)?,
+                );
+                (
+                    Activity::Care {
+                        child,
+                        source,
+                        completes,
+                    },
+                    None,
+                    None,
+                )
+            }
             Command::Tell {
                 recipient,
                 inventory,
@@ -333,6 +398,8 @@ impl Simulation {
                 if source == destination
                     || quantity.0 == 0
                     || source_inventory.good != destination_inventory.good
+                    || (source_inventory.location != InventoryLocation::Carried(actor)
+                        && destination_inventory.location != InventoryLocation::Carried(actor))
                     || !self.can_use(actor, source_inventory)
                     || !self.can_use(actor, destination_inventory)
                     || self.unreserved_stock(source, actor) < quantity.0
@@ -411,6 +478,9 @@ impl Simulation {
             .get_mut(&actor)
             .unwrap();
         a.activity = activity.clone();
+        if let Activity::Care { child, .. } = activity {
+            self.care_index.insert(child, actor);
+        }
         if let Some(job) = new_job {
             a.job = Some(job);
         }
@@ -420,7 +490,8 @@ impl Simulation {
         let deadline = match activity {
             Activity::Eat { completes, .. }
             | Activity::Load { completes, .. }
-            | Activity::Tell { completes, .. } => Some(completes),
+            | Activity::Tell { completes, .. }
+            | Activity::Care { completes, .. } => Some(completes),
             _ => None,
         };
         if let Some(deadline) = deadline {
@@ -435,8 +506,12 @@ impl Simulation {
     }
 
     pub(crate) fn interrupt_physical(&mut self, actor: PersonId) {
+        self.invalidate_pregnancies(actor, false);
         if let Some(world) = &mut self.state.physical {
             let a = world.actors.get_mut(&actor).unwrap();
+            if let Activity::Care { child, .. } = a.activity {
+                self.care_index.remove(&child);
+            }
             a.activity = Activity::Idle;
             for due in self.state.due.values_mut() {
                 due.retain(|d| !matches!(d, Due::Physical(id) if *id == actor));
@@ -465,7 +540,9 @@ impl Simulation {
             .filter(|(id, _)| **id != excluding)
             .map(|(_, a)| {
                 u128::from(match a.activity {
-                    Activity::Eat { source: s, .. } if s == source => {
+                    Activity::Eat { source: s, .. } | Activity::Care { source: s, .. }
+                        if s == source =>
+                    {
                         self.state.physical.as_ref().unwrap().rules.meal_size.0
                     }
                     Activity::Load {
@@ -603,6 +680,13 @@ impl Simulation {
             .activity
             .clone();
         let mut success = false;
+        if let Activity::Conceive { pregnancy, .. } = activity {
+            self.complete_conception(pregnancy);
+            return;
+        }
+        if activity == Activity::Idle {
+            return;
+        }
         match activity {
             Activity::Eat { source, .. } => {
                 let quantity = self.state.physical.as_ref().unwrap().rules.meal_size;
@@ -670,6 +754,53 @@ impl Simulation {
                     success = self.receive_report(actor, recipient, fact);
                 }
             }
+            Activity::Care { child, source, .. } => {
+                self.care_index.remove(&child);
+                let recipient = &self.state.physical.as_ref().unwrap().actors[&child];
+                let quantity = self.state.physical.as_ref().unwrap().rules.meal_size;
+                if recipient.vitals.alive
+                    && self.state.people[self.person_index[&child]].location
+                        == self.state.people[self.person_index[&actor]].location
+                    && self.can_use(actor, &self.state.inventories[&source])
+                    && self.state.inventories[&source].quantity >= quantity
+                {
+                    let food = self.state.inventories.get_mut(&source).unwrap();
+                    food.quantity.0 -= quantity.0;
+                    food.last_granted = Some(actor);
+                    self.state
+                        .development
+                        .as_mut()
+                        .unwrap()
+                        .lives
+                        .get_mut(&child)
+                        .unwrap()
+                        .caregivers
+                        .insert(actor);
+                    let relationship = self
+                        .state
+                        .decisions
+                        .as_mut()
+                        .unwrap()
+                        .minds
+                        .get_mut(&child)
+                        .unwrap()
+                        .relationships
+                        .entry(actor)
+                        .or_insert(decisions::Relationship {
+                            trust: 0,
+                            affection: 0,
+                        });
+                    relationship.trust = (relationship.trust + 50).min(1_000);
+                    relationship.affection = (relationship.affection + 50).min(1_000);
+                    self.emit(EventKind::Cared {
+                        caregiver: actor,
+                        child,
+                        source,
+                        quantity,
+                    });
+                    success = true;
+                }
+            }
             _ => {}
         }
         if !success {
@@ -702,7 +833,10 @@ impl Simulation {
                 .iter()
                 .rev()
                 .take_while(|e| e.time == self.state.time)
-                .any(|e| matches!(e.kind, EventKind::Ate { actor: id, .. } if id == actor));
+                .any(|e| {
+                    matches!(e.kind, EventKind::Ate { actor: id, .. } if id == actor)
+                        || matches!(e.kind, EventKind::Cared { child: id, .. } if id == actor)
+                });
             if ate {
                 vitals.hunger = vitals.hunger.saturating_sub(rules.meal_relief);
             }
@@ -775,10 +909,14 @@ impl Simulation {
                     .job = None;
                 self.state.people[self.person_index[&actor]].route.clear();
                 for due in self.state.due.values_mut() {
-                    due.retain(|d| !matches!(d, Due::Arrive(id) if *id == actor));
+                    due.retain(|d| !matches!(d, Due::Arrive(id) | Due::Age(id) if *id == actor));
                 }
                 self.state.due.retain(|_, due| !due.is_empty());
                 self.emit(EventKind::Died { actor });
+                for people in self.dependent_index.values_mut() {
+                    people.remove(&actor);
+                }
+                self.invalidate_pregnancies(actor, true);
             } else if previously_injured && vitals.health == rules.max_health {
                 self.emit(EventKind::Recovered { actor });
             }
@@ -884,6 +1022,14 @@ impl Simulation {
             a.vitals.alive = false;
             a.job = None;
             self.emit(EventKind::Died { actor });
+            for people in self.dependent_index.values_mut() {
+                people.remove(&actor);
+            }
+            for due in self.state.due.values_mut() {
+                due.retain(|d| !matches!(d, Due::Age(id) if *id == actor));
+            }
+            self.state.due.retain(|_, due| !due.is_empty());
+            self.invalidate_pregnancies(actor, true);
         }
         self.interrupt_physical(actor);
         Ok(())

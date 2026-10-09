@@ -60,6 +60,7 @@ pub enum Dream {
     Independence,
     Comfort,
     SupportOthers,
+    Parenthood,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Goal {
@@ -67,6 +68,7 @@ pub enum Goal {
     Recovery,
     Practice,
     Rest,
+    Care,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Relationship {
@@ -98,7 +100,15 @@ pub struct SiteKnowledge {
     pub access: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildSignal {
+    pub area: AreaId,
+    pub urgency: i64,
+    pub observed_at: SimTime,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mind {
+    #[serde(default)]
+    pub child_signals: BTreeMap<PersonId, ChildSignal>,
     pub personality: Personality,
     pub dream: Dream,
     pub knowledge: BTreeMap<InventoryId, StockKnowledge>,
@@ -140,6 +150,7 @@ impl Simulation {
                 (
                     p.id,
                     Mind {
+                        child_signals: BTreeMap::new(),
                         personality: if restful {
                             Personality::restful()
                         } else {
@@ -227,6 +238,26 @@ impl Simulation {
                     },
                 );
             }
+            mind.child_signals.retain(|_, signal| signal.area != area);
+            for child in self.dependent_index.get(&area).into_iter().flatten() {
+                let vitals = &self.state.physical.as_ref().unwrap().actors[child].vitals;
+                let rules = &self.state.physical.as_ref().unwrap().rules;
+                let urgency = if vitals.hunger >= rules.hunger_harm {
+                    20_000
+                } else if vitals.hunger >= rules.meal_relief {
+                    3_000
+                } else {
+                    0
+                };
+                mind.child_signals.insert(
+                    *child,
+                    ChildSignal {
+                        area,
+                        urgency,
+                        observed_at: self.state.time,
+                    },
+                );
+            }
             for site in self
                 .state
                 .physical
@@ -257,6 +288,7 @@ impl Simulation {
             return Ok(());
         };
         self.observe_local_facts();
+        self.review_conception()?;
         let world = self.state.decisions.as_ref().unwrap();
         let evaluate =
             |(id, mind): (&PersonId, &Mind)| self.decide(*id, mind, world.switching_margin);
@@ -269,7 +301,7 @@ impl Simulation {
         // Equal claims use the same persistent rotating cursor as physical transfers.
         intentions.sort_by_key(|i| {
             let (resource, cursor) = match i.command {
-                Some(Command::Eat { source }) => {
+                Some(Command::Eat { source }) | Some(Command::Care { source, .. }) => {
                     (source.0, self.state.inventories[&source].last_granted)
                 }
                 Some(Command::Work { site }) => (
@@ -326,13 +358,20 @@ impl Simulation {
         if id == self.state.ruler || !actor.vitals.alive || actor.vitals.health == 0 {
             return none();
         }
+        if !self.independent(id) {
+            return none();
+        }
         let Location::AtArea(area) = p.location else {
             return none();
         };
         let urgent = actor.vitals.hunger >= physical.rules.meal_relief;
         if matches!(
             actor.activity,
-            Activity::Eat { .. } | Activity::Load { .. } | Activity::Tell { .. }
+            Activity::Eat { .. }
+                | Activity::Load { .. }
+                | Activity::Tell { .. }
+                | Activity::Care { .. }
+                | Activity::Conceive { .. }
         ) || matches!(actor.activity, Activity::Work { .. }) && !urgent
         {
             return none();
@@ -365,6 +404,38 @@ impl Simulation {
                     Goal::Survival,
                     actor.vitals.hunger as i64 / 100 + 10_000,
                     0,
+                    0,
+                );
+            }
+        }
+        for (child, signal) in mind.child_signals.iter().filter(|(_, signal)| {
+            signal.area == area && signal.urgency > 0 && signal.observed_at == self.state.time
+        }) {
+            if *child == id {
+                continue;
+            }
+            let attachment = mind
+                .relationships
+                .get(child)
+                .map_or(0, |r| r.affection.max(0));
+            let motivation = i64::from(mind.personality.empathy) / 2 + i64::from(attachment);
+            if motivation < 300 {
+                continue;
+            }
+            for fact in mind.knowledge.values().filter(|f| {
+                f.area == area
+                    && f.good == Good::Food
+                    && f.accessible
+                    && f.quantity >= physical.rules.meal_size
+            }) {
+                add(
+                    Command::Care {
+                        child: *child,
+                        source: fact.inventory,
+                    },
+                    Goal::Care,
+                    signal.urgency,
+                    motivation,
                     0,
                 );
             }

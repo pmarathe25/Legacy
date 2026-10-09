@@ -70,3 +70,42 @@ fn cli_process_accepts_a_noninteractive_script() {
     assert_eq!(views[1].time, SimTime(120_000));
     assert_eq!(views[1].location, Location::AtArea(AreaId(2)));
 }
+
+#[test]
+fn newborn_care_is_reachable_through_normal_observations_and_the_text_adapter() {
+    let execution = Execution::default();
+    let mut sim = Simulation::life_fixture(1, execution.clone()).unwrap();
+    game_cli::execute(&mut sim, "run 5m", &execution).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    let child = view
+        .nearby_life_stages
+        .iter()
+        .find(|(_, stage)| *stage == LifeStage::Infant)
+        .unwrap()
+        .0;
+    let source = view
+        .available_commands
+        .iter()
+        .find_map(|c| {
+            if let Command::Care {
+                child: target,
+                source,
+            } = c
+            {
+                (*target == child).then_some(*source)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    game_cli::execute(
+        &mut sim,
+        &format!("care {} {}", child.0, source.0),
+        &execution,
+    )
+    .unwrap();
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    let ruler = sim.canonical_state().ruler;
+    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { caregiver, child: target, .. } if caregiver == ruler && target == child)));
+}

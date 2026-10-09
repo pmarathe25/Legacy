@@ -1,6 +1,10 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 1;
+const SAVE_VERSION: u32 = 2;
+#[derive(Deserialize)]
+struct SaveHeader {
+    version: u32,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Save {
@@ -23,9 +27,16 @@ impl Simulation {
     }
 
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
+        let header: SaveHeader =
+            serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
+        if ![1, SAVE_VERSION].contains(&header.version) {
+            return Err(Error::InvalidSave("unsupported save version".into()));
+        }
         let save: Save =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if save.version != SAVE_VERSION {
+        // Version 1 predates development and child observations. Their empty
+        // defaults preserve continuation for its three supported fixtures.
+        if save.version == 1 && save.state.development.is_some() {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         validate(&save.state)?;
@@ -44,11 +55,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent committed state".into());
     if !matches!(
         s.scenario.id.as_str(),
-        "kernel-fixture" | "survival-fixture" | "autonomy-fixture"
+        "kernel-fixture" | "survival-fixture" | "autonomy-fixture" | "life-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
-        || (s.scenario.id == "autonomy-fixture") != s.decisions.is_some()
+        || matches!(s.scenario.id.as_str(), "autonomy-fixture" | "life-fixture")
+            != s.decisions.is_some()
+        || (s.scenario.id == "life-fixture") != s.development.is_some()
     {
         return Err(fail());
     }
@@ -73,6 +86,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     if let Some(world) = &s.decisions {
         for id in world.concepts.keys() {
+            if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.development {
+        for id in world.pregnancies.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -120,6 +140,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     }
                 }
                 Due::Review => reviews.push(*time),
+                Due::Age(_) | Due::Birth(_) => {
+                    if s.development.is_none() {
+                        return Err(fail());
+                    }
+                }
                 Due::Transfers(intents) => {
                     for i in intents {
                         if i.quantity.0 == 0
@@ -138,7 +163,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -335,6 +360,64 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
+            EventKind::ConceptionRefused { actor, partner } => {
+                if !people.contains_key(&actor) || !people.contains_key(&partner) {
+                    return Err(fail());
+                }
+            }
+            EventKind::Conceived { pregnancy, parents } => {
+                if !s
+                    .development
+                    .as_ref()
+                    .is_some_and(|w| w.pregnancies.contains_key(&pregnancy))
+                    || parents.iter().any(|p| !people.contains_key(p))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::PregnancyEnded { pregnancy } => {
+                if !s
+                    .development
+                    .as_ref()
+                    .is_some_and(|w| w.pregnancies.contains_key(&pregnancy))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::Born {
+                pregnancy,
+                child,
+                parents,
+            } => {
+                if !s
+                    .development
+                    .as_ref()
+                    .is_some_and(|w| w.pregnancies.contains_key(&pregnancy))
+                    || !people.contains_key(&child)
+                    || parents.iter().any(|p| !people.contains_key(p))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::Cared {
+                caregiver,
+                child,
+                source,
+                quantity,
+            } => {
+                if !people.contains_key(&caregiver)
+                    || !people.contains_key(&child)
+                    || !s.inventories.contains_key(&source)
+                    || quantity.0 == 0
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::Developed { actor, .. } => {
+                if !people.contains_key(&actor) {
+                    return Err(fail());
+                }
+            }
         }
     }
     if s.next_event != s.events.len() as u64 + 1 || s.next_command != s.accepted.len() as u64 + 1 {
@@ -390,6 +473,15 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
+            for (child, signal) in &mind.child_signals {
+                if !people.contains_key(child)
+                    || !areas.contains(&signal.area)
+                    || signal.observed_at > s.time
+                    || ![0, 3_000, 20_000].contains(&signal.urgency)
+                {
+                    return Err(fail());
+                }
+            }
             for id in mind.relationships.keys() {
                 if !people.contains_key(id) {
                     return Err(fail());
@@ -412,6 +504,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
+    development::validate(s)?;
     Ok(())
 }
 
@@ -464,6 +557,7 @@ fn validate_physical(
             *cargo.entry(p).or_default() += u128::from(i.quantity.0);
         }
     }
+    let mut care_targets = BTreeSet::new();
     for (id, actor) in &world.actors {
         let p = people.get(id).ok_or_else(fail)?;
         let carried = cargo.get(id).copied().unwrap_or(0);
@@ -488,7 +582,11 @@ fn validate_physical(
         }
         let timed = matches!(
             actor.activity,
-            Activity::Eat { .. } | Activity::Load { .. } | Activity::Tell { .. }
+            Activity::Eat { .. }
+                | Activity::Load { .. }
+                | Activity::Tell { .. }
+                | Activity::Care { .. }
+                | Activity::Conceive { .. }
         );
         if timed != deadlines.contains(id) {
             return Err(fail());
@@ -497,6 +595,7 @@ fn validate_physical(
             return Err(fail());
         }
         match actor.activity {
+            Activity::Care { child, .. } if !care_targets.insert(child) => return Err(fail()),
             Activity::Eat { source, .. } => {
                 if !s
                     .inventories
@@ -537,6 +636,27 @@ fn validate_physical(
             } if !people.contains_key(&recipient)
                 || !s.inventories.contains_key(&fact.inventory)
                 || fact.observed_at > s.time =>
+            {
+                return Err(fail());
+            }
+            Activity::Care { child, source, .. }
+                if !people.contains_key(&child)
+                    || !s
+                        .inventories
+                        .get(&source)
+                        .is_some_and(|i| i.good == Good::Food) =>
+            {
+                return Err(fail());
+            }
+            Activity::Conceive {
+                pregnancy,
+                completes,
+            } if !s.development.as_ref().is_some_and(|w| {
+                w.pregnancies.get(&pregnancy).is_some_and(|p| {
+                    [p.gestator, p.partner].contains(id)
+                        && p.state == development::PregnancyState::Conceiving { completes }
+                })
+            }) =>
             {
                 return Err(fail());
             }

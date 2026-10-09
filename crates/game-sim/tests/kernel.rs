@@ -204,9 +204,10 @@ fn save_load_preserves_fractional_progress_pending_transfers_and_idempotency() {
     move_to(&mut loaded, 7, 3).unwrap();
     assert_eq!(&before, loaded.canonical_state());
     let mut json: serde_json::Value = serde_json::from_slice(&loaded.save().unwrap()).unwrap();
+    let valid_version = json["version"].clone();
     json["version"] = 999.into();
     assert!(Simulation::load(&serde_json::to_vec(&json).unwrap(), Execution::default()).is_err());
-    json["version"] = 1.into();
+    json["version"] = valid_version;
     json["state"]["next_id"] = 1.into();
     assert!(Simulation::load(&serde_json::to_vec(&json).unwrap(), Execution::default()).is_err());
 }

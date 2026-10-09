@@ -18,6 +18,8 @@ pub fn execute(
             Ok(serde_json::to_string(&receipt)?)
         }
         ["rest"] => submit(sim, Command::Rest),
+        ["conceive", partner] => submit(sim, Command::Conceive { partner: PersonId(partner.parse()?) }),
+        ["care", child, source] => submit(sim, Command::Care { child: PersonId(child.parse()?), source: InventoryId(source.parse()?) }),
         ["cancel"] => submit(sim, Command::Cancel),
         ["eat", source] => submit(sim, Command::Eat { source: InventoryId(source.parse()?) }),
         ["load", source, destination, quantity] => submit(sim, Command::Load { source: InventoryId(source.parse()?), destination: InventoryId(destination.parse()?), quantity: Quantity(quantity.parse()?) }),
@@ -35,7 +37,7 @@ pub fn execute(
             *sim = loaded;
             Ok("loaded".into())
         }
-        ["help"] => Ok("status | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
+        ["help"] => Ok("status | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | conceive <partner> | care <child> <food-stock> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
 }

@@ -14,6 +14,7 @@ id!(
     InventoryId,
     SiteId,
     ConceptId,
+    PregnancyId,
     EventId,
     SimTime,
     SimDuration,
@@ -43,6 +44,13 @@ pub enum Command {
     Tell {
         recipient: PersonId,
         inventory: InventoryId,
+    },
+    Conceive {
+        partner: PersonId,
+    },
+    Care {
+        child: PersonId,
+        source: InventoryId,
     },
 }
 
@@ -116,6 +124,7 @@ pub struct PlayerView {
     pub physical: Option<PhysicalView>,
     pub known_stocks: Vec<StockKnowledge>,
     pub nearby_people: Vec<(PersonId, Role)>,
+    pub nearby_life_stages: Vec<(PersonId, LifeStage)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -156,6 +165,15 @@ pub enum Activity {
         fact: StockKnowledge,
         completes: SimTime,
     },
+    Conceive {
+        pregnancy: PregnancyId,
+        completes: SimTime,
+    },
+    Care {
+        child: PersonId,
+        source: InventoryId,
+        completes: SimTime,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +182,14 @@ pub struct StockView {
     pub good: Good,
     pub quantity: Quantity,
     pub can_access: bool,
+    pub capacity: Quantity,
+    pub position: StockPosition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StockPosition {
+    Area(AreaId),
+    Carried(PersonId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +274,40 @@ pub enum EventKind {
         recipient: PersonId,
         inventory: InventoryId,
     },
+    ConceptionRefused {
+        actor: PersonId,
+        partner: PersonId,
+    },
+    Conceived {
+        pregnancy: PregnancyId,
+        parents: [PersonId; 2],
+    },
+    PregnancyEnded {
+        pregnancy: PregnancyId,
+    },
+    Born {
+        pregnancy: PregnancyId,
+        child: PersonId,
+        parents: [PersonId; 2],
+    },
+    Cared {
+        caregiver: PersonId,
+        child: PersonId,
+        source: InventoryId,
+        quantity: Quantity,
+    },
+    Developed {
+        actor: PersonId,
+        stage: LifeStage,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LifeStage {
+    Infant,
+    Child,
+    Adult,
+    Elder,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -3,6 +3,7 @@
 pub mod benchmark;
 pub mod compute;
 pub mod decisions;
+pub mod development;
 mod persistence;
 pub mod physical;
 pub mod session;
@@ -97,6 +98,8 @@ enum Due {
     Review,
     Physical(PersonId),
     Spoil(InventoryId),
+    Birth(PregnancyId),
+    Age(PersonId),
 }
 
 /// Logical state in persistent ID order; excludes host publication counters and timings.
@@ -115,6 +118,8 @@ pub struct CanonicalState {
     pub events: Vec<Event>,
     pub physical: Option<physical::World>,
     pub decisions: Option<decisions::World>,
+    #[serde(default)]
+    pub development: Option<development::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -129,6 +134,9 @@ pub struct Simulation {
     profile: Profile,
     person_index: BTreeMap<PersonId, usize>,
     inventory_index: BTreeMap<InventoryLocation, Vec<InventoryId>>,
+    pregnancy_index: BTreeMap<PersonId, PregnancyId>,
+    care_index: BTreeMap<PersonId, PersonId>,
+    dependent_index: BTreeMap<AreaId, BTreeSet<PersonId>>,
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
@@ -148,6 +156,11 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "life-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
@@ -158,6 +171,9 @@ impl Simulation {
         }
         if scenario == "autonomy-fixture" {
             return Self::autonomy_fixture(seed, execution);
+        }
+        if scenario == "life-fixture" {
+            return Self::life_fixture(seed, execution);
         }
         if scenario != "kernel-fixture" {
             return Err(Error::InvalidConfiguration("unknown scenario".into()));
@@ -191,6 +207,7 @@ impl Simulation {
             next_event: 1,
             physical: None,
             decisions: None,
+            development: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -294,6 +311,45 @@ impl Simulation {
                 .or_default()
                 .push(i.id);
         }
+        let pregnancy_index = state.development.as_ref().map_or_else(BTreeMap::new, |w| {
+            w.pregnancies
+                .values()
+                .filter(|p| {
+                    matches!(
+                        p.state,
+                        development::PregnancyState::Conceiving { .. }
+                            | development::PregnancyState::Gestating { .. }
+                    )
+                })
+                .map(|p| (p.gestator, p.id))
+                .collect()
+        });
+        let care_index = state.physical.as_ref().map_or_else(BTreeMap::new, |w| {
+            w.actors
+                .iter()
+                .filter_map(|(id, a)| {
+                    if let Activity::Care { child, .. } = a.activity {
+                        Some((child, *id))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        });
+        let mut dependent_index = BTreeMap::<AreaId, BTreeSet<PersonId>>::new();
+        if let Some(world) = &state.development {
+            for p in &state.people {
+                if let Location::AtArea(area) = p.location
+                    && matches!(
+                        world.lives[&p.id].stage,
+                        LifeStage::Infant | LifeStage::Child
+                    )
+                    && state.physical.as_ref().unwrap().actors[&p.id].vitals.alive
+                {
+                    dependent_index.entry(area).or_default().insert(p.id);
+                }
+            }
+        }
         Ok(Self {
             state,
             pool,
@@ -302,6 +358,9 @@ impl Simulation {
             profile: Profile::default(),
             person_index,
             inventory_index,
+            pregnancy_index,
+            care_index,
+            dependent_index,
         })
     }
 
@@ -355,6 +414,39 @@ impl Simulation {
                                 .map(|s| Command::Eat { source: s.id }),
                         );
                     }
+                    for source in &view.local_stocks {
+                        for destination in &view.local_stocks {
+                            let carried = InventoryLocation::Carried(ruler.id);
+                            if source.id != destination.id
+                                && source.good == destination.good
+                                && source.can_access
+                                && destination.can_access
+                                && source.quantity.0 >= 1_000
+                                && (self.state.inventories[&source.id].location == carried
+                                    || self.state.inventories[&destination.id].location == carried)
+                            {
+                                available_commands.push(Command::Load {
+                                    source: source.id,
+                                    destination: destination.id,
+                                    quantity: Quantity(1_000),
+                                });
+                            }
+                        }
+                    }
+                    if let Some(children) = self.dependent_index.get(&origin) {
+                        for child in children {
+                            for source in view.local_stocks.iter().filter(|s| {
+                                s.good == Good::Food
+                                    && s.can_access
+                                    && s.quantity >= world.rules.meal_size
+                            }) {
+                                available_commands.push(Command::Care {
+                                    child: *child,
+                                    source: source.id,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -378,11 +470,25 @@ impl Simulation {
                 w.minds[&ruler.id].knowledge.values().cloned().collect()
             }),
             nearby_people: self.nearby_people(0, 64),
+            nearby_life_stages: self.state.development.as_ref().map_or_else(Vec::new, |w| {
+                self.nearby_people(0, 64)
+                    .into_iter()
+                    .map(|(id, _)| (id, w.lives[&id].stage))
+                    .collect()
+            }),
         }
     }
 
     pub fn nearby_people(&self, offset: usize, limit: usize) -> Vec<(PersonId, Role)> {
         let ruler = &self.state.people[self.person_index[&self.state.ruler]];
+        if self
+            .state
+            .physical
+            .as_ref()
+            .is_some_and(|w| !w.actors[&ruler.id].vitals.alive)
+        {
+            return Vec::new();
+        }
         self.state.people.iter().filter(|p| p.id != ruler.id && matches!((&p.location, &ruler.location), (Location::AtArea(a), Location::AtArea(b)) if a == b))
             .skip(offset).take(limit.min(100)).map(|p| (p.id, p.role)).collect()
     }
@@ -429,7 +535,9 @@ impl Simulation {
         } else {
             None
         };
-        self.ensure_event_capacity(usize::from(departure.is_some()))?;
+        self.ensure_event_capacity(
+            usize::from(departure.is_some()) + usize::from(self.state.development.is_some()),
+        )?;
         let receipt = CommandReceipt {
             caller_sequence: submission.caller_sequence,
             authoritative_sequence: self.state.next_command,
@@ -500,6 +608,9 @@ impl Simulation {
 
     fn depart(&mut self, index: usize, from: AreaId, to: AreaId, arrives: SimTime) {
         let actor = self.state.people[index].id;
+        if let Some(people) = self.dependent_index.get_mut(&from) {
+            people.remove(&actor);
+        }
         self.state.people[index].route.remove(0);
         self.state.people[index].location = Location::InTransit {
             from,
@@ -578,6 +689,8 @@ impl Simulation {
             Due::Physical(id) => (2, id.0),
             Due::Review => (3, 0),
             Due::Transfers(_) => (4, 0),
+            Due::Age(id) => (5, id.0),
+            Due::Birth(id) => (6, id.0),
         });
         for event in &due {
             match event {
@@ -611,18 +724,25 @@ impl Simulation {
                 _ => {}
             }
         }
+        self.preflight_development(&due, next)?;
         let event_bound: usize = due
             .iter()
             .map(|d| match d {
                 Due::Arrive(_) => 2,
                 Due::Transfers(v) => v.len(),
                 Due::Review => 0,
-                Due::Physical(_) | Due::Spoil(_) => 2,
+                Due::Physical(_) | Due::Spoil(_) => 4,
+                Due::Birth(_) | Due::Age(_) => 2,
             })
             .sum::<usize>()
             + self.state.people.len() * 2;
         self.ensure_event_capacity(event_bound)?;
         let started = Instant::now();
+        let lifecycle: Vec<_> = due
+            .iter()
+            .filter(|d| matches!(d, Due::Age(_) | Due::Birth(_)))
+            .cloned()
+            .collect();
         let transfers: Vec<_> = due
             .iter()
             .filter_map(|d| {
@@ -659,6 +779,7 @@ impl Simulation {
                     let index = self.person_index[&id];
                     if let Location::InTransit { to, .. } = self.state.people[index].location {
                         self.state.people[index].location = Location::AtArea(to);
+                        self.index_dependent(id, to);
                         self.emit(EventKind::Arrived {
                             actor: id,
                             area: to,
@@ -670,6 +791,7 @@ impl Simulation {
                     }
                 }
                 Due::Transfers(_) => {}
+                Due::Age(_) | Due::Birth(_) => {}
                 Due::Physical(actor) => self.complete_physical(actor),
                 Due::Spoil(inventory) => {
                     let stock = self.state.inventories.get_mut(&inventory).unwrap();
@@ -716,6 +838,9 @@ impl Simulation {
             }
         }
         self.commit_physical(physical_output);
+        for event in lifecycle {
+            self.complete_development(event);
+        }
         self.learn_from_work();
         if self.state.time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
@@ -806,6 +931,9 @@ impl Simulation {
                     destination: i.destination,
                     amount: i.quantity.0,
                     eligible: source.good == destination.good
+                        && self.state.physical.as_ref().is_none_or(|w| {
+                            w.actors[&i.actor].vitals.alive && w.actors[&i.actor].vitals.health > 0
+                        })
                         && source.access.contains(&i.actor)
                         && destination.access.contains(&i.actor)
                         && area.is_some()
