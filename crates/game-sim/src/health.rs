@@ -3,6 +3,7 @@
 use crate::*;
 
 pub use game_health::*;
+type HealthCohort = (AreaId, Option<ShelterId>);
 
 impl Simulation {
     /// Called after the physical water enters a stock. Existing contamination
@@ -802,6 +803,7 @@ impl Simulation {
             Some(shelter)
         }
     }
+    #[cfg(test)]
     fn in_health_contact(&self, a: PersonId, b: PersonId) -> bool {
         if a == b
             || self.state.people[self.person_index[&a]].location
@@ -847,24 +849,6 @@ impl Simulation {
         })
     }
     fn health_exposure(&self, actor: PersonId) -> ExposureInput {
-        let w = self.state.health.as_ref().unwrap();
-        let mut infectious_contacts = [0; 2];
-        for (index, kind) in [IllnessKind::Enteric, IllnessKind::Respiratory]
-            .into_iter()
-            .enumerate()
-        {
-            infectious_contacts[index] = w
-                .clinical
-                .iter()
-                .filter(|(other, state)| {
-                    state
-                        .illnesses
-                        .get(&kind)
-                        .is_some_and(|i| i.symptomatic && i.recovers > self.state.time)
-                        && self.in_health_contact(actor, **other)
-                })
-                .count() as u64;
-        }
         ExposureInput {
             temperature_c: self
                 .state
@@ -872,14 +856,143 @@ impl Simulation {
                 .as_ref()
                 .map_or(12, |w| w.weather.temperature),
             insulation: self.effective_shelter(actor).map_or(0, |s| s.insulation),
-            infectious_contacts,
+            // Body contributions use weather/shelter, never contact doses.
+            infectious_contacts: [0; 2],
         }
+    }
+    fn health_locations(&self) -> BTreeMap<PersonId, HealthCohort> {
+        self.state
+            .people
+            .iter()
+            .filter_map(|person| {
+                if let Location::AtArea(area) = person.location {
+                    Some((
+                        person.id,
+                        (area, self.effective_shelter(person.id).map(|s| s.id)),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    /// Derived from one immutable opening state. Shared shelter contacts are
+    /// aggregated, while actual interactions outside them are deduplicated.
+    fn indexed_health_exposures(&self) -> BTreeMap<PersonId, ExposureInput> {
+        let world = self.state.health.as_ref().unwrap();
+        let locations = self.health_locations();
+        let infectious: BTreeMap<_, _> = self
+            .state
+            .people
+            .iter()
+            .map(|person| {
+                let state = world.clinical.get(&person.id);
+                let flags = [IllnessKind::Enteric, IllnessKind::Respiratory].map(|kind| {
+                    u64::from(
+                        state
+                            .and_then(|s| s.illnesses.get(&kind))
+                            .is_some_and(|i| i.symptomatic && i.recovers > self.state.time),
+                    )
+                });
+                (person.id, flags)
+            })
+            .collect();
+        let mut shared: BTreeMap<ShelterId, [u64; 2]> = BTreeMap::new();
+        for (actor, (_, shelter)) in &locations {
+            if let Some(shelter) = shelter {
+                let count = shared.entry(*shelter).or_default();
+                for (total, flag) in count.iter_mut().zip(infectious[actor]) {
+                    *total += flag;
+                }
+            }
+        }
+        let mut exposures: BTreeMap<_, _> = self
+            .state
+            .people
+            .iter()
+            .map(|person| {
+                let mut exposure = ExposureInput {
+                    temperature_c: self
+                        .state
+                        .environment
+                        .as_ref()
+                        .map_or(12, |w| w.weather.temperature),
+                    insulation: locations
+                        .get(&person.id)
+                        .and_then(|(_, shelter)| *shelter)
+                        .map_or(0, |id| world.shelters[&id].insulation),
+                    infectious_contacts: [0; 2],
+                };
+                if let Some((_, Some(shelter))) = locations.get(&person.id) {
+                    exposure.infectious_contacts = shared[shelter];
+                    for (count, own) in exposure
+                        .infectious_contacts
+                        .iter_mut()
+                        .zip(infectious[&person.id])
+                    {
+                        *count -= own;
+                    }
+                }
+                (person.id, exposure)
+            })
+            .collect();
+        let mut pairs = BTreeSet::new();
+        let mut add_pair = |a: PersonId, b: PersonId, treatment: bool| {
+            if a == b {
+                return;
+            }
+            let (Some((area_a, shelter_a)), Some((area_b, shelter_b))) =
+                (locations.get(&a), locations.get(&b))
+            else {
+                return;
+            };
+            if area_a != area_b
+                || (!treatment && shelter_a != shelter_b)
+                || (shelter_a.is_some() && shelter_a == shelter_b)
+            {
+                return;
+            }
+            pairs.insert(if a < b { (a, b) } else { (b, a) });
+        };
+        for job in world.jobs.values() {
+            if let Work::Treat { patient, .. } = job.work {
+                add_pair(job.actor, patient, true);
+            }
+        }
+        for (actor, body) in &self.state.physical.as_ref().unwrap().actors {
+            match body.activity {
+                Activity::Care { child, .. } | Activity::Comfort { child, .. } => {
+                    add_pair(*actor, child, false)
+                }
+                Activity::Tell { recipient, .. } => add_pair(*actor, recipient, false),
+                _ => {}
+            }
+        }
+        if let Some(missions) = &self.state.missions {
+            for talk in missions.talks.values() {
+                add_pair(talk.speaker, talk.listener, false);
+            }
+        }
+        for (a, b) in pairs {
+            for (receiver, source) in [(a, b), (b, a)] {
+                let exposure = exposures.get_mut(&receiver).unwrap();
+                for (count, flag) in exposure
+                    .infectious_contacts
+                    .iter_mut()
+                    .zip(infectious[&source])
+                {
+                    *count += flag;
+                }
+            }
+        }
+        exposures
     }
     fn clinical_input<'a>(
         &'a self,
         actor: PersonId,
         state: &'a Clinical,
         next: SimTime,
+        exposure: ExposureInput,
     ) -> ClinicalInput<'a> {
         ClinicalInput {
             rules: &self.state.health.as_ref().unwrap().rules,
@@ -892,7 +1005,7 @@ impl Simulation {
             thirst_enabled: !self.state.people[self.person_index[&actor]].hunger_exempt,
             resting: self.state.physical.as_ref().unwrap().actors[&actor].activity
                 == Activity::Rest,
-            exposure: self.health_exposure(actor),
+            exposure,
         }
     }
     pub(crate) fn health_body_delta(
@@ -903,7 +1016,8 @@ impl Simulation {
         let Some(w) = &self.state.health else {
             return Ok(HealthDelta::default());
         };
-        let state = w.clinical.get(&actor).cloned().unwrap_or_default();
+        let empty = Clinical::default();
+        let state = w.clinical.get(&actor).unwrap_or(&empty);
         let next = SimTime(
             self.state
                 .time
@@ -911,7 +1025,12 @@ impl Simulation {
                 .checked_add(elapsed)
                 .ok_or(Error::Overflow)?,
         );
-        game_health::clinical_contribution(self.clinical_input(actor, &state, next))
+        game_health::clinical_contribution(self.clinical_input(
+            actor,
+            state,
+            next,
+            self.health_exposure(actor),
+        ))
     }
     pub(crate) fn evaluate_health(&self, next: SimTime) -> Result<PendingHealth, Error> {
         let Some(w) = &self.state.health else {
@@ -925,6 +1044,7 @@ impl Simulation {
             .checked_sub(self.state.time.0)
             .ok_or(Error::Overflow)?;
         let mut clinical = w.clinical.clone();
+        let exposures = self.indexed_health_exposures();
         let mut jobs = BTreeMap::new();
         for person in &self.state.people {
             if !self.state.physical.as_ref().unwrap().actors[&person.id]
@@ -933,10 +1053,16 @@ impl Simulation {
             {
                 continue;
             }
-            let state = w.clinical.get(&person.id).cloned().unwrap_or_default();
+            let empty = Clinical::default();
+            let state = w.clinical.get(&person.id).unwrap_or(&empty);
             clinical.insert(
                 person.id,
-                game_health::advance_clinical(self.clinical_input(person.id, &state, next))?,
+                game_health::advance_clinical(self.clinical_input(
+                    person.id,
+                    state,
+                    next,
+                    exposures[&person.id],
+                ))?,
             );
         }
         for (actor, job) in &w.jobs {
@@ -957,6 +1083,7 @@ impl Simulation {
             return Ok(limit);
         };
         let mut boundary = limit;
+        let exposures = self.indexed_health_exposures();
         for job in w.jobs.values() {
             if self.health_job_can_progress(job) && job.completes > self.state.time {
                 boundary = boundary.min(job.completes);
@@ -965,9 +1092,10 @@ impl Simulation {
         // Domain thresholds constrain the interval. The coordinator separately
         // finds combined body limits using game-physiology.
         for person in &self.state.people {
-            let state = w.clinical.get(&person.id).cloned().unwrap_or_default();
+            let empty = Clinical::default();
+            let state = w.clinical.get(&person.id).unwrap_or(&empty);
             boundary = boundary.min(game_health::clinical_boundary(
-                self.clinical_input(person.id, &state, limit),
+                self.clinical_input(person.id, state, limit, exposures[&person.id]),
                 limit,
             )?);
         }
@@ -1329,6 +1457,42 @@ impl Simulation {
         if self.state.health.is_none() {
             return;
         }
+        let locations = self.health_locations();
+        let mut cohorts: BTreeMap<HealthCohort, BTreeSet<PersonId>> = BTreeMap::new();
+        for (actor, location) in &locations {
+            cohorts.entry(*location).or_default().insert(*actor);
+        }
+        let symptoms: BTreeMap<_, _> = cohorts
+            .iter()
+            .map(|(cohort, actors)| {
+                (
+                    *cohort,
+                    actors
+                        .iter()
+                        .take(64)
+                        .map(|actor| (*actor, self.visible_symptoms(*actor)))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        let world = self.state.health.as_ref().unwrap();
+        let mut area_shelters: BTreeMap<AreaId, Vec<ShelterId>> = BTreeMap::new();
+        for shelter in world.shelters.values() {
+            area_shelters
+                .entry(shelter.area)
+                .or_default()
+                .push(shelter.id);
+        }
+        let mut occupants: BTreeMap<(ShelterId, HealthCohort), BTreeSet<PersonId>> =
+            BTreeMap::new();
+        for (actor, shelter) in &world.occupancy {
+            if let Some(location) = locations.get(actor) {
+                occupants
+                    .entry((*shelter, *location))
+                    .or_default()
+                    .insert(*actor);
+            }
+        }
         let observers: Vec<_> = self
             .state
             .people
@@ -1346,38 +1510,16 @@ impl Simulation {
                 Location::AtArea(area) => area,
                 _ => continue,
             };
-            let people: Vec<_> = self
-                .state
-                .people
-                .iter()
-                .filter(|p| self.can_observe_health(observer, p.id))
-                .map(|p| p.id)
-                .collect::<BTreeSet<_>>()
+            let cohort = locations[&observer];
+            let people = &symptoms[&cohort];
+            let shelters: Vec<_> = area_shelters
+                .get(&area)
                 .into_iter()
-                .take(64)
-                .map(|person| (person, self.visible_symptoms(person)))
-                .collect();
-            let shelters: Vec<_> = self
-                .state
-                .health
-                .as_ref()
-                .unwrap()
-                .shelters
-                .values()
-                .filter(|s| s.area == area)
-                .map(|s| {
-                    let known_occupants = self
-                        .state
-                        .health
-                        .as_ref()
-                        .unwrap()
-                        .occupancy
-                        .iter()
-                        .filter(|(person, id)| {
-                            **id == s.id && self.can_observe_health(observer, **person)
-                        })
-                        .map(|(p, _)| *p)
-                        .collect();
+                .flatten()
+                .map(|id| {
+                    let s = &self.state.health.as_ref().unwrap().shelters[id];
+                    let known_occupants =
+                        occupants.get(&(*id, cohort)).cloned().unwrap_or_default();
                     (
                         s.id,
                         ShelterView {
@@ -1402,7 +1544,7 @@ impl Simulation {
                 .entry(observer)
                 .or_default();
             for (person, symptoms) in people {
-                knowledge.people.insert(person, symptoms);
+                knowledge.people.insert(*person, symptoms.clone());
             }
             for (id, s) in shelters {
                 knowledge.shelters.insert(id, s);
@@ -2507,5 +2649,358 @@ mod integration_tests {
             sim.debug_actor_command(actor, expected),
             Err(Error::Unavailable)
         );
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    fn population_fixture(population: usize) -> Simulation {
+        let sample = Simulation::health_fixture(71, Execution::default()).unwrap();
+        let sample_world = sample.state.physical.as_ref().unwrap();
+        let template = sample_world.actors[&sample.state.ruler].clone();
+        let mut sim = Simulation::kernel_fixture(71, population, Execution::default()).unwrap();
+        sim.state.physical = Some(physical::World {
+            rules: sample_world.rules.clone(),
+            actors: sim
+                .state
+                .people
+                .iter()
+                .map(|p| (p.id, template.clone()))
+                .collect(),
+            sites: BTreeMap::new(),
+        });
+        sim.initialize_health(Rules::fixture()).unwrap();
+        sim
+    }
+
+    fn exhaustive_exposures(sim: &Simulation) -> BTreeMap<PersonId, ExposureInput> {
+        sim.state
+            .people
+            .iter()
+            .map(|person| {
+                let mut exposure = sim.health_exposure(person.id);
+                for (index, kind) in [IllnessKind::Enteric, IllnessKind::Respiratory]
+                    .into_iter()
+                    .enumerate()
+                {
+                    exposure.infectious_contacts[index] = sim
+                        .state
+                        .health
+                        .as_ref()
+                        .unwrap()
+                        .clinical
+                        .iter()
+                        .filter(|(other, state)| {
+                            state
+                                .illnesses
+                                .get(&kind)
+                                .is_some_and(|i| i.symptomatic && i.recovers > sim.state.time)
+                                && sim.in_health_contact(person.id, **other)
+                        })
+                        .count() as u64;
+                }
+                (person.id, exposure)
+            })
+            .collect()
+    }
+
+    fn exhaustive_observations(sim: &Simulation) -> BTreeMap<PersonId, Knowledge> {
+        let world = sim.state.health.as_ref().unwrap();
+        let mut known = world.known.clone();
+        for observer in sim.state.people.iter().filter(|p| {
+            sim.state.physical.as_ref().unwrap().actors[&p.id]
+                .vitals
+                .alive
+        }) {
+            let Location::AtArea(area) = observer.location else {
+                continue;
+            };
+            let people: Vec<_> = sim
+                .state
+                .people
+                .iter()
+                .filter(|p| sim.can_observe_health(observer.id, p.id))
+                .map(|p| p.id)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .take(64)
+                .map(|p| (p, sim.visible_symptoms(p)))
+                .collect();
+            let shelters: Vec<_> = world
+                .shelters
+                .values()
+                .filter(|s| s.area == area)
+                .map(|s| {
+                    (
+                        s.id,
+                        ShelterView {
+                            id: s.id,
+                            area: s.area,
+                            capacity: s.capacity,
+                            insulation: s.insulation,
+                            custodian: s.custodian,
+                            accessible: s.access.contains(&observer.id),
+                            known_occupants: world
+                                .occupancy
+                                .iter()
+                                .filter(|(p, id)| {
+                                    **id == s.id && sim.can_observe_health(observer.id, **p)
+                                })
+                                .map(|(p, _)| *p)
+                                .collect(),
+                            observed_at: sim.state.time,
+                        },
+                    )
+                })
+                .collect();
+            let knowledge = known.entry(observer.id).or_default();
+            knowledge.people.extend(people);
+            knowledge.shelters.extend(shelters);
+        }
+        known
+    }
+
+    fn add_shelters(sim: &mut Simulation) -> [ShelterId; 2] {
+        let actor = sim.state.ruler;
+        let area = sim.state.areas[0].id;
+        let ids = [
+            ShelterId(sim.state.next_id),
+            ShelterId(sim.state.next_id + 1),
+        ];
+        sim.state.next_id += 2;
+        let world = sim.state.health.as_mut().unwrap();
+        for id in ids {
+            world.shelters.insert(
+                id,
+                Shelter {
+                    id,
+                    area,
+                    custodian: actor,
+                    access: BTreeSet::from([actor]),
+                    capacity: 64,
+                    insulation: 650,
+                    built_at: SimTime(0),
+                    timber_used: Quantity(64_000),
+                    labor_ms: 60_000,
+                },
+            );
+        }
+        ids
+    }
+
+    #[test]
+    fn indexed_contacts_match_exhaustive_pairs_across_varied_opening_states() {
+        let mut sim = population_fixture(15);
+        let people: Vec<_> = sim.state.people.iter().map(|p| p.id).collect();
+        let shelters = add_shelters(&mut sim);
+        for phase in 0..18 {
+            sim.state.health.as_mut().unwrap().occupancy.clear();
+            sim.state.health.as_mut().unwrap().jobs.clear();
+            for (index, actor) in people.iter().enumerate() {
+                let area = sim.state.areas[if index < 6 { 0 } else { (index + phase) % 3 }].id;
+                sim.state.people[sim.person_index[actor]].location = if (index + phase) % 11 == 0 {
+                    Location::InTransit {
+                        from: area,
+                        to: sim.state.areas[1].id,
+                        departed: SimTime(0),
+                        arrives: SimTime(100_000),
+                    }
+                } else {
+                    Location::AtArea(area)
+                };
+                if area == sim.state.areas[0].id && (index + phase) % 3 != 2 {
+                    sim.state
+                        .health
+                        .as_mut()
+                        .unwrap()
+                        .occupancy
+                        .insert(*actor, shelters[(index + phase) % 2]);
+                }
+                let body = sim
+                    .state
+                    .physical
+                    .as_mut()
+                    .unwrap()
+                    .actors
+                    .get_mut(actor)
+                    .unwrap();
+                body.vitals.alive = (index + phase) % 13 != 0;
+                let recipient = people[(index + 1) % people.len()];
+                body.activity = match (index + phase) % 6 {
+                    0 => Activity::Care {
+                        child: recipient,
+                        source: InventoryId(1),
+                        completes: SimTime(60_000),
+                    },
+                    1 => Activity::Comfort {
+                        child: recipient,
+                        completes: SimTime(60_000),
+                    },
+                    2 => Activity::Tell {
+                        recipient,
+                        fact: StockKnowledge {
+                            inventory: InventoryId(1),
+                            area,
+                            good: Good::Water,
+                            quantity: Quantity(0),
+                            accessible: false,
+                            observed_at: SimTime(0),
+                            learned_at: SimTime(0),
+                            source: KnowledgeSource::Observed(*actor),
+                        },
+                        completes: SimTime(60_000),
+                    },
+                    3 => Activity::Rest,
+                    4 => Activity::Play {
+                        interest: ChildhoodInterest::Movement,
+                        completes: SimTime(60_000),
+                    },
+                    _ => Activity::Idle,
+                };
+                let state = sim
+                    .state
+                    .health
+                    .as_mut()
+                    .unwrap()
+                    .clinical
+                    .get_mut(actor)
+                    .unwrap();
+                state.illnesses.clear();
+                for (kind_index, kind) in [IllnessKind::Enteric, IllnessKind::Respiratory]
+                    .into_iter()
+                    .enumerate()
+                {
+                    state.illnesses.insert(
+                        kind,
+                        Infection {
+                            kind,
+                            acquired: SimTime(0),
+                            onset: SimTime(0),
+                            recovers: SimTime(if (index + phase + kind_index) % 5 == 0 {
+                                0
+                            } else {
+                                120_000
+                            }),
+                            symptomatic: (index + phase + kind_index) % 3 != 0,
+                        },
+                    );
+                }
+            }
+            sim.state.health.as_mut().unwrap().jobs.insert(
+                people[0],
+                Job {
+                    actor: people[0],
+                    area: sim.state.areas[0].id,
+                    completes: SimTime(60_000),
+                    work: Work::Treat {
+                        patient: people[1],
+                        skill_ms: 0,
+                        elapsed: 0,
+                    },
+                },
+            );
+            sim.state.missions = Some(missions::World {
+                missions: BTreeMap::new(),
+                recruitments: BTreeMap::new(),
+                known: BTreeMap::new(),
+                talks: BTreeMap::from([(
+                    people[0],
+                    missions::PendingTalk {
+                        speaker: people[0],
+                        listener: people[1],
+                        area: sim.state.areas[0].id,
+                        completes: SimTime(60_000),
+                        conversation: missions::Conversation::Objective {
+                            mission: MissionId(999),
+                            leader: people[0],
+                            objective: MissionObjective::Visit {
+                                destination: sim.state.areas[0].id,
+                            },
+                        },
+                    },
+                )]),
+                last_event: 0,
+                last_review: SimTime(0),
+            });
+            assert_eq!(
+                sim.indexed_health_exposures(),
+                exhaustive_exposures(&sim),
+                "phase {phase}"
+            );
+            let expected = exhaustive_observations(&sim);
+            sim.observe_health();
+            assert_eq!(
+                sim.state.health.as_ref().unwrap().known,
+                expected,
+                "phase {phase}"
+            );
+            sim.cancel_health_activity(people[0]);
+            sim.state.missions.as_mut().unwrap().talks.clear();
+            sim.state
+                .physical
+                .as_mut()
+                .unwrap()
+                .actors
+                .get_mut(&people[1])
+                .unwrap()
+                .vitals
+                .alive = false;
+            sim.on_health_event(&EventKind::Died { actor: people[1] });
+            assert_eq!(sim.indexed_health_exposures(), exhaustive_exposures(&sim));
+        }
+    }
+
+    #[test]
+    fn indexed_observations_preserve_the_first64_ids_after_storage_reordering() {
+        let mut sim = population_fixture(90);
+        let area = sim.state.areas[0].id;
+        for p in &mut sim.state.people {
+            p.location = Location::AtArea(area);
+        }
+        add_shelters(&mut sim);
+        let expected = exhaustive_observations(&sim);
+        sim.state.people.reverse();
+        sim.person_index = sim
+            .state
+            .people
+            .iter()
+            .enumerate()
+            .map(|(index, p)| (p.id, index))
+            .collect();
+        sim.observe_health();
+        assert_eq!(sim.state.health.as_ref().unwrap().known, expected);
+        assert!(expected.values().all(|k| k.people.len() == 64));
+    }
+
+    #[test]
+    #[ignore = "explicit release workload measurement"]
+    fn health_index_workload_timings() {
+        for population in [1_000, 10_000] {
+            let mut sim = population_fixture(population);
+            let start = Instant::now();
+            let indexed = sim.indexed_health_exposures();
+            let index_time = start.elapsed();
+            let start = Instant::now();
+            let exhaustive = exhaustive_exposures(&sim);
+            let reference_time = start.elapsed();
+            assert_eq!(indexed, exhaustive);
+            let start = Instant::now();
+            let expected = exhaustive_observations(&sim);
+            let observe_reference = start.elapsed();
+            let start = Instant::now();
+            sim.observe_health();
+            let observe_indexed = start.elapsed();
+            assert_eq!(sim.state.health.as_ref().unwrap().known, expected);
+            let start = Instant::now();
+            for person in &sim.state.people {
+                std::hint::black_box(sim.health_body_delta(person.id, 1_000).unwrap());
+            }
+            let body_contributions = start.elapsed();
+            println!(
+                "population={population} exposure_index={index_time:?} exposure_exhaustive={reference_time:?} observe_index={observe_indexed:?} observe_exhaustive={observe_reference:?} body_contributions={body_contributions:?}"
+            );
+        }
     }
 }
