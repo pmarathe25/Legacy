@@ -273,3 +273,26 @@ fn host_services_pause_queries_commands_and_save_during_long_advancement() {
     assert_eq!(result.reached, paused.time);
     assert_eq!(session.observe().unwrap().time, paused.time);
 }
+
+#[test]
+fn replacing_a_route_with_the_current_leg_endpoint_stops_after_that_leg() {
+    let mut sim = fixture(1, false);
+    move_to(&mut sim, 1, 3).unwrap();
+    sim.advance(SimDuration(50_000)).unwrap();
+    move_to(&mut sim, 2, 2).unwrap();
+    assert!(sim.observe().available_commands.contains(&Command::Move {
+        destination: AreaId(3)
+    }));
+    move_to(&mut sim, 3, 3).unwrap();
+    assert!(matches!(
+        sim.observe().location,
+        Location::InTransit {
+            arrives: SimTime(180_000),
+            ..
+        }
+    ));
+    sim.advance(SimDuration(130_000)).unwrap();
+    assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
+    assert_eq!(sim.canonical_state().people[0].work_units, 0);
+    assert!(sim.canonical_state().people[0].route.is_empty());
+}

@@ -109,3 +109,36 @@ fn newborn_care_is_reachable_through_normal_observations_and_the_text_adapter() 
     let ruler = sim.canonical_state().ruler;
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { caregiver, child: target, .. } if caregiver == ruler && target == child)));
 }
+
+#[test]
+fn save_is_atomic_even_when_the_target_has_the_old_temporary_extension() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("kernel-fixture", 1, execution.clone()).unwrap();
+    let root = std::env::temp_dir().join(format!("legacy-cli-save-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("world.save-tmp");
+    std::fs::write(&path, b"old save").unwrap();
+    game_cli::execute(&mut sim, &format!("save {}", path.display()), &execution).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        sim.canonical_state(),
+        Simulation::load(&bytes, execution.clone())
+            .unwrap()
+            .canonical_state()
+    );
+    let directory = root.join("not-a-file");
+    std::fs::create_dir_all(&directory).unwrap();
+    assert!(
+        game_cli::execute(
+            &mut sim,
+            &format!("save {}", directory.display()),
+            &execution
+        )
+        .is_err()
+    );
+    assert!(directory.is_dir());
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(directory).unwrap();
+    std::fs::remove_dir(root).unwrap();
+}

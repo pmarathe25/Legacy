@@ -386,7 +386,11 @@ impl Simulation {
             .state
             .areas
             .iter()
-            .filter(|a| a.id != origin)
+            .filter(|a| {
+                a.id != origin
+                    || matches!(ruler.location, Location::InTransit { .. })
+                        && !ruler.route.is_empty()
+            })
             .filter(|a| self.path(origin, a.id).is_ok())
             .map(|a| Command::Move { destination: a.id })
             .collect();
@@ -522,7 +526,10 @@ impl Simulation {
             Location::InTransit { to, .. } => to,
         };
         let path = self.path(origin, destination)?;
-        if path.is_empty() {
+        if path.is_empty()
+            && (matches!(self.state.people[index].location, Location::AtArea(_))
+                || self.state.people[index].route.is_empty())
+        {
             return Err(Error::AlreadyThere);
         }
         let new_sequence = self

@@ -28,9 +28,9 @@ fn main() {
     workers.sort_unstable();
     workers.dedup();
     for population in [15, 1_000, 10_000, 20_000] {
+        let mut expected = None;
         for count in &workers {
             let mut samples = Vec::new();
-            let mut expected = None;
             let mut profile = Profile::default();
             for _ in 0..5 {
                 let mut sim = Simulation::kernel_fixture(

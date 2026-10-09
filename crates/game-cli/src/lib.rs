@@ -27,9 +27,7 @@ pub fn execute(
         ["tell", recipient, inventory] => submit(sim, Command::Tell { recipient: PersonId(recipient.parse()?), inventory: InventoryId(inventory.parse()?) }),
         ["save", path] => {
             let path = std::path::Path::new(path);
-            let temporary = path.with_extension("save-tmp");
-            std::fs::write(&temporary, sim.save()?)?;
-            std::fs::rename(temporary, path)?;
+            save_file(path, &sim.save()?)?;
             Ok("saved".into())
         }
         ["load", path] => {
@@ -40,6 +38,34 @@ pub fn execute(
         ["help"] => Ok("status | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | conceive <partner> | care <child> <food-stock> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
+}
+
+fn save_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "save needs a filename")
+    })?;
+    let temporary = path.with_file_name(format!(
+        ".{}.{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn submit(sim: &mut Simulation, command: Command) -> Result<String, Box<dyn std::error::Error>> {

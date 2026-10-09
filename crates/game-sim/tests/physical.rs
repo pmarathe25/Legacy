@@ -39,7 +39,7 @@ fn food_total(sim: &Simulation) -> u64 {
 }
 
 #[test]
-fn reachable_food_requires_time_and_consumption_and_guardians_do_not_eat() {
+fn reachable_food_requires_consumption_while_guardians_have_no_hunger_need() {
     let mut sim = sim(4);
     let source = food(&sim);
     let before = food_total(&sim);
@@ -56,10 +56,10 @@ fn reachable_food_requires_time_and_consumption_and_guardians_do_not_eat() {
     assert_eq!(food_total(&sim), before - 20_000);
     assert!(sim.observe().physical.unwrap().vitals.alive);
     let guardian = sim.canonical_state().people[1].id;
-    assert_eq!(
-        sim.debug_physical_command(guardian, Command::Eat { source }),
-        Err(Error::Unavailable)
-    );
+    sim.debug_physical_command(guardian, Command::Eat { source })
+        .unwrap();
+    sim.advance(MINUTE).unwrap();
+    assert_eq!(food_total(&sim), before - 21_000);
     let state = sim.canonical_state();
     assert_eq!(
         state.physical.as_ref().unwrap().actors[&guardian]

@@ -222,3 +222,50 @@ fn decisions_conservation_events_and_learned_values_survive_chunking_and_workers
         assert_eq!(split.canonical_state(), loaded.canonical_state());
     }
 }
+
+#[test]
+fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() {
+    let mut sim = sim(1);
+    peaceful(&mut sim);
+    let ruler = sim.canonical_state().ruler;
+    let receiver = sim.canonical_state().people[4].id;
+    let source = sim
+        .canonical_state()
+        .inventories
+        .values()
+        .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
+        .unwrap()
+        .id;
+    sim.debug_spoil_at(source, SimTime(13_000)).unwrap();
+    sim.advance(SimDuration(13_000)).unwrap();
+    assert_eq!(
+        sim.observe()
+            .physical
+            .unwrap()
+            .local_stocks
+            .iter()
+            .find(|s| s.id == source)
+            .unwrap()
+            .quantity,
+        Quantity(0)
+    );
+    sim.submit(Submission {
+        caller_sequence: 1,
+        command: Command::Tell {
+            recipient: receiver,
+            inventory: source,
+        },
+    })
+    .unwrap();
+    assert_eq!(
+        sim.canonical_state().decisions.as_ref().unwrap().minds[&ruler].knowledge[&source].quantity,
+        Quantity(0)
+    );
+    sim.advance(MINUTE).unwrap();
+    assert!(sim.canonical_state().events.iter().any(|e| e.kind
+        == EventKind::Reported {
+            sender: ruler,
+            recipient: receiver,
+            inventory: source
+        }));
+}

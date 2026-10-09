@@ -325,14 +325,33 @@ impl Simulation {
                 recipient,
                 inventory,
             } => {
-                let fact = self
+                let remembered = self
                     .state
                     .decisions
                     .as_ref()
                     .and_then(|w| w.minds.get(&actor))
                     .and_then(|m| m.knowledge.get(&inventory))
-                    .cloned()
+                    .cloned();
+                let visible = self.state.inventories.get(&inventory).filter(|i| {
+                    i.location == InventoryLocation::Area(area)
+                        || i.location == InventoryLocation::Carried(actor)
+                });
+                let fact = visible
+                    .map(|i| StockKnowledge {
+                        inventory,
+                        area,
+                        good: i.good,
+                        quantity: i.quantity,
+                        accessible: i.access.contains(&actor),
+                        observed_at: self.state.time,
+                        learned_at: self.state.time,
+                        source: KnowledgeSource::Observed(actor),
+                    })
+                    .or(remembered)
                     .ok_or(Error::Unavailable)?;
+                if self.state.decisions.is_none() {
+                    return Err(Error::Unavailable);
+                }
                 let receiver = self
                     .person_index
                     .get(&recipient)
@@ -364,8 +383,7 @@ impl Simulation {
                     .inventories
                     .get(&source)
                     .ok_or(Error::Unavailable)?;
-                if p.hunger_exempt
-                    || inventory.good != Good::Food
+                if inventory.good != Good::Food
                     || !self.can_use(actor, inventory)
                     || self.unreserved_stock(source, actor) < rules.meal_size.0
                 {
@@ -478,6 +496,17 @@ impl Simulation {
             .get_mut(&actor)
             .unwrap();
         a.activity = activity.clone();
+        if let Activity::Tell { ref fact, .. } = activity {
+            self.state
+                .decisions
+                .as_mut()
+                .unwrap()
+                .minds
+                .get_mut(&actor)
+                .unwrap()
+                .knowledge
+                .insert(fact.inventory, fact.clone());
+        }
         if let Activity::Care { child, .. } = activity {
             self.care_index.insert(child, actor);
         }
