@@ -14,6 +14,7 @@ pub fn execute(
     match words.as_slice() {
         [] => Ok(String::new()),
         ["status"] => Ok(serde_json::to_string(&sim.observe())?),
+        ["lineage"] => Ok(serde_json::to_string(&sim.observe().lineage)?),
         ["combat"] => Ok(serde_json::to_string(&sim.observe().combat)?),
         ["pause"] => Ok(serde_json::to_string(&sim.observe())?),
         ["debug"] => Ok(format!("DEBUG OMNISCIENT {}", serde_json::to_string(sim.canonical_state())?)),
@@ -28,7 +29,7 @@ pub fn execute(
             *sim = loaded;
             Ok("loaded".into())
         }
-        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
+        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
 }
@@ -238,13 +239,14 @@ pub fn execute_session(
     let text = match words.as_slice() {
         [] => String::new(),
         ["status"] => serde_json::to_string(&session.observe()?)?,
+        ["lineage"] => serde_json::to_string(&session.observe()?.lineage)?,
         ["combat"] => serde_json::to_string(&session.observe()?.combat)?,
         ["pause"] => serde_json::to_string(&session.pause()?)?,
         ["debug"] => format!("DEBUG OMNISCIENT {}",session.debug_json()?),
         ["run",duration] => return Ok(SessionOutput::Advancing(session.run(parse_duration(duration)?)?)),
         ["save",path] => { save_file(std::path::Path::new(path),&session.save()?)?; "saved".into() },
         ["load",path] => { session.load(std::fs::read(path)?)?; "loaded".into() },
-        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
+        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
         _ => return Err("unknown command; use help".into()),
     };
     Ok(SessionOutput::Text(text))

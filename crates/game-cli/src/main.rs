@@ -25,7 +25,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" => {
                 println!(
-                    "game-cli --scenario kernel-fixture|survival-fixture|autonomy-fixture|life-fixture|combat-fixture|childhood-fixture|farming-fixture|agreement-fixture --seed 1 [--workers N] [--script PATH] [--environment CONFIG.json]\nDebug fixtures only; type help for commands"
+                    "game-cli --scenario kernel-fixture|survival-fixture|autonomy-fixture|life-fixture|combat-fixture|childhood-fixture|farming-fixture|agreement-fixture|lineage-fixture --seed 1 [--workers N] [--script PATH] [--environment CONFIG.json]\nDebug fixtures only; type help for commands"
                 );
                 return Ok(());
             }

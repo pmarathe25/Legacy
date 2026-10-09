@@ -336,6 +336,7 @@ impl Simulation {
             return Ok(());
         };
         self.observe_local_facts();
+        self.review_lineage()?;
         self.review_agreements()?;
         self.review_conception()?;
         let world = self.state.decisions.as_ref().unwrap();
@@ -409,6 +410,7 @@ impl Simulation {
             explanation: mind.explanation.clone(),
         };
         if self.in_combat(id)
+            || self.lineage_handles(id)
             || id == self.state.ruler
             || !actor.vitals.alive
             || actor.vitals.health == 0

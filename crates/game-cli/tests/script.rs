@@ -438,3 +438,54 @@ fn agreement_text_commands_record_promises_and_deliver_actual_cargo() {
     assert_eq!(sim.observe().agreements[0].obligations[0].performed, 1_000);
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
 }
+
+#[test]
+fn session_stops_at_successor_birth_and_switches_to_the_newborns_real_agency() {
+    let mut sim = Simulation::new("lineage-fixture", 1, Execution::default()).unwrap();
+    let old = sim.observe().ruler;
+    sim.debug_injure(
+        old,
+        sim.canonical_state()
+            .physical
+            .as_ref()
+            .unwrap()
+            .rules
+            .max_health,
+    )
+    .unwrap();
+    let session = game_sim::session::Session::spawn(sim).unwrap();
+    let waiting = game_cli::execute_session(&session, "lineage").unwrap();
+    let game_cli::SessionOutput::Text(waiting) = waiting else {
+        panic!("view expected")
+    };
+    let waiting: Option<LineageView> = serde_json::from_str(&waiting).unwrap();
+    assert_eq!(waiting.unwrap().current, None);
+    let game_cli::SessionOutput::Advancing(handle) =
+        game_cli::execute_session(&session, "run 3650d").unwrap()
+    else {
+        panic!("run expected")
+    };
+    let result = handle.wait().unwrap();
+    let StopReason::SuccessorBorn { ruler } = result.reason else {
+        panic!("birth must stop acceleration")
+    };
+    assert_ne!(ruler, old);
+    assert_eq!(result.reached, SimTime(300_000));
+    let view = session.observe().unwrap();
+    assert_eq!(view.life_stage, Some(LifeStage::Infant));
+    assert_eq!(view.lineage.unwrap().current, Some(ruler));
+    assert!(view.available_commands.contains(&Command::Signal {
+        preference: ChildhoodInterest::Food
+    }));
+    game_cli::execute_session(&session, "signal food").unwrap();
+    let game_cli::SessionOutput::Advancing(handle) =
+        game_cli::execute_session(&session, "run 6s").unwrap()
+    else {
+        panic!("run expected")
+    };
+    handle.wait().unwrap();
+    assert_eq!(
+        session.observe().unwrap().preference,
+        Some(ChildhoodInterest::Food)
+    );
+}

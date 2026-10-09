@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 7;
+const SAVE_VERSION: u32 = 8;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, 6, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -70,6 +70,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "childhood-fixture"
             | "farming-fixture"
             | "agreement-fixture"
+            | "lineage-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -81,14 +82,21 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "childhood-fixture"
                 | "farming-fixture"
                 | "agreement-fixture"
+                | "lineage-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "life-fixture" | "combat-fixture" | "childhood-fixture" | "farming-fixture"
+            "life-fixture"
+                | "combat-fixture"
+                | "childhood-fixture"
+                | "farming-fixture"
+                | "lineage-fixture"
         ) != s.development.is_some()
-        || (s.scenario.id == "combat-fixture") != s.combat.is_some()
+        || matches!(s.scenario.id.as_str(), "combat-fixture" | "lineage-fixture")
+            != s.combat.is_some()
         || (s.scenario.id == "farming-fixture") != s.environment.is_some()
         || (s.scenario.id == "agreement-fixture") != s.agreements.is_some()
+        || (s.scenario.id == "lineage-fixture") != s.lineage.is_some()
     {
         return Err(fail());
     }
@@ -753,6 +761,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     agreements::validate(s)?;
     development::validate(s)?;
     combat::validate(s)?;
+    lineage::validate(s)?;
     Ok(())
 }
 

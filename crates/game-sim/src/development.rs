@@ -599,6 +599,7 @@ impl Simulation {
             child,
             parents,
         });
+        self.record_lineage_birth(child);
     }
 
     pub(crate) fn index_dependent(&mut self, id: PersonId, area: AreaId) {
@@ -663,6 +664,7 @@ impl Simulation {
         }
         self.emit(EventKind::Died { actor: id });
         self.invalidate_pregnancies(id, true);
+        self.observe_lineage_deaths();
     }
 
     pub(crate) fn invalidate_pregnancies(&mut self, actor: PersonId, died: bool) {

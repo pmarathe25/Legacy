@@ -149,6 +149,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub lineage: Option<LineageView>,
     pub agreements: Vec<AgreementView>,
     pub environment: Option<EnvironmentView>,
     pub revision: u64,
@@ -486,6 +487,7 @@ pub struct Event {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
+    SuccessorBorn { ruler: PersonId },
     TargetReached,
     Paused,
     CombatInput { encounter: EncounterId },
@@ -588,4 +590,27 @@ pub struct FieldView {
     pub preparation_ms: u64,
     pub planting_ms: u64,
     pub harvest_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineageView {
+    pub current: Option<PersonId>,
+    pub incarnations: Vec<PersonId>,
+    pub waiting_since: Option<SimTime>,
+    pub guardians: Vec<GuardianSearchView>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardianSearchView {
+    pub guardian: PersonId,
+    pub location: Location,
+    pub goal: GuardianGoalView,
+    pub target: Option<PersonId>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuardianGoalView {
+    Waiting,
+    Searching,
+    Mentoring,
+    Confined,
+    Recovering,
 }

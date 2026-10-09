@@ -7,6 +7,7 @@ pub mod compute;
 pub mod decisions;
 pub mod development;
 pub mod environment;
+pub mod lineage;
 mod persistence;
 pub mod physical;
 pub mod session;
@@ -130,6 +131,8 @@ pub struct CanonicalState {
     pub environment: Option<environment::World>,
     #[serde(default)]
     pub agreements: Option<agreements::World>,
+    #[serde(default)]
+    pub lineage: Option<lineage::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -191,11 +194,19 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "lineage-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "lineage-fixture" {
+            return Self::lineage_fixture(seed, execution);
+        }
         if scenario == "agreement-fixture" {
             return Self::agreement_fixture(seed, execution);
         }
@@ -253,6 +264,7 @@ impl Simulation {
             combat: None,
             environment: None,
             agreements: None,
+            lineage: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -615,6 +627,7 @@ impl Simulation {
             }
         }
         PlayerView {
+            lineage: self.lineage_view(),
             agreements: self.agreement_view(ruler.id),
             environment: self.environment_view(ruler.id),
             revision: self.revision,
@@ -663,6 +676,38 @@ impl Simulation {
                     .collect()
             }),
         }
+    }
+
+    pub fn lineage_view(&self) -> Option<LineageView> {
+        let world = self.state.lineage.as_ref()?;
+        let current = world.current();
+        let local = self
+            .nearby_people(0, 100)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>();
+        Some(LineageView {
+            current,
+            incarnations: world.incarnations.iter().map(|life| life.person).collect(),
+            waiting_since: world.waiting.as_ref().map(|w| w.died_at),
+            guardians: world
+                .guardians
+                .iter()
+                .filter(|(id, _)| current.is_none() || local.contains(id))
+                .map(|(id, guardian)| GuardianSearchView {
+                    guardian: *id,
+                    location: self.state.people[self.person_index[id]].location.clone(),
+                    target: guardian.target,
+                    goal: match guardian.goal {
+                        lineage::GuardianGoal::Waiting => GuardianGoalView::Waiting,
+                        lineage::GuardianGoal::Searching => GuardianGoalView::Searching,
+                        lineage::GuardianGoal::Mentoring => GuardianGoalView::Mentoring,
+                        lineage::GuardianGoal::Confined => GuardianGoalView::Confined,
+                        lineage::GuardianGoal::Recovering => GuardianGoalView::Recovering,
+                    },
+                })
+                .collect(),
+        })
     }
 
     pub fn nearby_people(&self, offset: usize, limit: usize) -> Vec<(PersonId, Role)> {
@@ -874,7 +919,18 @@ impl Simulation {
                 .min(requested);
             let next = next.min(self.next_agreement_deadline().unwrap_or(next));
             let next = self.environment_boundary(self.physical_boundary(next));
+            let controlled = self.state.ruler;
             self.step(next)?;
+            if controlled != self.state.ruler {
+                return Ok(AdvanceResult {
+                    requested,
+                    reached: self.state.time,
+                    revision: self.revision,
+                    reason: StopReason::SuccessorBorn {
+                        ruler: self.state.ruler,
+                    },
+                });
+            }
         }
         Ok(AdvanceResult {
             requested,
@@ -1090,6 +1146,7 @@ impl Simulation {
             }
         }
         self.commit_physical(physical_output);
+        self.observe_lineage_deaths();
         for event in lifecycle {
             if let Due::CombatRound(encounter) = event {
                 self.finish_combat_round(encounter)?;

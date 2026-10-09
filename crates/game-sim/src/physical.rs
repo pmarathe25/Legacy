@@ -1311,6 +1311,7 @@ impl Simulation {
             self.invalidate_pregnancies(actor, true);
         }
         self.interrupt_physical(actor);
+        self.observe_lineage_deaths();
         Ok(())
     }
 }
