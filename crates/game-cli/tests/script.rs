@@ -290,3 +290,69 @@ fn player_childhood_choices_are_playable_through_normal_views_and_text() {
             .all(|a| [AreaId(1), AreaId(2), AreaId(3)].contains(&a.id))
     );
 }
+
+#[test]
+fn seasonal_farming_commands_use_real_time_seed_and_local_field_views() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("farming-fixture", 1, execution.clone()).unwrap();
+    assert!(sim.observe().environment.unwrap().fields.is_empty());
+    game_cli::execute(&mut sim, "move 2", &execution).unwrap();
+    game_cli::execute(&mut sim, "run 2m", &execution).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    let field = view
+        .available_commands
+        .iter()
+        .find_map(|command| {
+            if let Command::Cultivate {
+                field,
+                operation: FarmOperation::Prepare,
+            } = command
+            {
+                Some(*field)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert!(view.available_commands.contains(&Command::Cultivate {
+        field,
+        operation: FarmOperation::Prepare
+    }));
+    game_cli::execute(&mut sim, &format!("farm {} prepare", field.0), &execution).unwrap();
+    game_cli::execute(&mut sim, "run 4h", &execution).unwrap();
+    let seeds_before: u64 = sim
+        .observe()
+        .physical
+        .unwrap()
+        .local_stocks
+        .iter()
+        .filter(|s| s.good == Good::Seed)
+        .map(|s| s.quantity.0)
+        .sum();
+    game_cli::execute(&mut sim, &format!("farm {} plant", field.0), &execution).unwrap();
+    let seeds_after: u64 = sim
+        .observe()
+        .physical
+        .unwrap()
+        .local_stocks
+        .iter()
+        .filter(|s| s.good == Good::Seed)
+        .map(|s| s.quantity.0)
+        .sum();
+    assert_eq!(seeds_before - seeds_after, 1_000);
+    game_cli::execute(&mut sim, "run 2h", &execution).unwrap();
+    assert_eq!(
+        sim.observe()
+            .environment
+            .unwrap()
+            .fields
+            .iter()
+            .find(|f| f.id == field)
+            .unwrap()
+            .phase,
+        "Growing"
+    );
+    assert!(sim.observe().time.0 >= 6 * 3_600_000);
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}

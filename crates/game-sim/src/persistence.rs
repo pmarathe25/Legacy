@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 5;
+const SAVE_VERSION: u32 = 6;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -68,18 +68,24 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "life-fixture"
             | "combat-fixture"
             | "childhood-fixture"
+            | "farming-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "autonomy-fixture" | "life-fixture" | "combat-fixture" | "childhood-fixture"
+            "autonomy-fixture"
+                | "life-fixture"
+                | "combat-fixture"
+                | "childhood-fixture"
+                | "farming-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "life-fixture" | "combat-fixture" | "childhood-fixture"
+            "life-fixture" | "combat-fixture" | "childhood-fixture" | "farming-fixture"
         ) != s.development.is_some()
         || (s.scenario.id == "combat-fixture") != s.combat.is_some()
+        || (s.scenario.id == "farming-fixture") != s.environment.is_some()
     {
         return Err(fail());
     }
@@ -97,6 +103,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     if let Some(world) = &s.physical {
         for id in world.sites.keys() {
+            if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.environment {
+        for id in world.fields.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -198,7 +211,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -528,6 +541,26 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
+            EventKind::Cultivated { actor, field, .. }
+            | EventKind::CropHarvested { actor, field, .. } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .environment
+                        .as_ref()
+                        .is_some_and(|w| w.fields.contains_key(&field))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::CropFailed { field } => {
+                if !s
+                    .environment
+                    .as_ref()
+                    .is_some_and(|w| w.fields.contains_key(&field))
+                {
+                    return Err(fail());
+                }
+            }
             EventKind::Comforted { caregiver, child } => {
                 if !people.contains_key(&caregiver) || !people.contains_key(&child) {
                     return Err(fail());
@@ -729,6 +762,7 @@ fn validate_physical(
                 | Activity::Comfort { .. }
                 | Activity::Express { .. }
                 | Activity::Play { .. }
+                | Activity::Cultivate { .. }
         );
         if timed != deadlines.contains(id) {
             return Err(fail());
@@ -737,6 +771,18 @@ fn validate_physical(
             return Err(fail());
         }
         match actor.activity {
+            Activity::Cultivate {
+                field,
+                operation,
+                completes,
+            } if !s.environment.as_ref().is_some_and(|w| {
+                w.jobs.get(id).is_some_and(|job| {
+                    job.field == field && job.operation == operation && job.completes == completes
+                })
+            }) =>
+            {
+                return Err(fail());
+            }
             Activity::Express { completes, .. } | Activity::Play { completes, .. } => {
                 let life = s
                     .development

@@ -612,7 +612,7 @@ impl Simulation {
         }
     }
 
-    fn schedule_age(&mut self, id: PersonId) {
+    pub(crate) fn schedule_age(&mut self, id: PersonId) {
         if self.state.people[self.person_index[&id]].role == Role::Guardian
             || !self.state.physical.as_ref().unwrap().actors[&id]
                 .vitals

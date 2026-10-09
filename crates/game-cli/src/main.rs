@@ -12,6 +12,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut seed = 1;
     let mut execution = Execution::default();
     let mut script = None;
+    let mut environment_config = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -19,16 +20,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--seed" => seed = args.next().ok_or("missing seed")?.parse()?,
             "--workers" => execution.workers = args.next().ok_or("missing workers")?.parse()?,
             "--script" => script = Some(args.next().ok_or("missing script path")?),
+            "--environment" => {
+                environment_config = Some(args.next().ok_or("missing environment config path")?)
+            }
             "--help" => {
                 println!(
-                    "game-cli --scenario kernel-fixture|survival-fixture|autonomy-fixture|life-fixture|combat-fixture|childhood-fixture --seed 1 [--workers N] [--script PATH]\nDebug fixtures only; type help for commands"
+                    "game-cli --scenario kernel-fixture|survival-fixture|autonomy-fixture|life-fixture|combat-fixture|childhood-fixture|farming-fixture --seed 1 [--workers N] [--script PATH] [--environment CONFIG.json]\nDebug fixtures only; type help for commands"
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown option {arg}").into()),
         }
     }
-    let sim = Simulation::new(&scenario, seed, execution.clone())?;
+    let sim = if let Some(path) = environment_config {
+        if scenario != "farming-fixture" {
+            return Err("environment configuration requires farming-fixture".into());
+        }
+        let config = serde_json::from_slice(&std::fs::read(path)?)?;
+        Simulation::farming_with_config(seed, execution.clone(), config)?
+    } else {
+        Simulation::new(&scenario, seed, execution.clone())?
+    };
     let session = game_sim::session::Session::spawn(sim)?;
     let interactive = script.is_none() && io::stdin().is_terminal();
     let reader: Box<dyn BufRead> = if let Some(path) = script {

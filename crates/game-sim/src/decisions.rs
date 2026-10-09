@@ -432,6 +432,7 @@ impl Simulation {
                 | Activity::Comfort { .. }
                 | Activity::Express { .. }
                 | Activity::Play { .. }
+                | Activity::Cultivate { .. }
         ) || matches!(actor.activity, Activity::Work { .. }) && !urgent
         {
             return none();
@@ -547,6 +548,15 @@ impl Simulation {
             && !urgent
             && actor.vitals.fatigue < physical.rules.fatigue_limit
         {
+            if let Some(command) = self.autonomous_cultivation(id) {
+                add(
+                    command,
+                    Goal::Practice,
+                    0,
+                    i64::from(mind.personality.discipline + mind.personality.ambition) / 4,
+                    100,
+                );
+            }
             let work_value = mind
                 .values
                 .get(&self.state.decisions.as_ref().unwrap().work_concept)

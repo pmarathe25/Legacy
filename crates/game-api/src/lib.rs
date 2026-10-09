@@ -27,6 +27,10 @@ pub const MINUTE: SimDuration = SimDuration(60_000);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Cultivate {
+        field: SiteId,
+        operation: FarmOperation,
+    },
     Move {
         destination: AreaId,
     },
@@ -137,6 +141,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub environment: Option<EnvironmentView>,
     pub revision: u64,
     pub time: SimTime,
     pub ruler: PersonId,
@@ -159,6 +164,8 @@ pub enum Good {
     Timber,
     Tool,
     Binding,
+    Seed,
+    Water,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +179,11 @@ pub struct Vitals {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Cultivate {
+        field: SiteId,
+        operation: FarmOperation,
+        completes: SimTime,
+    },
     Comfort {
         child: PersonId,
         completes: SimTime,
@@ -266,6 +278,21 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    Cultivated {
+        actor: PersonId,
+        field: SiteId,
+        operation: FarmOperation,
+        labor_ms: u64,
+    },
+    CropHarvested {
+        actor: PersonId,
+        field: SiteId,
+        food: Quantity,
+        seed: Quantity,
+    },
+    CropFailed {
+        field: SiteId,
+    },
     Comforted {
         caregiver: PersonId,
         child: PersonId,
@@ -500,4 +527,33 @@ pub struct ScenarioInfo {
     pub id: String,
     pub version: u32,
     pub debug_fixture: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FarmOperation {
+    Prepare,
+    Plant,
+    Tend,
+    Irrigate,
+    Harvest,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvironmentView {
+    pub day: u64,
+    pub day_of_year: u64,
+    pub season: u8,
+    pub temperature_c: i32,
+    pub rain: u64,
+    pub fields: Vec<FieldView>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldView {
+    pub id: SiteId,
+    pub phase: String,
+    pub soil_fertility: u16,
+    pub soil_water: u64,
+    pub degree_days_milli: u64,
+    pub preparation_ms: u64,
+    pub planting_ms: u64,
+    pub harvest_ms: u64,
 }

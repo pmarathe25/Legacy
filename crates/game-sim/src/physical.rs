@@ -256,6 +256,9 @@ impl Simulation {
         actor: PersonId,
         command: Command,
     ) -> Result<(), Error> {
+        if let Command::Cultivate { field, operation } = command {
+            return self.start_cultivation(actor, field, operation);
+        }
         if let Command::Conceive { partner } = command {
             return self.start_conception(actor, partner);
         }
@@ -657,6 +660,7 @@ impl Simulation {
     }
 
     pub(crate) fn interrupt_physical(&mut self, actor: PersonId) {
+        self.interrupt_cultivation(actor);
         self.invalidate_pregnancies(actor, false);
         if let Some(world) = &mut self.state.physical {
             let a = world.actors.get_mut(&actor).unwrap();
@@ -680,7 +684,7 @@ impl Simulation {
         }
     }
 
-    fn unreserved_stock(&self, source: InventoryId, excluding: PersonId) -> u64 {
+    pub(crate) fn unreserved_stock(&self, source: InventoryId, excluding: PersonId) -> u64 {
         let reserved: u128 = self
             .state
             .physical
@@ -752,7 +756,10 @@ impl Simulation {
             }
             if matches!(
                 a.activity,
-                Activity::Work { .. } | Activity::Load { .. } | Activity::Play { .. }
+                Activity::Work { .. }
+                    | Activity::Load { .. }
+                    | Activity::Play { .. }
+                    | Activity::Cultivate { .. }
             ) {
                 dt = dt.min(world.rules.fatigue_limit.saturating_sub(a.vitals.fatigue));
             }
@@ -786,6 +793,7 @@ impl Simulation {
                         | Activity::Load { .. }
                         | Activity::Combat { .. }
                         | Activity::Play { .. }
+                        | Activity::Cultivate { .. }
                 ) || matches!(p.location, Location::InTransit { .. });
                 if exerting {
                     vitals.fatigue = vitals
@@ -839,6 +847,10 @@ impl Simulation {
             .activity
             .clone();
         let mut success = false;
+        if matches!(activity, Activity::Cultivate { .. }) {
+            self.complete_cultivation(actor);
+            return;
+        }
         if let Activity::Conceive { pregnancy, .. } = activity {
             self.complete_conception(pregnancy);
             return;
@@ -1101,7 +1113,10 @@ impl Simulation {
             let interrupted = vitals.fatigue >= rules.fatigue_limit
                 && matches!(
                     previous.activity,
-                    Activity::Work { .. } | Activity::Load { .. } | Activity::Play { .. }
+                    Activity::Work { .. }
+                        | Activity::Load { .. }
+                        | Activity::Play { .. }
+                        | Activity::Cultivate { .. }
                 );
             let a = self
                 .state

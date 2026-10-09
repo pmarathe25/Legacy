@@ -5,6 +5,7 @@ pub mod combat;
 pub mod compute;
 pub mod decisions;
 pub mod development;
+pub mod environment;
 mod persistence;
 pub mod physical;
 pub mod session;
@@ -124,6 +125,8 @@ pub struct CanonicalState {
     pub development: Option<development::World>,
     #[serde(default)]
     pub combat: Option<combat::World>,
+    #[serde(default)]
+    pub environment: Option<environment::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -175,11 +178,19 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "farming-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "farming-fixture" {
+            return Self::farming_fixture(seed, execution);
+        }
         if scenario == "survival-fixture" {
             return Self::survival_fixture(seed, execution);
         }
@@ -229,6 +240,7 @@ impl Simulation {
             decisions: None,
             development: None,
             combat: None,
+            environment: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -373,7 +385,7 @@ impl Simulation {
                 }
             }
         }
-        Ok(Self {
+        let sim = Self {
             state,
             pool,
             execution,
@@ -384,7 +396,9 @@ impl Simulation {
             pregnancy_index,
             care_index,
             dependent_index,
-        })
+        };
+        sim.validate_environment()?;
+        Ok(sim)
     }
 
     pub fn canonical_state(&self) -> &CanonicalState {
@@ -536,6 +550,7 @@ impl Simulation {
                 }
             }
         }
+        available_commands.extend(self.available_cultivation(ruler.id));
         if self.in_combat(ruler.id) {
             available_commands.clear();
             if let Some(view) = self.tactical_view()
@@ -587,6 +602,7 @@ impl Simulation {
             }
         }
         PlayerView {
+            environment: self.environment_view(ruler.id),
             revision: self.revision,
             time: self.state.time,
             ruler: ruler.id,
@@ -842,7 +858,7 @@ impl Simulation {
                 .map(|(t, _)| *t)
                 .unwrap_or(requested)
                 .min(requested);
-            let next = self.physical_boundary(next);
+            let next = self.environment_boundary(self.physical_boundary(next));
             self.step(next)?;
         }
         Ok(AdvanceResult {
@@ -875,6 +891,7 @@ impl Simulation {
             .collect();
         let output = compute::evaluate(&self.pool, &input, self.execution.reverse_jobs)?;
         let physical_output = self.evaluate_physical(elapsed)?;
+        let environment_output = self.evaluate_environment(next)?;
         self.profile.evaluation_ns += started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
         let mut due = self.state.due.get(&next).cloned().unwrap_or_default();
@@ -933,7 +950,12 @@ impl Simulation {
                 Due::CombatRound(_) => self.state.people.len() * 8,
             })
             .sum::<usize>()
-            + self.state.people.len() * 2;
+            + self.state.people.len() * 2
+            + self
+                .state
+                .environment
+                .as_ref()
+                .map_or(0, |w| w.fields.len());
         self.ensure_event_capacity(event_bound)?;
         let started = Instant::now();
         let lifecycle: Vec<_> = due
@@ -964,6 +986,7 @@ impl Simulation {
             p.work_remainder = out.remainder;
         }
         self.state.time = next;
+        self.commit_environment(environment_output);
         self.state.due.remove(&next);
         for event in due {
             match event {
