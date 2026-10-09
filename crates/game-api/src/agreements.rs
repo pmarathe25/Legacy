@@ -80,6 +80,10 @@ pub struct AmendmentProcedure {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgreementAction {
+    Report {
+        agreement: AgreementId,
+        recipient: PersonId,
+    },
     Propose {
         parties: BTreeSet<PersonId>,
         terms: Vec<AgreementTerm>,
@@ -131,6 +135,14 @@ pub struct ObligationView {
     pub term: AgreementTerm,
     pub performed: u64,
     pub defaulted: bool,
+    #[serde(default)]
+    pub cargo: BTreeMap<InventoryId, u64>,
+    #[serde(default)]
+    pub observed_at: SimTime,
+    #[serde(default)]
+    pub learned_at: SimTime,
+    #[serde(default)]
+    pub source: Option<KnowledgeSource>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgreementView {
@@ -143,6 +155,14 @@ pub struct AgreementView {
     pub obligations: Vec<ObligationView>,
     pub procedure: Option<AmendmentProcedure>,
     pub amendments: Vec<AmendmentView>,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub observed_at: SimTime,
+    #[serde(default)]
+    pub learned_at: SimTime,
+    #[serde(default)]
+    pub source: Option<KnowledgeSource>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,4 +172,6 @@ pub struct AmendmentView {
     pub replacements: BTreeMap<u16, AgreementTerm>,
     pub votes: BTreeMap<PersonId, bool>,
     pub status: AmendmentStatus,
+    #[serde(default)]
+    pub base_revision: u64,
 }

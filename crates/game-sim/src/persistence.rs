@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 12;
+const SAVE_VERSION: u32 = 14;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -47,7 +47,11 @@ impl Simulation {
             }
         }
         validate(&save.state)?;
-        Self::from_state(save.state, execution, 0)
+        let mut sim = Self::from_state(save.state, execution, 0)?;
+        if save.version < SAVE_VERSION {
+            sim.migrate_legacy_agreement_knowledge();
+        }
+        Ok(sim)
     }
 
     pub fn next_caller_sequence(&self) -> Result<u64, Error> {
@@ -75,6 +79,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "institution-fixture"
             | "skills-fixture"
             | "project-fixture"
+            | "invocation-fixture"
+            | "force-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -91,6 +97,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "institution-fixture"
                 | "skills-fixture"
                 | "project-fixture"
+                | "invocation-fixture"
+                | "force-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
@@ -101,22 +109,37 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "lineage-fixture"
                 | "property-fixture"
                 | "skills-fixture"
+                | "invocation-fixture"
+                | "force-fixture"
         ) != s.development.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "combat-fixture" | "lineage-fixture" | "property-fixture" | "skills-fixture"
+            "combat-fixture"
+                | "lineage-fixture"
+                | "property-fixture"
+                | "skills-fixture"
+                | "invocation-fixture"
+                | "force-fixture"
         ) != s.combat.is_some()
         || (s.scenario.id == "farming-fixture") != s.environment.is_some()
         || matches!(
             s.scenario.id.as_str(),
             "agreement-fixture" | "property-fixture" | "institution-fixture" | "project-fixture"
         ) != s.agreements.is_some()
-        || matches!(s.scenario.id.as_str(), "lineage-fixture" | "skills-fixture")
-            != s.lineage.is_some()
+        || matches!(
+            s.scenario.id.as_str(),
+            "lineage-fixture" | "skills-fixture" | "invocation-fixture" | "force-fixture"
+        ) != s.lineage.is_some()
         || (s.scenario.id == "property-fixture") != s.property.is_some()
         || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
-        || (s.scenario.id == "skills-fixture" && s.skills.is_none())
+        || (matches!(
+            s.scenario.id.as_str(),
+            "skills-fixture" | "invocation-fixture"
+        ) && s.skills.is_none())
         || (s.scenario.id == "project-fixture") != s.projects.is_some()
+        || (s.scenario.id == "invocation-fixture") != s.invocation.is_some()
+        || (s.scenario.id == "force-fixture" && s.force.is_none())
+        || (s.force.is_some() && s.combat.is_none())
     {
         return Err(fail());
     }
@@ -135,6 +158,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if let Some(world) = &s.physical {
         for id in world.sites.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.invocation {
+        for id in world
+            .warnings
+            .keys()
+            .map(|id| id.0)
+            .chain(world.records.keys().map(|id| id.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
@@ -293,7 +328,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -394,6 +429,49 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         match event.kind {
+            EventKind::AgreementReported {
+                sender,
+                recipient,
+                agreement,
+            } => {
+                if !people.contains_key(&sender)
+                    || !people.contains_key(&recipient)
+                    || !s
+                        .agreements
+                        .as_ref()
+                        .is_some_and(|w| w.agreements.contains_key(&agreement))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::GuardianAccepted {
+                guardian: actor,
+                requester: captor,
+            }
+            | EventKind::Yielded { actor, captor } => {
+                if !people.contains_key(&actor) || !people.contains_key(&captor) {
+                    return Err(fail());
+                }
+            }
+            EventKind::YieldWithdrawn { actor }
+            | EventKind::EscapeAttempted { actor }
+            | EventKind::EscapeInterrupted { actor } => {
+                if !people.contains_key(&actor) {
+                    return Err(fail());
+                }
+            }
+            EventKind::Restrained {
+                actor,
+                target,
+                binding,
+            } => {
+                if !people.contains_key(&actor)
+                    || !people.contains_key(&target)
+                    || !s.inventories.contains_key(&binding)
+                {
+                    return Err(fail());
+                }
+            }
             EventKind::EncounterStarted { encounter, area } => {
                 if !s
                     .combat
@@ -619,6 +697,74 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !people.contains_key(&child)
                     || !s.inventories.contains_key(&source)
                     || quantity.0 == 0
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::InvocationStarted { actor, ref lives } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .invocation
+                        .as_ref()
+                        .is_some_and(|w| lives.iter().all(|id| w.history.contains_key(id)))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::InvocationDismissed { actor }
+            | EventKind::InvocationCostApplied { actor, .. }
+            | EventKind::InvocationControlChanged { actor, .. } => {
+                if !people.contains_key(&actor) {
+                    return Err(fail());
+                }
+            }
+            EventKind::InvocationWarningRaised { warning, actor }
+            | EventKind::InvocationCostAccepted { warning, actor } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .invocation
+                        .as_ref()
+                        .is_some_and(|w| w.warnings.contains_key(&warning))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::MemoryRecorded {
+                record,
+                actor,
+                inventory,
+            } => {
+                if !people.contains_key(&actor)
+                    || !s.inventories.contains_key(&inventory)
+                    || !s
+                        .invocation
+                        .as_ref()
+                        .is_some_and(|w| w.records.contains_key(&record))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::MemoryRead { record, actor } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .invocation
+                        .as_ref()
+                        .is_some_and(|w| w.records.contains_key(&record))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::MemoryTaught {
+                actor,
+                recipient,
+                life,
+            } => {
+                if !people.contains_key(&actor)
+                    || !people.contains_key(&recipient)
+                    || !s
+                        .invocation
+                        .as_ref()
+                        .is_some_and(|w| w.history.contains_key(&life))
                 {
                     return Err(fail());
                 }
@@ -1068,6 +1214,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     institutions::validate(s)?;
     skills::validate(s)?;
     projects::validate(s)?;
+    invocation::validate(s)?;
+    force::validate(s)?;
     Ok(())
 }
 
@@ -1153,7 +1301,10 @@ fn validate_physical(
         }
         let timed = matches!(
             actor.activity,
-            Activity::Eat { .. }
+            Activity::ReportAgreement { .. }
+                | Activity::Escape { .. }
+                | Activity::Restrain { .. }
+                | Activity::Eat { .. }
                 | Activity::Load { .. }
                 | Activity::Tell { .. }
                 | Activity::Care { .. }
@@ -1175,6 +1326,9 @@ fn validate_physical(
             return Err(fail());
         }
         match actor.activity {
+            Activity::ReportAgreement { recipient, .. } if !people.contains_key(&recipient) => {
+                return Err(fail());
+            }
             Activity::Cultivate {
                 field,
                 operation,

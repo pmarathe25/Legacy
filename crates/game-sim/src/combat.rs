@@ -70,7 +70,7 @@ impl Map {
     fn contains(&self, p: Point) -> bool {
         p.x >= 0 && p.y >= 0 && p.x <= self.width && p.y <= self.height
     }
-    fn clear(&self, a: Point, b: Point) -> bool {
+    pub(crate) fn clear(&self, a: Point, b: Point) -> bool {
         self.contains(a)
             && self.contains(b)
             && self
@@ -190,13 +190,20 @@ impl Simulation {
         let v = &self.state.physical.as_ref().unwrap().actors[&actor].vitals;
         v.alive && v.health > w.rules.incapacitation && !w.captivity.contains_key(&actor)
     }
+    fn can_combat_act(&self, actor: PersonId) -> bool {
+        self.independent(actor) && (self.can_fight(actor) || self.force_can_combat_act(actor))
+    }
     pub(crate) fn awaiting_combat_input(&self) -> Option<EncounterId> {
         self.state
             .combat
             .as_ref()?
             .encounters
             .values()
-            .find(|e| e.active && e.order.get(e.cursor) == Some(&self.state.ruler))
+            .find(|e| {
+                e.active
+                    && !self.controls_actor(self.state.ruler)
+                    && e.order.get(e.cursor) == Some(&self.state.ruler)
+            })
             .map(|e| e.id)
     }
     pub(crate) fn tactical_view(&self) -> Option<TacticalView> {
@@ -244,7 +251,7 @@ impl Simulation {
                     actor: f.actor,
                     position: f.position,
                     team: f.team,
-                    incapacitated: !self.can_fight(f.actor),
+                    incapacitated: !self.can_combat_act(f.actor),
                     surrendered: f.surrendered,
                     captured: w.captivity.contains_key(&f.actor),
                 })
@@ -290,6 +297,60 @@ impl Simulation {
         self.revision += 1;
         Ok(receipt)
     }
+    pub(crate) fn ensure_combat_map(&mut self, area: AreaId) -> Result<CombatMapId, Error> {
+        let combat = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
+        if let Some(map) = combat.maps.get(&area) {
+            return Ok(map.id);
+        }
+        if !self.state.areas.iter().any(|node| node.id == area) {
+            return Err(Error::UnknownArea);
+        }
+        self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+        let id = CombatMapId(allocate(&mut self.state)?);
+        let offset = ((self.state.seed ^ area.0).wrapping_mul(0x9e3779b97f4a7c15) % 2_000) as i64;
+        let exits = self
+            .state
+            .areas
+            .iter()
+            .find(|a| a.id == area)
+            .unwrap()
+            .links
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                (
+                    l.destination,
+                    Point {
+                        x: if i.is_multiple_of(2) { 0 } else { 24_000 },
+                        y: 8_000,
+                    },
+                )
+            })
+            .collect();
+        let map = Map {
+            id,
+            version: 1,
+            area,
+            width: 24_000,
+            height: 16_000,
+            obstacles: vec![ObstacleView {
+                index: 0,
+                minimum: Point {
+                    x: 12_000 + offset,
+                    y: 4_000,
+                },
+                maximum: Point {
+                    x: 14_000 + offset,
+                    y: 10_000,
+                },
+                integrity: 180_000,
+            }],
+            exits,
+        };
+        self.state.combat.as_mut().unwrap().maps.insert(area, map);
+        Ok(id)
+    }
+
     pub fn debug_start_encounter(
         &mut self,
         participants: Vec<(PersonId, u32)>,
@@ -320,9 +381,9 @@ impl Simulation {
             };
             if area.is_some_and(|a| a != at)
                 || !ids.insert(*actor)
-                || !self.can_fight(*actor)
+                || !(self.can_combat_act(*actor) || self.force_passive_participant(*actor))
                 || self.in_combat(*actor)
-                || !self.independent(*actor)
+                || (!self.independent(*actor) && !self.force_passive_participant(*actor))
             {
                 return Err(Error::Unavailable);
             }
@@ -341,51 +402,7 @@ impl Simulation {
             .checked_add(if w.maps.contains_key(&area) { 1 } else { 2 })
             .ok_or(Error::Overflow)?;
         self.ensure_event_capacity(participants.len() * 8 + 2)?;
-        if !self.state.combat.as_ref().unwrap().maps.contains_key(&area) {
-            let id = CombatMapId(allocate(&mut self.state)?);
-            let offset =
-                ((self.state.seed ^ area.0).wrapping_mul(0x9e3779b97f4a7c15) % 2_000) as i64;
-            let exits = self
-                .state
-                .areas
-                .iter()
-                .find(|a| a.id == area)
-                .unwrap()
-                .links
-                .iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    (
-                        l.destination,
-                        Point {
-                            x: if i.is_multiple_of(2) { 0 } else { 24_000 },
-                            y: 8_000,
-                        },
-                    )
-                })
-                .collect();
-            let map = Map {
-                id,
-                version: 1,
-                area,
-                width: 24_000,
-                height: 16_000,
-                obstacles: vec![ObstacleView {
-                    index: 0,
-                    minimum: Point {
-                        x: 12_000 + offset,
-                        y: 4_000,
-                    },
-                    maximum: Point {
-                        x: 14_000 + offset,
-                        y: 10_000,
-                    },
-                    integrity: 180_000,
-                }],
-                exits,
-            };
-            self.state.combat.as_mut().unwrap().maps.insert(area, map);
-        }
+        self.ensure_combat_map(area)?;
         let id = EncounterId(allocate(&mut self.state)?);
         let map = self.state.combat.as_ref().unwrap().maps[&area].id;
         let mut fighters = BTreeMap::new();
@@ -399,15 +416,24 @@ impl Simulation {
                 .get_mut(&actor)
                 .unwrap()
                 .activity = Activity::Combat { encounter: id };
+            let position = self
+                .state
+                .combat
+                .as_ref()
+                .unwrap()
+                .captivity
+                .get(&actor)
+                .map(|captive| captive.position)
+                .unwrap_or(Point {
+                    x: 4_000 + if team == 0 { 0 } else { 2_000 },
+                    y: 8_000 + (i as i64 / 2) * 300,
+                });
             fighters.insert(
                 actor,
                 Fighter {
                     actor,
                     team,
-                    position: Point {
-                        x: 4_000 + if team == 0 { 0 } else { 2_000 },
-                        y: 8_000 + (i as i64 / 2) * 300,
-                    },
+                    position,
                     surrendered: false,
                     withdrawn: false,
                     defending: false,
@@ -536,7 +562,11 @@ impl Simulation {
     ) -> Result<(), Error> {
         let w = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
         let e = w.encounters.get(&id).ok_or(Error::Unavailable)?;
-        if !e.active || e.order.get(e.cursor) != Some(&actor) || !self.can_fight(actor) {
+        if !e.active
+            || e.order.get(e.cursor) != Some(&actor)
+            || !self.can_combat_act(actor)
+            || !self.force_action_allowed(actor, movement, &action)
+        {
             return Err(Error::Unavailable);
         }
         let f = &e.fighters[&actor];
@@ -580,9 +610,7 @@ impl Simulation {
                 }
             }
             CombatAction::Release { target } => {
-                if !reachable(target)
-                    || !w.captivity.get(&target).is_some_and(|c| c.captor == actor)
-                {
+                if !reachable(target) || !self.can_release(actor, target) {
                     return Err(Error::Unavailable);
                 }
             }
@@ -651,7 +679,10 @@ impl Simulation {
                 let w = self.state.combat.as_ref().unwrap();
                 let defending = w.encounters[&id].fighters[&target].defending;
                 let damage = self
-                    .effective_combat_damage(actor, w.rules.damage)?
+                    .invocation_combat_damage(
+                        actor,
+                        self.effective_combat_damage(actor, w.rules.damage)?,
+                    )?
                     .saturating_sub(if defending { w.rules.defence } else { 0 });
                 self.damage_from_combat(target, damage);
                 self.emit(EventKind::Struck {
@@ -690,6 +721,7 @@ impl Simulation {
                     encounter: id,
                     actor,
                 });
+                self.force_note_surrender(id, actor);
             }
             CombatAction::Capture { target } => {
                 let source = self.binding_stock(actor).unwrap();
@@ -729,13 +761,7 @@ impl Simulation {
                 });
             }
             CombatAction::Release { target } => {
-                self.state
-                    .combat
-                    .as_mut()
-                    .unwrap()
-                    .captivity
-                    .remove(&target);
-                self.emit(EventKind::Released { actor, target });
+                self.release_captive(actor, target);
             }
             CombatAction::Retreat { destination } => {
                 let f = self
@@ -792,14 +818,14 @@ impl Simulation {
             self.end_life(actor);
         }
     }
-    fn drive_combat_npcs(&mut self, id: EncounterId) -> Result<(), Error> {
+    pub(crate) fn drive_combat_npcs(&mut self, id: EncounterId) -> Result<(), Error> {
         loop {
             let w = self.state.combat.as_ref().unwrap();
             let e = &w.encounters[&id];
             let Some(actor) = e.order.get(e.cursor).copied() else {
                 break;
             };
-            if !self.can_fight(actor)
+            if !self.can_combat_act(actor)
                 || e.fighters[&actor].withdrawn
                 || e.fighters[&actor].surrendered
             {
@@ -813,7 +839,7 @@ impl Simulation {
                     .cursor += 1;
                 continue;
             }
-            if actor == self.state.ruler {
+            if actor == self.state.ruler && !self.controls_actor(actor) {
                 break;
             }
             self.observe_fighter(id, actor);
@@ -821,13 +847,17 @@ impl Simulation {
             let e = &w.encounters[&id];
             let f = &e.fighters[&actor];
             let map = &w.maps[&e.area];
-            let target = f
-                .known
-                .keys()
-                .filter(|other| e.fighters.get(other).is_some_and(|o| o.team != f.team))
-                .min_by_key(|other| (distance(f.position, f.known[other]), **other))
-                .copied();
-            let (movement, action) = if let Some(target) = target {
+            let rescue = self.force_rescue_target(actor);
+            let target = rescue.or_else(|| {
+                f.known
+                    .keys()
+                    .filter(|other| e.fighters.get(other).is_some_and(|o| o.team != f.team))
+                    .min_by_key(|other| (distance(f.position, f.known[other]), **other))
+                    .copied()
+            });
+            let (movement, action) = if let Some(action) = self.force_combat_action(actor, id) {
+                (None, action)
+            } else if let Some(target) = target {
                 let destination = f.known[&target];
                 let d = distance(f.position, destination).isqrt() as i64;
                 let step = d
@@ -853,29 +883,36 @@ impl Simulation {
                 let health = self.state.physical.as_ref().unwrap().actors[&actor]
                     .vitals
                     .health;
-                let traits = &self.state.decisions.as_ref().unwrap().minds[&actor].personality;
-                let action = if self.state.people[self.person_index[&actor]].role == Role::Guardian
-                    && target == self.state.ruler
-                {
-                    CombatAction::Defend
-                } else if traits.risk_tolerance < 500
-                    && health < self.state.physical.as_ref().unwrap().rules.max_health / 2
-                {
-                    CombatAction::Surrender
-                } else if reachable
-                    && (e.fighters[&target].surrendered || !self.can_fight(target))
-                    && self.binding_stock(actor).is_some()
-                    && !w.captivity.contains_key(&target)
-                {
-                    CombatAction::Capture { target }
-                } else if reachable
-                    && !e.fighters[&target].surrendered
-                    && !w.captivity.contains_key(&target)
-                {
-                    CombatAction::Attack { target }
-                } else {
-                    CombatAction::Defend
-                };
+                let borrowed = self.invocation_personality(actor);
+                let traits = borrowed
+                    .as_ref()
+                    .unwrap_or(&self.state.decisions.as_ref().unwrap().minds[&actor].personality);
+                let action =
+                    if rescue == Some(target) && reachable && self.can_release(actor, target) {
+                        CombatAction::Release { target }
+                    } else if self.state.people[self.person_index[&actor]].role == Role::Guardian
+                        && target == self.state.ruler
+                    {
+                        CombatAction::Defend
+                    } else if traits.risk_tolerance < 500
+                        && health < self.state.physical.as_ref().unwrap().rules.max_health / 2
+                    {
+                        CombatAction::Surrender
+                    } else if reachable
+                        && (e.fighters[&target].surrendered || !self.can_fight(target))
+                        && self.binding_stock(actor).is_some()
+                        && !w.captivity.contains_key(&target)
+                    {
+                        CombatAction::Capture { target }
+                    } else if reachable
+                        && !e.fighters[&target].surrendered
+                        && (!w.captivity.contains_key(&target) || self.force_can_combat_act(target))
+                        && rescue != Some(target)
+                    {
+                        CombatAction::Attack { target }
+                    } else {
+                        CombatAction::Defend
+                    };
                 (movement, action)
             } else {
                 (None, CombatAction::Defend)
@@ -957,13 +994,14 @@ impl Simulation {
                     && self.state.physical.as_ref().unwrap().actors[&f.actor]
                         .vitals
                         .alive
-                    && !self
+                    && (!self
                         .state
                         .combat
                         .as_ref()
                         .unwrap()
                         .captivity
                         .contains_key(&f.actor)
+                        || self.force_can_combat_act(f.actor) && !f.surrendered)
             })
             .map(|f| f.team)
             .collect();
@@ -1027,6 +1065,25 @@ impl Simulation {
         else {
             return false;
         };
+        if !self.independent(actor)
+            || !self.state.physical.as_ref().is_some_and(|world| {
+                world.actors.get(&actor).is_some_and(|body| {
+                    body.vitals.alive
+                        && body.vitals.health
+                            > self.state.combat.as_ref().unwrap().rules.incapacitation
+                })
+            })
+            || (self
+                .state
+                .combat
+                .as_ref()
+                .unwrap()
+                .captivity
+                .contains_key(&actor)
+                && actor != target)
+        {
+            return false;
+        }
         self.person_index
             .get(&actor)
             .is_some_and(|i| self.state.people[*i].location == Location::AtArea(c.area))
@@ -1048,6 +1105,10 @@ impl Simulation {
             .unwrap()
             .captivity
             .remove(&target);
+        if let Some(force) = &mut self.state.force {
+            force.escapes.remove(&target);
+            force.yielded.remove(&target);
+        }
         self.emit(EventKind::Released { actor, target });
     }
 }

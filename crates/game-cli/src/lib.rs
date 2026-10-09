@@ -8,7 +8,7 @@ pub fn execute(
     execution: &Execution,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let words: Vec<_> = line.split_whitespace().collect();
-    if let Some(command) = parse_game_command(&words)? {
+    if let Some(command) = parse_line_command(line, &words)? {
         return submit(sim, command);
     }
     match words.as_slice() {
@@ -29,7 +29,7 @@ pub fn execute(
             *sim = loaded;
             Ok("loaded".into())
         }
-        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
+        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site|food source quantity> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | invocation <JSON action> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | escape | restrain <person> | yield <captor> | withdraw-yield | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
 }
@@ -141,6 +141,39 @@ fn parse_combat_turn(
     Ok((movement, action))
 }
 
+fn parse_line_command(
+    line: &str,
+    words: &[&str],
+) -> Result<Option<Command>, Box<dyn std::error::Error>> {
+    let trimmed = line.trim_start();
+    let (verb, body) = trimmed
+        .split_once(char::is_whitespace)
+        .unwrap_or((trimmed, ""));
+    let command = match verb {
+        "invocation" => Some(Command::Invocation {
+            action: serde_json::from_str(body)?,
+        }),
+        "project" => Some(Command::Project {
+            action: serde_json::from_str(body)?,
+        }),
+        "institution" => Some(Command::Institution {
+            action: serde_json::from_str(body)?,
+        }),
+        "property" => Some(Command::Property {
+            action: serde_json::from_str(body)?,
+        }),
+        "agreement" => Some(Command::Agreement {
+            action: serde_json::from_str(body)?,
+        }),
+        _ => None,
+    };
+    if command.is_some() {
+        Ok(command)
+    } else {
+        parse_game_command(words)
+    }
+}
+
 fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::error::Error>> {
     let interest = |name: &str| -> Result<ChildhoodInterest, Box<dyn std::error::Error>> {
         match name {
@@ -152,6 +185,21 @@ fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::er
         }
     };
     let command = match words {
+        ["escape"] => Command::Escape,
+        ["restrain", target] => Command::Restrain {
+            target: PersonId(target.parse()?),
+        },
+        ["yield", captor] => Command::Yield {
+            captor: PersonId(captor.parse()?),
+        },
+        ["withdraw-yield"] => Command::WithdrawYield,
+        ["guardian", guardian, "food", source, quantity] => Command::RequestGuardian {
+            guardian: PersonId(guardian.parse()?),
+            request: GuardianRequest::SupplyFood {
+                source: InventoryId(source.parse()?),
+                quantity: Quantity(quantity.parse()?),
+            },
+        },
         ["learn", teacher, topic] => Command::Learn {
             teacher: PersonId(teacher.parse()?),
             topic: match *topic {
@@ -204,18 +252,6 @@ fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::er
                 recipient: PersonId(recipient.parse()?),
                 incident: IncidentId(incident.parse()?),
             },
-        },
-        ["project", json @ ..] => Command::Project {
-            action: serde_json::from_str(&json.join(" "))?,
-        },
-        ["institution", json @ ..] => Command::Institution {
-            action: serde_json::from_str(&json.join(" "))?,
-        },
-        ["property", json @ ..] => Command::Property {
-            action: serde_json::from_str(&json.join(" "))?,
-        },
-        ["agreement", json @ ..] => Command::Agreement {
-            action: serde_json::from_str(&json.join(" "))?,
         },
         ["move", area] => Command::Move {
             destination: AreaId(area.parse()?),
@@ -297,7 +333,7 @@ pub fn execute_session(
     line: &str,
 ) -> Result<SessionOutput, Box<dyn std::error::Error>> {
     let words: Vec<_> = line.split_whitespace().collect();
-    if let Some(command) = parse_game_command(&words)? {
+    if let Some(command) = parse_line_command(line, &words)? {
         return Ok(SessionOutput::Text(serde_json::to_string(
             &session.submit_command(command)?,
         )?));
@@ -312,8 +348,28 @@ pub fn execute_session(
         ["run",duration] => return Ok(SessionOutput::Advancing(session.run(parse_duration(duration)?)?)),
         ["save",path] => { save_file(std::path::Path::new(path),&session.save()?)?; "saved".into() },
         ["load",path] => { session.load(std::fs::read(path)?)?; "loaded".into() },
-        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
+        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | carry <source> <quantity> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site|food source quantity> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | invocation <JSON action> | project <JSON action> | institution <JSON action> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | escape | restrain <person> | yield <captor> | withdraw-yield | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
         _ => return Err("unknown command; use help".into()),
     };
     Ok(SessionOutput::Text(text))
+}
+
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+
+    #[test]
+    fn structured_commands_preserve_whitespace_inside_text() {
+        let line = r#"institution {"Found":{"origin":null,"charter":{"purpose":"Two  timber\tstores","founders":[1],"jurisdiction":2,"open_membership":false,"procedure":{"proposers":{"members":true,"named":[],"offices":[]},"voters":{"members":true,"named":[],"offices":[]},"minimum_support":1},"rules":[],"offices":[],"contributions":[]}}}"#;
+        let parsed = parse_line_command(line, &line.split_whitespace().collect::<Vec<_>>())
+            .unwrap()
+            .unwrap();
+        let Command::Institution {
+            action: InstitutionAction::Found { charter, .. },
+        } = parsed
+        else {
+            panic!("wrong command")
+        };
+        assert_eq!(charter.purpose, "Two  timber\tstores");
+    }
 }

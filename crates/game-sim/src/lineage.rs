@@ -555,6 +555,22 @@ impl Simulation {
                 guardian: *teacher,
                 request: GuardianRequest::Rest,
             });
+            for food in mind.knowledge.values().filter(|k| {
+                k.good == Good::Food
+                    && k.accessible
+                    && k.quantity.0 >= 1_000
+                    && self.state.decisions.as_ref().unwrap().minds[&student]
+                        .knowledge
+                        .contains_key(&k.inventory)
+            }) {
+                commands.push(Command::RequestGuardian {
+                    guardian: *teacher,
+                    request: GuardianRequest::SupplyFood {
+                        source: food.inventory,
+                        quantity: Quantity(1_000),
+                    },
+                });
+            }
             if guard
                 .assessments
                 .get(&student)
@@ -727,6 +743,9 @@ impl Simulation {
         guardian: PersonId,
         request: GuardianRequest,
     ) -> Result<(), Error> {
+        if let GuardianRequest::SupplyFood { source, quantity } = request {
+            return self.request_guardian_food(guardian, requester, source, quantity);
+        }
         let world = self.state.lineage.as_ref().ok_or(Error::Unavailable)?;
         if world.current() != Some(requester)
             || !world.guardians.contains_key(&guardian)
@@ -756,6 +775,7 @@ impl Simulation {
         let command = match request {
             GuardianRequest::Move { destination } => Command::Move { destination },
             GuardianRequest::Rest => Command::Rest,
+            GuardianRequest::SupplyFood { .. } => unreachable!("handled above"),
             GuardianRequest::Work { site } => Command::Work { site },
         };
         let reason = if self.guardian_constraint(guardian).is_some() || self.in_combat(guardian) {
@@ -801,6 +821,11 @@ impl Simulation {
         };
         match accepted {
             Ok(()) => {
+                self.force_cancel_food(guardian);
+                self.emit(EventKind::GuardianAccepted {
+                    guardian,
+                    requester,
+                });
                 let guard = self
                     .state
                     .lineage
@@ -888,8 +913,21 @@ impl Simulation {
                         matches!(body.activity, Activity::Work { site: active } if active == site)
                     }
                     GuardianRequest::Rest => self.state.time <= assignment.accepted_at,
+                    GuardianRequest::SupplyFood { .. } => false,
                 });
-            let (goal, explanation, command) = if self
+            let (goal, explanation, command) = if let Some(command) = self.force_candidate(id) {
+                (
+                    GuardianGoal::Confined,
+                    "Attempting to release the physical bindings with a carried tool".into(),
+                    Some(command),
+                )
+            } else if let Some(command) = self.guardian_food_command(id) {
+                (
+                    GuardianGoal::Mentoring,
+                    "Carrying out an accepted food delivery using known stores and routes".into(),
+                    Some(command),
+                )
+            } else if self
                 .state
                 .combat
                 .as_ref()
@@ -973,6 +1011,13 @@ impl Simulation {
         target_location: &Location,
     ) -> (GuardianGoal, String, Option<Command>) {
         let body = &self.state.physical.as_ref().unwrap().actors[&guardian];
+        if let Some(command) = self.force_guardian_rescue(guardian, target) {
+            return (
+                GuardianGoal::Searching,
+                "Reaching the confined incarnation with a physical rescue tool".into(),
+                Some(command),
+            );
+        }
         if matches!(own_location, Location::InTransit { .. }) {
             return (
                 GuardianGoal::Searching,
@@ -1262,6 +1307,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     }
                     GuardianRequest::Work { site } => !physical.sites.contains_key(&site),
                     GuardianRequest::Rest => false,
+                    GuardianRequest::SupplyFood { source, quantity } => {
+                        !state.inventories.contains_key(&source) || quantity.0 == 0
+                    }
                 })
         {
             return Err(fail());

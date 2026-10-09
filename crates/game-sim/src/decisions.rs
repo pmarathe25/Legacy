@@ -429,6 +429,20 @@ impl Simulation {
         {
             return none();
         }
+        if let Some(command) = self.force_candidate(id) {
+            return Intention {
+                actor: id,
+                command: Some(command),
+                explanation: Explanation {
+                    goal: Goal::Practice,
+                    need: 2_000,
+                    benefit: 0,
+                    value: 0,
+                    total: 2_000,
+                    blocker: None,
+                },
+            };
+        }
         if !self.independent(id) {
             return none();
         }
@@ -452,6 +466,13 @@ impl Simulation {
                 | Activity::ReportIncident { .. }
                 | Activity::Lesson { .. }
                 | Activity::Construct { .. }
+                | Activity::ReportAgreement { .. }
+                | Activity::Escape { .. }
+                | Activity::Restrain { .. }
+                | Activity::WritingMemory { .. }
+                | Activity::ReadingMemory { .. }
+                | Activity::TeachingMemory { .. }
+                | Activity::MovingRecord { .. }
         ) || matches!(actor.activity, Activity::Work { .. }) && !urgent
         {
             return none();

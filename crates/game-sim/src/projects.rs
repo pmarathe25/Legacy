@@ -337,6 +337,7 @@ impl Simulation {
                 .iter()
                 .any(|(worker, job)| *worker != actor && job.project == project.id)
             && self.project_usable(actor, project.tool, Good::Tool, 1_000)
+            && self.tool_available_for(actor, project.tool)
             && (project.materials_consumed
                 || self.project_usable(
                     actor,

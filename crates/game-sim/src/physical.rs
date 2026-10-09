@@ -265,9 +265,25 @@ impl Simulation {
     ) -> Result<(), Error> {
         self.preflight_agreements()?;
         self.preflight_institutions()?;
+        match command {
+            Command::Escape => return self.start_escape(actor),
+            Command::Restrain { target } => return self.start_restraint(actor, target),
+            Command::Yield { captor } => return self.force_yield(actor, captor),
+            Command::WithdrawYield => return self.force_withdraw_yield(actor),
+            Command::FreeCaptive { target } if target == actor => return self.start_escape(actor),
+            _ => {}
+        }
         if let Command::Institution { ref action } = command {
             self.institution_command(actor, action)?;
             self.reconcile_institutions()?;
+            self.revision += 1;
+            return Ok(());
+        }
+        if let Command::Invocation { ref action } = command {
+            self.invocation_command(actor, action)?;
+            self.update_property_events();
+            self.reconcile_agreements()?;
+            self.observe_agreement_events();
             self.revision += 1;
             return Ok(());
         }
@@ -287,10 +303,12 @@ impl Simulation {
             self.debug_property_action(actor, action)?;
             self.update_property_events();
             self.reconcile_agreements()?;
+            self.observe_agreement_events();
             return Ok(());
         }
         if let Command::Agreement { ref action } = command {
             self.agreement_command(actor, action)?;
+            self.observe_agreement_events();
             self.revision += 1;
             return Ok(());
         }
@@ -398,6 +416,7 @@ impl Simulation {
                 if !self.can_release(actor, target) {
                     return Err(Error::Unavailable);
                 }
+                self.preflight_force_intervention()?;
                 let completes = SimTime(
                     self.state
                         .time
@@ -568,13 +587,15 @@ impl Simulation {
                     .get(&destination)
                     .ok_or(Error::Unavailable)?;
                 if source == destination
+                    || !self.record_transfer_allowed(source, quantity)
                     || quantity.0 == 0
                     || source_inventory.good != destination_inventory.good
                     || (source_inventory.location != InventoryLocation::Carried(actor)
                         && destination_inventory.location != InventoryLocation::Carried(actor))
                     || !self.can_use(actor, source_inventory)
                     || !(self.can_use(actor, destination_inventory)
-                        || self.agreement_accepts_delivery(actor, destination, quantity))
+                        || self.agreement_accepts_delivery(actor, destination, quantity)
+                        || self.force_accepts_food_delivery(actor, source, destination, quantity))
                     || self.unreserved_stock(source, actor) < quantity.0
                     || destination_inventory.capacity.0 - destination_inventory.quantity.0
                         < quantity.0
@@ -718,14 +739,20 @@ impl Simulation {
                 .or_default()
                 .push(Due::Physical(actor));
         }
+        if let Activity::Unbind { target, completes } = activity {
+            self.force_release_started(actor, target, completes)?;
+        }
         self.update_property_events();
         self.reconcile_agreements()?;
+        self.observe_agreement_events();
         self.reconcile_institutions()?;
         self.revision += 1;
         Ok(())
     }
 
     pub(crate) fn interrupt_physical(&mut self, actor: PersonId) {
+        self.interrupt_force(actor);
+        self.cancel_invocation_action(actor);
         self.interrupt_construction(actor);
         self.interrupt_lesson(actor);
         self.interrupt_property_action(actor);
@@ -838,8 +865,12 @@ impl Simulation {
                 && let Some(job) = &a.job
             {
                 dt = dt.min(
-                    skills::work_duration(job.remaining, job.rate, job.work_remainder)
-                        .expect("validated frozen skill rate"),
+                    skills::work_duration(
+                        job.remaining,
+                        self.invocation_work_rate(*id, job.rate),
+                        job.work_remainder,
+                    )
+                    .expect("validated frozen skill rate"),
                 );
             }
         }
@@ -897,12 +928,18 @@ impl Simulation {
                     vitals.alive = false;
                 }
             }
+            if let Some(joint) = self.joint_invocation_vitals(*id, elapsed)? {
+                vitals = joint;
+            }
             let (remaining, work_remainder) = if let Some(job) = &a.job {
                 if matches!(a.activity, Activity::Work { .. })
                     && equipment.get(id).copied().unwrap_or(false)
                 {
-                    let (work, remainder) =
-                        skills::advance_work(elapsed, job.rate, job.work_remainder)?;
+                    let (work, remainder) = skills::advance_work(
+                        elapsed,
+                        self.invocation_work_rate(*id, job.rate),
+                        job.work_remainder,
+                    )?;
                     (Some(job.remaining.saturating_sub(work)), Some(remainder))
                 } else {
                     (Some(job.remaining), Some(job.work_remainder))
@@ -931,6 +968,17 @@ impl Simulation {
             .activity
             .clone();
         let mut success = false;
+        if matches!(
+            activity,
+            Activity::Escape { .. } | Activity::Restrain { .. }
+        ) {
+            self.complete_force(actor);
+            return;
+        }
+        if matches!(activity, Activity::ReportAgreement { .. }) {
+            self.complete_agreement_report(actor);
+            return;
+        }
         if matches!(activity, Activity::Construct { .. }) {
             self.complete_construction(actor);
             return;
@@ -1185,8 +1233,11 @@ impl Simulation {
         // interval's evaluated output in commit_physical using this event.
     }
 
-    pub(crate) fn commit_physical(&mut self, outcomes: Vec<Outcome>) {
-        let equipment = self.equipment_availability();
+    pub(crate) fn commit_physical(
+        &mut self,
+        outcomes: Vec<Outcome>,
+        equipment: &BTreeMap<PersonId, bool>,
+    ) {
         for out in outcomes {
             let actor = out.id;
             let world = self.state.physical.as_ref().unwrap();
@@ -1422,6 +1473,7 @@ impl Simulation {
         }
         self.interrupt_physical(actor);
         self.observe_lineage_deaths();
+        self.observe_invocation_deaths()?;
         Ok(())
     }
 }

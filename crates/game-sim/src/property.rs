@@ -77,6 +77,8 @@ impl Simulation {
             })
             .collect();
         sim.state.agreements = Some(agreements::World {
+            knowledge: BTreeMap::new(),
+            last_observation_event: sim.state.next_event - 1,
             agreements: BTreeMap::new(),
             obligations: BTreeMap::new(),
             amendments: BTreeMap::new(),

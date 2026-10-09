@@ -25,6 +25,13 @@ impl Simulation {
                     .as_ref()
                     .and_then(|world| world.fields.get(&field))
                     .map(|field| field.tool),
+                Activity::Construct { project, .. } => self
+                    .state
+                    .projects
+                    .as_ref()
+                    .and_then(|world| world.projects.get(&project))
+                    .map(|plan| plan.tool),
+                Activity::WritingMemory { .. } => self.invocation_selected_tool(*actor),
                 _ => None,
             };
             if let Some(tool) = selected
@@ -55,7 +62,10 @@ impl Simulation {
             .filter(|(_, body)| {
                 matches!(
                     body.activity,
-                    Activity::Work { .. } | Activity::Cultivate { .. }
+                    Activity::Work { .. }
+                        | Activity::Cultivate { .. }
+                        | Activity::Construct { .. }
+                        | Activity::WritingMemory { .. }
                 )
             })
             .map(|(actor, _)| (*actor, false))
@@ -422,6 +432,7 @@ mod tests {
     #[test]
     fn cultivation_and_work_cannot_allocate_the_same_toolkit() {
         let mut sim = Simulation::farming_fixture(1, Execution::default()).unwrap();
+        sim.state.environment.as_mut().unwrap().crop.prepare_labor = MINUTE;
         let farmer = sim.state.ruler;
         let worker = sim.state.people[3].id;
         let field = sim
@@ -447,6 +458,16 @@ mod tests {
         }
         sim.advance(SimDuration(120_000)).unwrap();
         sim.debug_physical_command(worker, Command::Cancel).unwrap();
+        let land = sim
+            .state
+            .environment
+            .as_mut()
+            .unwrap()
+            .fields
+            .get_mut(&field.id)
+            .unwrap();
+        land.preparation_ms = 0;
+        land.phase = environment::CropPhase::Fallow;
         let input = sim
             .debug_add_inventory(
                 Good::Timber,
@@ -498,6 +519,46 @@ mod tests {
                 .is_err()
         );
         assert_eq!(sim.state, before);
+        // Two toolkits initially support both workers. One leaves precisely at
+        // completion; finishing cultivation cannot reassign its closing slot to
+        // the other worker's elapsed shift.
+        sim.state.inventories.get_mut(&field.tool).unwrap().quantity = Quantity(2_000);
+        sim.debug_physical_command(worker, Command::Work { site })
+            .unwrap();
+        let cargo = sim
+            .debug_add_inventory(
+                Good::Tool,
+                InventoryLocation::Carried(worker),
+                Quantity(0),
+                Quantity(1_000),
+                BTreeSet::from([worker]),
+            )
+            .unwrap();
+        sim.debug_schedule_transfers(
+            SimTime(sim.time().0 + MINUTE.0),
+            vec![TransferIntent {
+                actor: worker,
+                source: field.tool,
+                destination: cargo,
+                quantity: Quantity(1_000),
+            }],
+        )
+        .unwrap();
+        sim.advance(MINUTE).unwrap();
+        assert_eq!(
+            sim.state.environment.as_ref().unwrap().fields[&field.id].phase,
+            environment::CropPhase::Prepared
+        );
+        assert_eq!(sim.state.inventories[&output].quantity, Quantity(0));
+        assert_eq!(
+            sim.state.physical.as_ref().unwrap().actors[&worker]
+                .job
+                .as_ref()
+                .unwrap()
+                .remaining,
+            0
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
 
     #[test]

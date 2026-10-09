@@ -8,7 +8,9 @@ pub mod decisions;
 pub mod development;
 pub mod environment;
 mod equipment;
+pub mod force;
 pub mod institutions;
+pub mod invocation;
 pub mod lineage;
 mod persistence;
 pub mod physical;
@@ -146,6 +148,10 @@ pub struct CanonicalState {
     pub skills: Option<skills::World>,
     #[serde(default)]
     pub projects: Option<projects::World>,
+    #[serde(default)]
+    pub invocation: Option<invocation::World>,
+    #[serde(default)]
+    pub force: Option<force::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -232,11 +238,27 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "force-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
+            id: "invocation-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "force-fixture" {
+            return Self::force_fixture(seed, execution);
+        }
+        if scenario == "invocation-fixture" {
+            return Self::invocation_fixture(seed, execution);
+        }
         if scenario == "project-fixture" {
             return Self::project_fixture(seed, execution);
         }
@@ -314,6 +336,8 @@ impl Simulation {
             institutions: None,
             skills: None,
             projects: None,
+            invocation: None,
+            force: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -633,6 +657,7 @@ impl Simulation {
         available_commands.extend(self.available_institution_commands(ruler.id));
         available_commands.extend(self.available_lesson_commands(ruler.id));
         available_commands.extend(self.available_project_commands(ruler.id));
+        available_commands.extend(self.available_invocation_commands(ruler.id));
         if self.in_combat(ruler.id) {
             available_commands.clear();
             if let Some(view) = self.tactical_view()
@@ -683,7 +708,13 @@ impl Simulation {
                 }
             }
         }
+        available_commands.extend(self.available_force_commands(ruler.id));
+        if self.controls_actor(ruler.id) {
+            available_commands.clear();
+        }
         PlayerView {
+            force: self.force_view(self.state.ruler),
+            invocation: self.invocation_view(),
             projects: self.project_view(ruler.id),
             skills: self.own_skill_view(ruler.id),
             institutions: self.institution_view(ruler.id),
@@ -810,6 +841,9 @@ impl Simulation {
                 Err(Error::SequenceConflict)
             };
         }
+        if self.controls_actor(self.state.ruler) {
+            return Err(Error::Unavailable);
+        }
         if matches!(
             submission.command,
             Command::Engage { .. } | Command::CombatTurn { .. }
@@ -869,7 +903,9 @@ impl Simulation {
             Location::AtArea(a) => a,
             Location::InTransit { to, .. } => to,
         };
-        let path = if let Some(world) = &self.state.decisions {
+        let path = if let Some(routes) = self.invocation_routes(actor) {
+            decisions::known_path(&routes, origin, destination)?.0
+        } else if let Some(world) = &self.state.decisions {
             decisions::known_path(&world.minds[&actor].routes, origin, destination)?.0
         } else {
             self.path(origin, destination)?
@@ -980,6 +1016,24 @@ impl Simulation {
                 .ok_or(Error::Overflow)?,
         );
         while self.state.time < requested {
+            if let Some(warning) = self.required_invocation_input() {
+                return Ok(AdvanceResult {
+                    requested,
+                    reached: self.state.time,
+                    revision: self.revision,
+                    reason: StopReason::InvocationWarning { warning },
+                });
+            }
+            let encounters: Vec<_> = self.state.combat.as_ref().map_or_else(Vec::new, |w| {
+                w.encounters
+                    .values()
+                    .filter(|e| e.active)
+                    .map(|e| e.id)
+                    .collect()
+            });
+            for encounter in encounters {
+                self.drive_combat_npcs(encounter)?;
+            }
             if let Some(encounter) = self.awaiting_combat_input() {
                 return Ok(AdvanceResult {
                     requested,
@@ -998,6 +1052,7 @@ impl Simulation {
             let next = next.min(self.next_agreement_deadline().unwrap_or(next));
             let next =
                 self.project_boundary(self.environment_boundary(self.physical_boundary(next)));
+            let next = self.invocation_boundary(next);
             let controlled = self.state.ruler;
             self.step(next)?;
             if controlled != self.state.ruler {
@@ -1008,6 +1063,14 @@ impl Simulation {
                     reason: StopReason::SuccessorBorn {
                         ruler: self.state.ruler,
                     },
+                });
+            }
+            if let Some(warning) = self.required_invocation_input() {
+                return Ok(AdvanceResult {
+                    requested,
+                    reached: self.state.time,
+                    revision: self.revision,
+                    reason: StopReason::InvocationWarning { warning },
                 });
             }
         }
@@ -1045,6 +1108,7 @@ impl Simulation {
         let physical_output = self.evaluate_physical(elapsed)?;
         let skill_output = self.evaluate_skills(next)?;
         let project_output = self.evaluate_projects(next)?;
+        let invocation_output = self.evaluate_invocation(next)?;
         let environment_output = self.evaluate_environment(next)?;
         self.profile.evaluation_ns += started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
@@ -1100,9 +1164,12 @@ impl Simulation {
             .next_id
             .checked_add(construction_ids)
             .and_then(|id| id.checked_add(birth_ids))
+            .and_then(|id| id.checked_add(self.invocation_allocation_bound(next)))
+            .and_then(|id| id.checked_add(self.force_allocation_bound(&due)))
             .ok_or(Error::Overflow)?;
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
+        self.preflight_force(&due)?;
         self.preflight_agreements()?;
         self.preflight_institutions_at(next)?;
         let event_bound: usize = due
@@ -1129,6 +1196,8 @@ impl Simulation {
             .filter(|d| matches!(d, Due::Age(_) | Due::Birth(_) | Due::CombatRound(_)))
             .cloned()
             .collect();
+        let mut production_completions = Vec::new();
+        let mut force_completions = Vec::new();
         let transfers: Vec<_> = due
             .iter()
             .filter_map(|d| {
@@ -1204,7 +1273,25 @@ impl Simulation {
                 }
                 Due::Transfers(_) => {}
                 Due::Age(_) | Due::Birth(_) | Due::CombatRound(_) => {}
-                Due::Physical(actor) => self.complete_physical(actor),
+                Due::Physical(actor) => {
+                    if self.state.physical.as_ref().is_some_and(|w| {
+                        matches!(
+                            w.actors[&actor].activity,
+                            Activity::Cultivate { .. } | Activity::Construct { .. }
+                        )
+                    }) {
+                        production_completions.push(actor);
+                    } else if self.state.physical.as_ref().is_some_and(|w| {
+                        matches!(
+                            w.actors[&actor].activity,
+                            Activity::Escape { .. } | Activity::Restrain { .. }
+                        )
+                    }) {
+                        force_completions.push(actor);
+                    } else {
+                        self.complete_physical(actor);
+                    }
+                }
                 Due::Spoil(inventory) => {
                     let stock = self.state.inventories.get_mut(&inventory).unwrap();
                     let quantity = stock.quantity;
@@ -1249,8 +1336,32 @@ impl Simulation {
                 });
             }
         }
-        self.commit_physical(physical_output);
+        // Closing allocations are shared across all workers before any completion
+        // releases a tool. A released or newly produced toolkit cannot fund an
+        // interval which already elapsed.
+        let closing_equipment = self.equipment_availability();
+        for actor in production_completions {
+            if closing_equipment.get(&actor).copied().unwrap_or(false) {
+                self.complete_physical(actor);
+            } else {
+                self.interrupt_physical(actor);
+                self.emit(EventKind::Interrupted { actor });
+            }
+        }
+        self.commit_physical(physical_output, &closing_equipment);
+        for actor in force_completions {
+            if self.state.physical.as_ref().is_some_and(|w| {
+                matches!(
+                    w.actors[&actor].activity,
+                    Activity::Escape { .. } | Activity::Restrain { .. }
+                )
+            }) {
+                self.complete_physical(actor);
+            }
+        }
         self.commit_skills(skill_output);
+        self.observe_invocation_deaths()?;
+        self.commit_invocation(invocation_output)?;
         self.observe_lineage_deaths();
         for event in lifecycle {
             if let Due::CombatRound(encounter) = event {
@@ -1259,13 +1370,17 @@ impl Simulation {
                 self.complete_development(event);
             }
         }
+        self.observe_invocation_deaths()?;
+        self.update_force();
         self.update_projects()?;
         self.update_property_events();
         self.reconcile_agreements()?;
+        self.observe_agreement_events();
         self.reconcile_institutions()?;
         self.learn_from_work();
         if self.state.time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
+            self.review_invocation()?;
         }
         self.revision += 1;
         self.profile.commit_ns += started.elapsed().as_nanos();
@@ -1352,13 +1467,20 @@ impl Simulation {
                     source: i.source,
                     destination: i.destination,
                     amount: i.quantity.0,
-                    eligible: source.good == destination.good
+                    eligible: self.record_transfer_allowed(i.source, i.quantity)
+                        && source.good == destination.good
                         && self.state.physical.as_ref().is_none_or(|w| {
                             w.actors[&i.actor].vitals.alive && w.actors[&i.actor].vitals.health > 0
                         })
                         && self.has_stock_access(i.actor, source)
                         && (self.has_stock_access(i.actor, destination)
-                            || self.agreement_accepts_delivery(i.actor, i.destination, i.quantity))
+                            || self.agreement_accepts_delivery(i.actor, i.destination, i.quantity)
+                            || self.force_accepts_food_delivery(
+                                i.actor,
+                                i.source,
+                                i.destination,
+                                i.quantity,
+                            ))
                         && area.is_some()
                         && area == self.inventory_area(source)
                         && area == self.inventory_area(destination),
@@ -1432,6 +1554,15 @@ impl Simulation {
     fn emit(&mut self, kind: EventKind) {
         self.witness_lineage_event(&kind);
         self.on_skill_event(&kind);
+        if let EventKind::Transferred {
+            source,
+            destination,
+            quantity,
+            ..
+        } = &kind
+        {
+            self.relocate_record_transfer(*source, *destination, *quantity);
+        }
         let id = EventId(self.state.next_event);
         self.state.next_event += 1;
         self.state.events.push(Event {

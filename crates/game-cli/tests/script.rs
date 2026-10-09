@@ -765,3 +765,212 @@ fn the_ordinary_text_view_observes_a_completed_autonomous_workshop_without_priva
     );
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
 }
+
+#[test]
+fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("force-fixture", 88, execution.clone()).unwrap();
+    let ruler = sim.observe().ruler;
+    let captor = sim.canonical_state().people[3].id;
+    let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
+    for actor in people {
+        sim.debug_physical_command(actor, Command::Cancel).unwrap();
+        sim.debug_set_personality(
+            actor,
+            game_sim::decisions::Personality::restful(),
+            game_sim::decisions::Dream::Comfort,
+        )
+        .unwrap();
+    }
+    let tool = sim
+        .canonical_state()
+        .inventories
+        .values()
+        .find(|i| {
+            i.good == Good::Tool && i.location == game_sim::InventoryLocation::Area(AreaId(1))
+        })
+        .unwrap()
+        .id;
+    game_cli::execute(&mut sim, &format!("carry {} 1000", tool.0), &execution).unwrap();
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    game_cli::execute(&mut sim, &format!("yield {}", captor.0), &execution).unwrap();
+    sim.debug_physical_command(captor, Command::Restrain { target: ruler })
+        .unwrap();
+    game_cli::execute(&mut sim, "run 6s", &execution).unwrap();
+    assert!(
+        sim.observe()
+            .force
+            .confinements
+            .iter()
+            .any(|c| c.target == ruler && c.can_escape)
+    );
+    game_cli::execute(&mut sim, "escape", &execution).unwrap();
+    game_cli::execute(&mut sim, "run 6s", &execution).unwrap();
+    assert!(sim.observe().force.confinements.is_empty());
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}
+
+#[test]
+fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("invocation-fixture", 9, execution.clone()).unwrap();
+    let actor = sim.observe().ruler;
+    let world = sim.canonical_state().development.as_ref().unwrap();
+    let childhood = world.lives[&actor].born.0 + world.rules.infancy.0;
+    let delta = childhood - sim.time().0;
+    game_cli::execute(&mut sim, &format!("run {delta}ms"), &execution).unwrap();
+    let teacher = *sim
+        .canonical_state()
+        .lineage
+        .as_ref()
+        .unwrap()
+        .guardians
+        .keys()
+        .next()
+        .unwrap();
+    for _ in 0..2 {
+        let mut completed = false;
+        for _ in 0..12 {
+            if matches!(
+                sim.canonical_state()
+                    .people
+                    .iter()
+                    .find(|p| p.id == teacher)
+                    .unwrap()
+                    .location,
+                Location::AtArea(_)
+            ) {
+                sim.debug_physical_command(teacher, Command::Rest).unwrap();
+            }
+            if game_cli::execute(
+                &mut sim,
+                &format!("learn {} invocation", teacher.0),
+                &execution,
+            )
+            .is_ok()
+                && matches!(
+                    sim.observe().physical.unwrap().activity,
+                    Activity::Lesson { .. }
+                )
+            {
+                game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+                completed = true;
+                break;
+            }
+            game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+        }
+        assert!(completed);
+    }
+    let invocation = sim.observe().invocation.unwrap();
+    assert!(invocation.ready);
+    let life = invocation.available_lives[0];
+    let action = serde_json::to_string(&InvocationAction::Activate {
+        lives: std::collections::BTreeSet::from([life]),
+    })
+    .unwrap();
+    game_cli::execute(&mut sim, &format!("invocation {action}"), &execution).unwrap();
+    let warning = sim.observe().invocation.unwrap().warning.unwrap();
+    let stopped: AdvanceResult =
+        serde_json::from_str(&game_cli::execute(&mut sim, "run 1m", &execution).unwrap()).unwrap();
+    assert_eq!(
+        stopped.reason,
+        StopReason::InvocationWarning {
+            warning: warning.id
+        }
+    );
+    let action = serde_json::to_string(&InvocationAction::AcceptWarning {
+        warning: warning.id,
+    })
+    .unwrap();
+    game_cli::execute(&mut sim, &format!("invocation {action}"), &execution).unwrap();
+    assert!(
+        sim.observe()
+            .invocation
+            .unwrap()
+            .active_lives
+            .contains(&life)
+    );
+    game_cli::execute(&mut sim, r#"invocation "Dismiss""#, &execution).unwrap();
+    assert!(sim.observe().invocation.unwrap().active_lives.is_empty());
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}
+
+#[test]
+fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_stock() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("force-fixture", 88, execution.clone()).unwrap();
+    let guardian = *sim
+        .canonical_state()
+        .lineage
+        .as_ref()
+        .unwrap()
+        .guardians
+        .keys()
+        .next()
+        .unwrap();
+    let ruler = sim.observe().ruler;
+    for person in sim
+        .canonical_state()
+        .people
+        .iter()
+        .map(|p| p.id)
+        .collect::<Vec<_>>()
+    {
+        sim.debug_physical_command(person, Command::Rest).unwrap();
+        sim.debug_set_personality(
+            person,
+            game_sim::decisions::Personality::restful(),
+            game_sim::decisions::Dream::Comfort,
+        )
+        .unwrap();
+    }
+    let source = sim
+        .canonical_state()
+        .inventories
+        .values()
+        .find(|i| {
+            i.good == Good::Food && i.location == game_sim::InventoryLocation::Area(AreaId(1))
+        })
+        .unwrap()
+        .id;
+    let stock = sim.canonical_state().inventories[&source].quantity.0;
+    let cargo = sim
+        .canonical_state()
+        .people
+        .iter()
+        .find(|p| p.id == ruler)
+        .unwrap()
+        .inventory;
+    let held = sim.canonical_state().inventories[&cargo].quantity.0;
+    game_cli::execute(
+        &mut sim,
+        &format!("guardian {} food {} 1000", guardian.0, source.0),
+        &execution,
+    )
+    .unwrap();
+    assert_eq!(sim.canonical_state().inventories[&source].quantity.0, stock);
+    assert_eq!(sim.canonical_state().inventories[&cargo].quantity.0, held);
+    game_cli::execute(&mut sim, "run 2m", &execution).unwrap();
+    assert!(sim.canonical_state().inventories[&source].quantity.0 <= stock - 1000);
+    let loaded: u64 = sim
+        .canonical_state()
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Transferred {
+                actor,
+                source: from,
+                quantity,
+                ..
+            } if actor == guardian && from == source => Some(quantity.0),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(loaded, 1000);
+    assert_eq!(
+        sim.canonical_state().inventories[&cargo].quantity.0,
+        held + 1000
+    );
+    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::GuardianAccepted { guardian: actor, requester } if actor == guardian && requester == ruler)));
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}

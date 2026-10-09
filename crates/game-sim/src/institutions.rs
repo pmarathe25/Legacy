@@ -608,10 +608,17 @@ impl Simulation {
                 .physical
                 .as_ref()
                 .is_some_and(|w| w.actors[&office.holder].vitals.alive)
-            && i.office_support
-                .get(&office.slot)
-                .map_or(0, |supporters| supporters.intersection(&i.members).count())
-                >= usize::from(office.minimum_support)
+            && i.office_support.get(&office.slot).map_or(0, |supporters| {
+                supporters
+                    .intersection(&i.members)
+                    .filter(|person| {
+                        self.state
+                            .physical
+                            .as_ref()
+                            .is_some_and(|w| w.actors[person].vitals.alive)
+                    })
+                    .count()
+            }) >= usize::from(office.minimum_support)
     }
     pub(crate) fn institution_allows_access(
         &self,
@@ -2120,7 +2127,14 @@ impl Simulation {
                     *actor,
                     InstitutionAction::Vote {
                         proposal: p.id,
-                        support: self.change_vote_score(*actor, i, &p.change) >= 0,
+                        support: self.change_vote_score(*actor, i, &p.change)
+                            - if self.social_area(p.proposer).ok() == self.social_area(*actor).ok()
+                            {
+                                self.invocation_social_penalty(p.proposer)
+                            } else {
+                                0
+                            }
+                            >= 0,
                     },
                 ));
             }

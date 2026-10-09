@@ -11,6 +11,10 @@ pub mod skills;
 pub use skills::*;
 pub mod projects;
 pub use projects::*;
+pub mod invocation;
+pub use invocation::*;
+pub mod force;
+pub use force::*;
 
 macro_rules! id {
     ($($name:ident),*) => {$(
@@ -25,6 +29,8 @@ id!(
     SiteId,
     ConceptId,
     AgreementId,
+    WarningId,
+    RecordId,
     ProjectId,
     EnterpriseId,
     InstitutionId,
@@ -47,6 +53,17 @@ pub const MINUTE: SimDuration = SimDuration(60_000);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Escape,
+    Restrain {
+        target: PersonId,
+    },
+    Yield {
+        captor: PersonId,
+    },
+    WithdrawYield,
+    Invocation {
+        action: InvocationAction,
+    },
     Carry {
         source: InventoryId,
         quantity: Quantity,
@@ -185,6 +202,8 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub force: ForceView,
+    pub invocation: Option<InvocationView>,
     pub projects: ProjectsView,
     pub skills: Vec<SkillView>,
     pub institutions: Vec<InstitutionView>,
@@ -217,6 +236,7 @@ pub enum Good {
     Binding,
     Seed,
     Water,
+    Record,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +250,32 @@ pub struct Vitals {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Escape {
+        tool: InventoryId,
+        completes: SimTime,
+    },
+    Restrain {
+        target: PersonId,
+        binding: InventoryId,
+        completes: SimTime,
+    },
+    ReportAgreement {
+        recipient: PersonId,
+        snapshot: Box<AgreementView>,
+        completes: SimTime,
+    },
+    WritingMemory {
+        completes: SimTime,
+    },
+    ReadingMemory {
+        completes: SimTime,
+    },
+    TeachingMemory {
+        completes: SimTime,
+    },
+    MovingRecord {
+        completes: SimTime,
+    },
     Construct {
         project: ProjectId,
         completes: SimTime,
@@ -332,6 +378,7 @@ pub struct PhysicalView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeSource {
+    Recorded(RecordId),
     Observed(PersonId),
     Reported(PersonId),
 }
@@ -350,6 +397,69 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    AgreementReported {
+        sender: PersonId,
+        recipient: PersonId,
+        agreement: AgreementId,
+    },
+    Yielded {
+        actor: PersonId,
+        captor: PersonId,
+    },
+    YieldWithdrawn {
+        actor: PersonId,
+    },
+    EscapeAttempted {
+        actor: PersonId,
+    },
+    EscapeInterrupted {
+        actor: PersonId,
+    },
+    Restrained {
+        actor: PersonId,
+        target: PersonId,
+        binding: InventoryId,
+    },
+    InvocationStarted {
+        actor: PersonId,
+        lives: std::collections::BTreeSet<PersonId>,
+    },
+    InvocationDismissed {
+        actor: PersonId,
+    },
+    InvocationWarningRaised {
+        warning: WarningId,
+        actor: PersonId,
+    },
+    InvocationCostAccepted {
+        warning: WarningId,
+        actor: PersonId,
+    },
+    InvocationCostApplied {
+        actor: PersonId,
+        cost: InvocationCost,
+        severity: u8,
+        permanent: bool,
+    },
+    InvocationControlChanged {
+        actor: PersonId,
+        controlled: bool,
+        until: Option<SimTime>,
+    },
+    MemoryRecorded {
+        record: RecordId,
+        actor: PersonId,
+        inventory: InventoryId,
+    },
+    MemoryRead {
+        record: RecordId,
+        actor: PersonId,
+    },
+    MemoryTaught {
+        actor: PersonId,
+        recipient: PersonId,
+        life: PersonId,
+    },
     ProjectProposed {
         project: ProjectId,
         sponsor: PersonId,
@@ -421,6 +531,10 @@ pub enum EventKind {
         guardian: PersonId,
         requester: PersonId,
         reason: String,
+    },
+    GuardianAccepted {
+        guardian: PersonId,
+        requester: PersonId,
     },
     PropertyClaimed {
         claim: ClaimId,
@@ -670,6 +784,7 @@ pub struct Event {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
+    InvocationWarning { warning: WarningId },
     SuccessorBorn { ruler: PersonId },
     TargetReached,
     Paused,
@@ -811,7 +926,15 @@ pub enum LessonTopic {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GuardianRequest {
-    Move { destination: AreaId },
+    SupplyFood {
+        source: InventoryId,
+        quantity: Quantity,
+    },
+    Move {
+        destination: AreaId,
+    },
     Rest,
-    Work { site: SiteId },
+    Work {
+        site: SiteId,
+    },
 }

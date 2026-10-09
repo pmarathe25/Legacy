@@ -15,6 +15,111 @@ pub struct Agreement {
     pub revision: u64,
 }
 
+fn refresh_known_status(view: &mut AgreementView) {
+    if matches!(
+        view.status,
+        AgreementStatus::Active | AgreementStatus::Fulfilled | AgreementStatus::Breached
+    ) {
+        view.status = if !view.obligations.is_empty()
+            && view
+                .obligations
+                .iter()
+                .all(|o| o.performed == o.term.amount())
+        {
+            AgreementStatus::Fulfilled
+        } else if view.obligations.iter().any(|o| o.defaulted) {
+            AgreementStatus::Breached
+        } else {
+            AgreementStatus::Active
+        };
+    }
+}
+
+fn same_duty(a: &AgreementTerm, b: &AgreementTerm) -> bool {
+    match (a, b) {
+        (
+            AgreementTerm::Delivery {
+                debtor: a,
+                source: x,
+                destination: y,
+                ..
+            },
+            AgreementTerm::Delivery {
+                debtor: b,
+                source: u,
+                destination: v,
+                ..
+            },
+        ) => a == b && x == u && y == v,
+        (
+            AgreementTerm::Labor {
+                debtor: a, site: x, ..
+            },
+            AgreementTerm::Labor {
+                debtor: b, site: y, ..
+            },
+        ) => a == b && x == y,
+        (
+            AgreementTerm::ConstructionLabor {
+                debtor: a,
+                project: x,
+                ..
+            },
+            AgreementTerm::ConstructionLabor {
+                debtor: b,
+                project: y,
+                ..
+            },
+        ) => a == b && x == y,
+        (AgreementTerm::Access { .. }, AgreementTerm::Access { .. }) => a == b,
+        _ => false,
+    }
+}
+
+fn merge_agreement_knowledge(old: AgreementView, incoming: &mut AgreementView) {
+    if old.revision > incoming.revision {
+        *incoming = old;
+        return;
+    }
+    if old.revision == incoming.revision {
+        incoming.accepted.extend(old.accepted.iter().copied());
+        if matches!(
+            old.status,
+            AgreementStatus::Withdrawn | AgreementStatus::Rejected
+        ) || incoming.status == AgreementStatus::Proposed
+            && old.status != AgreementStatus::Proposed
+        {
+            incoming.status = old.status;
+        }
+        for prior in old.obligations {
+            if let Some(new) = incoming.obligations.iter_mut().find(|o| o.id == prior.id) {
+                if prior.observed_at > new.observed_at {
+                    *new = prior;
+                } else if prior.term == new.term {
+                    new.performed = new.performed.max(prior.performed);
+                    new.defaulted |= prior.defaulted;
+                }
+            } else {
+                incoming.obligations.push(prior);
+            }
+        }
+        for prior in old.amendments {
+            if let Some(new) = incoming.amendments.iter_mut().find(|a| a.id == prior.id) {
+                for (actor, support) in prior.votes {
+                    new.votes.entry(actor).or_insert(support);
+                }
+                if prior.status != AmendmentStatus::Proposed {
+                    new.status = prior.status;
+                }
+            } else {
+                incoming.amendments.push(prior);
+            }
+        }
+    }
+    incoming.obligations.sort_by_key(|o| o.id);
+    incoming.amendments.sort_by_key(|a| a.id);
+}
+
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let Some(w) = &s.agreements else {
         return Ok(());
@@ -24,6 +129,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let physical = s.physical.as_ref().ok_or_else(fail)?;
     if s.decisions.is_none()
         || w.last_event >= s.next_event
+        || w.last_observation_event >= s.next_event
         || w.custodians.iter().any(|(inventory, actor)| {
             !s.inventories.contains_key(inventory) || !people.contains(actor)
         })
@@ -33,7 +139,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     let valid_term = |term: &AgreementTerm, parties: &BTreeSet<PersonId>| {
         let [a, b] = term.parties();
-        if a == b || !parties.contains(&a) || !parties.contains(&b) || term.amount() == 0 {
+        if a == b || !parties.contains(&a) || !parties.contains(&b) {
             return false;
         }
         match term {
@@ -97,6 +203,17 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             a.status,
             AgreementStatus::Active | AgreementStatus::Fulfilled | AgreementStatus::Breached
         );
+        if a.terms.iter().enumerate().any(|(index, term)| {
+            term.amount() == 0
+                && (!active
+                    || !w.amendments.values().any(|amendment| {
+                        amendment.agreement == a.id
+                            && amendment.status == AmendmentStatus::Adopted
+                            && amendment.replacements.get(&(index as u16)) == Some(term)
+                    }))
+        }) {
+            return Err(fail());
+        }
         if (active && (a.obligations.len() != a.terms.len() || a.accepted != a.parties))
             || (!active && !a.obligations.is_empty())
         {
@@ -139,6 +256,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         if *id != o.id
             || id.0 >= s.next_id
             || o.performed > o.term.amount()
+            || o.term.amount() == 0 && o.defaulted
             || (o.defaulted && !o.term.deadline().is_some_and(|d| d <= s.time))
         {
             return Err(fail());
@@ -190,7 +308,132 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
+    for (actor, known) in &w.knowledge {
+        if !people.contains(actor) {
+            return Err(fail());
+        }
+        for (id, view) in known {
+            if *id != view.id || !valid_knowledge(s, view) {
+                return Err(fail());
+            }
+        }
+    }
+    for body in physical.actors.values() {
+        if let Activity::ReportAgreement { ref snapshot, .. } = body.activity
+            && !valid_knowledge(s, snapshot)
+        {
+            return Err(fail());
+        }
+    }
     Ok(())
+}
+
+fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
+    let Some(world) = &state.agreements else {
+        return false;
+    };
+    let Some(actual) = world.agreements.get(&view.id) else {
+        return false;
+    };
+    let exists = |actor| state.people.iter().any(|person| person.id == actor);
+    let source_valid = |source: &Option<KnowledgeSource>| {
+        source.as_ref().is_none_or(|source| match source {
+            KnowledgeSource::Observed(actor) | KnowledgeSource::Reported(actor) => exists(*actor),
+            KnowledgeSource::Recorded(_) => false,
+        })
+    };
+    if view.parties != actual.parties
+        || view.proposer != actual.proposer
+        || !view.accepted.is_subset(&view.parties)
+        || view.terms.is_empty()
+        || view.terms.len() > 16
+        || view.revision > actual.revision
+        || view.observed_at > view.learned_at
+        || view.learned_at > state.time
+        || !source_valid(&view.source)
+    {
+        return false;
+    }
+    let valid_term = |term: &AgreementTerm| {
+        let [a, b] = term.parties();
+        if a == b || !view.parties.contains(&a) || !view.parties.contains(&b) {
+            return false;
+        }
+        match term {
+            AgreementTerm::Delivery {
+                source,
+                destination,
+                ..
+            } => {
+                source != destination
+                    && state.inventories.contains_key(source)
+                    && state.inventories.contains_key(destination)
+            }
+            AgreementTerm::Labor { site, .. } => {
+                state.physical.as_ref().unwrap().sites.contains_key(site)
+            }
+            AgreementTerm::ConstructionLabor { project, .. } => state
+                .projects
+                .as_ref()
+                .is_some_and(|w| w.projects.contains_key(project)),
+            AgreementTerm::Access { inventory, .. } => state.inventories.contains_key(inventory),
+        }
+    };
+    if view.terms.iter().any(|term| !valid_term(term)) {
+        return false;
+    }
+    let mut obligations = BTreeSet::new();
+    for obligation in &view.obligations {
+        if !obligations.insert(obligation.id)
+            || !world
+                .obligations
+                .get(&obligation.id)
+                .is_some_and(|o| o.agreement == view.id)
+            || !valid_term(&obligation.term)
+            || obligation.performed > obligation.term.amount()
+            || obligation.observed_at > obligation.learned_at
+            || obligation.learned_at > state.time
+            || !source_valid(&obligation.source)
+            || obligation.defaulted
+                && !obligation
+                    .term
+                    .deadline()
+                    .is_some_and(|at| at <= obligation.observed_at)
+            || obligation
+                .cargo
+                .iter()
+                .any(|(id, qty)| !state.inventories.contains_key(id) || *qty == 0)
+            || obligation
+                .cargo
+                .values()
+                .try_fold(0_u64, |sum, qty| sum.checked_add(*qty))
+                .is_none_or(|sum| sum > obligation.term.amount() - obligation.performed)
+        {
+            return false;
+        }
+    }
+    let mut amendments = BTreeSet::new();
+    for proposal in &view.amendments {
+        if !amendments.insert(proposal.id)
+            || !world
+                .amendments
+                .get(&proposal.id)
+                .is_some_and(|a| a.agreement == view.id)
+            || proposal.base_revision > view.revision
+            || proposal.replacements.is_empty()
+            || proposal
+                .replacements
+                .iter()
+                .any(|(index, term)| *index as usize >= view.terms.len() || !valid_term(term))
+            || proposal
+                .votes
+                .keys()
+                .any(|actor| !view.parties.contains(actor))
+        {
+            return false;
+        }
+    }
+    true
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Obligation {
@@ -222,6 +465,10 @@ pub struct World {
     pub last_event: u64,
     pub next_search: BTreeMap<PersonId, SimTime>,
     pub pending_work: BTreeMap<ObligationId, u64>,
+    #[serde(default)]
+    pub knowledge: BTreeMap<PersonId, BTreeMap<AgreementId, AgreementView>>,
+    #[serde(default)]
+    pub last_observation_event: u64,
 }
 
 impl Simulation {
@@ -263,6 +510,8 @@ impl Simulation {
             last_event: sim.state.next_event - 1,
             next_search: BTreeMap::new(),
             pending_work: BTreeMap::new(),
+            knowledge: BTreeMap::new(),
+            last_observation_event: sim.state.next_event - 1,
         });
         Ok(sim)
     }
@@ -272,45 +521,595 @@ impl Simulation {
             return Vec::new();
         };
         world
+            .knowledge
+            .get(&actor)
+            .into_iter()
+            .flat_map(|known| known.values())
+            .take(64)
+            .cloned()
+            .collect()
+    }
+
+    fn actual_agreement_snapshot(
+        &self,
+        actor: PersonId,
+        agreement: AgreementId,
+    ) -> Option<AgreementView> {
+        let world = self.state.agreements.as_ref()?;
+        let a = world.agreements.get(&agreement)?;
+        Some(AgreementView {
+            id: a.id,
+            proposer: a.proposer,
+            parties: a.parties.clone(),
+            accepted: a.accepted.clone(),
+            status: a.status,
+            terms: a.terms.clone(),
+            obligations: a
+                .obligations
+                .iter()
+                .map(|id| {
+                    let o = &world.obligations[id];
+                    ObligationView {
+                        id: *id,
+                        term: o.term.clone(),
+                        performed: o.performed,
+                        defaulted: o.defaulted,
+                        cargo: if o.term.parties()[0] == actor {
+                            o.cargo.clone()
+                        } else {
+                            BTreeMap::new()
+                        },
+                        observed_at: self.state.time,
+                        learned_at: self.state.time,
+                        source: Some(KnowledgeSource::Observed(actor)),
+                    }
+                })
+                .collect(),
+            procedure: a.procedure.clone(),
+            amendments: world
+                .amendments
+                .values()
+                .filter(|m| m.agreement == a.id)
+                .map(|m| AmendmentView {
+                    id: m.id,
+                    proposer: m.proposer,
+                    replacements: m.replacements.clone(),
+                    votes: m.votes.clone(),
+                    status: m.status,
+                    base_revision: m.base_revision,
+                })
+                .collect(),
+            revision: a.revision,
+            observed_at: self.state.time,
+            learned_at: self.state.time,
+            source: Some(KnowledgeSource::Observed(actor)),
+        })
+    }
+
+    /// A genuine notice discloses declared terms, not remote warehouse facts.
+    pub(crate) fn notice_agreement(&mut self, actor: PersonId, agreement: AgreementId) {
+        let Some(mut view) = self.actual_agreement_snapshot(actor, agreement) else {
+            return;
+        };
+        let old = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .knowledge
+            .get(&actor)
+            .and_then(|known| known.get(&agreement))
+            .cloned();
+        view.amendments = old
+            .as_ref()
+            .map_or_else(Vec::new, |old| old.amendments.clone());
+        for amendment in &mut view.amendments {
+            if amendment.status == AmendmentStatus::Proposed
+                && amendment.base_revision < view.revision
+            {
+                amendment.status = AmendmentStatus::Rejected;
+            }
+        }
+        for obligation in &mut view.obligations {
+            let prior = old
+                .as_ref()
+                .and_then(|old| old.obligations.iter().find(|o| o.id == obligation.id));
+            if let Some(prior) = prior {
+                obligation.performed = if same_duty(&prior.term, &obligation.term) {
+                    prior.performed.min(obligation.term.amount())
+                } else if matches!(obligation.term, AgreementTerm::Access { .. }) {
+                    1
+                } else {
+                    0
+                };
+                obligation.defaulted = if prior.term == obligation.term {
+                    prior.defaulted
+                } else {
+                    obligation.performed < obligation.term.amount()
+                        && obligation
+                            .term
+                            .deadline()
+                            .is_some_and(|d| d <= self.state.time)
+                        && obligation.term.parties()[0] == actor
+                };
+                obligation.cargo = if same_duty(&prior.term, &obligation.term) {
+                    prior.cargo.clone()
+                } else {
+                    BTreeMap::new()
+                };
+                let mut remaining = obligation.term.amount() - obligation.performed;
+                for quantity in obligation.cargo.values_mut() {
+                    *quantity = (*quantity).min(remaining);
+                    remaining -= *quantity;
+                }
+                obligation.cargo.retain(|_, quantity| *quantity > 0);
+                obligation.observed_at = prior.observed_at;
+                obligation.learned_at = prior.learned_at;
+                obligation.source = prior.source.clone();
+                if obligation.defaulted && prior.term != obligation.term {
+                    obligation.observed_at = self.state.time;
+                    obligation.learned_at = self.state.time;
+                    obligation.source = Some(KnowledgeSource::Observed(actor));
+                }
+            } else {
+                obligation.performed = if matches!(obligation.term, AgreementTerm::Access { .. }) {
+                    obligation.performed
+                } else {
+                    0
+                };
+                obligation.defaulted = false;
+                obligation.cargo.clear();
+            }
+        }
+        if matches!(
+            view.status,
+            AgreementStatus::Active | AgreementStatus::Fulfilled | AgreementStatus::Breached
+        ) {
+            view.status = AgreementStatus::Active;
+        }
+        refresh_known_status(&mut view);
+        self.store_agreement_knowledge(actor, view);
+    }
+
+    fn store_agreement_knowledge(&mut self, actor: PersonId, view: AgreementView) {
+        let old = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .knowledge
+            .get(&actor)
+            .and_then(|known| known.get(&view.id));
+        let failures: Vec<_> = view
+            .obligations
+            .iter()
+            .filter(|o| {
+                o.defaulted
+                    && o.term.parties()[1] == actor
+                    && !old.is_some_and(|known| {
+                        known
+                            .obligations
+                            .iter()
+                            .any(|prior| prior.id == o.id && prior.defaulted)
+                    })
+            })
+            .map(|o| o.term.parties()[0])
+            .collect();
+        self.state
+            .agreements
+            .as_mut()
+            .unwrap()
+            .knowledge
+            .entry(actor)
+            .or_default()
+            .insert(view.id, view);
+        if let Some(mind) = self
+            .state
+            .decisions
+            .as_mut()
+            .and_then(|world| world.minds.get_mut(&actor))
+        {
+            for debtor in failures {
+                let loss = i32::from(mind.personality.honesty) / 100;
+                let relationship =
+                    mind.relationships
+                        .entry(debtor)
+                        .or_insert(decisions::Relationship {
+                            trust: 0,
+                            affection: 0,
+                        });
+                relationship.trust = (relationship.trust - loss).max(-1_000);
+            }
+        }
+    }
+
+    fn local_agreement_notice(
+        &mut self,
+        agreement: AgreementId,
+        speaker: PersonId,
+        amendment: Option<AmendmentId>,
+    ) {
+        let Some(area) = self.agreement_actor_area(speaker).ok() else {
+            return;
+        };
+        let parties = self.state.agreements.as_ref().unwrap().agreements[&agreement]
+            .parties
+            .clone();
+        for actor in parties
+            .into_iter()
+            .filter(|actor| self.agreement_actor_area(*actor).ok() == Some(area))
+            .collect::<Vec<_>>()
+        {
+            self.notice_agreement(actor, agreement);
+            if let Some(amendment) = amendment {
+                let Some(proposal) = self
+                    .state
+                    .agreements
+                    .as_ref()
+                    .unwrap()
+                    .amendments
+                    .get(&amendment)
+                else {
+                    continue;
+                };
+                let learned = AmendmentView {
+                    id: proposal.id,
+                    proposer: proposal.proposer,
+                    replacements: proposal.replacements.clone(),
+                    votes: proposal.votes.clone(),
+                    status: proposal.status,
+                    base_revision: proposal.base_revision,
+                };
+                let known = self
+                    .state
+                    .agreements
+                    .as_mut()
+                    .unwrap()
+                    .knowledge
+                    .get_mut(&actor)
+                    .unwrap()
+                    .get_mut(&agreement)
+                    .unwrap();
+                if let Some(old) = known.amendments.iter_mut().find(|old| old.id == amendment) {
+                    *old = learned;
+                } else {
+                    known.amendments.push(learned);
+                    known.amendments.sort_by_key(|a| a.id);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn observe_agreement_events(&mut self) {
+        let Some(world) = &self.state.agreements else {
+            return;
+        };
+        let cursor = world.last_observation_event;
+        let events: Vec<_> = self
+            .state
+            .events
+            .iter()
+            .filter(|event| event.id.0 > cursor)
+            .cloned()
+            .collect();
+        for event in events {
+            match event.kind {
+                EventKind::AgreementProposed {
+                    agreement,
+                    proposer,
+                } if event.time == self.state.time => {
+                    self.local_agreement_notice(agreement, proposer, None);
+                }
+                EventKind::AgreementActivated { agreement } if event.time == self.state.time => {
+                    let proposer =
+                        self.state.agreements.as_ref().unwrap().agreements[&agreement].proposer;
+                    self.local_agreement_notice(agreement, proposer, None);
+                }
+                EventKind::AgreementRejected { agreement, actor }
+                    if event.time == self.state.time =>
+                {
+                    self.local_agreement_notice(agreement, actor, None);
+                }
+                EventKind::ObligationPerformed {
+                    obligation, actor, ..
+                } => {
+                    self.observe_obligation_fact(obligation, actor, event.time);
+                }
+                EventKind::ObligationDefaulted { obligation } => {
+                    let actor = self.state.agreements.as_ref().unwrap().obligations[&obligation]
+                        .term
+                        .parties()[0];
+                    self.observe_obligation_fact(obligation, actor, event.time);
+                }
+                _ => {}
+            }
+        }
+        self.state
+            .agreements
+            .as_mut()
+            .unwrap()
+            .last_observation_event = self.state.next_event - 1;
+        // A person knows the cargo and work they themselves actually performed.
+        // This does not reveal amended duties they have not yet been told about.
+        let actors: Vec<_> = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .knowledge
+            .keys()
+            .copied()
+            .collect();
+        for actor in actors {
+            if !self.state.physical.as_ref().unwrap().actors[&actor]
+                .vitals
+                .alive
+                || self.state.physical.as_ref().unwrap().actors[&actor]
+                    .vitals
+                    .health
+                    == 0
+            {
+                continue;
+            }
+            let mut known = self.agreement_view_unbounded(actor);
+            for view in &mut known {
+                for fact in &mut view.obligations {
+                    if fact.term.parties()[0] != actor {
+                        continue;
+                    }
+                    if let Some(actual) = self
+                        .state
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .obligations
+                        .get(&fact.id)
+                        && actual.term == fact.term
+                        && (fact.performed != actual.performed
+                            || fact.defaulted != actual.defaulted
+                            || fact.cargo != actual.cargo)
+                    {
+                        fact.performed = actual.performed;
+                        fact.defaulted = actual.defaulted;
+                        fact.cargo = actual.cargo.clone();
+                        fact.observed_at = self.state.time;
+                        fact.learned_at = self.state.time;
+                        fact.source = Some(KnowledgeSource::Observed(actor));
+                    }
+                }
+                refresh_known_status(view);
+                self.store_agreement_knowledge(actor, view.clone());
+            }
+        }
+    }
+
+    fn agreement_view_unbounded(&self, actor: PersonId) -> Vec<AgreementView> {
+        self.state
+            .agreements
+            .as_ref()
+            .and_then(|world| world.knowledge.get(&actor))
+            .map_or_else(Vec::new, |known| known.values().cloned().collect())
+    }
+
+    fn observe_obligation_fact(
+        &mut self,
+        obligation: ObligationId,
+        performer: PersonId,
+        at: SimTime,
+    ) {
+        let Some(actual) = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .obligations
+            .get(&obligation)
+            .cloned()
+        else {
+            return;
+        };
+        let area = self.agreement_actor_area(performer).ok();
+        let observers: Vec<_> = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .knowledge
+            .iter()
+            .filter_map(|(actor, known)| {
+                known
+                    .get(&actual.agreement)
+                    .is_some_and(|view| view.obligations.iter().any(|fact| fact.id == obligation))
+                    .then_some(*actor)
+            })
+            .filter(|actor| {
+                self.state.physical.as_ref().unwrap().actors[actor]
+                    .vitals
+                    .alive
+                    && self.state.physical.as_ref().unwrap().actors[actor]
+                        .vitals
+                        .health
+                        > 0
+                    && (*actor == performer
+                        || at == self.state.time
+                            && area.is_some()
+                            && self.agreement_actor_area(*actor).ok() == area)
+            })
+            .collect();
+        for actor in observers {
+            let mut view = self.state.agreements.as_ref().unwrap().knowledge[&actor]
+                [&actual.agreement]
+                .clone();
+            let fact = view
+                .obligations
+                .iter_mut()
+                .find(|fact| fact.id == obligation)
+                .unwrap();
+            if fact.term != actual.term {
+                continue;
+            }
+            fact.performed = actual.performed;
+            fact.defaulted = actual.defaulted;
+            fact.cargo = if actual.term.parties()[0] == actor {
+                actual.cargo.clone()
+            } else {
+                fact.cargo.clone()
+            };
+            fact.observed_at = at;
+            fact.learned_at = self.state.time;
+            fact.source = Some(KnowledgeSource::Observed(actor));
+            refresh_known_status(&mut view);
+            self.store_agreement_knowledge(actor, view);
+        }
+    }
+
+    pub(crate) fn migrate_legacy_agreement_knowledge(&mut self) {
+        let Some(world) = &self.state.agreements else {
+            return;
+        };
+        let entries: Vec<_> = world
             .agreements
             .values()
-            .filter(|a| a.parties.contains(&actor))
-            .take(64)
-            .map(|a| AgreementView {
-                id: a.id,
-                proposer: a.proposer,
-                parties: a.parties.clone(),
-                accepted: a.accepted.clone(),
-                status: a.status,
-                terms: a.terms.clone(),
-                obligations: a
-                    .obligations
-                    .iter()
-                    .map(|id| {
-                        let o = &world.obligations[id];
-                        ObligationView {
-                            id: *id,
-                            term: o.term.clone(),
-                            performed: o.performed,
-                            defaulted: o.defaulted,
-                        }
-                    })
-                    .collect(),
-                procedure: a.procedure.clone(),
-                amendments: world
-                    .amendments
-                    .values()
-                    .filter(|m| m.agreement == a.id)
-                    .map(|m| AmendmentView {
-                        id: m.id,
-                        proposer: m.proposer,
-                        replacements: m.replacements.clone(),
-                        votes: m.votes.clone(),
-                        status: m.status,
-                    })
-                    .collect(),
-            })
-            .collect()
+            .flat_map(|agreement| agreement.parties.iter().map(|actor| (*actor, agreement.id)))
+            .collect();
+        for (actor, agreement) in entries {
+            if let Some(view) = self.actual_agreement_snapshot(actor, agreement) {
+                self.state
+                    .agreements
+                    .as_mut()
+                    .unwrap()
+                    .knowledge
+                    .entry(actor)
+                    .or_default()
+                    .insert(agreement, view);
+            }
+        }
+        self.state
+            .agreements
+            .as_mut()
+            .unwrap()
+            .last_observation_event = self.state.next_event - 1;
+    }
+
+    pub(crate) fn start_agreement_report(
+        &mut self,
+        sender: PersonId,
+        recipient: PersonId,
+        agreement: AgreementId,
+    ) -> Result<(), Error> {
+        let area = self.agreement_actor_area(sender)?;
+        if sender == recipient
+            || self.agreement_actor_area(recipient)? != area
+            || self.care_index.contains_key(&sender)
+            || !matches!(
+                self.state.physical.as_ref().unwrap().actors[&recipient].activity,
+                Activity::Idle | Activity::Rest
+            )
+        {
+            return Err(Error::Unavailable);
+        }
+        let snapshot = self
+            .state
+            .agreements
+            .as_ref()
+            .and_then(|world| world.knowledge.get(&sender))
+            .and_then(|known| known.get(&agreement))
+            .cloned()
+            .ok_or(Error::Unavailable)?;
+        let completes = SimTime(
+            self.state
+                .time
+                .0
+                .checked_add(MINUTE.0)
+                .ok_or(Error::Overflow)?,
+        );
+        self.ensure_event_capacity(1)?;
+        self.interrupt_physical(sender);
+        self.state
+            .physical
+            .as_mut()
+            .unwrap()
+            .actors
+            .get_mut(&sender)
+            .unwrap()
+            .activity = Activity::ReportAgreement {
+            recipient,
+            snapshot: Box::new(snapshot),
+            completes,
+        };
+        self.state
+            .due
+            .entry(completes)
+            .or_default()
+            .push(Due::Physical(sender));
+        self.revision += 1;
+        Ok(())
+    }
+
+    pub(crate) fn complete_agreement_report(&mut self, sender: PersonId) {
+        let Activity::ReportAgreement {
+            recipient,
+            snapshot,
+            ..
+        } = self.state.physical.as_ref().unwrap().actors[&sender]
+            .activity
+            .clone()
+        else {
+            return;
+        };
+        if self.agreement_actor_area(sender).ok() == self.agreement_actor_area(recipient).ok()
+            && self.agreement_actor_area(sender).is_ok()
+            && matches!(
+                self.state.physical.as_ref().unwrap().actors[&recipient].activity,
+                Activity::Idle | Activity::Rest
+            )
+        {
+            let agreement = snapshot.id;
+            self.receive_agreement_report(sender, recipient, *snapshot);
+            self.emit(EventKind::AgreementReported {
+                sender,
+                recipient,
+                agreement,
+            });
+        } else {
+            self.emit(EventKind::Interrupted { actor: sender });
+        }
+        self.state
+            .physical
+            .as_mut()
+            .unwrap()
+            .actors
+            .get_mut(&sender)
+            .unwrap()
+            .activity = Activity::Idle;
+    }
+
+    fn receive_agreement_report(
+        &mut self,
+        sender: PersonId,
+        recipient: PersonId,
+        mut incoming: AgreementView,
+    ) {
+        incoming.learned_at = self.state.time;
+        incoming.source = Some(KnowledgeSource::Reported(sender));
+        for obligation in &mut incoming.obligations {
+            obligation.learned_at = self.state.time;
+            obligation.source = Some(KnowledgeSource::Reported(sender));
+        }
+        if let Some(old) = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .knowledge
+            .get(&recipient)
+            .and_then(|known| known.get(&incoming.id))
+            .cloned()
+        {
+            merge_agreement_knowledge(old, &mut incoming);
+        }
+        refresh_known_status(&mut incoming);
+        self.store_agreement_knowledge(recipient, incoming);
     }
 
     pub(crate) fn agreement_accepts_delivery(
@@ -355,16 +1154,16 @@ impl Simulation {
     }
 
     pub(crate) fn available_agreement_commands(&self, actor: PersonId) -> Vec<Command> {
-        let Some(w) = &self.state.agreements else {
+        let Some(_world) = &self.state.agreements else {
             return Vec::new();
         };
         let Ok(area) = self.agreement_actor_area(actor) else {
             return Vec::new();
         };
         let mut commands = Vec::new();
-        for a in w
-            .agreements
-            .values()
+        let known = self.agreement_view(actor);
+        for a in known
+            .iter()
             .filter(|a| a.parties.contains(&actor) && a.status == AgreementStatus::Proposed)
             .take(32)
         {
@@ -381,36 +1180,30 @@ impl Simulation {
                 });
             }
             if !a.accepted.contains(&actor)
-                && self.validate_terms(&a.parties, &a.terms, true).is_ok()
+                && a.terms.iter().all(|term| {
+                    !term
+                        .deadline()
+                        .is_some_and(|deadline| deadline <= self.state.time)
+                })
             {
                 commands.push(Command::Agreement {
                     action: AgreementAction::Accept { agreement: a.id },
                 });
             }
         }
-        for m in w
-            .amendments
-            .values()
-            .filter(|m| {
-                m.status == AmendmentStatus::Proposed
-                    && w.agreements[&m.agreement].parties.contains(&actor)
-            })
+        for (a, m) in known
+            .iter()
+            .filter(|a| a.parties.contains(&actor))
+            .flat_map(|a| a.amendments.iter().map(move |m| (a, m)))
+            .filter(|(_, m)| m.status == AmendmentStatus::Proposed)
             .take(32)
         {
-            let a = &w.agreements[&m.agreement];
             let Some(p) = &a.procedure else { continue };
             if m.base_revision != a.revision
                 || m.votes.contains_key(&actor)
                 || self.agreement_actor_area(m.proposer).ok() != Some(area)
                 || (!p.approvers.contains(&actor)
                     && !p.term_approvers.values().any(|ids| ids.contains(&actor)))
-                || self
-                    .validate_terms(
-                        &a.parties,
-                        &m.replacements.values().cloned().collect::<Vec<_>>(),
-                        false,
-                    )
-                    .is_err()
             {
                 continue;
             }
@@ -448,6 +1241,12 @@ impl Simulation {
         self.reserve_agreement_ids(0)?;
         let world = self.state.agreements.as_ref().ok_or(Error::Unavailable)?;
         match action {
+            AgreementAction::Report {
+                agreement,
+                recipient,
+            } => {
+                return self.start_agreement_report(actor, *recipient, *agreement);
+            }
             AgreementAction::Propose {
                 parties,
                 terms,
@@ -643,6 +1442,42 @@ impl Simulation {
                 self.resolve_amendment(*amendment)?;
             }
         }
+        let notice = match action {
+            AgreementAction::Propose { .. } => self
+                .state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .agreements
+                .keys()
+                .next_back()
+                .copied()
+                .map(|agreement| (agreement, None)),
+            AgreementAction::Counteroffer { agreement, .. }
+            | AgreementAction::Accept { agreement }
+            | AgreementAction::Reject { agreement }
+            | AgreementAction::Withdraw { agreement } => Some((*agreement, None)),
+            AgreementAction::Amend { agreement, .. } => Some((
+                *agreement,
+                self.state
+                    .agreements
+                    .as_ref()
+                    .unwrap()
+                    .amendments
+                    .keys()
+                    .next_back()
+                    .copied(),
+            )),
+            AgreementAction::Vote { amendment, .. } => Some((
+                self.state.agreements.as_ref().unwrap().amendments[amendment].agreement,
+                Some(*amendment),
+            )),
+            AgreementAction::Report { .. } => None,
+        };
+        if let Some((agreement, amendment)) = notice {
+            self.local_agreement_notice(agreement, actor, amendment);
+        }
+        self.observe_agreement_events();
         Ok(())
     }
 
@@ -693,7 +1528,14 @@ impl Simulation {
             .physical
             .as_ref()
             .is_some_and(|w| w.actors[&actor].vitals.alive);
-        if !alive || !self.independent(actor) || self.combat_restricts(actor) {
+        if !alive
+            || !self.independent(actor)
+            || self.in_combat(actor)
+            || self.state.physical.as_ref().unwrap().actors[&actor]
+                .vitals
+                .health
+                == 0
+        {
             return Err(Error::Unavailable);
         }
         match p.location {
@@ -748,7 +1590,7 @@ impl Simulation {
             if a == b
                 || !parties.contains(&a)
                 || !parties.contains(&b)
-                || term.amount() == 0
+                || future && term.amount() == 0
                 || (future && term.deadline().is_some_and(|d| d <= self.state.time))
             {
                 return Err(Error::Unavailable);
@@ -1321,16 +2163,15 @@ impl Simulation {
             return Ok(());
         };
         let mut answers = Vec::new();
-        for a in world
-            .agreements
-            .values()
-            .filter(|a| a.status == AgreementStatus::Proposed)
-        {
-            for actor in a
-                .parties
-                .iter()
-                .filter(|id| **id != self.state.ruler && !a.accepted.contains(id))
-            {
+        for (actor, known) in &world.knowledge {
+            if *actor == self.state.ruler {
+                continue;
+            }
+            for a in known.values().filter(|a| {
+                a.status == AgreementStatus::Proposed
+                    && a.parties.contains(actor)
+                    && !a.accepted.contains(actor)
+            }) {
                 if self.agreement_actor_area(*actor).ok()
                     != self.agreement_actor_area(a.proposer).ok()
                 {
@@ -1381,48 +2222,40 @@ impl Simulation {
             let _ = self.agreement_command(actor, &answer);
         }
         let mut votes = Vec::new();
-        let world = self.state.agreements.as_ref().unwrap();
-        for m in world
-            .amendments
-            .values()
-            .filter(|m| m.status == AmendmentStatus::Proposed)
-        {
-            let a = &world.agreements[&m.agreement];
-            let p = a.procedure.as_ref().unwrap();
-            let eligible: BTreeSet<_> = p
-                .approvers
-                .iter()
-                .copied()
-                .chain(
-                    p.term_approvers
-                        .values()
-                        .flat_map(|ids| ids.iter().copied()),
-                )
-                .collect();
-            let mut revised = a.terms.clone();
-            for (index, term) in &m.replacements {
-                revised[*index as usize] = term.clone();
+        for (actor, known) in &self.state.agreements.as_ref().unwrap().knowledge {
+            if *actor == self.state.ruler {
+                continue;
             }
-            for actor in eligible
-                .iter()
-                .filter(|actor| **actor != self.state.ruler && !m.votes.contains_key(actor))
-            {
-                if self.agreement_actor_area(*actor).ok()
-                    != self.agreement_actor_area(m.proposer).ok()
-                {
-                    continue;
+            for a in known.values().filter(|a| a.parties.contains(actor)) {
+                let Some(p) = &a.procedure else { continue };
+                for m in a.amendments.iter().filter(|m| {
+                    m.status == AmendmentStatus::Proposed
+                        && m.base_revision == a.revision
+                        && !m.votes.contains_key(actor)
+                }) {
+                    if (!p.approvers.contains(actor)
+                        && !p.term_approvers.values().any(|ids| ids.contains(actor)))
+                        || self.agreement_actor_area(*actor).ok()
+                            != self.agreement_actor_area(m.proposer).ok()
+                    {
+                        continue;
+                    }
+                    let mut revised = a.terms.clone();
+                    for (index, term) in &m.replacements {
+                        revised[*index as usize] = term.clone();
+                    }
+                    let mind = &self.state.decisions.as_ref().unwrap().minds[actor];
+                    let concession = i64::from(mind.personality.empathy.saturating_sub(700)) * 5;
+                    let support = self.agreement_offer_score(*actor, &revised) + concession
+                        >= self.agreement_offer_score(*actor, &a.terms);
+                    votes.push((
+                        *actor,
+                        AgreementAction::Vote {
+                            amendment: m.id,
+                            support,
+                        },
+                    ));
                 }
-                let mind = &self.state.decisions.as_ref().unwrap().minds[actor];
-                let concession = i64::from(mind.personality.empathy.saturating_sub(700)) * 5;
-                let support = self.agreement_offer_score(*actor, &revised) + concession
-                    >= self.agreement_offer_score(*actor, &a.terms);
-                votes.push((
-                    *actor,
-                    AgreementAction::Vote {
-                        amendment: m.id,
-                        support,
-                    },
-                ));
             }
         }
         for (actor, vote) in votes {
@@ -1437,6 +2270,9 @@ impl Simulation {
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
         let mut score = self.project_financing_utility(actor, terms);
         for term in terms {
+            if term.amount() == 0 {
+                continue;
+            }
             match *term {
                 AgreementTerm::Delivery {
                     debtor,
@@ -1520,6 +2356,22 @@ impl Simulation {
                 _ => {}
             }
         }
+        let area = self.agreement_actor_area(actor).ok();
+        let speakers: BTreeSet<_> = terms
+            .iter()
+            .filter(|term| !matches!(term, AgreementTerm::Access { .. }))
+            .map(|term| term.parties())
+            .filter(|[debtor, creditor]| *debtor != actor && *creditor == actor)
+            .map(|[debtor, _]| debtor)
+            .collect();
+        for speaker in speakers {
+            // A relationship does not disclose new symptoms across distance.
+            if area.is_some() && self.agreement_actor_area(speaker).ok() == area {
+                let trust = i64::from(mind.relationships.get(&speaker).map_or(0, |r| r.trust))
+                    .clamp(-1_000, 1_000);
+                score -= self.invocation_social_penalty(speaker) * (1_000 - trust) / 1_000;
+            }
+        }
         score + i64::from(mind.personality.empathy) - 500
     }
 
@@ -1532,12 +2384,14 @@ impl Simulation {
                     .next_search
                     .get(actor)
                     .is_some_and(|time| *time > self.state.time)
-                || world.agreements.values().any(|a| {
-                    a.parties.contains(actor)
-                        && matches!(
-                            a.status,
-                            AgreementStatus::Proposed | AgreementStatus::Active
-                        )
+                || world.knowledge.get(actor).is_some_and(|known| {
+                    known.values().any(|a| {
+                        a.parties.contains(actor)
+                            && matches!(
+                                a.status,
+                                AgreementStatus::Proposed | AgreementStatus::Active
+                            )
+                    })
                 })
             {
                 continue;
@@ -1613,17 +2467,38 @@ impl Simulation {
 
     fn perform_chosen_agreement_tasks(&mut self) {
         let mut intentions = BTreeMap::new();
-        for o in self
+        let obligations: Vec<_> = self
             .state
             .agreements
             .as_ref()
             .unwrap()
-            .obligations
-            .values()
+            .knowledge
+            .iter()
+            .flat_map(|(actor, known)| {
+                known
+                    .values()
+                    .filter(|a| {
+                        matches!(
+                            a.status,
+                            AgreementStatus::Active | AgreementStatus::Breached
+                        )
+                    })
+                    .flat_map(move |a| {
+                        a.obligations
+                            .iter()
+                            .filter(move |o| o.term.parties()[0] == *actor)
+                    })
+            })
             .filter(|o| o.performed < o.term.amount())
-        {
+            .cloned()
+            .collect();
+        for o in &obligations {
             let debtor = o.term.parties()[0];
-            if debtor == self.state.ruler || intentions.contains_key(&debtor) {
+            if debtor == self.state.ruler
+                || intentions.contains_key(&debtor)
+                || self.combat_restricts(debtor)
+                || self.in_combat(debtor)
+            {
                 continue;
             }
             let Ok(area) = self.agreement_actor_area(debtor) else {
@@ -1685,7 +2560,10 @@ impl Simulation {
                         let src = mind.knowledge.get(&source).filter(|k| k.accessible);
                         let carried = self.state.inventories.values().find(|i| {
                             i.location == InventoryLocation::Carried(debtor)
-                                && i.good == self.state.inventories[&source].good
+                                && mind
+                                    .knowledge
+                                    .get(&source)
+                                    .is_some_and(|known| i.good == known.good)
                         });
                         src.zip(carried)
                             .and_then(|(k, carried)| {

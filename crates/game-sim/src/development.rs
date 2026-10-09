@@ -402,7 +402,13 @@ impl Simulation {
                 let world = self.state.development.as_ref().unwrap();
                 let life = &world.lives[&id];
                 let age = self.state.time.0 - life.born.0 + life.initial_age.0;
-                if age >= world.rules.lifespan.0 {
+                if age
+                    >= world
+                        .rules
+                        .lifespan
+                        .0
+                        .saturating_sub(self.invocation_lifespan_loss(id))
+                {
                     self.end_life(id);
                 } else {
                     let stage = if age < world.rules.infancy.0 {
@@ -628,7 +634,13 @@ impl Simulation {
             world.rules.infancy,
             world.rules.adulthood,
             world.rules.elderhood,
-            world.rules.lifespan,
+            SimDuration(
+                world
+                    .rules
+                    .lifespan
+                    .0
+                    .saturating_sub(self.invocation_lifespan_loss(id)),
+            ),
         ]
         .into_iter()
         .find(|t| t.0 > age)
@@ -773,7 +785,15 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                         world.rules.infancy,
                         world.rules.adulthood,
                         world.rules.elderhood,
-                        world.rules.lifespan,
+                        SimDuration(
+                            world.rules.lifespan.0.saturating_sub(
+                                state
+                                    .invocation
+                                    .as_ref()
+                                    .and_then(|w| w.people.get(id))
+                                    .map_or(0, |b| b.lifespan_loss),
+                            ),
+                        ),
                     ]
                     .contains(&SimDuration(age))
                         || !age_deadlines.insert(*id)
@@ -831,7 +851,15 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 LifeStage::Elder
             };
             if person.role != Role::Guardian
-                && (age >= world.rules.lifespan.0 || stage != life.stage)
+                && (age
+                    >= world.rules.lifespan.0.saturating_sub(
+                        state
+                            .invocation
+                            .as_ref()
+                            .and_then(|w| w.people.get(&person.id))
+                            .map_or(0, |b| b.lifespan_loss),
+                    )
+                    || stage != life.stage)
             {
                 return Err(fail());
             }
