@@ -260,6 +260,7 @@ impl Simulation {
             .next_command
             .checked_add(1)
             .ok_or(Error::Overflow)?;
+        self.preflight_agreements()?;
         match &submission.command {
             Command::Engage { target } => {
                 self.debug_start_encounter(vec![(self.state.ruler, 0), (*target, 1)])?;
@@ -274,6 +275,7 @@ impl Simulation {
             }
             _ => return Err(Error::Unavailable),
         }
+        self.reconcile_agreements()?;
         let receipt = CommandReceipt {
             caller_sequence: submission.caller_sequence,
             authoritative_sequence: self.state.next_command,
@@ -712,6 +714,12 @@ impl Simulation {
                         binding,
                     },
                 );
+                self.emit(EventKind::Transferred {
+                    actor,
+                    source,
+                    destination: binding,
+                    quantity: Quantity(1_000),
+                });
                 self.emit(EventKind::Captured {
                     encounter: id,
                     actor,

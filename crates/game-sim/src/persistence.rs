@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 6;
+const SAVE_VERSION: u32 = 7;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, 6, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -69,6 +69,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "combat-fixture"
             | "childhood-fixture"
             | "farming-fixture"
+            | "agreement-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -79,6 +80,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "combat-fixture"
                 | "childhood-fixture"
                 | "farming-fixture"
+                | "agreement-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
@@ -86,6 +88,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         ) != s.development.is_some()
         || (s.scenario.id == "combat-fixture") != s.combat.is_some()
         || (s.scenario.id == "farming-fixture") != s.environment.is_some()
+        || (s.scenario.id == "agreement-fixture") != s.agreements.is_some()
     {
         return Err(fail());
     }
@@ -104,6 +107,19 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if let Some(world) = &s.physical {
         for id in world.sites.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.agreements {
+        for id in world
+            .agreements
+            .keys()
+            .map(|id| id.0)
+            .chain(world.obligations.keys().map(|id| id.0))
+            .chain(world.amendments.keys().map(|id| id.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
@@ -541,6 +557,66 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
+            EventKind::AgreementProposed {
+                agreement,
+                proposer,
+            } => {
+                if !people.contains_key(&proposer)
+                    || !s
+                        .agreements
+                        .as_ref()
+                        .is_some_and(|w| w.agreements.contains_key(&agreement))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::AgreementActivated { agreement }
+            | EventKind::AgreementRejected { agreement, .. } => {
+                if !s
+                    .agreements
+                    .as_ref()
+                    .is_some_and(|w| w.agreements.contains_key(&agreement))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::AgreementAmended {
+                agreement,
+                amendment,
+            } => {
+                if !s.agreements.as_ref().is_some_and(|w| {
+                    w.agreements.contains_key(&agreement)
+                        && w.amendments
+                            .get(&amendment)
+                            .is_some_and(|a| a.agreement == agreement)
+                }) {
+                    return Err(fail());
+                }
+            }
+            EventKind::ObligationPerformed {
+                obligation,
+                actor,
+                quantity,
+            } => {
+                if !people.contains_key(&actor)
+                    || quantity.0 == 0
+                    || !s
+                        .agreements
+                        .as_ref()
+                        .is_some_and(|w| w.obligations.contains_key(&obligation))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ObligationDefaulted { obligation } => {
+                if !s
+                    .agreements
+                    .as_ref()
+                    .is_some_and(|w| w.obligations.contains_key(&obligation))
+                {
+                    return Err(fail());
+                }
+            }
             EventKind::Cultivated { actor, field, .. }
             | EventKind::CropHarvested { actor, field, .. } => {
                 if !people.contains_key(&actor)
@@ -674,6 +750,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
+    agreements::validate(s)?;
     development::validate(s)?;
     combat::validate(s)?;
     Ok(())

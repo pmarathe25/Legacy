@@ -356,3 +356,85 @@ fn seasonal_farming_commands_use_real_time_seed_and_local_field_views() {
     assert!(sim.observe().time.0 >= 6 * 3_600_000);
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
 }
+
+#[test]
+fn agreement_text_commands_record_promises_and_deliver_actual_cargo() {
+    use std::collections::BTreeSet;
+    let execution = Execution::default();
+    let mut sim = Simulation::new("agreement-fixture", 1, execution.clone()).unwrap();
+    let ruler = sim.observe().ruler;
+    let recipient = sim
+        .observe()
+        .nearby_people
+        .iter()
+        .find(|(_, role)| *role == Role::Citizen)
+        .unwrap()
+        .0;
+    let source = sim
+        .observe()
+        .physical
+        .unwrap()
+        .local_stocks
+        .iter()
+        .find(|s| s.good == Good::Food && s.can_access && s.quantity.0 >= 1_000)
+        .unwrap()
+        .id;
+    let cargo = sim
+        .canonical_state()
+        .people
+        .iter()
+        .find(|p| p.id == ruler)
+        .unwrap()
+        .inventory;
+    let destination = sim
+        .canonical_state()
+        .people
+        .iter()
+        .find(|p| p.id == recipient)
+        .unwrap()
+        .inventory;
+    let proposal = AgreementAction::Propose {
+        parties: BTreeSet::from([ruler, recipient]),
+        terms: vec![AgreementTerm::Delivery {
+            debtor: ruler,
+            creditor: recipient,
+            source,
+            destination,
+            quantity: Quantity(1_000),
+            deadline: SimTime(180_000),
+        }],
+        procedure: None,
+    };
+    let stocks = sim.canonical_state().inventories.clone();
+    game_cli::execute(
+        &mut sim,
+        &format!("agreement {}", serde_json::to_string(&proposal).unwrap()),
+        &execution,
+    )
+    .unwrap();
+    assert_eq!(&stocks, &sim.canonical_state().inventories);
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    assert_eq!(view.agreements[0].status, AgreementStatus::Active);
+    game_cli::execute(
+        &mut sim,
+        &format!("load {} {} 1000", source.0, cargo.0),
+        &execution,
+    )
+    .unwrap();
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    game_cli::execute(
+        &mut sim,
+        &format!("load {} {} 1000", cargo.0, destination.0),
+        &execution,
+    )
+    .unwrap();
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    assert_eq!(
+        sim.observe().agreements[0].status,
+        AgreementStatus::Fulfilled
+    );
+    assert_eq!(sim.observe().agreements[0].obligations[0].performed, 1_000);
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}

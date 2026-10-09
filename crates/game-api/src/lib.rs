@@ -1,6 +1,8 @@
 //! Renderer-independent commands and committed observations. Time is in milliseconds;
 //! quantities use 1,000 fixed-point units per whole good.
 use serde::{Deserialize, Serialize};
+pub mod agreements;
+pub use agreements::*;
 
 macro_rules! id {
     ($($name:ident),*) => {$(
@@ -14,6 +16,9 @@ id!(
     InventoryId,
     SiteId,
     ConceptId,
+    AgreementId,
+    AmendmentId,
+    ObligationId,
     PregnancyId,
     EncounterId,
     CombatMapId,
@@ -27,6 +32,9 @@ pub const MINUTE: SimDuration = SimDuration(60_000);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Agreement {
+        action: AgreementAction,
+    },
     Cultivate {
         field: SiteId,
         operation: FarmOperation,
@@ -141,6 +149,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub agreements: Vec<AgreementView>,
     pub environment: Option<EnvironmentView>,
     pub revision: u64,
     pub time: SimTime,
@@ -278,6 +287,29 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    AgreementProposed {
+        agreement: AgreementId,
+        proposer: PersonId,
+    },
+    AgreementActivated {
+        agreement: AgreementId,
+    },
+    AgreementRejected {
+        agreement: AgreementId,
+        actor: PersonId,
+    },
+    AgreementAmended {
+        agreement: AgreementId,
+        amendment: AmendmentId,
+    },
+    ObligationPerformed {
+        obligation: ObligationId,
+        actor: PersonId,
+        quantity: Quantity,
+    },
+    ObligationDefaulted {
+        obligation: ObligationId,
+    },
     Cultivated {
         actor: PersonId,
         field: SiteId,

@@ -1,4 +1,5 @@
 //! Authoritative headless simulation. Debug fixtures are never player scenarios.
+pub mod agreements;
 #[doc(hidden)]
 pub mod benchmark;
 pub mod combat;
@@ -127,6 +128,8 @@ pub struct CanonicalState {
     pub combat: Option<combat::World>,
     #[serde(default)]
     pub environment: Option<environment::World>,
+    #[serde(default)]
+    pub agreements: Option<agreements::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -183,11 +186,19 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "agreement-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "agreement-fixture" {
+            return Self::agreement_fixture(seed, execution);
+        }
         if scenario == "farming-fixture" {
             return Self::farming_fixture(seed, execution);
         }
@@ -241,6 +252,7 @@ impl Simulation {
             development: None,
             combat: None,
             environment: None,
+            agreements: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -551,6 +563,7 @@ impl Simulation {
             }
         }
         available_commands.extend(self.available_cultivation(ruler.id));
+        available_commands.extend(self.available_agreement_commands(ruler.id));
         if self.in_combat(ruler.id) {
             available_commands.clear();
             if let Some(view) = self.tactical_view()
@@ -602,6 +615,7 @@ impl Simulation {
             }
         }
         PlayerView {
+            agreements: self.agreement_view(ruler.id),
             environment: self.environment_view(ruler.id),
             revision: self.revision,
             time: self.state.time,
@@ -858,6 +872,7 @@ impl Simulation {
                 .map(|(t, _)| *t)
                 .unwrap_or(requested)
                 .min(requested);
+            let next = next.min(self.next_agreement_deadline().unwrap_or(next));
             let next = self.environment_boundary(self.physical_boundary(next));
             self.step(next)?;
         }
@@ -939,6 +954,7 @@ impl Simulation {
         }
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
+        self.preflight_agreements()?;
         let event_bound: usize = due
             .iter()
             .map(|d| match d {
@@ -986,6 +1002,21 @@ impl Simulation {
             p.work_remainder = out.remainder;
         }
         self.state.time = next;
+        let actual_work: Vec<_> = self.state.physical.as_ref().map_or_else(Vec::new, |w| {
+            w.actors
+                .iter()
+                .filter_map(|(actor, body)| {
+                    if let Activity::Work { site } = body.activity {
+                        Some((*actor, site))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        });
+        for (actor, site) in actual_work {
+            self.record_agreement_work(actor, site, elapsed);
+        }
         self.commit_environment(environment_output);
         self.state.due.remove(&next);
         for event in due {
@@ -1066,6 +1097,7 @@ impl Simulation {
                 self.complete_development(event);
             }
         }
+        self.reconcile_agreements()?;
         self.learn_from_work();
         if self.state.time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
@@ -1160,7 +1192,8 @@ impl Simulation {
                             w.actors[&i.actor].vitals.alive && w.actors[&i.actor].vitals.health > 0
                         })
                         && source.access.contains(&i.actor)
-                        && destination.access.contains(&i.actor)
+                        && (destination.access.contains(&i.actor)
+                            || self.agreement_accepts_delivery(i.actor, i.destination, i.quantity))
                         && area.is_some()
                         && area == self.inventory_area(source)
                         && area == self.inventory_area(destination),

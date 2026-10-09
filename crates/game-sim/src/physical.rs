@@ -256,6 +256,12 @@ impl Simulation {
         actor: PersonId,
         command: Command,
     ) -> Result<(), Error> {
+        self.preflight_agreements()?;
+        if let Command::Agreement { ref action } = command {
+            self.agreement_command(actor, action)?;
+            self.revision += 1;
+            return Ok(());
+        }
         if let Command::Cultivate { field, operation } = command {
             return self.start_cultivation(actor, field, operation);
         }
@@ -535,7 +541,8 @@ impl Simulation {
                     || (source_inventory.location != InventoryLocation::Carried(actor)
                         && destination_inventory.location != InventoryLocation::Carried(actor))
                     || !self.can_use(actor, source_inventory)
-                    || !self.can_use(actor, destination_inventory)
+                    || !(self.can_use(actor, destination_inventory)
+                        || self.agreement_accepts_delivery(actor, destination, quantity))
                     || self.unreserved_stock(source, actor) < quantity.0
                     || destination_inventory.capacity.0 - destination_inventory.quantity.0
                         < quantity.0
@@ -655,6 +662,7 @@ impl Simulation {
                 .or_default()
                 .push(Due::Physical(actor));
         }
+        self.reconcile_agreements()?;
         self.revision += 1;
         Ok(())
     }

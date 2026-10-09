@@ -336,6 +336,7 @@ impl Simulation {
             return Ok(());
         };
         self.observe_local_facts();
+        self.review_agreements()?;
         self.review_conception()?;
         let world = self.state.decisions.as_ref().unwrap();
         let evaluate =
