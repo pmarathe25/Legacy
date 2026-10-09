@@ -10,25 +10,25 @@ The alien species and its civilization still need names. The exact state of thei
 
 ## The reincarnating ruler
 
-The alien civilization is led by one chosen ruler. When the ruler dies, they are later reincarnated as a new person.
+The alien civilization has a line of reincarnating rulers. A successor is chosen from children born after the previous ruler's death. If no new children are born, there is no new ruler. People can reject or depose an incarnation; belonging to the lineage does not guarantee political power.
 
-Two immortal guardians protect this line of rulers. After each death, they search for the next incarnation, identify them, teach them, and help them take power. Once the new ruler is ready, the guardians serve as their right and left hands.
+Two immortal guardians protect this line of rulers. Their innate connection lets them locate the successor instinctively, but they must still reach them, teach them, and help them take power. The player controls the newborn, can spectate the guardians' journey, and influences their upbringing through interactions and choices. The guardians decide when the ruler is ready to leave mentorship. They are loyal to each ruler and unwaveringly dedicated to finding, mentoring, and assisting the lineage across lifetimes, but can disagree, warn, and outright refuse orders.
 
-Each incarnation is a different person with their own childhood, personality, skills, relationships, and experiences. The ruler can draw on the memories and abilities of earlier lives.
+Each incarnation is a different person with their own childhood, personality, skills, relationships, and experiences. The ruler accesses memories and abilities of earlier lives through active invocation. That access does not automatically make those memories their own, but they can deliberately record information or teach it to others.
 
-In battle, the ruler may call on one or more past lives. Using one life grants access to that person’s skills. Combining several lives can create very powerful effects. This has a cost that still needs to be decided. Possible costs include physical strain, loss of identity, emotional instability, reduced lifespan, or temporary loss of control.
+In battle, the ruler may call on one or more past lives. Using one life grants access to that person's skills. Combining several lives can create very powerful effects. Costs include physical strain, loss of identity, emotional instability, reduced lifespan, and temporary loss of control. Severity grows with duration and simultaneous lives. While the player retains control, the game warns before a new cost and offers dismissal or acceptance. Accepting loss of control commits the player to its warned duration and whatever consequences follow, without an emergency dismissal or protective cost cap. Regular use should be practical; direct permanent invocation penalties are very rare and reserved for very protracted use. Exact effects and thresholds remain to be designed.
 
-The guardians develop differently. They live continuously and change slowly over time. Their abilities are dependable and less costly, but they do not have the ruler’s sudden bursts of power.
+The guardians develop differently. They live continuously and change slowly over time. They do not suffer hunger, but can tire, be injured, or become incapacitated. They always recover with time, regenerating destroyed bodies in place. Imprisonment can still contain them after recovery. Their abilities are dependable and less costly, but they do not have the ruler's sudden bursts of power.
 
 Past lives should also affect government. Former rulers may provide knowledge of old laws, lost crafts, military tactics, diplomacy, or earlier political relationships. Their mistakes and unfinished work may return as problems for later incarnations.
 
 ## Game structure
 
-The game combines two main modes.
+The game begins as an open-ended historical sandbox with two connected modes. The design leaves room for a later overarching story or long-term change affecting the world, such as a dying star; no particular story is selected yet.
 
 ### Realm management
 
-The main interface is a real-time kingdom simulation. The player rules a realm made of provinces. Provinces contain settlements, and settlements contain named areas such as:
+The realm interface follows a real-time society simulation. When the player holds recognized authority, they can govern through its institutions. Provinces are possible administrative divisions rather than a required starting government. Settlements contain named areas such as:
 
 - the town center;
 - nearby farms;
@@ -43,11 +43,13 @@ Areas have travel times between them, but the game does not simulate exact paths
 
 Settlements begin small, with dozens of individually simulated people. Every citizen has a name, personality, skills, needs, relationships, possessions, dreams, goals, and plans.
 
-As the realm grows, the player can appoint mayors and governors. They handle local decisions according to their ability, personality, loyalty, and instructions. The player can still intervene directly when needed.
+As the realm grows, its institutions can establish mayors and governors. A player with the relevant authority can appoint or direct them. They handle local decisions according to their ability, personality, loyalty, and instructions. Intervention still requires authority, communication, and people willing or compelled to act.
 
 ### Party missions
 
-The player directly controls the ruler and gives firm orders to the two guardians. They can be sent on expeditions, into battles, or to handle important local problems.
+The player directly controls the current incarnation except during accepted loss of control. Once the guardians judge the ruler ready, the player can give adult orders, which the guardians may question or refuse. During childhood the player influences their guardians through interactions and choices. The party can undertake expeditions, battles, and important local problems.
+
+Combat is turn-based. A shared round advances a fixed amount of simulation time, regardless of the number of participants. Combat maps are procedurally generated with continuous positions, while the wider world retains named areas and travel links. The same people, resources, and lasting consequences connect both scales.
 
 The ruler and guardians can also perform normal work. They can help construct a building, work on a farm, mine resources, negotiate with citizens, train soldiers, or teach apprentices.
 
@@ -124,7 +126,7 @@ Agreements are only as strong as the institutions that enforce them. A stable re
 
 ## Early progression
 
-The game begins with a fragile settlement.
+The player can choose among multiple starting scenarios or request random selection. Their contents remain to be developed. A fragile settlement provides an early progression path.
 
 The first problems are food, shelter, tools, labor, and basic safety. As the settlement becomes secure, the focus moves toward skilled work, businesses, trade, wealth, social conflict, and government.
 
