@@ -269,3 +269,112 @@ fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() 
             inventory: source
         }));
 }
+
+fn remote_supply(spoils: bool, workers: usize) -> (Simulation, PersonId, InventoryId) {
+    let mut sim = sim(workers);
+    peaceful(&mut sim);
+    let actor = sim.canonical_state().people[3].id;
+    let village_food = sim
+        .canonical_state()
+        .inventories
+        .values()
+        .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
+        .unwrap()
+        .id;
+    let mut data: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+    data["state"]["inventories"][village_food.0.to_string()]["quantity"] = 0.into();
+    let mut sim = Simulation::load(
+        &serde_json::to_vec(&data).unwrap(),
+        Execution {
+            workers,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    let source = sim
+        .debug_add_inventory(
+            Good::Food,
+            InventoryLocation::Area(AreaId(3)),
+            Quantity(1_000),
+            Quantity(10_000),
+            BTreeSet::from([actor]),
+        )
+        .unwrap();
+    sim.debug_set_knowledge(
+        actor,
+        StockKnowledge {
+            inventory: source,
+            area: AreaId(3),
+            good: Good::Food,
+            quantity: Quantity(1_000),
+            accessible: true,
+            observed_at: SimTime(0),
+            learned_at: SimTime(0),
+            source: KnowledgeSource::Reported(sim.canonical_state().ruler),
+        },
+    )
+    .unwrap();
+    if spoils {
+        sim.debug_spoil_at(source, SimTime(400_000)).unwrap();
+    }
+    (sim, actor, source)
+}
+
+#[test]
+fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplies() {
+    let (mut sim, actor, source) = remote_supply(false, 4);
+    sim.advance(SimDuration(300_000)).unwrap();
+    let index = sim
+        .canonical_state()
+        .people
+        .iter()
+        .position(|p| p.id == actor)
+        .unwrap();
+    assert!(matches!(
+        sim.canonical_state().people[index].location,
+        Location::InTransit {
+            arrives: SimTime(480_000),
+            ..
+        }
+    ));
+    sim.advance(SimDuration(240_000)).unwrap();
+    assert_eq!(
+        sim.canonical_state().people[index].location,
+        Location::AtArea(AreaId(3))
+    );
+    assert_eq!(sim.canonical_state().people[index].work_units, 0);
+    assert_eq!(
+        sim.canonical_state().inventories[&source].quantity,
+        Quantity(0)
+    );
+    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Ate { actor: id, source: inventory, .. } if id == actor && inventory == source)));
+}
+
+#[test]
+fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
+    let (mut sim, actor, source) = remote_supply(true, 1);
+    sim.advance(SimDuration(420_000)).unwrap();
+    assert_eq!(
+        sim.canonical_state().inventories[&source].quantity,
+        Quantity(0)
+    );
+    assert_eq!(
+        sim.canonical_state().decisions.as_ref().unwrap().minds[&actor].knowledge[&source].quantity,
+        Quantity(1_000)
+    );
+    let mut loaded = Simulation::load(
+        &sim.save().unwrap(),
+        Execution {
+            workers: 4,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    sim.advance(SimDuration(60_001)).unwrap();
+    loaded.advance(SimDuration(60_001)).unwrap();
+    assert_eq!(sim.canonical_state(), loaded.canonical_state());
+    let mind = &sim.canonical_state().decisions.as_ref().unwrap().minds[&actor];
+    assert_eq!(mind.knowledge[&source].quantity, Quantity(0));
+    assert_eq!(mind.last_failure, Some((SimTime(480_000), source)));
+    assert_eq!(mind.plan, Some(Command::Rest));
+}

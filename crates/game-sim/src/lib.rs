@@ -511,32 +511,61 @@ impl Simulation {
         let Command::Move { destination } = submission.command else {
             unreachable!()
         };
-        if self.state.physical.as_ref().is_some_and(|w| {
-            !w.actors[&self.state.ruler].vitals.alive
-                || w.actors[&self.state.ruler].vitals.health == 0
-        }) {
+        let next = self
+            .state
+            .next_command
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
+        self.start_movement(self.state.ruler, destination)?;
+        let receipt = CommandReceipt {
+            caller_sequence: submission.caller_sequence,
+            authoritative_sequence: self.state.next_command,
+            accepted_at: self.state.time,
+        };
+        self.state.next_command = next;
+        self.state.accepted.insert(
+            submission.caller_sequence,
+            (submission.command, receipt.clone()),
+        );
+        Ok(receipt)
+    }
+
+    /// Scenario control, separate from the player's authority over the ruler.
+    pub fn debug_move_actor(&mut self, actor: PersonId, destination: AreaId) -> Result<(), Error> {
+        self.start_movement(actor, destination)
+    }
+
+    pub(crate) fn start_movement(
+        &mut self,
+        actor: PersonId,
+        destination: AreaId,
+    ) -> Result<(), Error> {
+        let index = *self.person_index.get(&actor).ok_or(Error::Unavailable)?;
+        if !self.independent(actor)
+            || self.state.physical.as_ref().is_some_and(|w| {
+                !w.actors[&actor].vitals.alive || w.actors[&actor].vitals.health == 0
+            })
+        {
             return Err(Error::Unavailable);
         }
         if !self.state.areas.iter().any(|a| a.id == destination) {
             return Err(Error::UnknownArea);
         }
-        let index = self.person_index[&self.state.ruler];
         let origin = match self.state.people[index].location {
             Location::AtArea(a) => a,
             Location::InTransit { to, .. } => to,
         };
-        let path = self.path(origin, destination)?;
+        let path = if let Some(world) = &self.state.decisions {
+            decisions::known_path(&world.minds[&actor].routes, origin, destination)?.0
+        } else {
+            self.path(origin, destination)?
+        };
         if path.is_empty()
             && (matches!(self.state.people[index].location, Location::AtArea(_))
                 || self.state.people[index].route.is_empty())
         {
             return Err(Error::AlreadyThere);
         }
-        let new_sequence = self
-            .state
-            .next_command
-            .checked_add(1)
-            .ok_or(Error::Overflow)?;
         let departure = if matches!(self.state.people[index].location, Location::AtArea(_)) {
             Some(self.departure(origin, path[0])?)
         } else {
@@ -545,23 +574,13 @@ impl Simulation {
         self.ensure_event_capacity(
             usize::from(departure.is_some()) + usize::from(self.state.development.is_some()),
         )?;
-        let receipt = CommandReceipt {
-            caller_sequence: submission.caller_sequence,
-            authoritative_sequence: self.state.next_command,
-            accepted_at: self.state.time,
-        };
-        self.state.next_command = new_sequence;
-        self.interrupt_physical(self.state.ruler);
+        self.interrupt_physical(actor);
         self.state.people[index].route = path;
         if let Some((to, arrives)) = departure {
             self.depart(index, origin, to, arrives);
         }
-        self.state.accepted.insert(
-            submission.caller_sequence,
-            (submission.command, receipt.clone()),
-        );
         self.revision += 1;
-        Ok(receipt)
+        Ok(())
     }
 
     fn path(&self, origin: AreaId, destination: AreaId) -> Result<Vec<AreaId>, Error> {

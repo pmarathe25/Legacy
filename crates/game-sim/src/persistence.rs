@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 2;
+const SAVE_VERSION: u32 = 3;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,15 +29,22 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
-        let save: Save =
+        let mut save: Save =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
         // Version 1 predates development and child observations. Their empty
         // defaults preserve continuation for its three supported fixtures.
         if save.version == 1 && save.state.development.is_some() {
             return Err(Error::InvalidSave("unsupported save version".into()));
+        }
+        if save.version < 3
+            && let Some(world) = &mut save.state.decisions
+        {
+            for mind in world.minds.values_mut() {
+                mind.routes = decisions::fixture_routes(&save.state.areas);
+            }
         }
         validate(&save.state)?;
         Self::from_state(save.state, execution, 0)
@@ -461,6 +468,20 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 .iter()
                 .any(|v| *v > 1_000)
             {
+                return Err(fail());
+            }
+            for (from, links) in &mind.routes {
+                if !areas.contains(from)
+                    || links
+                        .iter()
+                        .any(|(to, duration)| !areas.contains(to) || duration.0 == 0)
+                {
+                    return Err(fail());
+                }
+            }
+            if mind.last_failure.is_some_and(|(time, inventory)| {
+                time > s.time || !s.inventories.contains_key(&inventory)
+            }) {
                 return Err(fail());
             }
             for (id, fact) in &mind.knowledge {

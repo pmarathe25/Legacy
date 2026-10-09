@@ -108,6 +108,10 @@ pub struct ChildSignal {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mind {
     #[serde(default)]
+    pub routes: BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>,
+    #[serde(default)]
+    pub last_failure: Option<(SimTime, InventoryId)>,
+    #[serde(default)]
     pub child_signals: BTreeMap<PersonId, ChildSignal>,
     pub personality: Personality,
     pub dream: Dream,
@@ -150,6 +154,10 @@ impl Simulation {
                 (
                     p.id,
                     Mind {
+                        // These test villagers have an authored map of the three
+                        // fixture areas. Newborns learn routes by observation.
+                        routes: fixture_routes(&sim.state.areas),
+                        last_failure: None,
                         child_signals: BTreeMap::new(),
                         personality: if restful {
                             Personality::restful()
@@ -211,6 +219,17 @@ impl Simulation {
                 .minds
                 .get_mut(&p.id)
                 .unwrap();
+            let actual_routes = self
+                .state
+                .areas
+                .iter()
+                .find(|a| a.id == area)
+                .unwrap()
+                .links
+                .iter()
+                .map(|l| (l.destination, l.duration))
+                .collect();
+            mind.routes.insert(area, actual_routes);
             for id in self
                 .inventory_index
                 .get(&InventoryLocation::Area(area))
@@ -224,6 +243,18 @@ impl Simulation {
                 )
             {
                 let inventory = &self.state.inventories[id];
+                if mind.goal == Goal::Survival
+                    && matches!(mind.plan, Some(Command::Move { destination }) if destination == area)
+                    && mind.knowledge.get(id).is_some_and(|old| {
+                        old.good == Good::Food
+                            && old.quantity.0
+                                >= self.state.physical.as_ref().unwrap().rules.meal_size.0
+                    })
+                    && inventory.quantity.0
+                        < self.state.physical.as_ref().unwrap().rules.meal_size.0
+                {
+                    mind.last_failure = Some((self.state.time, *id));
+                }
                 mind.knowledge.insert(
                     *id,
                     StockKnowledge {
@@ -320,7 +351,11 @@ impl Simulation {
             let Some(command) = i.command else {
                 continue;
             };
-            let accepted = self.debug_physical_command(i.actor, command.clone());
+            let accepted = if let Command::Move { destination } = command {
+                self.start_movement(i.actor, destination)
+            } else {
+                self.debug_physical_command(i.actor, command.clone())
+            };
             let mind = self
                 .state
                 .decisions
@@ -392,18 +427,38 @@ impl Simulation {
         };
         if !p.hunger_exempt && urgent {
             for fact in mind.knowledge.values().filter(|f| {
-                f.area == area
-                    && f.good == Good::Food
-                    && f.accessible
-                    && f.quantity >= physical.rules.meal_size
+                f.good == Good::Food && f.accessible && f.quantity >= physical.rules.meal_size
             }) {
+                let (command, travel) = if fact.area == area {
+                    (
+                        Command::Eat {
+                            source: fact.inventory,
+                        },
+                        0,
+                    )
+                } else if let Ok((_, duration)) = known_path(&mind.routes, area, fact.area) {
+                    (
+                        Command::Move {
+                            destination: fact.area,
+                        },
+                        duration.0,
+                    )
+                } else {
+                    continue;
+                };
+                let survival_time = physical
+                    .rules
+                    .hunger_harm
+                    .saturating_sub(actor.vitals.hunger)
+                    .saturating_add(actor.vitals.health);
+                if travel.saturating_add(physical.rules.eating_time.0) > survival_time {
+                    continue;
+                }
                 add(
-                    Command::Eat {
-                        source: fact.inventory,
-                    },
+                    command,
                     Goal::Survival,
                     actor.vitals.hunger as i64 / 100 + 10_000,
-                    0,
+                    -((travel / 1_000).min(i64::MAX as u64) as i64),
                     0,
                 );
             }
@@ -491,8 +546,9 @@ impl Simulation {
                 std::cmp::Reverse(explanation.total),
                 match command {
                     Command::Eat { source } => (0, source.0),
-                    Command::Work { site } => (1, site.0),
-                    _ => (2, 0),
+                    Command::Move { destination } => (1, destination.0),
+                    Command::Work { site } => (2, site.0),
+                    _ => (3, 0),
                 },
             )
         });
@@ -626,4 +682,46 @@ impl Simulation {
         });
         true
     }
+}
+
+pub(crate) fn fixture_routes(areas: &[Area]) -> BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>> {
+    areas
+        .iter()
+        .map(|a| {
+            (
+                a.id,
+                a.links
+                    .iter()
+                    .map(|l| (l.destination, l.duration))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn known_path(
+    graph: &BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>,
+    origin: AreaId,
+    destination: AreaId,
+) -> Result<(Vec<AreaId>, SimDuration), Error> {
+    let mut frontier = BTreeSet::from([(0_u64, Vec::<AreaId>::new(), origin)]);
+    let mut visited = BTreeSet::new();
+    while let Some((cost, path, area)) = frontier.pop_first() {
+        if !visited.insert(area) {
+            continue;
+        }
+        if area == destination {
+            return Ok((path, SimDuration(cost)));
+        }
+        for (to, duration) in graph.get(&area).into_iter().flatten() {
+            let mut next = path.clone();
+            next.push(*to);
+            frontier.insert((
+                cost.checked_add(duration.0).ok_or(Error::Overflow)?,
+                next,
+                *to,
+            ));
+        }
+    }
+    Err(Error::NoRoute)
 }

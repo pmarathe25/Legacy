@@ -501,6 +501,8 @@ impl Simulation {
         );
         world.pregnancies.get_mut(&id).unwrap().state = PregnancyState::Born(child);
         let mut mind = self.state.decisions.as_ref().unwrap().minds[&pregnancy.gestator].clone();
+        mind.routes.clear();
+        mind.last_failure = None;
         mind.child_signals.clear();
         mind.knowledge.clear();
         mind.sites.clear();
