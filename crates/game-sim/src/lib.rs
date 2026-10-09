@@ -1,6 +1,7 @@
 //! Authoritative headless simulation. Debug fixtures are never player scenarios.
 #[doc(hidden)]
 pub mod benchmark;
+pub mod combat;
 pub mod compute;
 pub mod decisions;
 pub mod development;
@@ -100,6 +101,7 @@ enum Due {
     Spoil(InventoryId),
     Birth(PregnancyId),
     Age(PersonId),
+    CombatRound(EncounterId),
 }
 
 /// Logical state in persistent ID order; excludes host publication counters and timings.
@@ -120,6 +122,8 @@ pub struct CanonicalState {
     pub decisions: Option<decisions::World>,
     #[serde(default)]
     pub development: Option<development::World>,
+    #[serde(default)]
+    pub combat: Option<combat::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -161,6 +165,11 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "combat-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
@@ -171,6 +180,9 @@ impl Simulation {
         }
         if scenario == "autonomy-fixture" {
             return Self::autonomy_fixture(seed, execution);
+        }
+        if scenario == "combat-fixture" {
+            return Self::combat_fixture(seed, execution);
         }
         if scenario == "life-fixture" {
             return Self::life_fixture(seed, execution);
@@ -208,6 +220,7 @@ impl Simulation {
             physical: None,
             decisions: None,
             development: None,
+            combat: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -454,6 +467,56 @@ impl Simulation {
                 }
             }
         }
+        if self.in_combat(ruler.id) {
+            available_commands.clear();
+            if let Some(view) = self.tactical_view()
+                && view.turn == Some(ruler.id)
+            {
+                for action in [
+                    CombatAction::Wait,
+                    CombatAction::Defend,
+                    CombatAction::Surrender,
+                ] {
+                    available_commands.push(Command::CombatTurn {
+                        encounter: view.encounter,
+                        movement: None,
+                        action,
+                    });
+                }
+                for fighter in view.fighters.iter().filter(|f| f.actor != ruler.id) {
+                    available_commands.push(Command::CombatTurn {
+                        encounter: view.encounter,
+                        movement: None,
+                        action: CombatAction::Attack {
+                            target: fighter.actor,
+                        },
+                    });
+                    if fighter.incapacitated || fighter.surrendered {
+                        available_commands.push(Command::CombatTurn {
+                            encounter: view.encounter,
+                            movement: None,
+                            action: CombatAction::Capture {
+                                target: fighter.actor,
+                            },
+                        });
+                    }
+                }
+            }
+        } else if self.combat_restricts(ruler.id) {
+            available_commands.retain(|c| {
+                matches!(
+                    c,
+                    Command::Rest | Command::Eat { .. } | Command::Tell { .. }
+                )
+            });
+        }
+        if let Some(world) = &self.state.combat {
+            for target in world.captivity.keys() {
+                if self.can_release(ruler.id, *target) {
+                    available_commands.push(Command::FreeCaptive { target: *target });
+                }
+            }
+        }
         PlayerView {
             revision: self.revision,
             time: self.state.time,
@@ -473,6 +536,7 @@ impl Simulation {
             known_stocks: self.state.decisions.as_ref().map_or_else(Vec::new, |w| {
                 w.minds[&ruler.id].knowledge.values().cloned().collect()
             }),
+            combat: self.tactical_view(),
             nearby_people: self.nearby_people(0, 64),
             nearby_life_stages: self.state.development.as_ref().map_or_else(Vec::new, |w| {
                 self.nearby_people(0, 64)
@@ -504,6 +568,12 @@ impl Simulation {
             } else {
                 Err(Error::SequenceConflict)
             };
+        }
+        if matches!(
+            submission.command,
+            Command::Engage { .. } | Command::CombatTurn { .. }
+        ) {
+            return self.submit_combat(submission);
         }
         if !matches!(submission.command, Command::Move { .. }) {
             return self.submit_physical(submission);
@@ -541,6 +611,9 @@ impl Simulation {
         destination: AreaId,
     ) -> Result<(), Error> {
         let index = *self.person_index.get(&actor).ok_or(Error::Unavailable)?;
+        if self.combat_restricts(actor) {
+            return Err(Error::Unavailable);
+        }
         if !self.independent(actor)
             || self.state.physical.as_ref().is_some_and(|w| {
                 !w.actors[&actor].vitals.alive || w.actors[&actor].vitals.health == 0
@@ -666,6 +739,14 @@ impl Simulation {
                 .ok_or(Error::Overflow)?,
         );
         while self.state.time < requested {
+            if let Some(encounter) = self.awaiting_combat_input() {
+                return Ok(AdvanceResult {
+                    requested,
+                    reached: self.state.time,
+                    revision: self.revision,
+                    reason: StopReason::CombatInput { encounter },
+                });
+            }
             let next = self
                 .state
                 .due
@@ -717,6 +798,7 @@ impl Simulation {
             Due::Transfers(_) => (4, 0),
             Due::Age(id) => (5, id.0),
             Due::Birth(id) => (6, id.0),
+            Due::CombatRound(id) => (7, id.0),
         });
         for event in &due {
             match event {
@@ -751,6 +833,7 @@ impl Simulation {
             }
         }
         self.preflight_development(&due, next)?;
+        self.preflight_combat(&due, next)?;
         let event_bound: usize = due
             .iter()
             .map(|d| match d {
@@ -759,6 +842,7 @@ impl Simulation {
                 Due::Review => 0,
                 Due::Physical(_) | Due::Spoil(_) => 4,
                 Due::Birth(_) | Due::Age(_) => 2,
+                Due::CombatRound(_) => self.state.people.len() * 8,
             })
             .sum::<usize>()
             + self.state.people.len() * 2;
@@ -766,7 +850,7 @@ impl Simulation {
         let started = Instant::now();
         let lifecycle: Vec<_> = due
             .iter()
-            .filter(|d| matches!(d, Due::Age(_) | Due::Birth(_)))
+            .filter(|d| matches!(d, Due::Age(_) | Due::Birth(_) | Due::CombatRound(_)))
             .cloned()
             .collect();
         let transfers: Vec<_> = due
@@ -817,7 +901,7 @@ impl Simulation {
                     }
                 }
                 Due::Transfers(_) => {}
-                Due::Age(_) | Due::Birth(_) => {}
+                Due::Age(_) | Due::Birth(_) | Due::CombatRound(_) => {}
                 Due::Physical(actor) => self.complete_physical(actor),
                 Due::Spoil(inventory) => {
                     let stock = self.state.inventories.get_mut(&inventory).unwrap();
@@ -865,7 +949,11 @@ impl Simulation {
         }
         self.commit_physical(physical_output);
         for event in lifecycle {
-            self.complete_development(event);
+            if let Due::CombatRound(encounter) = event {
+                self.finish_combat_round(encounter)?;
+            } else {
+                self.complete_development(event);
+            }
         }
         self.learn_from_work();
         if self.state.time.0.is_multiple_of(60_000) {

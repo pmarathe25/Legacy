@@ -390,7 +390,11 @@ impl Simulation {
             command: None,
             explanation: mind.explanation.clone(),
         };
-        if id == self.state.ruler || !actor.vitals.alive || actor.vitals.health == 0 {
+        if self.in_combat(id)
+            || id == self.state.ruler
+            || !actor.vitals.alive
+            || actor.vitals.health == 0
+        {
             return none();
         }
         if !self.independent(id) {
@@ -407,6 +411,7 @@ impl Simulation {
                 | Activity::Tell { .. }
                 | Activity::Care { .. }
                 | Activity::Conceive { .. }
+                | Activity::Unbind { .. }
         ) || matches!(actor.activity, Activity::Work { .. }) && !urgent
         {
             return none();

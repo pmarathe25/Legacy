@@ -142,3 +142,45 @@ fn save_is_atomic_even_when_the_target_has_the_old_temporary_extension() {
     std::fs::remove_dir(directory).unwrap();
     std::fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn an_encounter_is_playable_through_the_text_client_and_ordinary_views() {
+    let execution = Execution::default();
+    let mut sim = Simulation::combat_fixture(1, execution.clone()).unwrap();
+    let target = sim
+        .observe()
+        .nearby_people
+        .iter()
+        .find(|(_, role)| *role == Role::Citizen)
+        .unwrap()
+        .0;
+    game_cli::execute(&mut sim, &format!("engage {}", target.0), &execution).unwrap();
+    let view: Option<TacticalView> =
+        serde_json::from_str(&game_cli::execute(&mut sim, "combat", &execution).unwrap()).unwrap();
+    let encounter = view.unwrap().encounter;
+    for _ in 0..3 {
+        game_cli::execute(
+            &mut sim,
+            &format!("turn {} attack {}", encounter.0, target.0),
+            &execution,
+        )
+        .unwrap();
+        game_cli::execute(&mut sim, "run 6s", &execution).unwrap();
+    }
+    game_cli::execute(
+        &mut sim,
+        &format!("turn {} capture {}", encounter.0, target.0),
+        &execution,
+    )
+    .unwrap();
+    game_cli::execute(&mut sim, "run 6s", &execution).unwrap();
+    assert_eq!(sim.time(), SimTime(24_000));
+    assert!(
+        sim.canonical_state()
+            .combat
+            .as_ref()
+            .unwrap()
+            .captivity
+            .contains_key(&target)
+    );
+}

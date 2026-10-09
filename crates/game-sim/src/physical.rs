@@ -259,6 +259,20 @@ impl Simulation {
         if let Command::Conceive { partner } = command {
             return self.start_conception(actor, partner);
         }
+        if self.combat_restricts(actor)
+            && !matches!(
+                command,
+                Command::Rest
+                    | Command::Eat { .. }
+                    | Command::Tell { .. }
+                    | Command::FreeCaptive { .. }
+            )
+        {
+            return Err(Error::Unavailable);
+        }
+        if self.in_combat(actor) {
+            return Err(Error::Unavailable);
+        }
         if !self.independent(actor) {
             return Err(Error::Unavailable);
         }
@@ -278,6 +292,19 @@ impl Simulation {
         let (activity, new_job, consume) = match command {
             Command::Rest => (Activity::Rest, None, None),
             Command::Cancel => (Activity::Idle, None, None),
+            Command::FreeCaptive { target } => {
+                if !self.can_release(actor, target) {
+                    return Err(Error::Unavailable);
+                }
+                let completes = SimTime(
+                    self.state
+                        .time
+                        .0
+                        .checked_add(rules.loading_time.0)
+                        .ok_or(Error::Overflow)?,
+                );
+                (Activity::Unbind { target, completes }, None, None)
+            }
             Command::Care { child, source } => {
                 let life = self
                     .state
@@ -520,7 +547,8 @@ impl Simulation {
             Activity::Eat { completes, .. }
             | Activity::Load { completes, .. }
             | Activity::Tell { completes, .. }
-            | Activity::Care { completes, .. } => Some(completes),
+            | Activity::Care { completes, .. }
+            | Activity::Unbind { completes, .. } => Some(completes),
             _ => None,
         };
         if let Some(deadline) = deadline {
@@ -655,8 +683,10 @@ impl Simulation {
                         - a.vitals.hunger.saturating_sub(world.rules.hunger_harm);
                     vitals.health = vitals.health.saturating_sub(harm);
                 }
-                let exerting = matches!(a.activity, Activity::Work { .. } | Activity::Load { .. })
-                    || matches!(p.location, Location::InTransit { .. });
+                let exerting = matches!(
+                    a.activity,
+                    Activity::Work { .. } | Activity::Load { .. } | Activity::Combat { .. }
+                ) || matches!(p.location, Location::InTransit { .. });
                 if exerting {
                     vitals.fatigue = vitals
                         .fatigue
@@ -765,6 +795,12 @@ impl Simulation {
                         destination,
                         quantity,
                     });
+                    success = true;
+                }
+            }
+            Activity::Unbind { target, .. } => {
+                if self.can_release(actor, target) {
+                    self.release_captive(actor, target);
                     success = true;
                 }
             }

@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 3;
+const SAVE_VERSION: u32 = 4;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -62,13 +62,21 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent committed state".into());
     if !matches!(
         s.scenario.id.as_str(),
-        "kernel-fixture" | "survival-fixture" | "autonomy-fixture" | "life-fixture"
+        "kernel-fixture"
+            | "survival-fixture"
+            | "autonomy-fixture"
+            | "life-fixture"
+            | "combat-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
-        || matches!(s.scenario.id.as_str(), "autonomy-fixture" | "life-fixture")
-            != s.decisions.is_some()
-        || (s.scenario.id == "life-fixture") != s.development.is_some()
+        || matches!(
+            s.scenario.id.as_str(),
+            "autonomy-fixture" | "life-fixture" | "combat-fixture"
+        ) != s.decisions.is_some()
+        || matches!(s.scenario.id.as_str(), "life-fixture" | "combat-fixture")
+            != s.development.is_some()
+        || (s.scenario.id == "combat-fixture") != s.combat.is_some()
     {
         return Err(fail());
     }
@@ -101,6 +109,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if let Some(world) = &s.development {
         for id in world.pregnancies.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.combat {
+        for id in world
+            .maps
+            .values()
+            .map(|m| m.id.0)
+            .chain(world.encounters.keys().map(|e| e.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
@@ -147,6 +167,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     }
                 }
                 Due::Review => reviews.push(*time),
+                Due::CombatRound(_) => {
+                    if s.combat.is_none() {
+                        return Err(fail());
+                    }
+                }
                 Due::Age(_) | Due::Birth(_) => {
                     if s.development.is_none() {
                         return Err(fail());
@@ -170,7 +195,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -271,6 +296,86 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         match event.kind {
+            EventKind::EncounterStarted { encounter, area } => {
+                if !s
+                    .combat
+                    .as_ref()
+                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    || !areas.contains(&area)
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::CombatMoved {
+                encounter, actor, ..
+            }
+            | EventKind::Surrendered { encounter, actor } => {
+                if !s
+                    .combat
+                    .as_ref()
+                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    || !people.contains_key(&actor)
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::Struck {
+                encounter,
+                actor,
+                target,
+                ..
+            } => {
+                if !s
+                    .combat
+                    .as_ref()
+                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    || !people.contains_key(&actor)
+                    || !people.contains_key(&target)
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::Captured {
+                encounter,
+                actor,
+                target,
+                binding,
+            } => {
+                if !s
+                    .combat
+                    .as_ref()
+                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    || !people.contains_key(&actor)
+                    || !people.contains_key(&target)
+                    || !s.inventories.contains_key(&binding)
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::Released { actor, target } => {
+                if !people.contains_key(&actor) || !people.contains_key(&target) {
+                    return Err(fail());
+                }
+            }
+            EventKind::ObstacleDamaged { map, obstacle, .. } => {
+                if !s.combat.as_ref().is_some_and(|w| {
+                    w.maps
+                        .values()
+                        .any(|m| m.id == map && m.obstacles.iter().any(|o| o.index == obstacle))
+                }) {
+                    return Err(fail());
+                }
+            }
+            EventKind::RoundEnded { encounter, .. } | EventKind::EncounterEnded { encounter } => {
+                if !s
+                    .combat
+                    .as_ref()
+                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                {
+                    return Err(fail());
+                }
+            }
+
             EventKind::Departed {
                 actor,
                 from,
@@ -526,6 +631,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     development::validate(s)?;
+    combat::validate(s)?;
     Ok(())
 }
 
@@ -608,6 +714,7 @@ fn validate_physical(
                 | Activity::Tell { .. }
                 | Activity::Care { .. }
                 | Activity::Conceive { .. }
+                | Activity::Unbind { .. }
         );
         if timed != deadlines.contains(id) {
             return Err(fail());
@@ -616,6 +723,7 @@ fn validate_physical(
             return Err(fail());
         }
         match actor.activity {
+            Activity::Unbind { target, .. } if !people.contains_key(&target) => return Err(fail()),
             Activity::Care { child, .. } if !care_targets.insert(child) => return Err(fail()),
             Activity::Eat { source, .. } => {
                 if !s

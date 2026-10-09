@@ -92,7 +92,10 @@ impl Session {
                                 let (_, reply) = active.take().unwrap();
                                 let _ = reply.send(Err(error));
                             }
-                            Ok(mut result) if simulation.time() == target => {
+                            Ok(mut result)
+                                if simulation.time() == target
+                                    || result.reason != StopReason::TargetReached =>
+                            {
                                 result.requested = target;
                                 let (_, reply) = active.take().unwrap();
                                 let _ = reply.send(Ok(result));

@@ -177,6 +177,9 @@ impl Simulation {
         actor: PersonId,
         partner: PersonId,
     ) -> Result<(), Error> {
+        if self.combat_restricts(actor) || self.combat_restricts(partner) {
+            return Err(Error::Unavailable);
+        }
         let world = self.state.development.as_ref().ok_or(Error::Unavailable)?;
         let (Some(a), Some(b)) = (world.lives.get(&actor), world.lives.get(&partner)) else {
             return Err(Error::Unavailable);
@@ -449,6 +452,11 @@ impl Simulation {
                 .push(Due::Arrive(child));
         }
         self.person_index.insert(child, index);
+        if let Some(world) = &mut self.state.combat {
+            world
+                .profiles
+                .insert(child, combat::Profile { initiative: 100 });
+        }
         let cargo = InventoryLocation::Carried(child);
         self.inventory_index
             .entry(cargo.clone())

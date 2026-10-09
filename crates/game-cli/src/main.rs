@@ -21,7 +21,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--script" => script = Some(args.next().ok_or("missing script path")?),
             "--help" => {
                 println!(
-                    "game-cli --scenario kernel-fixture|survival-fixture|autonomy-fixture|life-fixture --seed 1 [--workers N] [--script PATH]\nDebug fixtures only; type help for commands"
+                    "game-cli --scenario kernel-fixture|survival-fixture|autonomy-fixture|life-fixture|combat-fixture --seed 1 [--workers N] [--script PATH]\nDebug fixtures only; type help for commands"
                 );
                 return Ok(());
             }

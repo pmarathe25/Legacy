@@ -15,6 +15,8 @@ id!(
     SiteId,
     ConceptId,
     PregnancyId,
+    EncounterId,
+    CombatMapId,
     EventId,
     SimTime,
     SimDuration,
@@ -51,6 +53,17 @@ pub enum Command {
     Care {
         child: PersonId,
         source: InventoryId,
+    },
+    Engage {
+        target: PersonId,
+    },
+    FreeCaptive {
+        target: PersonId,
+    },
+    CombatTurn {
+        encounter: EncounterId,
+        movement: Option<Point>,
+        action: CombatAction,
     },
 }
 
@@ -125,6 +138,7 @@ pub struct PlayerView {
     pub known_stocks: Vec<StockKnowledge>,
     pub nearby_people: Vec<(PersonId, Role)>,
     pub nearby_life_stages: Vec<(PersonId, LifeStage)>,
+    pub combat: Option<TacticalView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -132,6 +146,7 @@ pub enum Good {
     Food,
     Timber,
     Tool,
+    Binding,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +187,13 @@ pub enum Activity {
     Care {
         child: PersonId,
         source: InventoryId,
+        completes: SimTime,
+    },
+    Combat {
+        encounter: EncounterId,
+    },
+    Unbind {
+        target: PersonId,
         completes: SimTime,
     },
 }
@@ -220,6 +242,47 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    EncounterStarted {
+        encounter: EncounterId,
+        area: AreaId,
+    },
+    CombatMoved {
+        encounter: EncounterId,
+        actor: PersonId,
+        position: Point,
+    },
+    Struck {
+        encounter: EncounterId,
+        actor: PersonId,
+        target: PersonId,
+        damage: u64,
+    },
+    Surrendered {
+        encounter: EncounterId,
+        actor: PersonId,
+    },
+    Captured {
+        encounter: EncounterId,
+        actor: PersonId,
+        target: PersonId,
+        binding: InventoryId,
+    },
+    Released {
+        actor: PersonId,
+        target: PersonId,
+    },
+    ObstacleDamaged {
+        map: CombatMapId,
+        obstacle: u32,
+        damage: u64,
+    },
+    RoundEnded {
+        encounter: EncounterId,
+        round: u64,
+    },
+    EncounterEnded {
+        encounter: EncounterId,
+    },
     Departed {
         actor: PersonId,
         from: AreaId,
@@ -321,6 +384,62 @@ pub struct Event {
 pub enum StopReason {
     TargetReached,
     Paused,
+    CombatInput { encounter: EncounterId },
+}
+
+/// Continuous placement in millimetres, independent of any rendering grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Point {
+    pub x: i64,
+    pub y: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CombatAction {
+    Attack { target: PersonId },
+    Defend,
+    Wait,
+    Surrender,
+    Capture { target: PersonId },
+    Release { target: PersonId },
+    Retreat { destination: AreaId },
+    Breach { obstacle: u32 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObstacleView {
+    pub index: u32,
+    pub minimum: Point,
+    pub maximum: Point,
+    pub integrity: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FighterView {
+    pub actor: PersonId,
+    pub position: Point,
+    pub team: u32,
+    pub incapacitated: bool,
+    pub surrendered: bool,
+    pub captured: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TacticalView {
+    pub encounter: EncounterId,
+    pub active: bool,
+    pub map: CombatMapId,
+    pub area: AreaId,
+    pub round: u64,
+    pub round_started: SimTime,
+    pub round_ends: SimTime,
+    pub turn: Option<PersonId>,
+    pub ready_to_advance: bool,
+    pub width: i64,
+    pub height: i64,
+    pub obstacles: Vec<ObstacleView>,
+    pub exits: Vec<(AreaId, Point)>,
+    pub fighters: Vec<FighterView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
