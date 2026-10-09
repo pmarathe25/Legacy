@@ -1541,9 +1541,10 @@ impl Simulation {
             };
             let body = &self.state.physical.as_ref().unwrap().actors[&debtor];
             let mind = &self.state.decisions.as_ref().unwrap().minds[&debtor];
+            let rules = &self.state.physical.as_ref().unwrap().rules;
             if !matches!(body.activity, Activity::Idle | Activity::Rest)
-                || body.vitals.hunger > 120_000
-                || body.vitals.fatigue > 120_000
+                || body.vitals.hunger >= rules.meal_relief
+                || body.vitals.fatigue >= rules.fatigue_limit / 2
                 || (mind.personality.discipline < 500 && mind.personality.honesty < 500)
             {
                 continue;

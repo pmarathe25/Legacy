@@ -7,6 +7,7 @@ pub mod compute;
 pub mod decisions;
 pub mod development;
 pub mod environment;
+pub mod institutions;
 pub mod lineage;
 mod persistence;
 pub mod physical;
@@ -136,6 +137,8 @@ pub struct CanonicalState {
     pub lineage: Option<lineage::World>,
     #[serde(default)]
     pub property: Option<property::World>,
+    #[serde(default)]
+    pub institutions: Option<institutions::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -207,11 +210,19 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "institution-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "institution-fixture" {
+            return Self::institution_fixture(seed, execution);
+        }
         if scenario == "property-fixture" {
             return Self::property_fixture(seed, execution);
         }
@@ -277,6 +288,7 @@ impl Simulation {
             agreements: None,
             lineage: None,
             property: None,
+            institutions: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -437,6 +449,10 @@ impl Simulation {
         Ok(sim)
     }
 
+    pub(crate) fn has_stock_access(&self, actor: PersonId, inventory: &Inventory) -> bool {
+        inventory.access.contains(&actor) || self.institution_allows_access(actor, inventory.id)
+    }
+
     pub fn canonical_state(&self) -> &CanonicalState {
         &self.state
     }
@@ -589,6 +605,7 @@ impl Simulation {
         available_commands.extend(self.available_cultivation(ruler.id));
         available_commands.extend(self.available_agreement_commands(ruler.id));
         available_commands.extend(self.available_property_commands(ruler.id));
+        available_commands.extend(self.available_institution_commands(ruler.id));
         available_commands.extend(self.available_lesson_commands(ruler.id));
         if self.in_combat(ruler.id) {
             available_commands.clear();
@@ -641,6 +658,8 @@ impl Simulation {
             }
         }
         PlayerView {
+            institutions: self.institution_view(ruler.id),
+            social_cases: self.social_case_view(ruler.id),
             property: self.property_view(ruler.id),
             lineage: self.lineage_view(),
             agreements: self.agreement_view(ruler.id),
@@ -1042,6 +1061,7 @@ impl Simulation {
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
         self.preflight_agreements()?;
+        self.preflight_institutions_at(next)?;
         let event_bound: usize = due
             .iter()
             .map(|d| match d {
@@ -1187,6 +1207,7 @@ impl Simulation {
         }
         self.update_property_events();
         self.reconcile_agreements()?;
+        self.reconcile_institutions()?;
         self.learn_from_work();
         if self.state.time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
@@ -1280,8 +1301,8 @@ impl Simulation {
                         && self.state.physical.as_ref().is_none_or(|w| {
                             w.actors[&i.actor].vitals.alive && w.actors[&i.actor].vitals.health > 0
                         })
-                        && source.access.contains(&i.actor)
-                        && (destination.access.contains(&i.actor)
+                        && self.has_stock_access(i.actor, source)
+                        && (self.has_stock_access(i.actor, destination)
                             || self.agreement_accepts_delivery(i.actor, i.destination, i.quantity))
                         && area.is_some()
                         && area == self.inventory_area(source)

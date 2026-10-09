@@ -593,3 +593,108 @@ fn childhood_guidance_requires_completed_lessons_in_the_text_client() {
     assert!(sim.observe().lineage.unwrap().invocation_ready);
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
 }
+
+#[test]
+fn institution_charters_and_supported_offices_have_real_access_effects_through_cli() {
+    use std::collections::BTreeSet;
+    let execution = Execution::default();
+    let mut sim = Simulation::new("institution-fixture", 1, execution.clone()).unwrap();
+    let ruler = sim.observe().ruler;
+    let owner = sim
+        .observe()
+        .nearby_people
+        .iter()
+        .find(|(_, role)| *role == Role::Citizen)
+        .unwrap()
+        .0;
+    let stock = sim
+        .observe()
+        .physical
+        .unwrap()
+        .local_stocks
+        .iter()
+        .find(|s| s.good == Good::Food && !s.can_access)
+        .unwrap()
+        .id;
+    let charter = InstitutionCharter {
+        purpose: "Food access by our agreement".into(),
+        jurisdiction: AreaId(1),
+        founders: BTreeSet::from([ruler, owner]),
+        open_membership: false,
+        procedure: DecisionProcedure {
+            proposers: Subjects::members(),
+            voters: Subjects::members(),
+            minimum_support: 2,
+        },
+        offices: vec![OfficeMandate {
+            slot: 0,
+            holder: ruler,
+            inventories: BTreeSet::from([stock]),
+            sites: BTreeSet::new(),
+            powers: BTreeSet::from([OfficePower::Access]),
+            minimum_support: 2,
+        }],
+        rules: vec![InstitutionalRule {
+            subjects: Subjects::named(ruler),
+            when: RuleExpression::All(vec![
+                RuleExpression::Fact(SocialCondition::Local),
+                RuleExpression::Fact(SocialCondition::Member),
+            ]),
+            effect: SocialEffect::Access {
+                inventory: stock,
+                allowed: true,
+            },
+            authority: 0,
+        }],
+        contributions: Vec::new(),
+        evidence: BTreeSet::new(),
+    };
+    let action = InstitutionAction::Found {
+        charter,
+        origin: None,
+    };
+    let before = sim.canonical_state().inventories.clone();
+    game_cli::execute(
+        &mut sim,
+        &format!("institution {}", serde_json::to_string(&action).unwrap()),
+        &execution,
+    )
+    .unwrap();
+    assert_eq!(sim.canonical_state().inventories, before);
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    assert_eq!(view.institutions[0].status, InstitutionStatus::Active);
+    assert!(
+        view.physical
+            .unwrap()
+            .local_stocks
+            .iter()
+            .find(|s| s.id == stock)
+            .unwrap()
+            .can_access
+    );
+    let action = InstitutionAction::SupportOffice {
+        institution: view.institutions[0].id,
+        office: 0,
+        support: false,
+    };
+    game_cli::execute(
+        &mut sim,
+        &format!("institution {}", serde_json::to_string(&action).unwrap()),
+        &execution,
+    )
+    .unwrap();
+    assert!(
+        !sim.observe()
+            .physical
+            .unwrap()
+            .local_stocks
+            .iter()
+            .find(|s| s.id == stock)
+            .unwrap()
+            .can_access
+    );
+    assert_eq!(sim.observe().ruler, ruler);
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}

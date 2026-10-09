@@ -5,6 +5,8 @@ pub mod agreements;
 pub use agreements::*;
 pub mod property;
 pub use property::*;
+pub mod institutions;
+pub use institutions::*;
 
 macro_rules! id {
     ($($name:ident),*) => {$(
@@ -19,6 +21,9 @@ id!(
     SiteId,
     ConceptId,
     AgreementId,
+    InstitutionId,
+    RuleProposalId,
+    CaseId,
     ClaimId,
     IncidentId,
     AmendmentId,
@@ -36,6 +41,9 @@ pub const MINUTE: SimDuration = SimDuration(60_000);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Institution {
+        action: InstitutionAction,
+    },
     Learn {
         teacher: PersonId,
         topic: LessonTopic,
@@ -164,6 +172,8 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub institutions: Vec<InstitutionView>,
+    pub social_cases: Vec<SocialCaseView>,
     pub property: PropertyView,
     pub lineage: Option<LineageView>,
     pub agreements: Vec<AgreementView>,
@@ -321,6 +331,37 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    InstitutionProposed {
+        institution: InstitutionId,
+        proposer: PersonId,
+    },
+    InstitutionFounded {
+        institution: InstitutionId,
+    },
+    InstitutionChanged {
+        institution: InstitutionId,
+        proposal: RuleProposalId,
+    },
+    InstitutionLeft {
+        institution: InstitutionId,
+        actor: PersonId,
+    },
+    OfficeSupportChanged {
+        institution: InstitutionId,
+        office: u16,
+        actor: PersonId,
+        support: bool,
+    },
+    InstitutionRuleApplied {
+        institution: InstitutionId,
+        rule: u16,
+        actor: PersonId,
+        agreement: Option<AgreementId>,
+    },
+    SocialCaseRecorded {
+        case: CaseId,
+        actor: PersonId,
+    },
     LessonCompleted {
         teacher: PersonId,
         student: PersonId,

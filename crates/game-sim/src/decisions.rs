@@ -216,6 +216,24 @@ impl Simulation {
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 continue;
             }
+            let visible_stocks: Vec<_> = self
+                .inventory_index
+                .get(&InventoryLocation::Area(area))
+                .into_iter()
+                .flatten()
+                .chain(
+                    self.inventory_index
+                        .get(&InventoryLocation::Carried(p.id))
+                        .into_iter()
+                        .flatten(),
+                )
+                .copied()
+                .collect();
+            let accessible_stocks: BTreeSet<_> = visible_stocks
+                .iter()
+                .filter(|id| self.has_stock_access(p.id, &self.state.inventories[id]))
+                .copied()
+                .collect();
             let mind = self
                 .state
                 .decisions
@@ -235,18 +253,7 @@ impl Simulation {
                 .map(|l| (l.destination, l.duration))
                 .collect();
             mind.routes.insert(area, actual_routes);
-            for id in self
-                .inventory_index
-                .get(&InventoryLocation::Area(area))
-                .into_iter()
-                .flatten()
-                .chain(
-                    self.inventory_index
-                        .get(&InventoryLocation::Carried(p.id))
-                        .into_iter()
-                        .flatten(),
-                )
-            {
+            for id in &visible_stocks {
                 let inventory = &self.state.inventories[id];
                 if mind.goal == Goal::Survival
                     && matches!(mind.plan, Some(Command::Move { destination }) if destination == area)
@@ -267,7 +274,7 @@ impl Simulation {
                         area,
                         good: inventory.good,
                         quantity: inventory.quantity,
-                        accessible: inventory.access.contains(&p.id),
+                        accessible: accessible_stocks.contains(id),
                         observed_at: self.state.time,
                         learned_at: self.state.time,
                         source: KnowledgeSource::Observed(p.id),
@@ -340,6 +347,7 @@ impl Simulation {
         self.review_property_sharing();
         self.review_lineage()?;
         self.review_agreements()?;
+        self.review_institutions()?;
         self.review_conception()?;
         let world = self.state.decisions.as_ref().unwrap();
         let evaluate =

@@ -205,7 +205,7 @@ impl Simulation {
                     id: i.id,
                     good: i.good,
                     quantity: i.quantity,
-                    can_access: i.access.contains(&ruler.id),
+                    can_access: self.has_stock_access(ruler.id, i),
                     capacity: i.capacity,
                     position: match i.location {
                         InventoryLocation::Area(id) => StockPosition::Area(id),
@@ -257,6 +257,13 @@ impl Simulation {
         command: Command,
     ) -> Result<(), Error> {
         self.preflight_agreements()?;
+        self.preflight_institutions()?;
+        if let Command::Institution { ref action } = command {
+            self.institution_command(actor, action)?;
+            self.reconcile_institutions()?;
+            self.revision += 1;
+            return Ok(());
+        }
         if let Command::Learn { teacher, topic } = command {
             return self.start_lesson(actor, teacher, topic);
         }
@@ -476,7 +483,7 @@ impl Simulation {
                         area,
                         good: i.good,
                         quantity: i.quantity,
-                        accessible: i.access.contains(&actor),
+                        accessible: self.has_stock_access(actor, i),
                         observed_at: self.state.time,
                         learned_at: self.state.time,
                         source: KnowledgeSource::Observed(actor),
@@ -676,6 +683,7 @@ impl Simulation {
         }
         self.update_property_events();
         self.reconcile_agreements()?;
+        self.reconcile_institutions()?;
         self.revision += 1;
         Ok(())
     }
@@ -701,7 +709,7 @@ impl Simulation {
     fn can_use(&self, actor: PersonId, inventory: &Inventory) -> bool {
         let p = &self.state.people[self.person_index[&actor]];
         if let Location::AtArea(area) = p.location {
-            inventory.access.contains(&actor) && self.inventory_area(inventory) == Some(area)
+            self.has_stock_access(actor, inventory) && self.inventory_area(inventory) == Some(area)
         } else {
             false
         }

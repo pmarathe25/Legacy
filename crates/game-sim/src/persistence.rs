@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 9;
+const SAVE_VERSION: u32 = 10;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, 6, 7, 8, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -72,6 +72,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "agreement-fixture"
             | "lineage-fixture"
             | "property-fixture"
+            | "institution-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -85,6 +86,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "agreement-fixture"
                 | "lineage-fixture"
                 | "property-fixture"
+                | "institution-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
@@ -102,10 +104,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         || (s.scenario.id == "farming-fixture") != s.environment.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "agreement-fixture" | "property-fixture"
+            "agreement-fixture" | "property-fixture" | "institution-fixture"
         ) != s.agreements.is_some()
         || (s.scenario.id == "lineage-fixture") != s.lineage.is_some()
         || (s.scenario.id == "property-fixture") != s.property.is_some()
+        || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
     {
         return Err(fail());
     }
@@ -124,6 +127,20 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if let Some(world) = &s.physical {
         for id in world.sites.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.institutions {
+        for id in world
+            .institutions
+            .keys()
+            .map(|id| id.0)
+            .chain(world.proposals.keys().map(|id| id.0))
+            .chain(world.cases.keys().map(|id| id.0))
+            .chain(world.concepts.keys().map(|id| id.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
@@ -586,6 +603,54 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
+            EventKind::InstitutionProposed {
+                institution,
+                proposer,
+            } => {
+                if !people.contains_key(&proposer)
+                    || !s
+                        .institutions
+                        .as_ref()
+                        .is_some_and(|w| w.institutions.contains_key(&institution))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::InstitutionFounded { institution }
+            | EventKind::InstitutionLeft { institution, .. }
+            | EventKind::OfficeSupportChanged { institution, .. }
+            | EventKind::InstitutionRuleApplied { institution, .. } => {
+                if !s
+                    .institutions
+                    .as_ref()
+                    .is_some_and(|w| w.institutions.contains_key(&institution))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::InstitutionChanged {
+                institution,
+                proposal,
+            } => {
+                if !s.institutions.as_ref().is_some_and(|w| {
+                    w.institutions.contains_key(&institution)
+                        && w.proposals
+                            .get(&proposal)
+                            .is_some_and(|p| p.institution == institution)
+                }) {
+                    return Err(fail());
+                }
+            }
+            EventKind::SocialCaseRecorded { case, actor } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .institutions
+                        .as_ref()
+                        .is_some_and(|w| w.cases.contains_key(&case))
+                {
+                    return Err(fail());
+                }
+            }
             EventKind::LessonCompleted {
                 teacher,
                 student,
@@ -903,6 +968,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     combat::validate(s)?;
     lineage::validate(s)?;
     property::validate(s)?;
+    institutions::validate(s)?;
     Ok(())
 }
 
