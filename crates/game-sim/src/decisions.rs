@@ -3,119 +3,15 @@
 use crate::*;
 use rayon::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Personality {
-    pub discipline: u16,
-    pub ambition: u16,
-    pub sociability: u16,
-    pub risk_tolerance: u16,
-    pub hedonism: u16,
-    pub empathy: u16,
-    pub aggression: u16,
-    pub honesty: u16,
-    pub patience: u16,
-}
+pub use game_characters::decisions::{
+    Attachment, ChildSignal, Dream, Explanation, Goal, Personality, Relationship, SiteKnowledge,
+};
 
-impl Personality {
-    pub fn industrious() -> Self {
-        Self {
-            discipline: 900,
-            ambition: 900,
-            sociability: 500,
-            risk_tolerance: 500,
-            hedonism: 100,
-            empathy: 500,
-            aggression: 100,
-            honesty: 800,
-            patience: 600,
-        }
-    }
-    pub fn restful() -> Self {
-        Self {
-            discipline: 100,
-            ambition: 100,
-            hedonism: 900,
-            ..Self::industrious()
-        }
-    }
-    fn valid(&self) -> bool {
-        [
-            self.discipline,
-            self.ambition,
-            self.sociability,
-            self.risk_tolerance,
-            self.hedonism,
-            self.empathy,
-            self.aggression,
-            self.honesty,
-            self.patience,
-        ]
-        .iter()
-        .all(|v| *v <= 1_000)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Dream {
-    Independence,
-    Comfort,
-    SupportOthers,
-    Parenthood,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Goal {
-    Survival,
-    Recovery,
-    Practice,
-    Rest,
-    Care,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Relationship {
-    pub trust: i32,
-    pub affection: i32,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Attachment {
-    pub weight: i32,
-    pub experiences: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Explanation {
-    pub goal: Goal,
-    pub need: i64,
-    pub benefit: i64,
-    pub value: i64,
-    pub total: i64,
-    pub blocker: Option<String>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SiteKnowledge {
-    pub site: SiteId,
-    pub area: AreaId,
-    pub input: InventoryId,
-    pub tool: InventoryId,
-    pub input_quantity: Quantity,
-    pub output: InventoryId,
-    pub access: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChildSignal {
-    #[serde(default)]
-    pub preference: Option<ChildhoodInterest>,
-    pub area: AreaId,
-    pub urgency: i64,
-    pub observed_at: SimTime,
-}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mind {
-    #[serde(default)]
     pub interests: BTreeMap<ChildhoodInterest, u64>,
-    #[serde(default)]
     pub routes: BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>,
-    #[serde(default)]
     pub last_failure: Option<(SimTime, InventoryId)>,
-    #[serde(default)]
     pub child_signals: BTreeMap<PersonId, ChildSignal>,
     pub personality: Personality,
     pub dream: Dream,
@@ -349,6 +245,8 @@ impl Simulation {
         self.review_lineage()?;
         self.review_agreements()?;
         self.review_institutions()?;
+        self.review_health()?;
+        self.review_enforcement()?;
         self.review_missions()?;
         self.review_projects()?;
         self.review_conception()?;
@@ -386,7 +284,7 @@ impl Simulation {
             let accepted = if let Command::Move { destination } = command {
                 self.start_movement(i.actor, destination)
             } else {
-                self.debug_physical_command(i.actor, command.clone())
+                self.debug_actor_command(i.actor, command.clone())
             };
             let mind = self
                 .state
@@ -425,6 +323,7 @@ impl Simulation {
         if self.in_combat(id)
             || self.lineage_handles(id)
             || self.mission_actor_busy(id)
+            || self.health_actor_busy(id)
             || id == self.state.ruler
             || !actor.vitals.alive
             || actor.vitals.health == 0
@@ -468,6 +367,11 @@ impl Simulation {
                 | Activity::ReportIncident { .. }
                 | Activity::Lesson { .. }
                 | Activity::Construct { .. }
+                | Activity::Social { .. }
+                | Activity::Instruction { .. }
+                | Activity::Practice { .. }
+                | Activity::EnforcementTalk { .. }
+                | Activity::HealthWork { .. }
                 | Activity::Gather { .. }
                 | Activity::MissionTalk { .. }
                 | Activity::ReportAgreement { .. }
@@ -495,6 +399,9 @@ impl Simulation {
                 },
             ))
         };
+        if let Some(command) = self.health_candidate(id) {
+            add(command, Goal::Recovery, 2_000, 200, 0);
+        }
         if let Some(command) = self.ecology_candidate(id) {
             add(
                 command,
@@ -692,29 +599,34 @@ impl Simulation {
                 }
             }
         }
-        candidates.sort_by_key(|(command, explanation)| {
-            (
-                std::cmp::Reverse(explanation.total),
-                match command {
-                    Command::Eat { source } => (0, source.0),
-                    Command::Move { destination } => (1, destination.0),
-                    Command::Work { site } => (2, site.0),
-                    _ => (3, 0),
+        let scores: Vec<_> = candidates
+            .iter()
+            .map(
+                |(command, explanation)| game_characters::decisions::CandidateScore {
+                    total: explanation.total,
+                    tie: match command {
+                        Command::Eat { source } => (0, source.0),
+                        Command::Move { destination } => (1, destination.0),
+                        Command::Work { site } => (2, site.0),
+                        _ => (3, 0),
+                    },
+                    resting: *command == Command::Rest,
                 },
             )
-        });
-        let Some((command, explanation)) = candidates.into_iter().next() else {
+            .collect();
+        let Some(index) = game_characters::decisions::choose(
+            &scores,
+            game_characters::decisions::ChoiceContext {
+                working: matches!(actor.activity, Activity::Work { .. }),
+                resting: actor.activity == Activity::Rest,
+                urgent,
+                previous_score: mind.explanation.total,
+                switching_margin: margin,
+            },
+        ) else {
             return none();
         };
-        if command == Command::Rest && actor.activity == Activity::Rest {
-            return none();
-        }
-        if matches!(actor.activity, Activity::Work { .. })
-            && explanation.total < mind.explanation.total + margin
-            && !urgent
-        {
-            return none();
-        }
+        let (command, explanation) = candidates.swap_remove(index);
         Intention {
             actor: id,
             command: Some(command),

@@ -68,7 +68,7 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
         .id;
     for _ in 0..3 {
         reference
-            .debug_physical_command(actor, Command::Work { site })
+            .debug_actor_command(actor, Command::Work { site })
             .unwrap();
         reference.advance(MINUTE).unwrap();
     }
@@ -156,7 +156,7 @@ fn distant_facts_require_a_timed_report_and_keep_their_original_age() {
             .iter()
             .any(|f| f.inventory == remote)
     );
-    sim.debug_physical_command(
+    sim.debug_actor_command(
         sender,
         Command::Tell {
             recipient: receiver,

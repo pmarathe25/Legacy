@@ -2,121 +2,8 @@
 //! advances the world once, including when several encounters run concurrently.
 use crate::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
-    pub round: SimDuration,
-    pub movement: u64,
-    pub reach: u64,
-    pub damage: u64,
-    pub defence: u64,
-    pub incapacitation: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Profile {
-    pub initiative: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Map {
-    pub id: CombatMapId,
-    pub version: u32,
-    pub area: AreaId,
-    pub width: i64,
-    pub height: i64,
-    pub obstacles: Vec<ObstacleView>,
-    pub exits: Vec<(AreaId, Point)>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Fighter {
-    pub actor: PersonId,
-    #[serde(default)]
-    pub joins_round: u64,
-    pub team: u32,
-    pub position: Point,
-    pub surrendered: bool,
-    pub withdrawn: bool,
-    pub defending: bool,
-    pub retreat: Option<AreaId>,
-    pub known: BTreeMap<PersonId, Point>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Encounter {
-    pub id: EncounterId,
-    pub area: AreaId,
-    pub map: CombatMapId,
-    pub round: u64,
-    pub started: SimTime,
-    pub ends: SimTime,
-    pub fighters: BTreeMap<PersonId, Fighter>,
-    pub order: Vec<PersonId>,
-    pub cursor: usize,
-    pub active: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Captivity {
-    pub actor: PersonId,
-    pub captor: PersonId,
-    pub area: AreaId,
-    pub position: Point,
-    pub binding: InventoryId,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub rules: Rules,
-    pub profiles: BTreeMap<PersonId, Profile>,
-    pub maps: BTreeMap<AreaId, Map>,
-    pub encounters: BTreeMap<EncounterId, Encounter>,
-    pub captivity: BTreeMap<PersonId, Captivity>,
-}
-
-impl Map {
-    fn contains(&self, p: Point) -> bool {
-        p.x >= 0 && p.y >= 0 && p.x <= self.width && p.y <= self.height
-    }
-    pub(crate) fn clear(&self, a: Point, b: Point) -> bool {
-        self.contains(a)
-            && self.contains(b)
-            && self
-                .obstacles
-                .iter()
-                .filter(|o| o.integrity > 0)
-                .all(|o| !crosses(a, b, o.minimum, o.maximum))
-    }
-}
-fn distance(a: Point, b: Point) -> u128 {
-    let x = i128::from(a.x) - i128::from(b.x);
-    let y = i128::from(a.y) - i128::from(b.y);
-    (x * x + y * y) as u128
-}
-fn crosses(a: Point, b: Point, min: Point, max: Point) -> bool {
-    let inside = |p: Point| p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y;
-    if inside(a) || inside(b) {
-        return true;
-    }
-    let orient = |a: Point, b: Point, c: Point| {
-        (i128::from(b.x) - i128::from(a.x)) * (i128::from(c.y) - i128::from(a.y))
-            - (i128::from(b.y) - i128::from(a.y)) * (i128::from(c.x) - i128::from(a.x))
-    };
-    let segment = |c: Point, d: Point| {
-        if a.x.max(b.x) < c.x.min(d.x)
-            || c.x.max(d.x) < a.x.min(b.x)
-            || a.y.max(b.y) < c.y.min(d.y)
-            || c.y.max(d.y) < a.y.min(b.y)
-        {
-            return false;
-        }
-        let (x, y, u, v) = (
-            orient(a, b, c),
-            orient(a, b, d),
-            orient(c, d, a),
-            orient(c, d, b),
-        );
-        (x == 0 || y == 0 || x.signum() != y.signum())
-            && (u == 0 || v == 0 || u.signum() != v.signum())
-    };
-    let p = Point { x: min.x, y: max.y };
-    let q = Point { x: max.x, y: min.y };
-    segment(min, p) || segment(p, max) || segment(max, q) || segment(q, min)
-}
+use game_conflict::distance;
+pub use game_conflict::{Captivity, Encounter, Fighter, Map, Profile, Rules, World};
 
 impl Simulation {
     pub fn combat_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -190,7 +77,13 @@ impl Simulation {
     pub(crate) fn can_fight(&self, actor: PersonId) -> bool {
         let w = self.state.combat.as_ref().unwrap();
         let v = &self.state.physical.as_ref().unwrap().actors[&actor].vitals;
-        v.alive && v.health > w.rules.incapacitation && !w.captivity.contains_key(&actor)
+        w.rules.can_fight(
+            game_conflict::TargetBody {
+                alive: v.alive,
+                health: v.health,
+            },
+            w.captivity.contains_key(&actor),
+        )
     }
     fn can_combat_act(&self, actor: PersonId) -> bool {
         self.independent(actor) && (self.can_fight(actor) || self.force_can_combat_act(actor))
@@ -240,7 +133,7 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         self.ensure_event_capacity(1)?;
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         self.state
             .physical
             .as_mut()
@@ -499,7 +392,7 @@ impl Simulation {
         let map = self.state.combat.as_ref().unwrap().maps[&area].id;
         let mut fighters = BTreeMap::new();
         for (i, (actor, team)) in participants.into_iter().enumerate() {
-            self.interrupt_physical(actor);
+            self.interrupt_actor_activity(actor);
             self.state
                 .physical
                 .as_mut()
@@ -561,25 +454,19 @@ impl Simulation {
     fn begin_combat_round(&mut self, id: EncounterId) -> Result<(), Error> {
         let e = &self.state.combat.as_ref().unwrap().encounters[&id];
         let w = self.state.combat.as_ref().unwrap();
-        let mut order: Vec<_> = e
+        let fatigue: Vec<_> = e
             .fighters
             .values()
-            .filter(|f| !f.withdrawn && f.joins_round <= e.round)
-            .map(|f| f.actor)
+            .map(|fighter| {
+                (
+                    fighter.actor,
+                    self.state.physical.as_ref().unwrap().actors[&fighter.actor]
+                        .vitals
+                        .fatigue,
+                )
+            })
             .collect();
-        order.sort_by_key(|actor| {
-            (
-                std::cmp::Reverse(
-                    w.profiles[actor].initiative.saturating_sub(
-                        self.state.physical.as_ref().unwrap().actors[actor]
-                            .vitals
-                            .fatigue
-                            / 1_000,
-                    ),
-                ),
-                *actor,
-            )
-        });
+        let order = w.initiative_order(id, &fatigue)?;
         let e = self
             .state
             .combat
@@ -664,20 +551,8 @@ impl Simulation {
         }
         let f = &e.fighters[&actor];
         let map = &w.maps[&e.area];
-        let position = movement.unwrap_or(f.position);
-        if !map.contains(position)
-            || distance(position, f.position) > u128::from(w.rules.movement).pow(2)
-            || !map.clear(f.position, position)
-        {
-            return Err(Error::Unavailable);
-        }
-        let reachable = |target: PersonId| {
-            e.fighters.get(&target).is_some_and(|t| {
-                !t.withdrawn
-                    && distance(position, t.position) <= u128::from(w.rules.reach).pow(2)
-                    && map.clear(position, t.position)
-            })
-        };
+        let position = w.turn_position(id, actor, movement)?;
+        let reachable = |target| w.reachable(id, position, target);
         match action {
             CombatAction::MissionObjective {
                 mission,
@@ -696,15 +571,26 @@ impl Simulation {
                 }
             }
             CombatAction::Capture { target } => {
-                if target == actor
-                    || !reachable(target)
-                    || w.captivity.contains_key(&target)
-                    || !self.state.physical.as_ref().unwrap().actors[&target]
-                        .vitals
-                        .alive
-                    || !(e.fighters[&target].surrendered || !self.can_fight(target))
-                    || self.binding_stock(actor).is_none()
-                {
+                let body = &self
+                    .state
+                    .physical
+                    .as_ref()
+                    .unwrap()
+                    .actors
+                    .get(&target)
+                    .ok_or(Error::Unavailable)?
+                    .vitals;
+                if !w.capture_possible(
+                    id,
+                    actor,
+                    position,
+                    target,
+                    game_conflict::TargetBody {
+                        alive: body.alive,
+                        health: body.health,
+                    },
+                    self.binding_stock(actor).is_some(),
+                ) {
                     return Err(Error::Unavailable);
                 }
             }
@@ -780,12 +666,11 @@ impl Simulation {
             CombatAction::Attack { target } => {
                 let w = self.state.combat.as_ref().unwrap();
                 let defending = w.encounters[&id].fighters[&target].defending;
-                let damage = self
-                    .invocation_combat_damage(
-                        actor,
-                        self.effective_combat_damage(actor, w.rules.damage)?,
-                    )?
-                    .saturating_sub(if defending { w.rules.defence } else { 0 });
+                let damage = self.invocation_combat_damage(
+                    actor,
+                    self.effective_combat_damage(actor, w.rules.damage)?,
+                )?;
+                let damage = w.rules.strike_damage(damage, defending);
                 self.damage_from_combat(target, damage);
                 self.emit(EventKind::Struck {
                     encounter: id,

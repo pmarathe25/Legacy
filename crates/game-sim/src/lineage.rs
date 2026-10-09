@@ -2,116 +2,7 @@
 //! or political office. Guardians sense that person's location and travel normally.
 use crate::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Incarnation {
-    pub person: PersonId,
-    pub bound_at: SimTime,
-    pub died_at: Option<SimTime>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Waiting {
-    pub predecessor: PersonId,
-    pub died_at: SimTime,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GuardianGoal {
-    Waiting,
-    Searching,
-    Mentoring,
-    Confined,
-    Recovering,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MentorshipRules {
-    pub lesson_duration: SimDuration,
-    pub lesson_gain: u64,
-    pub invocation_access_threshold: u64,
-}
-impl Default for MentorshipRules {
-    fn default() -> Self {
-        Self {
-            lesson_duration: MINUTE,
-            lesson_gain: 100,
-            invocation_access_threshold: 200,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Assessment {
-    pub independence: u64,
-    pub competence: u64,
-    pub judgment: u64,
-    pub risks: u64,
-    pub observed_stage: Option<LifeStage>,
-    pub observed_at: SimTime,
-    pub ready: bool,
-    pub explanation: String,
-}
-impl Default for Assessment {
-    fn default() -> Self {
-        Self {
-            independence: 0,
-            competence: 0,
-            judgment: 0,
-            risks: 0,
-            observed_stage: None,
-            observed_at: SimTime(0),
-            ready: false,
-            explanation: "No independent conduct has been observed".into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Assignment {
-    pub request: GuardianRequest,
-    pub accepted_at: SimTime,
-}
-
-fn knows_invocation() -> bool {
-    true
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Guardian {
-    pub target: Option<PersonId>,
-    /// This connection conveys location only. It grants no stock, permissions,
-    /// relationships, private intentions, or knowledge to other people.
-    pub sensed_location: Option<Location>,
-    pub sensed_at: SimTime,
-    pub goal: GuardianGoal,
-    pub explanation: String,
-    #[serde(default)]
-    pub assessments: BTreeMap<PersonId, Assessment>,
-    #[serde(default)]
-    pub assignment: Option<Assignment>,
-    #[serde(default = "knows_invocation")]
-    pub knows_invocation: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub incarnations: Vec<Incarnation>,
-    pub waiting: Option<Waiting>,
-    pub guardians: BTreeMap<PersonId, Guardian>,
-    #[serde(default)]
-    pub rules: MentorshipRules,
-    #[serde(default)]
-    pub invocation_learning: BTreeMap<PersonId, u64>,
-}
-
-impl World {
-    pub fn current(&self) -> Option<PersonId> {
-        self.incarnations
-            .last()
-            .filter(|life| life.died_at.is_none())
-            .map(|life| life.person)
-    }
-}
+pub use game_lineage::*;
 
 impl Simulation {
     pub fn lineage_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -177,21 +68,13 @@ impl Simulation {
             .keys()
             .map(|id| (*id, self.guardian_constraint(*id)))
             .collect();
-        let world = self.state.lineage.as_mut().unwrap();
-        world.incarnations.last_mut().unwrap().died_at = Some(self.state.time);
-        world.waiting = Some(Waiting {
-            predecessor: current,
-            died_at: self.state.time,
-        });
-        for (id, guardian) in &mut world.guardians {
-            guardian.assignment = None;
-            guardian.target = None;
-            guardian.sensed_location = None;
-            guardian.sensed_at = self.state.time;
-            guardian.goal = constraints[id].unwrap_or(GuardianGoal::Waiting);
-            guardian.explanation =
-                "No living incarnation; waiting for an actual post-death birth".into();
-        }
+        let world = game_lineage::observe_death(
+            self.state.lineage.as_ref().unwrap(),
+            false,
+            self.state.time,
+            &constraints,
+        );
+        self.state.lineage = Some(world);
     }
 
     /// Called only after an actual birth has created the person and body. Birth
@@ -214,20 +97,19 @@ impl Simulation {
         else {
             return;
         };
-        if life.born != self.state.time
-            || life.born <= waiting.died_at
-            || life.initial_age != SimDuration(0)
-            || life.parents.len() != 2
-            || !self.state.physical.as_ref().unwrap().actors[&child]
+        let birth = ActualBirth {
+            person: child,
+            born: life.born,
+            initial_age: life.initial_age,
+            parent_count: life.parents.len(),
+            alive: self.state.physical.as_ref().unwrap().actors[&child]
                 .vitals
-                .alive
-        {
-            return;
-        }
-        let location = self.state.people[self.person_index[&child]]
-            .location
-            .clone();
-        let constraints: BTreeMap<_, _> = self
+                .alive,
+            location: self.state.people[self.person_index[&child]]
+                .location
+                .clone(),
+        };
+        let constraints = self
             .state
             .lineage
             .as_ref()
@@ -236,26 +118,18 @@ impl Simulation {
             .keys()
             .map(|id| (*id, self.guardian_constraint(*id)))
             .collect();
-        // Role::Ruler is the existing character-control tag. Neither this change
-        // nor the lineage record grants claims, permissions, goods, or an office.
+        let Some(binding) = game_lineage::bind_actual_birth(
+            self.state.lineage.as_ref().unwrap(),
+            &[birth],
+            self.state.time,
+            &constraints,
+        ) else {
+            return;
+        };
         self.state.people[self.person_index[&waiting.predecessor]].role = Role::Citizen;
-        self.state.people[self.person_index[&child]].role = Role::Ruler;
-        self.state.ruler = child;
-        let world = self.state.lineage.as_mut().unwrap();
-        world.incarnations.push(Incarnation {
-            person: child,
-            bound_at: self.state.time,
-            died_at: None,
-        });
-        world.waiting = None;
-        for (id, guardian) in &mut world.guardians {
-            guardian.target = Some(child);
-            guardian.sensed_location = Some(location.clone());
-            guardian.sensed_at = self.state.time;
-            guardian.goal = constraints[id].unwrap_or(GuardianGoal::Searching);
-            guardian.explanation =
-                "The innate connection locates the newborn; reaching them requires travel".into();
-        }
+        self.state.people[self.person_index[&binding.successor]].role = Role::Ruler;
+        self.state.ruler = binding.successor;
+        self.state.lineage = Some(binding.lineage);
     }
 
     pub(crate) fn lineage_handles(&self, person: PersonId) -> bool {
@@ -266,23 +140,17 @@ impl Simulation {
     }
 
     fn guardian_constraint(&self, id: PersonId) -> Option<GuardianGoal> {
-        if self
-            .state
-            .combat
-            .as_ref()
-            .is_some_and(|world| world.captivity.contains_key(&id))
-        {
-            Some(GuardianGoal::Confined)
-        } else if self.state.physical.as_ref().unwrap().actors[&id]
-            .vitals
-            .health
-            == 0
-            || self.combat_restricts(id)
-        {
-            Some(GuardianGoal::Recovering)
-        } else {
-            None
-        }
+        game_lineage::guardian_constraint(
+            self.state
+                .combat
+                .as_ref()
+                .is_some_and(|w| w.captivity.contains_key(&id)),
+            self.state.physical.as_ref().unwrap().actors[&id]
+                .vitals
+                .health
+                == 0,
+            self.combat_restricts(id),
+        )
     }
 
     /// Called at the event's physical commit, not from a later query. A guardian
@@ -334,18 +202,15 @@ impl Simulation {
                 .child_signals
                 .get(&current)
                 .is_some_and(|signal| signal.urgency > 0);
-            let (independence, competence, judgment, risks) = match kind {
-                EventKind::Practiced { gain, .. } if *gain > 0 => (0, (*gain).min(100), 25, 0),
-                EventKind::Ate { .. } => (100, 0, 50, 0),
-                EventKind::Produced { .. } => (100, 100, 50, 0),
-                EventKind::Departed { .. } if known_distress => (100, 0, 0, 100),
-                EventKind::Departed { .. } => (100, 0, 50, 0),
-                EventKind::Arrived { .. } => (50, 0, 25, 0),
-                EventKind::Cared { .. } => (50, 50, 100, 0),
-                EventKind::Expressed { .. } => (0, 0, 10, 0),
-                EventKind::LessonCompleted { gain, .. } if *gain > 0 => {
-                    (0, (*gain).min(100), 50, 0)
-                }
+            let conduct = match kind {
+                EventKind::Practiced { gain, .. } => Conduct::Practice { gain: *gain },
+                EventKind::Ate { .. } => Conduct::Meal,
+                EventKind::Produced { .. } => Conduct::Production,
+                EventKind::Departed { .. } => Conduct::Departure { known_distress },
+                EventKind::Arrived { .. } => Conduct::Arrival,
+                EventKind::Cared { .. } => Conduct::Care,
+                EventKind::Expressed { .. } => Conduct::Expression,
+                EventKind::LessonCompleted { gain, .. } => Conduct::Lesson { gain: *gain },
                 _ => continue,
             };
             let stage = self.state.development.as_ref().unwrap().lives[&current].stage;
@@ -363,13 +228,16 @@ impl Simulation {
                 .assessments
                 .entry(current)
                 .or_default();
-            assessment.independence = (assessment.independence + independence).min(1_000);
-            assessment.competence = (assessment.competence + competence).min(1_000);
-            assessment.judgment = (assessment.judgment + judgment).min(1_000);
-            assessment.risks = (assessment.risks + risks).min(1_000);
-            assessment.observed_at = self.state.time;
-            assessment.observed_stage = Some(stage);
-            judge_readiness(assessment, &personality);
+            *assessment = game_lineage::observe_conduct(
+                assessment,
+                guardian_traits(&personality),
+                Observation {
+                    conduct,
+                    stage,
+                    at: self.state.time,
+                    witnessed: true,
+                },
+            );
         }
     }
 
@@ -453,8 +321,8 @@ impl Simulation {
                 .checked_add(world.rules.lesson_duration.0)
                 .ok_or(Error::Overflow)?,
         );
-        self.interrupt_physical(student);
-        self.interrupt_physical(teacher);
+        self.interrupt_actor_activity(student);
+        self.interrupt_actor_activity(teacher);
         self.state
             .lineage
             .as_mut()
@@ -778,24 +646,21 @@ impl Simulation {
             GuardianRequest::SupplyFood { .. } => unreachable!("handled above"),
             GuardianRequest::Work { site } => Command::Work { site },
         };
-        let reason = if self.guardian_constraint(guardian).is_some() || self.in_combat(guardian) {
-            Some("My body or restraints prevent that assistance")
-        } else if !matches!(body.activity, Activity::Idle | Activity::Rest) {
-            Some("I must finish my current physical duty first")
-        } else if !ready && !matches!(request, GuardianRequest::Rest) {
-            Some(
-                "I have not yet observed enough independence, competence, and judgment to follow that order",
-            )
-        } else if matches!(request, GuardianRequest::Move { .. })
-            && self.state.decisions.as_ref().unwrap().minds[&guardian]
-                .child_signals
-                .get(&requester)
-                .is_some_and(|s| s.urgency > 0)
-        {
-            Some("I will not leave while I can see that you need immediate care")
-        } else {
-            None
-        };
+        let reason = game_lineage::judge_request(
+            &request,
+            RequestInput {
+                constrained: self.guardian_constraint(guardian).is_some(),
+                in_combat: self.in_combat(guardian),
+                physical_duty_pending: !matches!(body.activity, Activity::Idle | Activity::Rest),
+                ready,
+                known_distress: self.state.decisions.as_ref().unwrap().minds[&guardian]
+                    .child_signals
+                    .get(&requester)
+                    .is_some_and(|s| s.urgency > 0),
+            },
+        )
+        .err()
+        .map(Refusal::reason);
         self.ensure_event_capacity(1)?;
         if let Some(reason) = reason {
             self.emit(EventKind::GuardianRefused {
@@ -817,7 +682,7 @@ impl Simulation {
         let accepted = if let Command::Move { destination } = command {
             self.start_movement(guardian, destination)
         } else {
-            self.debug_physical_command(guardian, command)
+            self.debug_actor_command(guardian, command)
         };
         match accepted {
             Ok(()) => {
@@ -889,9 +754,13 @@ impl Simulation {
                         .assessments
                         .entry(person)
                         .or_default();
-                    assessment.observed_stage = Some(stage);
-                    assessment.observed_at = self.state.time;
-                    judge_readiness(assessment, &personality);
+                    *assessment = game_lineage::observe_stage(
+                        assessment,
+                        guardian_traits(&personality),
+                        stage,
+                        self.state.time,
+                        true,
+                    );
                 }
             }
             let sensed = current.map(|person| {
@@ -988,7 +857,7 @@ impl Simulation {
                 let accepted = if let Command::Move { destination } = command {
                     self.start_movement(id, destination)
                 } else {
-                    self.debug_physical_command(id, command)
+                    self.debug_actor_command(id, command)
                 };
                 if accepted.is_err() {
                     self.state
@@ -1020,119 +889,52 @@ impl Simulation {
                 Some(command),
             );
         }
-        if matches!(own_location, Location::InTransit { .. }) {
-            return (
-                GuardianGoal::Searching,
-                "Traveling along the current physical route toward the sensed incarnation".into(),
-                None,
-            );
-        }
-        if own_location != target_location {
-            let destination = match target_location {
-                Location::AtArea(area) => *area,
-                Location::InTransit { to, .. } => *to,
-            };
-            return (
-                GuardianGoal::Searching,
-                "The innate connection gives a destination; a known traversable route is still needed".into(),
-                Some(Command::Move { destination }),
-            );
-        }
-        if !matches!(
-            body.activity,
-            Activity::Idle | Activity::Rest | Activity::Work { .. }
-        ) {
-            return (
-                GuardianGoal::Mentoring,
-                "Completing the current physical assistance before reconsidering".into(),
-                None,
-            );
-        }
-        let Location::AtArea(area) = own_location else {
-            unreachable!()
-        };
         let mind = &self.state.decisions.as_ref().unwrap().minds[&guardian];
-        // Needs and food access come from ordinary local observations. The
-        // lineage connection does not reveal private body needs or distant food.
-        if let Some(signal) = mind
+        let stocks: Vec<_> = mind.knowledge.values().cloned().collect();
+        let need = mind
             .child_signals
             .get(&target)
-            .filter(|s| s.area == *area && s.observed_at == self.state.time)
-        {
-            if signal.urgency > 0 {
-                if let Some(food) = mind.knowledge.values().find(|fact| {
-                    fact.good == Good::Food
-                        && fact.area == *area
-                        && fact.accessible
-                        && fact.quantity >= self.state.physical.as_ref().unwrap().rules.meal_size
-                }) {
-                    return (
-                        GuardianGoal::Mentoring,
-                        "Observed distress motivates care using food the guardian knows and can access".into(),
-                        Some(Command::Care { child: target, source: food.inventory }),
-                    );
-                }
-                return (
-                    GuardianGoal::Mentoring,
-                    "The child needs food, but no usable known supply is available here".into(),
-                    None,
-                );
-            }
-            if signal.preference == Some(ChildhoodInterest::Company) {
-                return (
-                    GuardianGoal::Mentoring,
-                    "Responding to the child's observed request for company".into(),
-                    Some(Command::Comfort { child: target }),
-                );
-            }
-        }
-        (
-            GuardianGoal::Mentoring,
-            if self.state.lineage.as_ref().unwrap().guardians[&guardian]
+            .map(|signal| NeedObservation {
+                area: signal.area,
+                observed_at: signal.observed_at,
+                urgency: signal.urgency,
+                preference: signal.preference,
+            });
+        let intent = game_lineage::guardian_intention(GuardianInput {
+            target,
+            own_location,
+            target_location,
+            now: self.state.time,
+            can_reconsider: matches!(
+                body.activity,
+                Activity::Idle | Activity::Rest | Activity::Work { .. }
+            ),
+            should_rest: matches!(body.activity, Activity::Idle | Activity::Work { .. }),
+            ready: self.state.lineage.as_ref().unwrap().guardians[&guardian]
                 .assessments
                 .get(&target)
-                .is_some_and(|assessment| assessment.ready)
-            {
-                "Present with the incarnation; observed readiness permits requests, which I still judge individually".into()
-            } else {
-                "Present with the incarnation; further observed competence and independence are needed before I follow orders".into()
-            },
-            matches!(body.activity, Activity::Idle | Activity::Work { .. })
-                .then_some(Command::Rest),
-        )
+                .is_some_and(|a| a.ready),
+            need,
+            known_stocks: &stocks,
+            meal_size: self.state.physical.as_ref().unwrap().rules.meal_size,
+        });
+        let command = intent.action.map(|action| match action {
+            GuardianAction::Move { destination } => Command::Move { destination },
+            GuardianAction::Care { child, source } => Command::Care { child, source },
+            GuardianAction::Comfort { child } => Command::Comfort { child },
+            GuardianAction::Rest => Command::Rest,
+        });
+        (intent.goal, intent.explanation, command)
     }
 }
 
-fn judge_readiness(assessment: &mut Assessment, personality: &decisions::Personality) {
-    let threshold =
-        250 + u64::from(personality.discipline) / 5 + u64::from(personality.patience) / 10
-            - u64::from(personality.risk_tolerance) / 5;
-    let risk_weight = 1_000 - u64::from(personality.risk_tolerance);
-    let score = (assessment.independence + assessment.competence + assessment.judgment)
-        .saturating_sub(assessment.risks * risk_weight / 1_000);
-    assessment.ready = assessment
-        .observed_stage
-        .is_some_and(|stage| stage != LifeStage::Infant)
-        && assessment.independence >= 100
-        && assessment.competence >= 100
-        && assessment.judgment >= 75
-        && score >= threshold;
-    assessment.explanation = format!(
-        "{}; witnessed independence {}, competence {}, judgment {}, risk {}. My required evidence score is {}, observed {}",
-        if assessment.ready {
-            "Ready for requests that still use my own judgment"
-        } else {
-            "More observed independence, competence, or judgment is needed"
-        },
-        assessment.independence,
-        assessment.competence,
-        assessment.judgment,
-        assessment.risks,
-        threshold,
-        score,
-    );
+fn guardian_traits(personality: &decisions::Personality) -> GuardianTraits {
+    GuardianTraits {
+        discipline: personality.discipline,
+        patience: personality.patience,
+        risk_tolerance: personality.risk_tolerance,
+    }
 }
-
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let Some(world) = &state.lineage else {
         return Ok(());

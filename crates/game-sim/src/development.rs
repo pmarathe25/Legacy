@@ -2,68 +2,12 @@
 //! not shared ownership or mandatory care; actual care records the supporting people.
 use crate::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
-    pub conception_time: SimDuration,
-    pub gestation: SimDuration,
-    pub infancy: SimDuration,
-    pub adulthood: SimDuration,
-    pub elderhood: SimDuration,
-    pub lifespan: SimDuration,
-}
-impl Rules {
-    pub fn human() -> Self {
-        let day = 86_400_000;
-        let year = 365 * day;
-        Self {
-            conception_time: MINUTE,
-            gestation: SimDuration(280 * day),
-            infancy: SimDuration(2 * year),
-            adulthood: SimDuration(18 * year),
-            elderhood: SimDuration(65 * year),
-            lifespan: SimDuration(90 * year),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Reproduction {
-    Gestates,
-    SuppliesSeed,
-    Neither,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Life {
-    pub id: PersonId,
-    pub born: SimTime,
-    pub initial_age: SimDuration,
-    pub stage: LifeStage,
-    pub reproduction: Reproduction,
-    pub parents: Vec<PersonId>,
-    pub caregivers: BTreeSet<PersonId>,
-    #[serde(default)]
-    pub preference: Option<(ChildhoodInterest, SimTime)>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PregnancyState {
-    Conceiving { completes: SimTime },
-    Gestating { due: SimTime },
-    Born(PersonId),
-    Ended,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Pregnancy {
-    pub id: PregnancyId,
-    pub gestator: PersonId,
-    pub partner: PersonId,
-    pub state: PregnancyState,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub rules: Rules,
-    pub lives: BTreeMap<PersonId, Life>,
-    pub pregnancies: BTreeMap<PregnancyId, Pregnancy>,
-}
+use game_characters::development::{
+    BirthEffect, ConceptionEffect, ParentChoiceInput, reproductive_pair,
+};
+pub use game_characters::development::{
+    Life, Pregnancy, PregnancyState, Reproduction, Rules, World,
+};
 
 impl Simulation {
     pub fn life_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -182,24 +126,37 @@ impl Simulation {
     }
 
     fn willing_parent(&self, id: PersonId, partner: PersonId) -> bool {
+        if !self.social_family_intent(id, partner) {
+            return false;
+        }
         let Some(mind) = self.state.decisions.as_ref().and_then(|w| w.minds.get(&id)) else {
             return false;
         };
         let body = &self.state.physical.as_ref().unwrap().actors[&id];
-        self.adult(id)
-            && body.vitals.alive
-            && body.vitals.health > 0
-            && body.vitals.hunger < self.state.physical.as_ref().unwrap().rules.meal_relief
-            && matches!(body.activity, Activity::Idle | Activity::Rest)
-            && mind.dream == decisions::Dream::Parenthood
-            && mind
-                .relationships
-                .get(&partner)
-                .is_some_and(|r| r.affection >= 100 && r.trust >= 0)
-            && mind
+        let Some(life) = self
+            .state
+            .development
+            .as_ref()
+            .and_then(|world| world.lives.get(&id))
+        else {
+            return false;
+        };
+        let relationship = mind.relationships.get(&partner);
+        game_characters::development::willing_parent(ParentChoiceInput {
+            stage: life.stage,
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            hunger: body.vitals.hunger,
+            meal_relief: self.state.physical.as_ref().unwrap().rules.meal_relief,
+            available: matches!(body.activity, Activity::Idle | Activity::Rest),
+            wants_parenthood: mind.dream == decisions::Dream::Parenthood,
+            partner_affection: relationship.map_or(0, |relation| relation.affection),
+            partner_trust: relationship.map_or(0, |relation| relation.trust),
+            knows_adequate_food: mind
                 .knowledge
                 .values()
-                .any(|f| f.good == Good::Food && f.accessible && f.quantity.0 >= 3_000)
+                .any(|fact| fact.good == Good::Food && fact.accessible && fact.quantity.0 >= 3_000),
+        })
     }
 
     pub(crate) fn start_conception(
@@ -228,11 +185,9 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        let (gestator, supplier) = match (a.reproduction, b.reproduction) {
-            (Reproduction::Gestates, Reproduction::SuppliesSeed) => (actor, partner),
-            (Reproduction::SuppliesSeed, Reproduction::Gestates) => (partner, actor),
-            _ => return Err(Error::Unavailable),
-        };
+        let (gestator, supplier) =
+            reproductive_pair((actor, a.reproduction), (partner, b.reproduction))
+                .ok_or(Error::Unavailable)?;
         if self.pregnancy_index.contains_key(&gestator) {
             return Err(Error::Unavailable);
         }
@@ -254,8 +209,8 @@ impl Simulation {
             .checked_add(world.rules.gestation.0)
             .ok_or(Error::Overflow)?;
         let id = PregnancyId(allocate(&mut self.state)?);
-        self.interrupt_physical(actor);
-        self.interrupt_physical(partner);
+        self.interrupt_actor_activity(actor);
+        self.interrupt_actor_activity(partner);
         self.state.development.as_mut().unwrap().pregnancies.insert(
             id,
             Pregnancy {
@@ -329,45 +284,32 @@ impl Simulation {
                 && matches!(a.activity, Activity::Conceive { pregnancy, .. } if pregnancy == id)
         }) && self.state.people[self.person_index[&pair[0]]].location
             == self.state.people[self.person_index[&pair[1]]].location;
-        self.state
+        let rules = self.state.development.as_ref().unwrap().rules.clone();
+        let effect = self
+            .state
             .development
             .as_mut()
             .unwrap()
             .pregnancies
             .get_mut(&id)
             .unwrap()
-            .state = PregnancyState::Ended;
-        for p in pair {
-            self.interrupt_physical(p);
+            .complete_conception(self.state.time, &rules, valid)
+            .expect("preflight conception deadline");
+        for person in pair {
+            self.interrupt_actor_activity(person);
         }
-        if valid {
-            let due = SimTime(
-                self.state.time.0 + self.state.development.as_ref().unwrap().rules.gestation.0,
-            );
-            self.state
-                .development
-                .as_mut()
-                .unwrap()
-                .pregnancies
-                .get_mut(&id)
-                .unwrap()
-                .state = PregnancyState::Gestating { due };
-            self.state.due.entry(due).or_default().push(Due::Birth(id));
-            self.emit(EventKind::Conceived {
-                pregnancy: id,
-                parents: pair,
-            });
-        } else {
-            self.pregnancy_index.remove(&pregnancy.gestator);
-            self.state
-                .development
-                .as_mut()
-                .unwrap()
-                .pregnancies
-                .get_mut(&id)
-                .unwrap()
-                .state = PregnancyState::Ended;
-            self.emit(EventKind::PregnancyEnded { pregnancy: id });
+        match effect {
+            ConceptionEffect::Gestating { due } => {
+                self.state.due.entry(due).or_default().push(Due::Birth(id));
+                self.emit(EventKind::Conceived {
+                    pregnancy: id,
+                    parents: pair,
+                });
+            }
+            ConceptionEffect::Ended => {
+                self.pregnancy_index.remove(&pregnancy.gestator);
+                self.emit(EventKind::PregnancyEnded { pregnancy: id });
+            }
         }
     }
 
@@ -375,6 +317,9 @@ impl Simulation {
         let Some(world) = &self.state.development else {
             return Ok(());
         };
+        if due.iter().any(|event| matches!(event, Due::Physical(actor) if matches!(self.state.physical.as_ref().unwrap().actors[actor].activity, Activity::Conceive { .. }))) {
+            next.0.checked_add(world.rules.gestation.0).ok_or(Error::Overflow)?;
+        }
         let births = due.iter().filter(|d| matches!(d, Due::Birth(_))).count() as u64;
         self.state
             .next_id
@@ -399,27 +344,22 @@ impl Simulation {
                 if !a.vitals.alive {
                     return;
                 }
-                let world = self.state.development.as_ref().unwrap();
-                let life = &world.lives[&id];
-                let age = self.state.time.0 - life.born.0 + life.initial_age.0;
-                if age
-                    >= world
-                        .rules
-                        .lifespan
-                        .0
-                        .saturating_sub(self.invocation_lifespan_loss(id))
-                {
+                let effect = self
+                    .state
+                    .development
+                    .as_ref()
+                    .unwrap()
+                    .evaluate_age(
+                        id,
+                        self.state.time,
+                        self.invocation_lifespan_loss(id),
+                        self.state.people[self.person_index[&id]].role != Role::Guardian,
+                    )
+                    .expect("preflight age deadline");
+                if effect.died {
                     self.end_life(id);
                 } else {
-                    let stage = if age < world.rules.infancy.0 {
-                        LifeStage::Infant
-                    } else if age < world.rules.adulthood.0 {
-                        LifeStage::Child
-                    } else if age < world.rules.elderhood.0 {
-                        LifeStage::Adult
-                    } else {
-                        LifeStage::Elder
-                    };
+                    let stage = effect.stage;
                     self.state
                         .development
                         .as_mut()
@@ -448,18 +388,20 @@ impl Simulation {
             return;
         }
         self.pregnancy_index.remove(&pregnancy.gestator);
-        if !self.state.physical.as_ref().unwrap().actors[&pregnancy.gestator]
+        let gestator_alive = self.state.physical.as_ref().unwrap().actors[&pregnancy.gestator]
             .vitals
-            .alive
-        {
-            self.state
-                .development
-                .as_mut()
-                .unwrap()
-                .pregnancies
-                .get_mut(&id)
-                .unwrap()
-                .state = PregnancyState::Ended;
+            .alive;
+        let effect = self
+            .state
+            .development
+            .as_mut()
+            .unwrap()
+            .pregnancies
+            .get_mut(&id)
+            .unwrap()
+            .birth_due(self.state.time, gestator_alive)
+            .expect("preflight actual birth deadline");
+        if effect == BirthEffect::Ended {
             self.emit(EventKind::PregnancyEnded { pregnancy: id });
             return;
         }
@@ -515,6 +457,8 @@ impl Simulation {
         self.state.physical.as_mut().unwrap().actors.insert(
             child,
             physical::Actor {
+                fatigue_remainder: 0,
+                health_remainder: 0,
                 vitals: Vitals {
                     hunger: 0,
                     fatigue: 0,
@@ -534,7 +478,7 @@ impl Simulation {
                 born: self.state.time,
                 initial_age: SimDuration(0),
                 stage: LifeStage::Infant,
-                reproduction: if child.0.is_multiple_of(2) {
+                reproduction: if birth_role_mix(self.state.seed, id).is_multiple_of(2) {
                     Reproduction::Gestates
                 } else {
                     Reproduction::SuppliesSeed
@@ -544,7 +488,12 @@ impl Simulation {
                 preference: None,
             },
         );
-        world.pregnancies.get_mut(&id).unwrap().state = PregnancyState::Born(child);
+        world
+            .pregnancies
+            .get_mut(&id)
+            .unwrap()
+            .record_actual_birth(child, self.state.time)
+            .expect("actual completed birth");
         let mut mind = self.state.decisions.as_ref().unwrap().minds[&pregnancy.gestator].clone();
         mind.interests.clear();
         mind.routes.clear();
@@ -628,24 +577,15 @@ impl Simulation {
             return;
         }
         let world = self.state.development.as_ref().unwrap();
-        let life = &world.lives[&id];
-        let age = self.state.time.0 - life.born.0 + life.initial_age.0;
-        if let Some(threshold) = [
-            world.rules.infancy,
-            world.rules.adulthood,
-            world.rules.elderhood,
-            SimDuration(
-                world
-                    .rules
-                    .lifespan
-                    .0
-                    .saturating_sub(self.invocation_lifespan_loss(id)),
-            ),
-        ]
-        .into_iter()
-        .find(|t| t.0 > age)
+        if let Some(at) = world.lives[&id]
+            .next_age_deadline(
+                &world.rules,
+                self.state.time,
+                self.invocation_lifespan_loss(id),
+                true,
+            )
+            .expect("validated life age arithmetic")
         {
-            let at = SimTime(life.born.0 + threshold.0 - life.initial_age.0);
             self.state.due.entry(at).or_default().push(Due::Age(id));
         }
     }
@@ -665,7 +605,7 @@ impl Simulation {
         a.vitals.alive = false;
         a.vitals.health = 0;
         a.job = None;
-        self.interrupt_physical(id);
+        self.interrupt_actor_activity(id);
         self.state.people[self.person_index[&id]].route.clear();
         for due in self.state.due.values_mut() {
             due.retain(|d| !matches!(d, Due::Age(p) | Due::Arrive(p) if *p == id));
@@ -683,32 +623,33 @@ impl Simulation {
         if self.state.development.is_none() {
             return;
         }
+        // The host's derived index selects affected records; lifecycle rules
+        // remain inside the character domain, without scanning old pregnancies
+        // whenever any person changes a physical activity.
         let mut ids = BTreeSet::new();
         if let Activity::Conceive { pregnancy, .. } =
             self.state.physical.as_ref().unwrap().actors[&actor].activity
-            && matches!(
-                self.state.development.as_ref().unwrap().pregnancies[&pregnancy].state,
-                PregnancyState::Conceiving { .. }
-            )
         {
             ids.insert(pregnancy);
         }
         if died && let Some(pregnancy) = self.pregnancy_index.get(&actor) {
             ids.insert(*pregnancy);
         }
-        for id in ids {
-            let p = self
-                .state
-                .development
-                .as_mut()
-                .unwrap()
-                .pregnancies
-                .get_mut(&id)
-                .unwrap();
-            let pair = [p.gestator, p.partner];
-            self.pregnancy_index.remove(&p.gestator);
-            let was_conceiving = matches!(p.state, PregnancyState::Conceiving { .. });
-            p.state = PregnancyState::Ended;
+        let ended: Vec<_> = ids
+            .into_iter()
+            .filter_map(|id| {
+                self.state
+                    .development
+                    .as_mut()
+                    .unwrap()
+                    .invalidate_pregnancy(id, actor, died)
+            })
+            .collect();
+        for effect in ended {
+            let id = effect.pregnancy;
+            let pair = effect.parents;
+            let was_conceiving = effect.was_conceiving;
+            self.pregnancy_index.remove(&pair[0]);
             if was_conceiving {
                 for person in pair {
                     self.state
@@ -759,15 +700,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let Some(world) = &state.development else {
         return Ok(());
     };
+    game_characters::development::validate_local(world, state.time)?;
     let fail = || Error::InvalidSave("inconsistent development state".into());
-    if world.lives.len() != state.people.len()
-        || world.rules.conception_time.0 == 0
-        || world.rules.gestation.0 == 0
-        || !(0 < world.rules.infancy.0
-            && world.rules.infancy < world.rules.adulthood
-            && world.rules.adulthood < world.rules.elderhood
-            && world.rules.elderhood < world.rules.lifespan)
-    {
+    if world.lives.len() != state.people.len() {
         return Err(fail());
     }
     let mut age_deadlines = BTreeSet::new();
@@ -841,15 +776,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 .checked_sub(life.born.0)
                 .and_then(|v| v.checked_add(life.initial_age.0))
                 .ok_or_else(fail)?;
-            let stage = if age < world.rules.infancy.0 {
-                LifeStage::Infant
-            } else if age < world.rules.adulthood.0 {
-                LifeStage::Child
-            } else if age < world.rules.elderhood.0 {
-                LifeStage::Adult
-            } else {
-                LifeStage::Elder
-            };
+            let stage = world.rules.stage_at(age);
             if person.role != Role::Guardian
                 && (age
                     >= world.rules.lifespan.0.saturating_sub(
@@ -906,4 +833,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+fn birth_role_mix(seed: u64, pregnancy: PregnancyId) -> u64 {
+    let mut value = seed ^ pregnancy.0.wrapping_mul(0x9e3779b97f4a7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+    value ^ (value >> 31)
 }

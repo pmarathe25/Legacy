@@ -1,59 +1,8 @@
 //! Harvestable natural matter renews from climate, not from a person's demand.
 //! Collection creates one physical cargo lot and debits the natural deposit.
 use crate::*;
+pub use game_economy::ecology::{Gathering, Plot, Resource, World};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Resource {
-    pub id: ResourceId,
-    pub area: AreaId,
-    pub kind: ResourceKind,
-    pub remaining: Quantity,
-    pub capacity: Quantity,
-    pub daily_growth: Quantity,
-    pub growth_remainder: u64,
-    pub decay_permille: u16,
-    pub soil_water: u64,
-    pub water_capacity: u64,
-    pub optimal_water: u64,
-    pub minimum_temperature: i32,
-    pub optimum_temperature: i32,
-    pub contamination: u16,
-    pub runoff_contamination: u16,
-    pub labor_per_unit: SimDuration,
-    pub workers: usize,
-    pub access: BTreeSet<PersonId>,
-    pub custodian: Option<PersonId>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Plot {
-    pub id: SiteId,
-    pub area: AreaId,
-    pub fertility: u16,
-    pub soil_water: u64,
-    pub water_capacity: u64,
-    pub access: BTreeSet<PersonId>,
-    pub custodian: Option<PersonId>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Gathering {
-    pub resource: ResourceId,
-    pub destination: InventoryId,
-    pub quantity: Quantity,
-    pub tool: Option<InventoryId>,
-    pub completes: SimTime,
-    pub unauthorized: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub resources: BTreeMap<ResourceId, Resource>,
-    pub plots: BTreeMap<SiteId, Plot>,
-    pub jobs: BTreeMap<PersonId, Gathering>,
-    pub known: BTreeMap<PersonId, BTreeMap<ResourceId, ResourceView>>,
-    pub known_plots: BTreeMap<PersonId, BTreeMap<SiteId, PlotView>>,
-    pub day: u64,
-    #[serde(default)]
-    pub next_request: BTreeMap<PersonId, BTreeMap<ResourceId, SimTime>>,
-}
 impl Simulation {
     pub fn ecology_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         Self::ecology_with_config(seed, execution, environment::Config::default())
@@ -498,7 +447,7 @@ impl Simulation {
                 BTreeSet::from([actor]),
             )?
         };
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         self.state.ecology.as_mut().unwrap().jobs.insert(
             actor,
             Gathering {
@@ -613,76 +562,18 @@ impl Simulation {
             .activity = Activity::Idle;
     }
     pub(crate) fn evaluate_ecology(&self, next: SimTime) -> Result<Option<World>, Error> {
-        let Some(mut world) = self.state.ecology.clone() else {
+        let Some(world) = &self.state.ecology else {
             return Ok(None);
         };
         let environment = self.state.environment.as_ref().ok_or(Error::Unavailable)?;
-        let day = next.0 / environment.calendar.day.0;
-        if day == world.day {
-            return Ok(Some(world));
-        }
-        if day != world.day + 1 {
-            return Err(Error::InvalidSave("ecology skipped a calendar day".into()));
-        }
-        for source in world.resources.values_mut() {
-            source.soil_water = source
-                .soil_water
-                .saturating_add(environment.weather.rain)
-                .min(source.water_capacity)
-                .saturating_sub(environment.weather.evaporation);
-            let warmth = i64::from(environment.weather.temperature - source.minimum_temperature)
-                .max(0)
-                .min(i64::from(
-                    source.optimum_temperature - source.minimum_temperature,
-                )) as u64
-                * 1_000
-                / u64::try_from(source.optimum_temperature - source.minimum_temperature)
-                    .map_err(|_| Error::Overflow)?;
-            let moisture = (u128::from(source.soil_water.min(source.optimal_water)) * 1_000
-                / u128::from(source.optimal_water)) as u64;
-            let growth =
-                u128::from(source.daily_growth.0) * u128::from(warmth) * u128::from(moisture)
-                    + u128::from(source.growth_remainder);
-            let available = source.capacity.0 - source.remaining.0;
-            let added = u64::try_from((growth / 1_000_000).min(u128::from(available)))
-                .map_err(|_| Error::Overflow)?;
-            source.growth_remainder = if added == available {
-                0
-            } else {
-                (growth % 1_000_000) as u64
-            };
-            let decay =
-                (u128::from(source.remaining.0) * u128::from(source.decay_permille) / 1_000) as u64;
-            let previous = source.remaining.0 - decay;
-            source.remaining.0 = previous.saturating_add(added).min(source.capacity.0);
-            if source.kind == ResourceKind::Spring && added > 0 {
-                source.contamination = ((u128::from(previous) * u128::from(source.contamination)
-                    + u128::from(added) * u128::from(source.runoff_contamination))
-                    / u128::from(source.remaining.0.max(1)))
-                    as u16;
-            }
-        }
-        for plot in world.plots.values_mut() {
-            plot.soil_water = plot
-                .soil_water
-                .saturating_add(if environment.weather.temperature > 0 {
-                    environment.weather.rain
-                } else {
-                    0
-                })
-                .min(plot.water_capacity)
-                .saturating_sub(environment.weather.evaporation);
-            if environment.weather.temperature > environment.crop.base_temperature
-                && plot.soil_water > 0
-            {
-                plot.fertility = plot
-                    .fertility
-                    .saturating_add(environment.crop.soil_recovery)
-                    .min(1_000);
-            }
-        }
-        world.day = day;
-        Ok(Some(world))
+        world
+            .advance(game_economy::ecology::RenewalInput {
+                day: next.0 / environment.calendar.day.0,
+                weather: &environment.weather,
+                base_temperature: environment.crop.base_temperature,
+                soil_recovery: environment.crop.soil_recovery,
+            })
+            .map(Some)
     }
     pub(crate) fn commit_ecology(&mut self, output: Option<World>) {
         if let Some(output) = output {
@@ -1022,7 +913,7 @@ mod tests {
     fn fixture() -> Simulation {
         let mut sim = Simulation::ecology_fixture(63, Execution::default()).unwrap();
         for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
-            sim.debug_physical_command(actor, Command::Cancel).unwrap();
+            sim.debug_actor_command(actor, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
@@ -1141,7 +1032,7 @@ mod tests {
         .unwrap();
         let destination = sim.state.ecology.as_ref().unwrap().jobs[&actor].destination;
         sim.advance(SimDuration(30_000)).unwrap();
-        sim.debug_physical_command(actor, Command::Cancel).unwrap();
+        sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
         assert_eq!(sim.state.inventories[&destination].quantity, Quantity(0));
         assert_eq!(

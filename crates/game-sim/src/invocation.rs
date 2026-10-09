@@ -2,31 +2,7 @@
 //! Fractional burden and physiology use opening-state integer arithmetic.
 use crate::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
-    pub activation_burden: u64,
-    pub activation_fatigue: u64,
-    pub strain_thresholds: [u64; 3],
-    pub emotional_thresholds: [u64; 3],
-    pub identity_thresholds: [u64; 3],
-    pub strain_per_mille: [u64; 4],
-    pub health_harm_per_mille: [u64; 4],
-    pub loss_threshold: u64,
-    pub loss_gap: u64,
-    pub loss_duration: SimDuration,
-    pub permanent_burden: u64,
-    pub permanent_exposure: SimDuration,
-    pub permanent_interval: SimDuration,
-    pub permanent_identity_per_band: u16,
-    pub lifespan_loss_per_band: SimDuration,
-    pub burden_recovery_per_mille: u64,
-    pub exposure_recovery_per_mille: u64,
-    pub controller_quantum: SimDuration,
-    pub writing_time: SimDuration,
-    pub reading_time: SimDuration,
-    pub teaching_time: SimDuration,
-    pub moving_time: SimDuration,
-}
+pub use game_invocation::{Burden, Consent, Episode, Rules, severity};
 
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let Some(w) = &s.invocation else {
@@ -46,44 +22,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         .collect();
     let areas: BTreeSet<_> = s.areas.iter().map(|a| a.id).collect();
     let r = &w.rules;
-    let increasing =
-        |values: [u64; 3]| values[0] > 0 && values[0] < values[1] && values[1] < values[2];
-    if !increasing(r.strain_thresholds)
-        || !increasing(r.emotional_thresholds)
-        || !increasing(r.identity_thresholds)
-        || r.strain_per_mille
-            .iter()
-            .chain(r.health_harm_per_mille.iter())
-            .any(|v| *v > 1_000_000)
-        || r.activation_fatigue == 0
-        || r.activation_burden == 0
-        || r.loss_threshold == 0
-        || r.loss_gap == 0
-        || r.loss_duration.0 == 0
-        || r.permanent_burden < r.loss_threshold
-        || r.permanent_exposure.0 == 0
-        || r.permanent_interval.0 == 0
-        || r.permanent_identity_per_band == 0
-        || r.permanent_identity_per_band > 100
-        || r.lifespan_loss_per_band.0 == 0
-        || r.lifespan_loss_per_band.0.checked_mul(252).is_none()
-        || r.burden_recovery_per_mille == 0
-        || r.burden_recovery_per_mille > 1_000_000
-        || r.exposure_recovery_per_mille == 0
-        || r.exposure_recovery_per_mille > 1_000
-        || r.controller_quantum.0 == 0
-        || r.controller_quantum > r.loss_duration
-        || [
-            r.writing_time,
-            r.reading_time,
-            r.teaching_time,
-            r.moving_time,
-        ]
-        .iter()
-        .any(|d| d.0 == 0)
-    {
-        return Err(fail());
-    }
+    game_invocation::validate_rules(r).map_err(|_| fail())?;
     let valid_lives = |selected: &BTreeSet<PersonId>| {
         !selected.is_empty()
             && selected.len() <= 8
@@ -144,8 +83,6 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         if !lives.contains(actor)
             || b.burden_remainder >= 1_000
             || b.exposure_remainder >= 1_000
-            || b.fatigue_remainder >= 1_000
-            || b.health_remainder >= 1_000
             || b.temporary_identity > 15
             || b.emotional_disruption > 300
             || b.permanent_identity > 252 * r.permanent_identity_per_band
@@ -324,76 +261,6 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     Ok(())
 }
-impl Rules {
-    pub fn human() -> Self {
-        let hour = 3_600_000;
-        let day = 24 * hour;
-        Self {
-            activation_burden: 60_000,
-            activation_fatigue: 10_000,
-            strain_thresholds: [hour, 8 * hour, 2 * day],
-            emotional_thresholds: [2 * hour, 12 * hour, 3 * day],
-            identity_thresholds: [4 * hour, day, 4 * day],
-            strain_per_mille: [0, 50, 250, 2_000],
-            health_harm_per_mille: [0, 0, 0, 500],
-            loss_threshold: day,
-            loss_gap: 6 * hour,
-            loss_duration: SimDuration(6 * hour),
-            permanent_burden: 30 * day,
-            permanent_exposure: SimDuration(90 * day),
-            permanent_interval: SimDuration(30 * day),
-            permanent_identity_per_band: 10,
-            lifespan_loss_per_band: SimDuration(365 * day),
-            burden_recovery_per_mille: 1_000,
-            exposure_recovery_per_mille: 100,
-            controller_quantum: MINUTE,
-            writing_time: MINUTE,
-            reading_time: MINUTE,
-            teaching_time: MINUTE,
-            moving_time: MINUTE,
-        }
-    }
-    fn fixture() -> Self {
-        Self {
-            activation_burden: 6_000,
-            activation_fatigue: 1_000,
-            strain_thresholds: [120_000, 360_000, 720_000],
-            emotional_thresholds: [180_000, 420_000, 780_000],
-            identity_thresholds: [240_000, 480_000, 840_000],
-            strain_per_mille: [0, 50, 250, 2_000],
-            health_harm_per_mille: [0, 0, 0, 500],
-            loss_threshold: 300_000,
-            loss_gap: 180_000,
-            loss_duration: SimDuration(420_000),
-            permanent_burden: 600_000,
-            permanent_exposure: SimDuration(600_000),
-            permanent_interval: SimDuration(300_000),
-            permanent_identity_per_band: 10,
-            lifespan_loss_per_band: MINUTE,
-            burden_recovery_per_mille: 1_000,
-            exposure_recovery_per_mille: 100,
-            controller_quantum: SimDuration(6_000),
-            writing_time: MINUTE,
-            reading_time: MINUTE,
-            teaching_time: MINUTE,
-            moving_time: MINUTE,
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Burden {
-    pub burden: u64,
-    pub exposure: u64,
-    pub uninterrupted: u64,
-    pub burden_remainder: u16,
-    pub exposure_remainder: u16,
-    pub fatigue_remainder: u16,
-    pub health_remainder: u16,
-    pub temporary_identity: u16,
-    pub emotional_disruption: u16,
-    pub permanent_identity: u16,
-    pub lifespan_loss: u64,
-}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PastLife {
     pub person: PersonId,
@@ -402,17 +269,6 @@ pub struct PastLife {
     pub skills: Vec<SkillView>,
     pub institutions: Vec<InstitutionView>,
     pub cases: Vec<SocialCaseView>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Episode {
-    pub actor: PersonId,
-    pub starts: SimTime,
-    pub ends: SimTime,
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Consent {
-    pub temporary: u8,
-    pub permanent: u8,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Active {
@@ -492,21 +348,6 @@ pub(crate) struct PendingInvocation {
     end_episode: Option<PersonId>,
 }
 
-fn severity(burden: u64, thresholds: [u64; 3]) -> u8 {
-    thresholds.iter().filter(|v| burden >= **v).count() as u8
-}
-fn signed_accumulator(
-    value: u64,
-    remainder: u16,
-    elapsed: u64,
-    rate: i128,
-    maximum: u64,
-) -> (u64, u16) {
-    let total = (i128::from(value) * 1_000 + i128::from(remainder) + i128::from(elapsed) * rate)
-        .clamp(0, i128::from(maximum) * 1_000);
-    ((total / 1_000) as u64, (total % 1_000) as u16)
-}
-
 impl Simulation {
     pub fn invocation_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::skills_fixture(seed, execution)?;
@@ -552,7 +393,7 @@ impl Simulation {
             .find(|s| s.area == AreaId(3))
             .unwrap()
             .id;
-        sim.debug_physical_command(old, Command::Work { site })?;
+        sim.debug_actor_command(old, Command::Work { site })?;
         sim.advance(MINUTE)?;
         let damage = sim.state.physical.as_ref().unwrap().rules.max_health;
         sim.debug_injure(old, damage)?;
@@ -666,18 +507,18 @@ impl Simulation {
                 .is_some_and(|w| w.actors[&actor].vitals.alive)
     }
     pub(crate) fn controls_actor(&self, actor: PersonId) -> bool {
-        self.state
+        let episode = self
+            .state
             .invocation
             .as_ref()
             .and_then(|w| w.active.as_ref())
-            .and_then(|a| a.episode.as_ref())
-            .is_some_and(|e| {
-                e.actor == actor
-                    && self.state.time < e.ends
-                    && self.state.physical.as_ref().unwrap().actors[&actor]
-                        .vitals
-                        .alive
-            })
+            .and_then(|a| a.episode.as_ref());
+        let alive = self
+            .state
+            .physical
+            .as_ref()
+            .is_some_and(|w| w.actors.get(&actor).is_some_and(|body| body.vitals.alive));
+        game_invocation::controls_actor(episode, actor, self.state.time, alive)
     }
     pub(crate) fn required_invocation_input(&self) -> Option<WarningId> {
         self.state
@@ -690,37 +531,18 @@ impl Simulation {
     fn required_bands(
         &self,
         lives: &BTreeSet<PersonId>,
-        b: &Burden,
+        burden: &Burden,
         next_loss: u64,
     ) -> Result<Vec<(InvocationCost, u8, bool)>, Error> {
-        let r = &self.state.invocation.as_ref().unwrap().rules;
-        let strain = if b.burden >= r.permanent_burden && b.exposure >= r.permanent_exposure.0 {
-            4
-        } else {
-            severity(b.burden, r.strain_thresholds)
-        };
-        let mut bands = Vec::new();
-        if strain > 0 || r.strain_per_mille[0] > 0 {
-            bands.push((InvocationCost::Strain, strain, false));
-        }
-        let emotional = severity(b.burden, r.emotional_thresholds);
-        if emotional > 0 {
-            bands.push((InvocationCost::Emotional, emotional, false));
-        }
-        let identity = severity(b.burden, r.identity_thresholds);
-        if identity > 0 {
-            bands.push((InvocationCost::Identity, identity, false));
-        }
-        if b.burden >= r.permanent_burden && b.exposure >= r.permanent_exposure.0 {
-            let count = 1 + (b.exposure - r.permanent_exposure.0) / r.permanent_interval.0;
-            let count = count.min(252) as u8;
-            bands.push((InvocationCost::Identity, count, true));
-            bands.push((InvocationCost::Lifespan, count, true));
-        }
-        if b.burden >= next_loss && !lives.is_empty() {
-            bands.push((InvocationCost::LossOfControl, 1, false));
-        }
-        Ok(bands)
+        Ok(game_invocation::required_bands(
+            &self.state.invocation.as_ref().unwrap().rules,
+            lives.len(),
+            burden,
+            next_loss,
+        )
+        .into_iter()
+        .map(|band| (band.cost, band.severity, band.permanent))
+        .collect())
     }
     fn warning_spec(
         &self,
@@ -731,40 +553,19 @@ impl Simulation {
         permanent: bool,
     ) -> Result<InvocationWarning, Error> {
         let r = &self.state.invocation.as_ref().unwrap().rules;
-        let count = (lives.len() as u64).pow(2);
-        let (fatigue, harm) = if cost == InvocationCost::Strain {
-            (
-                r.strain_per_mille[usize::from(band.min(3))]
-                    .checked_mul(count)
-                    .ok_or(Error::Overflow)?,
-                (if band > 3 {
-                    r.health_harm_per_mille[3]
-                } else {
-                    0
-                })
-                .checked_mul(count)
-                .ok_or(Error::Overflow)?,
-            )
-        } else {
-            (0, 0)
-        };
-        let identity = if cost == InvocationCost::Identity {
-            if permanent {
-                u16::from(band) * r.permanent_identity_per_band
-            } else {
-                u16::from(band) * 5
-            }
-        } else {
-            0
-        };
-        let lifespan = if cost == InvocationCost::Lifespan {
-            r.lifespan_loss_per_band
-                .0
-                .checked_mul(u64::from(band))
-                .ok_or(Error::Overflow)?
-        } else {
-            0
-        };
+        let effect = game_invocation::cost_effect(
+            r,
+            lives.len(),
+            game_invocation::CostRequirement {
+                cost,
+                severity: band,
+                permanent,
+            },
+        )?;
+        let fatigue = effect.fatigue_per_mille;
+        let harm = effect.health_harm_per_mille;
+        let identity = effect.identity_skill_penalty;
+        let lifespan = effect.lifespan_loss.0;
         Ok(InvocationWarning {id:WarningId(0),actor,lives:lives.clone(),cost,severity:band,activation_burden:0,instant_fatigue:0,fatigue_per_mille:fatigue,health_harm_per_mille:harm,identity_skill_penalty:identity,emotion_disruption:if cost==InvocationCost::Emotional {u16::from(band)*100}else{0},lifespan_loss:SimDuration(lifespan),control_loss_duration:if cost==InvocationCost::LossOfControl {r.loss_duration}else{SimDuration(0)},permanent,description:match cost {InvocationCost::Strain=>"Invocation adds the shown fatigue and injury rates while these lives remain active; ordinary rest can recover strain.".into(),InvocationCost::Emotional=>"Emotional interference changes judgment and impulsiveness; it recovers as burden falls.".into(),InvocationCost::Identity if !permanent=>"Temporary identity interference reduces effective mastery until burden recovers.".into(),InvocationCost::Identity=>"Very protracted exposure permanently impairs this person's identity and effective capabilities. A successor does not inherit this direct penalty.".into(),InvocationCost::Lifespan=>"Very protracted exposure permanently reduces this person's remaining lifespan; already advanced age can make the reduction fatal.".into(),InvocationCost::LossOfControl=>"Past lives direct this body for the exact shown duration. Actions and dismissal are unavailable; all ensuing costs, irreversible harm, and death are authorized during it. Pause, observation, and saving remain available.".into()}})
     }
     fn activation_charge(
@@ -773,24 +574,10 @@ impl Simulation {
         lives: &BTreeSet<PersonId>,
     ) -> Result<(u64, u64), Error> {
         let w = self.state.invocation.as_ref().unwrap();
-        let count = (lives.len() as u64).pow(2);
-        let burden = w
-            .rules
-            .activation_burden
-            .checked_mul(count)
-            .ok_or(Error::Overflow)?;
-        let fatigue = w
-            .rules
-            .activation_fatigue
-            .checked_mul(count)
-            .ok_or(Error::Overflow)?;
-        w.people
-            .get(&actor)
-            .cloned()
-            .unwrap_or_default()
-            .burden
-            .checked_add(burden)
-            .ok_or(Error::Overflow)?;
+        let before = w.people.get(&actor).cloned().unwrap_or_default();
+        let charge = game_invocation::activation_charge(&w.rules, &before, lives.len())?;
+        let burden = charge.burden;
+        let fatigue = charge.fatigue;
         if self.state.physical.as_ref().unwrap().actors[&actor]
             .vitals
             .fatigue
@@ -851,21 +638,22 @@ impl Simulation {
                 .ok_or(Error::Overflow)?;
         }
         let upfront = planned.is_some() && !accepted.contains_key(&InvocationCost::Strain);
-        let next = if upfront {
-            Some((InvocationCost::Strain, 0, false))
-        } else {
-            self.required_bands(&lives, &b, next_loss)?
-                .into_iter()
-                .find(|(kind, band, permanent)| {
-                    accepted.get(kind).is_none_or(|old| {
-                        if *permanent {
-                            old.permanent < *band
-                        } else {
-                            old.temporary < *band
-                        }
-                    }) || planned.is_none() && *kind == InvocationCost::LossOfControl
-                })
-        };
+        let next = game_invocation::next_warning(
+            &w.rules,
+            lives.len(),
+            &b,
+            next_loss,
+            &accepted,
+            planned.is_some(),
+            false,
+        )
+        .map(|requirement| {
+            (
+                requirement.cost,
+                requirement.severity,
+                requirement.permanent,
+            )
+        });
         if let Some((cost, band, permanent)) = next {
             self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
             self.ensure_event_capacity(1)?;
@@ -976,22 +764,20 @@ impl Simulation {
                         .ok_or(Error::Unavailable)?
                         .clone();
                     self.activation_charge(actor, &plan.lives)?;
-                    let consent = self
-                        .state
+                    let requirement = game_invocation::CostRequirement {
+                        cost: pending.view.cost,
+                        severity: pending.view.severity,
+                        permanent: pending.view.permanent,
+                    };
+                    let accepted = game_invocation::accept_requirement(&plan.accepted, requirement);
+                    self.state
                         .invocation
                         .as_mut()
                         .unwrap()
                         .activation
                         .as_mut()
                         .unwrap()
-                        .accepted
-                        .entry(pending.view.cost)
-                        .or_default();
-                    if pending.view.permanent {
-                        consent.permanent = pending.view.severity;
-                    } else {
-                        consent.temporary = pending.view.severity;
-                    }
+                        .accepted = accepted;
                     self.state.invocation.as_mut().unwrap().warning = None;
                     self.emit(EventKind::InvocationCostAccepted {
                         warning: *warning,
@@ -1001,22 +787,30 @@ impl Simulation {
                     return Ok(());
                 }
                 self.state.invocation.as_mut().unwrap().warning = None;
-                let consent = self
+                let active = self
                     .state
+                    .invocation
+                    .as_ref()
+                    .unwrap()
+                    .active
+                    .as_ref()
+                    .unwrap();
+                let accepted = game_invocation::accept_requirement(
+                    &active.accepted,
+                    game_invocation::CostRequirement {
+                        cost: pending.view.cost,
+                        severity: pending.view.severity,
+                        permanent: pending.view.permanent,
+                    },
+                );
+                self.state
                     .invocation
                     .as_mut()
                     .unwrap()
                     .active
                     .as_mut()
                     .unwrap()
-                    .accepted
-                    .entry(pending.view.cost)
-                    .or_default();
-                if pending.view.permanent {
-                    consent.permanent = pending.view.severity;
-                } else {
-                    consent.temporary = pending.view.severity;
-                }
+                    .accepted = accepted;
                 self.refresh_temporary_invocation_costs();
                 self.emit(EventKind::InvocationCostAccepted {
                     warning: *warning,
@@ -1110,24 +904,30 @@ impl Simulation {
         Ok(())
     }
     fn begin_control_episode(&mut self, actor: PersonId) -> Result<(), Error> {
-        let r = self.state.invocation.as_ref().unwrap().rules.clone();
-        let ends = SimTime(
-            self.state
-                .time
-                .0
-                .checked_add(r.loss_duration.0)
-                .ok_or(Error::Overflow)?,
-        );
-        let w = self.state.invocation.as_mut().unwrap();
-        let b = w.people.entry(actor).or_default();
-        let a = w.active.as_mut().unwrap();
-        a.next_loss_burden = b.burden.checked_add(r.loss_gap).ok_or(Error::Overflow)?;
-        a.episode = Some(Episode {
-            actor,
-            starts: self.state.time,
-            ends,
-        });
-        a.next_controller = self.state.time;
+        let w = self.state.invocation.as_ref().unwrap();
+        let before = w.people.get(&actor).cloned().unwrap_or_default();
+        let consent = w
+            .active
+            .as_ref()
+            .unwrap()
+            .accepted
+            .get(&InvocationCost::LossOfControl)
+            .cloned()
+            .unwrap_or_default();
+        let started =
+            game_invocation::begin_episode(&w.rules, &before, actor, self.state.time, &consent)?;
+        let ends = started.episode.ends;
+        let active = self
+            .state
+            .invocation
+            .as_mut()
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap();
+        active.next_loss_burden = started.next_loss_burden;
+        active.episode = Some(started.episode);
+        active.next_controller = started.next_controller;
         self.emit(EventKind::InvocationControlChanged {
             actor,
             controlled: false,
@@ -1142,26 +942,24 @@ impl Simulation {
         cost: InvocationCost,
         band: u8,
     ) -> Result<(), Error> {
-        let r = self.state.invocation.as_ref().unwrap().rules.clone();
-        let w = self.state.invocation.as_mut().unwrap();
-        let b = w.people.entry(actor).or_default();
-        let changed = if cost == InvocationCost::Identity {
-            let target = u16::from(band) * r.permanent_identity_per_band;
-            let changed = target > b.permanent_identity;
-            b.permanent_identity = b.permanent_identity.max(target);
-            changed
-        } else if cost == InvocationCost::Lifespan {
-            let target = r
-                .lifespan_loss_per_band
-                .0
-                .checked_mul(u64::from(band))
-                .ok_or(Error::Overflow)?;
-            let changed = target > b.lifespan_loss;
-            b.lifespan_loss = b.lifespan_loss.max(target);
-            changed
-        } else {
-            false
-        };
+        let w = self.state.invocation.as_ref().unwrap();
+        let before = w.people.get(&actor).cloned().unwrap_or_default();
+        let effect = game_invocation::apply_permanent(
+            &w.rules,
+            &before,
+            game_invocation::CostRequirement {
+                cost,
+                severity: band,
+                permanent: true,
+            },
+        )?;
+        let changed = effect.changed;
+        self.state
+            .invocation
+            .as_mut()
+            .unwrap()
+            .people
+            .insert(actor, effect.burden);
         if changed {
             self.emit(EventKind::InvocationCostApplied {
                 actor,
@@ -1204,133 +1002,34 @@ impl Simulation {
             .map_or(0, |b| b.lifespan_loss)
     }
 
-    fn effective_band(&self, active: &Active, kind: InvocationCost, required: u8) -> u8 {
-        if self.controls_actor(active.actor) {
-            required
-        } else {
-            active
-                .accepted
-                .get(&kind)
-                .map_or(0, |consent| consent.temporary.min(required))
+    fn cost_input<'a>(active: &'a Active) -> game_invocation::ActiveInput<'a> {
+        game_invocation::ActiveInput {
+            life_count: active.lives.len(),
+            accepted: &active.accepted,
+            episode: active.episode.as_ref(),
+            next_loss_burden: active.next_loss_burden,
         }
     }
-    fn invocation_rates(&self, actor: PersonId) -> (u64, u64) {
+    pub(crate) fn invocation_rates(&self, actor: PersonId) -> (u64, u64) {
         let Some(w) = &self.state.invocation else {
             return (0, 0);
         };
-        let Some(active) = w.active.as_ref().filter(|a| a.actor == actor) else {
-            return (0, 0);
-        };
-        let b = w.people.get(&actor).cloned().unwrap_or_default();
-        let required =
-            if b.burden >= w.rules.permanent_burden && b.exposure >= w.rules.permanent_exposure.0 {
-                4
-            } else {
-                severity(b.burden, w.rules.strain_thresholds)
-            };
-        if !self.controls_actor(actor) && !active.accepted.contains_key(&InvocationCost::Strain) {
-            return (0, 0);
-        }
-        let band = self.effective_band(active, InvocationCost::Strain, required);
-        let count = (active.lives.len() as u64).pow(2);
-        (
-            w.rules.strain_per_mille[usize::from(band.min(3))] * count,
-            (if band > 3 {
-                w.rules.health_harm_per_mille[3]
-            } else {
-                0
-            }) * count,
-        )
+        let before = w.people.get(&actor).cloned().unwrap_or_default();
+        let active = w
+            .active
+            .as_ref()
+            .filter(|a| a.actor == actor)
+            .map(Self::cost_input);
+        let alive = self.state.physical.as_ref().unwrap().actors[&actor]
+            .vitals
+            .alive;
+        let rates =
+            game_invocation::body_rates(&w.rules, &before, active, actor, self.state.time, alive)
+                .expect("validated invocation rates");
+        (rates.fatigue_per_mille, rates.health_harm_per_mille)
     }
-    fn joint_vitals_and_remainders(
-        &self,
-        actor: PersonId,
-        elapsed: u64,
-    ) -> Result<Option<(Vitals, u16, u16)>, Error> {
-        let Some(w) = &self.state.invocation else {
-            return Ok(None);
-        };
-        let state = w.people.get(&actor).cloned().unwrap_or_default();
-        let (strain, injury) = self.invocation_rates(actor);
-        if strain == 0 && injury == 0 && state.fatigue_remainder == 0 && state.health_remainder == 0
-        {
-            return Ok(None);
-        }
-        let physical = self.state.physical.as_ref().unwrap();
-        let body = &physical.actors[&actor];
-        let person = &self.state.people[self.person_index[&actor]];
-        if !body.vitals.alive {
-            return Ok(None);
-        }
-        let mut vitals = body.vitals.clone();
-        let hunger_before = vitals.hunger;
-        let hunger_harm = if person.hunger_exempt {
-            0
-        } else {
-            vitals.hunger = vitals.hunger.checked_add(elapsed).ok_or(Error::Overflow)?;
-            vitals.hunger.saturating_sub(physical.rules.hunger_harm)
-                - hunger_before.saturating_sub(physical.rules.hunger_harm)
-        };
-        let exerting = matches!(
-            body.activity,
-            Activity::Work { .. }
-                | Activity::Gather { .. }
-                | Activity::Construct { .. }
-                | Activity::Load { .. }
-                | Activity::Take { .. }
-                | Activity::Combat { .. }
-                | Activity::Play { .. }
-                | Activity::Cultivate { .. }
-        ) || matches!(person.location, Location::InTransit { .. });
-        let base_fatigue = if exerting {
-            1_000
-        } else if body.activity == Activity::Rest {
-            -2_000
-        } else {
-            0
-        };
-        let (fatigue, fraction) = signed_accumulator(
-            vitals.fatigue,
-            state.fatigue_remainder,
-            elapsed,
-            base_fatigue + i128::from(strain),
-            physical.rules.fatigue_limit,
-        );
-        vitals.fatigue = fatigue;
-        let healing = if person.hunger_exempt {
-            elapsed
-        } else if body.activity == Activity::Rest {
-            elapsed.min(physical.rules.hunger_harm.saturating_sub(hunger_before))
-        } else {
-            0
-        };
-        let total = i128::from(vitals.health) * 1_000
-            + i128::from(state.health_remainder)
-            + i128::from(healing) * 1_000
-            - i128::from(hunger_harm) * 1_000
-            - i128::from(elapsed) * i128::from(injury);
-        let maximum = i128::from(physical.rules.max_health) * 1_000;
-        let total = total.clamp(0, maximum);
-        vitals.health = (total / 1_000) as u64;
-        let health_fraction = (total % 1_000) as u16;
-        if vitals.health == 0 && !person.hunger_exempt {
-            vitals.alive = false;
-        }
-        Ok(Some((vitals, fraction, health_fraction)))
-    }
-    pub(crate) fn joint_invocation_vitals(
-        &self,
-        actor: PersonId,
-        elapsed: u64,
-    ) -> Result<Option<Vitals>, Error> {
-        Ok(self
-            .joint_vitals_and_remainders(actor, elapsed)?
-            .map(|(vitals, _, _)| vitals))
-    }
-
     pub(crate) fn evaluate_invocation(&self, next: SimTime) -> Result<PendingInvocation, Error> {
-        let elapsed = next
-            .0
+        next.0
             .checked_sub(self.state.time.0)
             .ok_or(Error::Overflow)?;
         let Some(w) = &self.state.invocation else {
@@ -1349,61 +1048,21 @@ impl Simulation {
             {
                 continue;
             }
-            let mut b = before.clone();
-            if let Some(active) = w.active.as_ref().filter(|a| a.actor == *actor) {
-                let rate = (active.lives.len() as u64).pow(2);
-                b.burden = b
-                    .burden
-                    .checked_add(elapsed.checked_mul(rate).ok_or(Error::Overflow)?)
-                    .ok_or(Error::Overflow)?;
-                b.exposure = b.exposure.checked_add(elapsed).ok_or(Error::Overflow)?;
-                b.uninterrupted = b
-                    .uninterrupted
-                    .checked_add(elapsed)
-                    .ok_or(Error::Overflow)?;
-                // Effects apply at the opening band. Reaching a new band raises
-                // a warning before a subsequent interval can apply its cost.
-                b.temporary_identity = u16::from(self.effective_band(
-                    active,
-                    InvocationCost::Identity,
-                    severity(before.burden, w.rules.identity_thresholds),
-                )) * 5;
-                b.emotional_disruption = u16::from(self.effective_band(
-                    active,
-                    InvocationCost::Emotional,
-                    severity(before.burden, w.rules.emotional_thresholds),
-                )) * 100;
-            } else {
-                let (burden, fraction) = signed_accumulator(
-                    b.burden,
-                    b.burden_remainder,
-                    elapsed,
-                    -i128::from(w.rules.burden_recovery_per_mille),
-                    u64::MAX,
-                );
-                b.burden = burden;
-                b.burden_remainder = fraction;
-                let (exposure, fraction) = signed_accumulator(
-                    b.exposure,
-                    b.exposure_remainder,
-                    elapsed,
-                    -i128::from(w.rules.exposure_recovery_per_mille),
-                    u64::MAX,
-                );
-                b.exposure = exposure;
-                b.exposure_remainder = fraction;
-                b.uninterrupted = 0;
-                b.temporary_identity = b
-                    .temporary_identity
-                    .min(u16::from(severity(b.burden, w.rules.identity_thresholds)) * 5);
-                b.emotional_disruption = b
-                    .emotional_disruption
-                    .min(u16::from(severity(b.burden, w.rules.emotional_thresholds)) * 100);
-            }
-            if let Some((_, fatigue, health)) = self.joint_vitals_and_remainders(*actor, elapsed)? {
-                b.fatigue_remainder = fatigue;
-                b.health_remainder = health;
-            }
+            let active = w
+                .active
+                .as_ref()
+                .filter(|active| active.actor == *actor)
+                .map(Self::cost_input);
+            let advanced = game_invocation::advance_burden(game_invocation::AdvanceInput {
+                rules: &w.rules,
+                before,
+                actor: *actor,
+                now: self.state.time,
+                next,
+                alive: true,
+                active,
+            })?;
+            let b = advanced.burden;
             updates.push((*actor, b));
         }
         let end_episode = w
@@ -1505,178 +1164,57 @@ impl Simulation {
         let Some(w) = &self.state.invocation else {
             return;
         };
-        let Some(a) = w.active.clone() else { return };
-        let b = w.people.get(&a.actor).cloned().unwrap_or_default();
-        let identity = u16::from(self.effective_band(
-            &a,
-            InvocationCost::Identity,
-            severity(b.burden, w.rules.identity_thresholds),
-        )) * 5;
-        let emotion = u16::from(self.effective_band(
-            &a,
-            InvocationCost::Emotional,
-            severity(b.burden, w.rules.emotional_thresholds),
-        )) * 100;
-        let b = self
-            .state
+        let Some(active) = w.active.clone() else {
+            return;
+        };
+        let before = w.people.get(&active.actor).cloned().unwrap_or_default();
+        let burden = game_invocation::refresh_temporary(
+            &w.rules,
+            &before,
+            &active.accepted,
+            self.controls_actor(active.actor),
+        );
+        self.state
             .invocation
             .as_mut()
             .unwrap()
             .people
-            .entry(a.actor)
-            .or_default();
-        b.temporary_identity = b.temporary_identity.max(identity);
-        b.emotional_disruption = b.emotional_disruption.max(emotion);
+            .insert(active.actor, burden);
     }
     fn next_cost_after(&self, actor: PersonId, lives: &BTreeSet<PersonId>) -> Option<SimDuration> {
         let w = self.state.invocation.as_ref()?;
-        let b = w.people.get(&actor).cloned().unwrap_or_default();
-        let rate = (lives.len() as u64).pow(2);
-        if rate == 0 {
-            return None;
-        }
-        let mut candidates = Vec::new();
-        for threshold in w
-            .rules
-            .strain_thresholds
-            .into_iter()
-            .chain(w.rules.emotional_thresholds)
-            .chain(w.rules.identity_thresholds)
-            .chain([w.rules.permanent_burden])
-        {
-            if threshold > b.burden {
-                candidates.push((threshold - b.burden).div_ceil(rate));
-            }
-        }
+        let before = w.people.get(&actor).cloned().unwrap_or_default();
         let next_loss = w
             .active
             .as_ref()
             .filter(|a| a.actor == actor)
             .map_or(w.rules.loss_threshold, |a| a.next_loss_burden);
-        if next_loss > b.burden {
-            candidates.push((next_loss - b.burden).div_ceil(rate));
-        }
-        if b.exposure < w.rules.permanent_exposure.0 {
-            candidates.push(w.rules.permanent_exposure.0 - b.exposure);
-        } else {
-            let next = w.rules.permanent_exposure.0.checked_add(
-                ((b.exposure - w.rules.permanent_exposure.0) / w.rules.permanent_interval.0 + 1)
-                    .checked_mul(w.rules.permanent_interval.0)?,
-            )?;
-            candidates.push(next - b.exposure);
-        }
-        candidates
-            .into_iter()
-            .filter(|v| *v > 0)
-            .min()
-            .map(SimDuration)
+        game_invocation::next_cost_after(&w.rules, &before, lives.len(), next_loss)
     }
     pub(crate) fn invocation_boundary(&self, limit: SimTime) -> SimTime {
         let Some(w) = &self.state.invocation else {
             return limit;
         };
         let mut next = limit;
-        for (actor, b) in &w.people {
-            if w.active.as_ref().is_some_and(|a| a.actor == *actor)
-                || !self.state.physical.as_ref().unwrap().actors[actor]
+        for (actor, before) in &w.people {
+            if !w.active.as_ref().is_some_and(|a| a.actor == *actor)
+                && self.state.physical.as_ref().unwrap().actors[actor]
                     .vitals
                     .alive
-                || w.rules.burden_recovery_per_mille == 0
             {
-                continue;
-            }
-            for threshold in w
-                .rules
-                .identity_thresholds
-                .into_iter()
-                .chain(w.rules.emotional_thresholds)
-            {
-                if b.burden >= threshold {
-                    let total = u128::from(b.burden) * 1_000 + u128::from(b.burden_remainder);
-                    let remaining = total - u128::from(threshold) * 1_000 + 1;
-                    let dt = remaining.div_ceil(u128::from(w.rules.burden_recovery_per_mille));
-                    if let Ok(dt) = u64::try_from(dt)
-                        && let Some(time) = self.state.time.0.checked_add(dt.max(1))
-                    {
-                        next = next.min(SimTime(time));
-                    }
-                }
+                next = game_invocation::recovery_boundary(&w.rules, before, self.state.time, next);
             }
         }
-        if let Some(a) = &w.active {
-            if let Some(cost) = self.next_cost_after(a.actor, &a.lives)
-                && let Some(time) = self.state.time.0.checked_add(cost.0)
-            {
-                next = next.min(SimTime(time));
-            }
-            if let Some(e) = &a.episode {
-                if e.ends > self.state.time {
-                    next = next.min(e.ends);
-                }
-                if a.next_controller > self.state.time {
-                    next = next.min(a.next_controller);
-                }
-            }
-            let body = &self.state.physical.as_ref().unwrap().actors[&a.actor];
-            let person = &self.state.people[self.person_index[&a.actor]];
-            let (strain, injury) = self.invocation_rates(a.actor);
-            let state = w.people.get(&a.actor).cloned().unwrap_or_default();
-            let exerting = matches!(
-                body.activity,
-                Activity::Work { .. }
-                    | Activity::Load { .. }
-                    | Activity::Take { .. }
-                    | Activity::Combat { .. }
-                    | Activity::Play { .. }
-                    | Activity::Cultivate { .. }
-            ) || matches!(person.location, Location::InTransit { .. });
-            let fatigue_rate = if exerting {
-                1_000_i128
-            } else if body.activity == Activity::Rest {
-                -2_000
-            } else {
-                0
-            } + i128::from(strain);
-            if fatigue_rate > 0
-                && body.vitals.fatigue < self.state.physical.as_ref().unwrap().rules.fatigue_limit
-            {
-                let remaining = u128::from(
-                    self.state.physical.as_ref().unwrap().rules.fatigue_limit - body.vitals.fatigue,
-                ) * 1_000
-                    - u128::from(state.fatigue_remainder);
-                let dt = remaining.div_ceil(fatigue_rate as u128);
-                if let Ok(dt) = u64::try_from(dt)
-                    && let Some(time) = self.state.time.0.checked_add(dt.max(1))
-                {
-                    next = next.min(SimTime(time));
-                }
-            }
-            let healing = if person.hunger_exempt
-                || body.activity == Activity::Rest
-                    && body.vitals.hunger < self.state.physical.as_ref().unwrap().rules.hunger_harm
-            {
-                1_000_i128
-            } else {
-                0
-            };
-            let hunger_harm = if !person.hunger_exempt
-                && body.vitals.hunger >= self.state.physical.as_ref().unwrap().rules.hunger_harm
-            {
-                1_000_i128
-            } else {
-                0
-            };
-            let damage = i128::from(injury) + hunger_harm - healing;
-            if damage > 0 && body.vitals.health > 0 {
-                let remaining =
-                    u128::from(body.vitals.health) * 1_000 + u128::from(state.health_remainder);
-                let dt = remaining.div_ceil(damage as u128);
-                if let Ok(dt) = u64::try_from(dt)
-                    && let Some(time) = self.state.time.0.checked_add(dt.max(1))
-                {
-                    next = next.min(SimTime(time));
-                }
-            }
+        if let Some(active) = &w.active {
+            let before = w.people.get(&active.actor).cloned().unwrap_or_default();
+            next = game_invocation::active_boundary(
+                &w.rules,
+                &before,
+                Self::cost_input(active),
+                self.state.time,
+                active.next_controller,
+                next,
+            );
         }
         for action in w.actions.values() {
             if action.completes > self.state.time {
@@ -1883,7 +1421,7 @@ impl Simulation {
         }
         if !matches!(person.location, Location::AtArea(_)) {
             if changed && mind.dream == decisions::Dream::Comfort {
-                let _ = self.debug_physical_command(a.actor, Command::Cancel);
+                let _ = self.debug_actor_command(a.actor, Command::Cancel);
             }
             return Ok(());
         }
@@ -2031,10 +1569,10 @@ impl Simulation {
             Command::Engage { target } => self
                 .debug_start_encounter(vec![(a.actor, 0), (target, 1)])
                 .map(|_| ()),
-            command => self.debug_physical_command(a.actor, command),
+            command => self.debug_actor_command(a.actor, command),
         };
         if result.is_err() {
-            let _ = self.debug_physical_command(a.actor, Command::Rest);
+            let _ = self.debug_actor_command(a.actor, Command::Rest);
         }
         Ok(())
     }
@@ -2458,7 +1996,7 @@ impl Simulation {
                 .checked_add(duration.0)
                 .ok_or(Error::Overflow)?,
         );
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         if let MemoryWork::Write { material, .. } = work {
             self.state
                 .inventories
@@ -2473,7 +2011,7 @@ impl Simulation {
             });
         }
         if let MemoryWork::Teach { recipient, .. } = work {
-            self.interrupt_physical(recipient);
+            self.interrupt_actor_activity(recipient);
             self.state
                 .physical
                 .as_mut()
@@ -2916,7 +2454,7 @@ mod tests {
                     sim.state.people[sim.person_index[&teacher]].location,
                     Location::AtArea(_)
                 ) {
-                    sim.debug_physical_command(teacher, Command::Rest).unwrap();
+                    sim.debug_actor_command(teacher, Command::Rest).unwrap();
                 }
                 if sim
                     .start_lesson(actor, teacher, LessonTopic::Invocation)
@@ -2968,7 +2506,7 @@ mod tests {
             BTreeSet::from([actor]),
         )
         .unwrap();
-        sim.debug_physical_command(actor, Command::Rest).unwrap();
+        sim.debug_actor_command(actor, Command::Rest).unwrap();
         sim.advance(MINUTE).unwrap();
         sim
     }
@@ -3122,9 +2660,7 @@ mod tests {
             .map(|(id, _)| *id)
             .collect();
         for other in other_workers {
-            borrowed
-                .debug_physical_command(other, Command::Rest)
-                .unwrap();
+            borrowed.debug_actor_command(other, Command::Rest).unwrap();
         }
         let mut baseline =
             Simulation::load(&borrowed.save().unwrap(), Execution::default()).unwrap();

@@ -132,7 +132,7 @@ fn supply(sim: &mut Simulation, quantity: u64) {
     let project = sim.project_view(maker).projects[0].id;
     sim.debug_project_action(maker, ProjectAction::Support { project, agreement })
         .unwrap();
-    sim.debug_physical_command(
+    sim.debug_actor_command(
         financier,
         Command::Load {
             source,
@@ -142,7 +142,7 @@ fn supply(sim: &mut Simulation, quantity: u64) {
     )
     .unwrap();
     sim.advance(MINUTE).unwrap();
-    sim.debug_physical_command(
+    sim.debug_actor_command(
         financier,
         Command::Load {
             source: cargo,
@@ -218,7 +218,7 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
         .unwrap();
     assert_eq!(sim.canonical_state().inventories[&materials].quantity.0, 0);
     sim.advance(SimDuration(120_000)).unwrap();
-    sim.debug_physical_command(maker, Command::Cancel).unwrap();
+    sim.debug_actor_command(maker, Command::Cancel).unwrap();
     assert_eq!(
         sim.canonical_state().projects.as_ref().unwrap().projects[&plan].progress_ms,
         120_000
@@ -354,7 +354,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     sim.debug_project_action(helper, ProjectAction::Work { project: plan })
         .unwrap();
     sim.advance(SimDuration(120_000)).unwrap();
-    sim.debug_physical_command(helper, Command::Cancel).unwrap();
+    sim.debug_actor_command(helper, Command::Cancel).unwrap();
     assert_eq!(
         sim.agreement_view(helper)
             .last()
@@ -372,7 +372,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     );
     let before = sim.canonical_state().inventories[&destination].quantity.0;
     let cargo = sim.canonical_state().people[3].inventory;
-    sim.debug_physical_command(
+    sim.debug_actor_command(
         maker,
         Command::Load {
             source: provisions,
@@ -382,7 +382,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     )
     .unwrap();
     sim.advance(MINUTE).unwrap();
-    sim.debug_physical_command(
+    sim.debug_actor_command(
         maker,
         Command::Load {
             source: cargo,
@@ -511,7 +511,7 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
         },
     )
     .unwrap();
-    sim.debug_physical_command(worker, Command::Work { site })
+    sim.debug_actor_command(worker, Command::Work { site })
         .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(

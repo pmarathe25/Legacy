@@ -4,41 +4,10 @@
 //! grants no mastery, and borrowing another life never changes these records.
 use crate::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
-    pub per_level: SimDuration,
-    pub max_level: u16,
-    pub work_bonus_per_level: u16,
-    pub damage_bonus_per_level: u16,
-    pub action_practice_ms: u64,
-}
-impl Default for Rules {
-    fn default() -> Self {
-        Self {
-            // Explicit accelerated fixture rates; full settings can replace them.
-            per_level: MINUTE,
-            max_level: 100,
-            work_bonus_per_level: 10,
-            damage_bonus_per_level: 5,
-            action_practice_ms: 6_000,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Progress {
-    pub practice_ms: u64,
-    pub level: u16,
-    pub progress_ms: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub rules: Rules,
-    pub records: BTreeMap<PersonId, BTreeMap<Skill, Progress>>,
-    #[serde(default)]
-    pub semantic_ticks: BTreeMap<PersonId, BTreeMap<Skill, u64>>,
-}
+use game_skills::progress;
+pub use game_skills::{
+    Progress, Rules, World, advance_work, damage_for_level, rate_for_level, work_duration,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PracticeDelta {
@@ -46,96 +15,6 @@ pub(crate) struct PracticeDelta {
     pub skill: Skill,
     pub milliseconds: u64,
     pub mastery_cap: Option<u64>,
-}
-
-impl World {
-    pub fn level(&self, actor: PersonId, skill: Skill) -> u16 {
-        self.records
-            .get(&actor)
-            .and_then(|skills| skills.get(&skill))
-            .map_or(0, |p| p.level)
-    }
-
-    fn practice(&self, actor: PersonId, skill: Skill) -> u64 {
-        self.records
-            .get(&actor)
-            .and_then(|skills| skills.get(&skill))
-            .map_or(0, |p| p.practice_ms)
-    }
-
-    fn credit(
-        &mut self,
-        actor: PersonId,
-        skill: Skill,
-        milliseconds: u64,
-        mastery_cap: Option<u64>,
-    ) {
-        if milliseconds == 0 {
-            return;
-        }
-        let cap = self.rules.per_level.0 * u64::from(self.rules.max_level);
-        let existing = self.practice(actor, skill);
-        // A guide cannot teach beyond their personal mastery. A pupil with more
-        // experience retains it; an inadequate guide never subtracts learning.
-        let cap = mastery_cap.map_or(cap, |teacher| cap.min(teacher.max(existing)));
-        let credited =
-            (u128::from(existing) + u128::from(milliseconds)).min(u128::from(cap)) as u64;
-        if credited == existing {
-            return;
-        }
-        self.records
-            .entry(actor)
-            .or_default()
-            .insert(skill, progress(credited, &self.rules));
-    }
-}
-
-fn progress(practice_ms: u64, rules: &Rules) -> Progress {
-    let level = (practice_ms / rules.per_level.0).min(u64::from(rules.max_level)) as u16;
-    Progress {
-        practice_ms,
-        level,
-        progress_ms: if level == rules.max_level {
-            0
-        } else {
-            practice_ms % rules.per_level.0
-        },
-    }
-}
-
-pub fn rate_for_level(level: u16, rules: &Rules) -> SkillRate {
-    SkillRate {
-        numerator: 1_000
-            + u64::from(level.min(rules.max_level)) * u64::from(rules.work_bonus_per_level),
-        denominator: 1_000,
-    }
-}
-
-pub fn advance_work(elapsed: u64, rate: SkillRate, remainder: u64) -> Result<(u64, u64), Error> {
-    if rate.numerator == 0 || rate.denominator == 0 || remainder >= rate.denominator {
-        return Err(Error::InvalidConfiguration(
-            "invalid frozen skill work rate".into(),
-        ));
-    }
-    let numerator = u128::from(elapsed) * u128::from(rate.numerator) + u128::from(remainder);
-    let work =
-        u64::try_from(numerator / u128::from(rate.denominator)).map_err(|_| Error::Overflow)?;
-    let remainder = (numerator % u128::from(rate.denominator)) as u64;
-    Ok((work, remainder))
-}
-
-pub fn work_duration(remaining: u64, rate: SkillRate, remainder: u64) -> Result<u64, Error> {
-    if rate.numerator == 0 || rate.denominator == 0 || remainder >= rate.denominator {
-        return Err(Error::InvalidConfiguration(
-            "invalid frozen skill work rate".into(),
-        ));
-    }
-    if remaining == 0 {
-        return Ok(0);
-    }
-    let needed = (u128::from(remaining) * u128::from(rate.denominator))
-        .saturating_sub(u128::from(remainder));
-    u64::try_from(needed.div_ceil(u128::from(rate.numerator))).map_err(|_| Error::Overflow)
 }
 
 impl Simulation {
@@ -211,7 +90,12 @@ impl Simulation {
                     }
                 }
                 Activity::Lesson { teacher, .. } if teacher == *actor => (Skill::Leadership, None),
-                _ => continue,
+                _ => {
+                    let Some(skill) = self.health_practice_skill(*actor) else {
+                        continue;
+                    };
+                    (skill, None)
+                }
             };
             pending.push(PracticeDelta {
                 actor: *actor,
@@ -220,6 +104,7 @@ impl Simulation {
                 mastery_cap: cap,
             });
         }
+        pending.extend(self.social_practice_deltas(next));
         Ok(pending)
     }
 
@@ -235,6 +120,28 @@ impl Simulation {
                 delta.mastery_cap,
             );
         }
+    }
+
+    pub(crate) fn skill_boundary(&self, limit: SimTime) -> Result<SimTime, Error> {
+        let Some(world) = &self.state.skills else {
+            return Ok(limit);
+        };
+        let mut next = limit;
+        for delta in self.evaluate_skills(limit)? {
+            if let Some(remaining) =
+                world.until_next_level(delta.actor, delta.skill, delta.mastery_cap)?
+                && remaining <= delta.milliseconds
+            {
+                next = next.min(SimTime(
+                    self.state
+                        .time
+                        .0
+                        .checked_add(remaining)
+                        .ok_or(Error::Overflow)?,
+                ));
+            }
+        }
+        Ok(next)
     }
 
     pub(crate) fn credit_skill(&mut self, actor: PersonId, skill: Skill, milliseconds: u64) {
@@ -349,12 +256,6 @@ impl Simulation {
     }
 }
 
-pub fn damage_for_level(base: u64, level: u16, rules: &Rules) -> Result<u64, Error> {
-    let numerator =
-        1_000 + u64::from(level.min(rules.max_level)) * u64::from(rules.damage_bonus_per_level);
-    u64::try_from(u128::from(base) * u128::from(numerator) / 1_000).map_err(|_| Error::Overflow)
-}
-
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let Some(world) = &state.skills else {
         return Ok(());
@@ -447,14 +348,14 @@ mod tests {
         let mut sim = sim(1);
         let actor = sim.state.ruler;
         let site = local_site(&sim);
-        sim.debug_physical_command(actor, Command::Work { site })
+        sim.debug_actor_command(actor, Command::Work { site })
             .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(sim.own_skill_level(actor, Skill::Craft), 1);
         let rate = sim.effective_work_rate(actor, Skill::Craft);
         let duration = work_duration(60_000, rate, 0).unwrap();
         assert!(duration < MINUTE.0);
-        sim.debug_physical_command(actor, Command::Work { site })
+        sim.debug_actor_command(actor, Command::Work { site })
             .unwrap();
         sim.advance(SimDuration(duration - 1)).unwrap();
         assert!(matches!(
@@ -463,7 +364,7 @@ mod tests {
         ));
         sim.advance(SimDuration(1)).unwrap();
         assert_eq!(sim.state.events.iter().filter(|event| matches!(event.kind, EventKind::Produced { actor: worker, .. } if worker == actor)).count(), 2);
-        sim.debug_physical_command(actor, Command::Work { site })
+        sim.debug_actor_command(actor, Command::Work { site })
             .unwrap();
         let remaining_to_level = 120_000
             - sim
@@ -490,7 +391,7 @@ mod tests {
     fn canceled_work_credits_only_elapsed_training_and_idle_or_travel_add_nothing() {
         let mut sim = sim(1);
         let actor = sim.state.ruler;
-        sim.debug_physical_command(
+        sim.debug_actor_command(
             actor,
             Command::Work {
                 site: local_site(&sim),
@@ -498,7 +399,7 @@ mod tests {
         )
         .unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
-        sim.debug_physical_command(actor, Command::Cancel).unwrap();
+        sim.debug_actor_command(actor, Command::Cancel).unwrap();
         let practice = sim
             .state
             .skills
@@ -525,7 +426,7 @@ mod tests {
     fn pending_training_is_passive_and_restores_exact_progress_with_different_workers() {
         let mut a = sim(1);
         let actor = a.state.ruler;
-        a.debug_physical_command(
+        a.debug_actor_command(
             actor,
             Command::Work {
                 site: local_site(&a),
@@ -566,7 +467,7 @@ mod tests {
     fn an_actual_newborn_does_not_receive_the_predecessors_practical_mastery() {
         let mut sim = Simulation::skills_fixture(1, Execution::default()).unwrap();
         let predecessor = sim.state.ruler;
-        sim.debug_physical_command(
+        sim.debug_actor_command(
             predecessor,
             Command::Work {
                 site: local_site(&sim),
@@ -612,7 +513,7 @@ mod tests {
         farmer.debug_move_actor(actor, area).unwrap();
         farmer.advance(SimDuration(120_000)).unwrap();
         farmer
-            .debug_physical_command(
+            .debug_actor_command(
                 actor,
                 Command::Cultivate {
                     field,
@@ -621,9 +522,7 @@ mod tests {
             )
             .unwrap();
         farmer.advance(SimDuration(30_000)).unwrap();
-        farmer
-            .debug_physical_command(actor, Command::Cancel)
-            .unwrap();
+        farmer.debug_actor_command(actor, Command::Cancel).unwrap();
         assert_eq!(
             farmer
                 .state
@@ -744,8 +643,7 @@ mod tests {
             30_000
         );
         assert_eq!(sim.own_skill_level(student, Skill::Invocation), 0);
-        sim.debug_physical_command(teacher, Command::Cancel)
-            .unwrap();
+        sim.debug_actor_command(teacher, Command::Cancel).unwrap();
         assert_eq!(
             sim.state
                 .lineage
@@ -875,70 +773,5 @@ mod tests {
                 .practice(actor, Skill::Negotiation),
             12_000
         );
-    }
-
-    #[test]
-    fn partial_training_is_fractional_bounded_and_slice_invariant() {
-        let mut whole = World::default();
-        let mut sliced = whole.clone();
-        whole.credit(PersonId(1), Skill::Craft, 170_003, None);
-        for elapsed in [1, 59_999, 10_003, 40_000, 60_000] {
-            sliced.credit(PersonId(1), Skill::Craft, elapsed, None);
-        }
-        assert_eq!(whole, sliced);
-        assert_eq!(whole.level(PersonId(1), Skill::Craft), 2);
-        assert_eq!(
-            whole.records[&PersonId(1)][&Skill::Craft].progress_ms,
-            50_003
-        );
-        assert_eq!(whole.level(PersonId(1), Skill::Farming), 0);
-        whole.credit(PersonId(1), Skill::Craft, u64::MAX, None);
-        assert_eq!(whole.level(PersonId(1), Skill::Craft), 100);
-        assert_eq!(whole.records[&PersonId(1)][&Skill::Craft].progress_ms, 0);
-        assert_eq!(whole.level(PersonId(2), Skill::Craft), 0);
-    }
-
-    #[test]
-    fn rational_work_progress_and_completion_share_the_exact_remainder() {
-        let rate = SkillRate {
-            numerator: 1_370,
-            denominator: 1_000,
-        };
-        let (whole, remainder) = advance_work(70_013, rate, 19).unwrap();
-        let (mut total, mut carry) = (0, 19);
-        for elapsed in [1, 9, 60_003, 10_000] {
-            let (work, next) = advance_work(elapsed, rate, carry).unwrap();
-            total += work;
-            carry = next;
-        }
-        assert_eq!((whole, remainder), (total, carry));
-        let duration = work_duration(60_000, rate, 19).unwrap();
-        assert!(advance_work(duration - 1, rate, 19).unwrap().0 < 60_000);
-        assert!(advance_work(duration, rate, 19).unwrap().0 >= 60_000);
-        assert_eq!(
-            work_duration(60_000, SkillRate::default(), 0).unwrap(),
-            60_000
-        );
-        assert!(advance_work(u64::MAX, rate, 0).is_err());
-    }
-
-    #[test]
-    fn guidance_cannot_copy_a_teachers_full_mastery_and_borrowing_is_read_only() {
-        let mut world = World::default();
-        world.credit(PersonId(1), Skill::Craft, 300_000, None);
-        let before = world.clone();
-        let borrowed = rate_for_level(world.level(PersonId(1), Skill::Craft), &world.rules);
-        assert!(borrowed.numerator > 1_000);
-        assert_eq!(world, before);
-        let teacher = world.practice(PersonId(1), Skill::Craft);
-        world.credit(PersonId(2), Skill::Craft, 30_000, Some(teacher));
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 0);
-        world.credit(PersonId(2), Skill::Craft, 600_000, Some(teacher));
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 5);
-        world.credit(PersonId(2), Skill::Craft, 60_000, None);
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 6);
-        world.credit(PersonId(2), Skill::Craft, 60_000, Some(teacher));
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 6);
-        assert_eq!(damage_for_level(45_000, 100, &world.rules).unwrap(), 67_500);
     }
 }

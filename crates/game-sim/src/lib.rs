@@ -3,10 +3,12 @@ pub mod agreements;
 #[doc(hidden)]
 pub mod benchmark;
 pub mod combat;
+mod commands;
 pub mod compute;
 pub mod decisions;
 pub mod development;
 pub mod ecology;
+pub mod enforcement;
 pub mod environment;
 mod equipment;
 pub mod force;
@@ -22,6 +24,7 @@ pub mod property;
 pub mod scenarios;
 pub mod session;
 pub mod skills;
+pub mod social;
 #[doc(hidden)]
 pub mod transactions;
 
@@ -162,6 +165,10 @@ pub struct CanonicalState {
     pub ecology: Option<ecology::World>,
     #[serde(default)]
     pub health: Option<health::World>,
+    #[serde(default)]
+    pub social: Option<social::World>,
+    #[serde(default)]
+    pub enforcement: Option<enforcement::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -274,6 +281,11 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             debug_fixture: true,
         },
         ScenarioInfo {
+            id: "health-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
             id: "settlement-founder".into(),
             version: 1,
             debug_fixture: false,
@@ -318,6 +330,9 @@ impl Simulation {
         }
         if scenario == "project-fixture" {
             return Self::project_fixture(seed, execution);
+        }
+        if scenario == "health-fixture" {
+            return Self::health_fixture(seed, execution);
         }
         if scenario == "skills-fixture" {
             return Self::skills_fixture(seed, execution);
@@ -398,6 +413,8 @@ impl Simulation {
             missions: None,
             ecology: None,
             health: None,
+            social: None,
+            enforcement: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -768,13 +785,23 @@ impl Simulation {
                 }
             }
         }
+        available_commands.extend(self.available_social_commands(ruler.id));
+        available_commands.extend(self.available_enforcement_commands(ruler.id));
+        available_commands.extend(self.available_health_commands(ruler.id));
         available_commands.extend(self.available_ecology_commands(ruler.id));
         available_commands.extend(self.available_force_commands(ruler.id));
         available_commands.extend(self.available_mission_commands(ruler.id));
+        if !self.independent(ruler.id) {
+            available_commands
+                .retain(|command| matches!(command, Command::Signal { .. } | Command::Cancel));
+        }
         if self.controls_actor(ruler.id) {
             available_commands.clear();
         }
         PlayerView {
+            social: self.social_view(ruler.id),
+            enforcement: self.enforcement_view(ruler.id),
+            health: self.health_view(ruler.id),
             ecology: self.ecology_view(ruler.id),
             missions: self.mission_view(ruler.id),
             force: self.force_view(self.state.ruler),
@@ -915,7 +942,7 @@ impl Simulation {
             return self.submit_combat(submission);
         }
         if !matches!(submission.command, Command::Move { .. }) {
-            return self.submit_physical(submission);
+            return self.submit_actor_action(submission);
         }
         let Command::Move { destination } = submission.command else {
             unreachable!()
@@ -988,7 +1015,7 @@ impl Simulation {
         self.ensure_event_capacity(
             usize::from(departure.is_some()) + usize::from(self.state.development.is_some()),
         )?;
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         self.state.people[index].route = path;
         if let Some((to, arrives)) = departure {
             self.depart(index, origin, to, arrives);
@@ -1048,6 +1075,7 @@ impl Simulation {
 
     fn depart(&mut self, index: usize, from: AreaId, to: AreaId, arrives: SimTime) {
         let actor = self.state.people[index].id;
+        self.leave_shelter_on_movement(actor);
         if let Some(people) = self.dependent_index.get_mut(&from) {
             people.remove(&actor);
         }
@@ -1116,7 +1144,10 @@ impl Simulation {
             let next = next.min(self.next_agreement_deadline().unwrap_or(next));
             let next =
                 self.project_boundary(self.environment_boundary(self.physical_boundary(next)));
-            let next = self.mission_boundary(self.invocation_boundary(next));
+            let next = self.health_boundary(
+                self.social_boundary(self.mission_boundary(self.invocation_boundary(next))),
+            )?;
+            let next = self.body_boundary(self.skill_boundary(next)?)?;
             let controlled = self.state.ruler;
             self.step(next)?;
             if controlled != self.state.ruler {
@@ -1175,6 +1206,7 @@ impl Simulation {
         let invocation_output = self.evaluate_invocation(next)?;
         let environment_output = self.evaluate_environment(next)?;
         let ecology_output = self.evaluate_ecology(next)?;
+        let health_output = self.evaluate_health(next)?;
         self.profile.evaluation_ns += started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
         let mut due = self.state.due.get(&next).cloned().unwrap_or_default();
@@ -1248,10 +1280,13 @@ impl Simulation {
             .and_then(|id| id.checked_add(self.invocation_allocation_bound(next)))
             .and_then(|id| id.checked_add(self.force_allocation_bound(&due)))
             .and_then(|id| id.checked_add(self.mission_allocation_bound()))
+            .and_then(|id| id.checked_add(self.health_allocation_bound(next)))
+            .and_then(|id| id.checked_add(self.enforcement_allocation_bound()))
             .ok_or(Error::Overflow)?;
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
         self.preflight_force(&due)?;
+        self.preflight_health(next)?;
         self.preflight_missions()?;
         self.preflight_agreements()?;
         self.preflight_institutions_at(next)?;
@@ -1268,6 +1303,7 @@ impl Simulation {
             .sum::<usize>()
             + self.state.people.len() * 2
             + self.mission_event_bound()
+            + self.health_event_bound()
             + self
                 .state
                 .environment
@@ -1339,6 +1375,10 @@ impl Simulation {
         for (actor, project) in builders {
             self.record_agreement_construction(actor, project, elapsed);
         }
+        // Install elapsed clinical progress before closing intake effects.
+        // Water care and other completed actions then update the progressed
+        // state once, rather than being overwritten by an opening snapshot.
+        self.commit_health(health_output)?;
         self.commit_projects(project_output);
         self.commit_environment(environment_output);
         self.commit_ecology(ecology_output);
@@ -1441,7 +1481,7 @@ impl Simulation {
             if closing_equipment.get(&actor).copied().unwrap_or(false) {
                 self.complete_physical(actor);
             } else {
-                self.interrupt_physical(actor);
+                self.interrupt_actor_activity(actor);
                 self.emit(EventKind::Interrupted { actor });
             }
         }
@@ -1457,6 +1497,8 @@ impl Simulation {
             }
         }
         self.commit_skills(skill_output);
+        self.reconcile_health(&closing_equipment)?;
+        self.reconcile_social();
         self.observe_invocation_deaths()?;
         self.commit_invocation(invocation_output)?;
         self.observe_lineage_deaths();
@@ -1479,10 +1521,13 @@ impl Simulation {
         self.update_projects()?;
         self.update_property_events();
         self.observe_ecology();
+        self.observe_health();
+        self.observe_enforcement();
         self.reconcile_agreements()?;
         self.observe_agreement_events();
         self.reconcile_institutions()?;
         self.learn_from_work();
+        self.review_social()?;
         if self.state.time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
             self.review_invocation()?;
@@ -1657,6 +1702,8 @@ impl Simulation {
             .map(|_| ())
     }
     fn emit(&mut self, kind: EventKind) {
+        self.on_health_event(&kind);
+        self.on_social_event(&kind);
         self.update_water_event(&kind);
         self.witness_lineage_event(&kind);
         self.on_skill_event(&kind);

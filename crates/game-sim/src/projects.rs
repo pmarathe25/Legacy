@@ -1,90 +1,7 @@
 //! A concrete wooden-tool workshop: support promises require real delivery,
 //! construction consumes timber and time, and the completed site uses recipes.
 use crate::*;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
-    pub construction_timber: Quantity,
-    pub construction_labor: SimDuration,
-    pub recipe_timber: Quantity,
-    pub recipe_tools: Quantity,
-    pub recipe_time: SimDuration,
-    pub workshops_per_area: usize,
-}
-impl Default for Rules {
-    fn default() -> Self {
-        Self {
-            construction_timber: Quantity(5_000),
-            construction_labor: SimDuration(300_000),
-            recipe_timber: Quantity(2_000),
-            recipe_tools: Quantity(1_000),
-            recipe_time: MINUTE,
-            workshops_per_area: 3,
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Project {
-    #[serde(default)]
-    pub kind: ProjectKind,
-    pub id: ProjectId,
-    pub sponsor: PersonId,
-    pub area: AreaId,
-    pub materials: InventoryId,
-    pub tool: InventoryId,
-    pub input: InventoryId,
-    pub output: InventoryId,
-    pub beneficiaries: BTreeSet<PersonId>,
-    pub workers: BTreeSet<PersonId>,
-    pub support: BTreeSet<AgreementId>,
-    pub status: ProjectStatus,
-    pub blocker: Option<ProjectBlocker>,
-    pub progress_ms: u64,
-    pub contributions: BTreeMap<PersonId, u64>,
-    pub materials_consumed: bool,
-    pub finish_by: SimTime,
-    pub enterprise: Option<EnterpriseId>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Construction {
-    pub project: ProjectId,
-    pub completes: SimTime,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Enterprise {
-    #[serde(default)]
-    pub inputs: BTreeMap<Good, u64>,
-    #[serde(default)]
-    pub kind: ProjectKind,
-    #[serde(default)]
-    pub produced: BTreeMap<Good, u64>,
-    pub id: EnterpriseId,
-    pub project: ProjectId,
-    pub sponsor: PersonId,
-    pub area: AreaId,
-    pub site: SiteId,
-    pub beneficiaries: BTreeSet<PersonId>,
-    pub workers: BTreeSet<PersonId>,
-    pub status: EnterpriseStatus,
-    pub blocker: Option<ProjectBlocker>,
-    pub timber_consumed: u64,
-    pub tools_produced: u64,
-    pub labor: BTreeMap<PersonId, u64>,
-    pub operating_agreements: BTreeSet<AgreementId>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub rules: Rules,
-    pub projects: BTreeMap<ProjectId, Project>,
-    pub enterprises: BTreeMap<EnterpriseId, Enterprise>,
-    pub jobs: BTreeMap<PersonId, Construction>,
-    pub known_projects: BTreeMap<PersonId, BTreeMap<ProjectId, ProjectView>>,
-    pub known_enterprises: BTreeMap<PersonId, BTreeMap<EnterpriseId, EnterpriseView>>,
-    #[serde(default)]
-    pub timber_hints: BTreeMap<PersonId, BTreeSet<AreaId>>,
-    pub next_search: BTreeMap<PersonId, SimTime>,
-    pub last_event: u64,
-}
+pub use game_economy::projects::{Construction, Enterprise, Project, Rules, World};
 
 impl Simulation {
     /// Authoring explicit custodians and opportunities is fixture content; it does
@@ -97,15 +14,17 @@ impl Simulation {
             debug_fixture: true,
         };
         sim.state.agreements = Some(agreements::World {
-            agreements: BTreeMap::new(),
-            obligations: BTreeMap::new(),
-            amendments: BTreeMap::new(),
+            ledger: game_economy::agreements::State {
+                agreements: BTreeMap::new(),
+                obligations: BTreeMap::new(),
+                amendments: BTreeMap::new(),
+                last_event: sim.state.next_event - 1,
+                next_search: BTreeMap::new(),
+                pending_work: BTreeMap::new(),
+                knowledge: BTreeMap::new(),
+                last_observation_event: sim.state.next_event - 1,
+            },
             custodians: BTreeMap::new(),
-            last_event: sim.state.next_event - 1,
-            next_search: BTreeMap::new(),
-            pending_work: BTreeMap::new(),
-            knowledge: BTreeMap::new(),
-            last_observation_event: sim.state.next_event - 1,
         });
         sim.state.projects = Some(World {
             rules: Rules::default(),
@@ -180,7 +99,7 @@ impl Simulation {
             BTreeSet::from([farmer]),
         )?;
         for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
-            sim.debug_physical_command(actor, Command::Cancel)?;
+            sim.debug_actor_command(actor, Command::Cancel)?;
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
@@ -226,7 +145,7 @@ impl Simulation {
             .map(|person| person.id)
             .collect::<Vec<_>>();
         for person in &people {
-            sim.debug_physical_command(*person, Command::Cancel)?;
+            sim.debug_actor_command(*person, Command::Cancel)?;
             sim.state
                 .physical
                 .as_mut()
@@ -753,7 +672,7 @@ impl Simulation {
                     .map(|(id, _)| *id)
                     .collect::<Vec<_>>();
                 for builder in builders {
-                    self.interrupt_physical(builder);
+                    self.interrupt_actor_activity(builder);
                 }
                 self.state
                     .projects
@@ -824,7 +743,7 @@ impl Simulation {
         let consume =
             (!plan.materials_consumed).then_some((plan.materials, world.rules.construction_timber));
         self.ensure_event_capacity(2)?;
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         if let Some((source, quantity)) = consume {
             self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
             self.emit(EventKind::Consumed {
@@ -905,51 +824,41 @@ impl Simulation {
             .min(limit)
     }
     pub(crate) fn evaluate_projects(&self, next: SimTime) -> Result<Option<World>, Error> {
-        let Some(mut world) = self.state.projects.clone() else {
+        let Some(world) = &self.state.projects else {
             return Ok(None);
         };
-        let elapsed = next
-            .0
-            .checked_sub(self.state.time.0)
-            .ok_or(Error::Overflow)?;
-        for (actor, job) in &world.jobs {
-            let plan = world
-                .projects
-                .get_mut(&job.project)
-                .ok_or(Error::Unavailable)?;
-            plan.progress_ms = plan
-                .progress_ms
-                .checked_add(elapsed)
-                .ok_or(Error::Overflow)?;
-            let credit = plan.contributions.entry(*actor).or_default();
-            *credit = credit.checked_add(elapsed).ok_or(Error::Overflow)?;
-        }
-        if let Some(physical) = &self.state.physical {
-            for (actor, body) in &physical.actors {
+        let work = self
+            .state
+            .physical
+            .as_ref()
+            .into_iter()
+            .flat_map(|w| w.actors.iter())
+            .filter_map(|(actor, body)| {
                 if let Activity::Work { site } | Activity::Cultivate { field: site, .. } =
                     body.activity
                     && body.vitals.alive
                     && body.vitals.health > 0
-                    && let Some(enterprise) = world
-                        .enterprises
-                        .values_mut()
-                        .find(|enterprise| enterprise.site == site)
                 {
-                    let credit = enterprise.labor.entry(*actor).or_default();
-                    *credit = credit.checked_add(elapsed).ok_or(Error::Overflow)?;
+                    Some(game_economy::projects::EnterpriseWork {
+                        actor: *actor,
+                        site,
+                    })
+                } else {
+                    None
                 }
-            }
-        }
-        let completions = world
+            })
+            .collect::<Vec<_>>();
+        let output = world.advance(self.state.time, next, &work)?;
+        let count = output
             .jobs
             .values()
             .filter(|job| job.completes == next)
             .count() as u64;
         self.state
             .next_id
-            .checked_add(completions.checked_mul(2).ok_or(Error::Overflow)?)
+            .checked_add(count.checked_mul(2).ok_or(Error::Overflow)?)
             .ok_or(Error::Overflow)?;
-        Ok(Some(world))
+        Ok(Some(output))
     }
     pub(crate) fn commit_projects(&mut self, output: Option<World>) {
         if let Some(output) = output {
@@ -1404,7 +1313,7 @@ impl Simulation {
                 .map(|(id, _)| *id)
                 .collect::<Vec<_>>();
             for actor in builders {
-                self.interrupt_physical(actor);
+                self.interrupt_actor_activity(actor);
             }
             let plan = self
                 .state
@@ -1436,7 +1345,7 @@ impl Simulation {
             .map(|(actor, _)| *actor)
             .collect::<Vec<_>>();
         for actor in missing_tools {
-            self.interrupt_physical(actor);
+            self.interrupt_actor_activity(actor);
         }
         let ids = self
             .state
@@ -2948,7 +2857,7 @@ mod farm_tests {
     fn share_remainders_and_debt_survive_end_and_need_real_delivery() {
         let mut sim = Simulation::project_fixture(69, Execution::default()).unwrap();
         for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
-            sim.debug_physical_command(actor, Command::Cancel).unwrap();
+            sim.debug_actor_command(actor, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
@@ -3057,7 +2966,7 @@ mod farm_tests {
         let obligation =
             sim.state.agreements.as_ref().unwrap().agreements[&agreement].obligations[0];
         for _ in 0..3 {
-            sim.debug_physical_command(debtor, Command::Work { site })
+            sim.debug_actor_command(debtor, Command::Work { site })
                 .unwrap();
             sim.advance(SimDuration(120_000)).unwrap();
         }
@@ -3088,7 +2997,7 @@ mod farm_tests {
                 BTreeSet::from([debtor]),
             )
             .unwrap();
-        sim.debug_physical_command(
+        sim.debug_actor_command(
             debtor,
             Command::Load {
                 source: output,
@@ -3102,7 +3011,7 @@ mod farm_tests {
             sim.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
             0
         );
-        sim.debug_physical_command(
+        sim.debug_actor_command(
             debtor,
             Command::Load {
                 source: cargo,

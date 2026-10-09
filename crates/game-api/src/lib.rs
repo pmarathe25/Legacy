@@ -1,5 +1,6 @@
 //! Renderer-independent commands and committed observations. Time is in milliseconds;
 //! quantities use 1,000 fixed-point units per whole good.
+pub use game_core::*;
 use serde::{Deserialize, Serialize};
 pub mod agreements;
 pub use agreements::*;
@@ -7,9 +8,8 @@ pub mod property;
 pub use property::*;
 pub mod institutions;
 pub use institutions::*;
-pub mod skills;
-pub use skills::*;
 pub mod projects;
+pub mod skills;
 pub use projects::*;
 pub mod invocation;
 pub use invocation::*;
@@ -19,47 +19,24 @@ pub mod missions;
 pub use missions::*;
 pub mod ecology;
 pub use ecology::*;
-
-macro_rules! id {
-    ($($name:ident),*) => {$(
-        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        pub struct $name(pub u64);
-    )*};
-}
-id!(
-    ResourceId,
-    MissionId,
-    RecruitmentId,
-    PersonId,
-    AreaId,
-    InventoryId,
-    SiteId,
-    ConceptId,
-    AgreementId,
-    WarningId,
-    RecordId,
-    ProjectId,
-    EnterpriseId,
-    InstitutionId,
-    RuleProposalId,
-    CaseId,
-    ClaimId,
-    IncidentId,
-    AmendmentId,
-    ObligationId,
-    PregnancyId,
-    EncounterId,
-    CombatMapId,
-    EventId,
-    SimTime,
-    SimDuration,
-    Quantity
-);
-
-pub const MINUTE: SimDuration = SimDuration(60_000);
+pub mod health;
+pub use health::*;
+pub mod social;
+pub use social::*;
+pub mod enforcement;
+pub use enforcement::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Social {
+        action: SocialAction,
+    },
+    Enforcement {
+        action: EnforcementAction,
+    },
+    Health {
+        action: HealthAction,
+    },
     Ecology {
         action: EcologyAction,
     },
@@ -168,46 +145,6 @@ pub struct CommandReceipt {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Error {
-    UnknownArea,
-    NoRoute,
-    AlreadyThere,
-    SequenceConflict,
-    InvalidConfiguration(String),
-    InvalidFixture(String),
-    InvalidSave(String),
-    Overflow,
-    WorkerFailure,
-    HostDisconnected,
-    Unavailable,
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-impl std::error::Error for Error {}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Role {
-    Ruler,
-    Guardian,
-    Citizen,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Location {
-    AtArea(AreaId),
-    InTransit {
-        from: AreaId,
-        to: AreaId,
-        departed: SimTime,
-        arrives: SimTime,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AreaView {
     pub id: AreaId,
     pub name: String,
@@ -215,6 +152,9 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub social: Option<SocialView>,
+    pub enforcement: EnforcementView,
+    pub health: Option<HealthView>,
     pub ecology: EcologyView,
     pub missions: Vec<MissionView>,
     pub force: ForceView,
@@ -243,29 +183,33 @@ pub struct PlayerView {
     pub preference: Option<ChildhoodInterest>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Good {
-    Herb,
-    Food,
-    Timber,
-    Tool,
-    Binding,
-    Seed,
-    Water,
-    Record,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Vitals {
-    /// Milliseconds of fixture hunger/fatigue exposure, not setting biology.
-    pub hunger: u64,
-    pub fatigue: u64,
-    pub health: u64,
-    pub alive: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Social {
+        partner: PersonId,
+        topic: SocialTopic,
+        completes: SimTime,
+    },
+    Instruction {
+        teacher: PersonId,
+        student: PersonId,
+        topic: InstructionTopic,
+        completes: SimTime,
+    },
+    Practice {
+        skill: Skill,
+        tool: Option<InventoryId>,
+        completes: SimTime,
+    },
+    EnforcementTalk {
+        case: EnforcementCaseId,
+        recipient: PersonId,
+        completes: SimTime,
+    },
+    HealthWork {
+        kind: HealthWorkKind,
+        completes: SimTime,
+    },
     Gather {
         resource: ResourceId,
         destination: InventoryId,
@@ -388,12 +332,6 @@ pub struct StockView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StockPosition {
-    Area(AreaId),
-    Carried(PersonId),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhysicalView {
     pub vitals: Vitals,
     pub activity: Activity,
@@ -402,26 +340,115 @@ pub struct PhysicalView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KnowledgeSource {
-    Recorded(RecordId),
-    Observed(PersonId),
-    Reported(PersonId),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StockKnowledge {
-    pub inventory: InventoryId,
-    pub area: AreaId,
-    pub good: Good,
-    pub quantity: Quantity,
-    pub accessible: bool,
-    pub observed_at: SimTime,
-    pub learned_at: SimTime,
-    pub source: KnowledgeSource,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    Socialized {
+        first: PersonId,
+        second: PersonId,
+        topic: SocialTopic,
+    },
+    InstructionCompleted {
+        teacher: PersonId,
+        student: PersonId,
+        topic: InstructionTopic,
+    },
+    PracticeCompleted {
+        actor: PersonId,
+        skill: Skill,
+    },
+    SocialRefused {
+        actor: PersonId,
+        recipient: PersonId,
+        reason: String,
+    },
+    EnforcementPolicyChanged {
+        institution: InstitutionId,
+        office: u16,
+    },
+    EnforcementFiling {
+        case: EnforcementCaseId,
+        actor: PersonId,
+        recipient: PersonId,
+    },
+    EnforcementFiled {
+        case: EnforcementCaseId,
+        actor: PersonId,
+        institution: InstitutionId,
+    },
+    EnforcementReported {
+        case: EnforcementCaseId,
+        sender: PersonId,
+        recipient: PersonId,
+    },
+    EnforcementDecided {
+        case: EnforcementCaseId,
+        judgment: JudgmentId,
+        proposer: PersonId,
+    },
+    EnforcementResponded {
+        case: EnforcementCaseId,
+        actor: PersonId,
+        comply: bool,
+    },
+    EnforcementDispatched {
+        case: EnforcementCaseId,
+        actor: PersonId,
+        mission: MissionId,
+    },
+    EnforcementOutcome {
+        case: EnforcementCaseId,
+        status: EnforcementStatus,
+    },
+    Drank {
+        actor: PersonId,
+        source: InventoryId,
+        quantity: Quantity,
+    },
+    WaterPurified {
+        actor: PersonId,
+        source: InventoryId,
+    },
+    ShelterBuilt {
+        shelter: ShelterId,
+        builder: PersonId,
+    },
+    ShelterAccessChanged {
+        shelter: ShelterId,
+        actor: PersonId,
+        person: PersonId,
+        allowed: bool,
+    },
+    ShelterEntered {
+        shelter: ShelterId,
+        actor: PersonId,
+    },
+    ShelterLeft {
+        shelter: ShelterId,
+        actor: PersonId,
+    },
+    TreatmentOffered {
+        caregiver: PersonId,
+        patient: PersonId,
+    },
+    TreatmentAccepted {
+        caregiver: PersonId,
+        patient: PersonId,
+    },
+    TreatmentRefused {
+        caregiver: PersonId,
+        patient: PersonId,
+    },
+    TreatmentCompleted {
+        caregiver: PersonId,
+        patient: PersonId,
+    },
+    IllnessStarted {
+        actor: PersonId,
+        kind: IllnessKind,
+    },
+    IllnessRecovered {
+        actor: PersonId,
+        kind: IllnessKind,
+    },
     ObligationAccrued {
         obligation: ObligationId,
         actor: PersonId,
@@ -847,22 +874,6 @@ pub enum EventKind {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LifeStage {
-    Infant,
-    Child,
-    Adult,
-    Elder,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum ChildhoodInterest {
-    Food,
-    Company,
-    Movement,
-    Craft,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Event {
     pub id: EventId,
@@ -877,13 +888,6 @@ pub enum StopReason {
     TargetReached,
     Paused,
     CombatInput { encounter: EncounterId },
-}
-
-/// Continuous placement in millimetres, independent of any rendering grid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Point {
-    pub x: i64,
-    pub y: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -912,13 +916,7 @@ pub enum CombatAction {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObstacleView {
-    pub index: u32,
-    pub minimum: Point,
-    pub maximum: Point,
-    pub integrity: u64,
-}
+pub use game_conflict::ObstacleView;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FighterView {
@@ -963,15 +961,8 @@ pub struct ScenarioInfo {
     pub debug_fixture: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FarmOperation {
-    Fallow,
-    Prepare,
-    Plant,
-    Tend,
-    Irrigate,
-    Harvest,
-}
+pub use game_economy::environment::FarmOperation;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvironmentView {
     pub day: u64,
@@ -993,51 +984,6 @@ pub struct FieldView {
     pub harvest_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineageView {
-    pub invocation_learning: u64,
-    pub invocation_ready: bool,
-    pub current: Option<PersonId>,
-    pub incarnations: Vec<PersonId>,
-    pub waiting_since: Option<SimTime>,
-    pub guardians: Vec<GuardianSearchView>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GuardianSearchView {
-    pub ready: bool,
-    pub assessment: String,
-    pub explanation: String,
-    pub guardian: PersonId,
-    pub location: Location,
-    pub goal: GuardianGoalView,
-    pub target: Option<PersonId>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GuardianGoalView {
-    Waiting,
-    Searching,
-    Mentoring,
-    Confined,
-    Recovering,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LessonTopic {
-    Invocation,
-    Craft,
-    Travel,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GuardianRequest {
-    SupplyFood {
-        source: InventoryId,
-        quantity: Quantity,
-    },
-    Move {
-        destination: AreaId,
-    },
-    Rest,
-    Work {
-        site: SiteId,
-    },
-}
+pub use game_lineage::{
+    GuardianGoalView, GuardianRequest, GuardianSearchView, LessonTopic, LineageView,
+};

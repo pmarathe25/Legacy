@@ -774,7 +774,7 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
     let captor = sim.canonical_state().people[3].id;
     let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
     for actor in people {
-        sim.debug_physical_command(actor, Command::Cancel).unwrap();
+        sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.debug_set_personality(
             actor,
             game_sim::decisions::Personality::restful(),
@@ -794,7 +794,7 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
     game_cli::execute(&mut sim, &format!("carry {} 1000", tool.0), &execution).unwrap();
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
     game_cli::execute(&mut sim, &format!("yield {}", captor.0), &execution).unwrap();
-    sim.debug_physical_command(captor, Command::Restrain { target: ruler })
+    sim.debug_actor_command(captor, Command::Restrain { target: ruler })
         .unwrap();
     game_cli::execute(&mut sim, "run 6s", &execution).unwrap();
     assert!(
@@ -840,7 +840,7 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
                     .location,
                 Location::AtArea(_)
             ) {
-                sim.debug_physical_command(teacher, Command::Rest).unwrap();
+                sim.debug_actor_command(teacher, Command::Rest).unwrap();
             }
             if game_cli::execute(
                 &mut sim,
@@ -916,7 +916,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         .map(|p| p.id)
         .collect::<Vec<_>>()
     {
-        sim.debug_physical_command(person, Command::Rest).unwrap();
+        sim.debug_actor_command(person, Command::Rest).unwrap();
         sim.debug_set_personality(
             person,
             game_sim::decisions::Personality::restful(),

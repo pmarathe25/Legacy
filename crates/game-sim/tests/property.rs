@@ -22,7 +22,7 @@ fn fixture(workers: usize) -> Simulation {
         .map(|person| person.id)
         .collect::<Vec<_>>();
     for person in people {
-        sim.debug_physical_command(person, Command::Cancel).unwrap();
+        sim.debug_actor_command(person, Command::Cancel).unwrap();
         sim.debug_set_personality(person, Personality::restful(), Dream::Comfort)
             .unwrap();
         sim.debug_set_property_attitude(
@@ -305,7 +305,7 @@ fn taking_can_invalidate_a_lawful_reservation_without_relocating_reserved_goods_
             BTreeSet::from([owner, carrier]),
         )
         .unwrap();
-    sim.debug_physical_command(
+    sim.debug_actor_command(
         carrier,
         Command::Load {
             source: stock,
@@ -416,7 +416,7 @@ fn failed_taking_is_inert_and_canceling_does_not_return_or_create_cargo() {
     assert_eq!(sim.canonical_state(), &before);
     take(&mut sim, 1_000);
     sim.advance(SimDuration(30_000)).unwrap();
-    sim.debug_physical_command(ruler, Command::Cancel).unwrap();
+    sim.debug_actor_command(ruler, Command::Cancel).unwrap();
     sim.advance(SimDuration(30_000)).unwrap();
     assert_eq!(
         sim.canonical_state().inventories[&cargo(&sim, ruler)]
@@ -477,7 +477,7 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
     let claim = sim.property_view(ruler).claims[0].id;
     take(&mut sim, 1_000);
     sim.advance(MINUTE).unwrap();
-    sim.debug_physical_command(ruler, Command::Eat { source: inventory })
+    sim.debug_actor_command(ruler, Command::Eat { source: inventory })
         .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(sim.canonical_state().inventories[&inventory].quantity.0, 0);
@@ -492,7 +492,7 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
         .find(|site| site.area == AreaId(1))
         .unwrap()
         .id;
-    sim.debug_physical_command(ruler, Command::Work { site })
+    sim.debug_actor_command(ruler, Command::Work { site })
         .unwrap();
     sim.advance(MINUTE).unwrap();
     let world = sim.canonical_state().property.as_ref().unwrap();

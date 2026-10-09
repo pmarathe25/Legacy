@@ -19,16 +19,15 @@ pub struct Rules {
 pub struct Job {
     pub site: SiteId,
     pub remaining: u64,
-    #[serde(default)]
     pub rate: SkillRate,
-    #[serde(default)]
     pub work_remainder: u64,
-    #[serde(default)]
     pub tool: Option<InventoryId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
+    pub fatigue_remainder: u16,
+    pub health_remainder: u16,
     pub vitals: Vitals,
     pub activity: Activity,
     pub job: Option<Job>,
@@ -59,6 +58,8 @@ pub struct World {
 pub(crate) struct Outcome {
     id: PersonId,
     vitals: Vitals,
+    fatigue_remainder: u16,
+    health_remainder: u16,
     remaining: Option<u64>,
     work_remainder: Option<u64>,
 }
@@ -88,6 +89,8 @@ impl Simulation {
                 (
                     p.id,
                     Actor {
+                        fatigue_remainder: 0,
+                        health_remainder: 0,
                         vitals: Vitals {
                             hunger: 0,
                             fatigue: 0,
@@ -236,97 +239,11 @@ impl Simulation {
         })
     }
 
-    pub(crate) fn submit_physical(
-        &mut self,
-        submission: Submission,
-    ) -> Result<CommandReceipt, Error> {
-        self.state
-            .next_command
-            .checked_add(1)
-            .ok_or(Error::Overflow)?;
-        self.debug_physical_command(self.state.ruler, submission.command.clone())?;
-        let receipt = CommandReceipt {
-            caller_sequence: submission.caller_sequence,
-            authoritative_sequence: self.state.next_command,
-            accepted_at: self.state.time,
-        };
-        self.state.next_command += 1;
-        self.state.accepted.insert(
-            submission.caller_sequence,
-            (submission.command, receipt.clone()),
-        );
-        Ok(receipt)
-    }
-
-    pub fn debug_physical_command(
+    pub(crate) fn start_physical_action(
         &mut self,
         actor: PersonId,
         command: Command,
     ) -> Result<(), Error> {
-        self.preflight_agreements()?;
-        self.preflight_institutions()?;
-        if let Command::Ecology { ref action } = command {
-            return self.debug_ecology_action(actor, action);
-        }
-        if let Command::Mission { ref action } = command {
-            self.mission_command(actor, action)?;
-            self.observe_agreement_events();
-            self.revision += 1;
-            return Ok(());
-        }
-        match command {
-            Command::Escape => return self.start_escape(actor),
-            Command::Restrain { target } => return self.start_restraint(actor, target),
-            Command::Yield { captor } => return self.force_yield(actor, captor),
-            Command::WithdrawYield => return self.force_withdraw_yield(actor),
-            Command::FreeCaptive { target } if target == actor => return self.start_escape(actor),
-            _ => {}
-        }
-        if let Command::Institution { ref action } = command {
-            self.institution_command(actor, action)?;
-            self.reconcile_institutions()?;
-            self.revision += 1;
-            return Ok(());
-        }
-        if let Command::Invocation { ref action } = command {
-            self.invocation_command(actor, action)?;
-            self.update_property_events();
-            self.reconcile_agreements()?;
-            self.observe_agreement_events();
-            self.revision += 1;
-            return Ok(());
-        }
-        if let Command::Carry { source, quantity } = command {
-            return self.carry_good(actor, source, quantity);
-        }
-        if let Command::Project { action } = command {
-            return self.debug_project_action(actor, action);
-        }
-        if let Command::Learn { teacher, topic } = command {
-            return self.start_lesson(actor, teacher, topic);
-        }
-        if let Command::RequestGuardian { guardian, request } = command {
-            return self.request_guardian(actor, guardian, request);
-        }
-        if let Command::Property { action } = command {
-            self.debug_property_action(actor, action)?;
-            self.update_property_events();
-            self.reconcile_agreements()?;
-            self.observe_agreement_events();
-            return Ok(());
-        }
-        if let Command::Agreement { ref action } = command {
-            self.agreement_command(actor, action)?;
-            self.observe_agreement_events();
-            self.revision += 1;
-            return Ok(());
-        }
-        if let Command::Cultivate { field, operation } = command {
-            return self.start_cultivation(actor, field, operation);
-        }
-        if let Command::Conceive { partner } = command {
-            return self.start_conception(actor, partner);
-        }
         if self.combat_restricts(actor)
             && !matches!(
                 command,
@@ -480,11 +397,14 @@ impl Simulation {
                     || self.care_index.get(&child).is_some_and(|id| *id != actor)
                     || self.state.people[self.person_index[&child]].location
                         != Location::AtArea(area)
-                    || food.good != Good::Food
+                    || !matches!(food.good, Good::Food | Good::Water)
                     || !self.can_use(actor, food)
                     || self.unreserved_stock(source, actor) < rules.meal_size.0
                 {
                     return Err(Error::Unavailable);
+                }
+                if food.good == Good::Water {
+                    self.preflight_water_care(child, source, rules.meal_size)?;
                 }
                 let completes = SimTime(
                     self.state
@@ -679,7 +599,7 @@ impl Simulation {
             self.preflight_enterprise_input(site, *quantity)?;
         }
         self.ensure_event_capacity(3)?;
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         if let Some((source, quantity)) = consume {
             self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
             self.emit(EventKind::Consumed {
@@ -759,29 +679,6 @@ impl Simulation {
         Ok(())
     }
 
-    pub(crate) fn interrupt_physical(&mut self, actor: PersonId) {
-        self.interrupt_ecology(actor);
-        self.cancel_mission_talk(actor);
-        self.interrupt_force(actor);
-        self.cancel_invocation_action(actor);
-        self.interrupt_construction(actor);
-        self.interrupt_lesson(actor);
-        self.interrupt_property_action(actor);
-        self.interrupt_cultivation(actor);
-        self.invalidate_pregnancies(actor, false);
-        if let Some(world) = &mut self.state.physical {
-            let a = world.actors.get_mut(&actor).unwrap();
-            if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = a.activity {
-                self.care_index.remove(&child);
-            }
-            a.activity = Activity::Idle;
-            for due in self.state.due.values_mut() {
-                due.retain(|d| !matches!(d, Due::Physical(id) if *id == actor));
-            }
-            self.state.due.retain(|_, due| !due.is_empty());
-        }
-    }
-
     fn can_use(&self, actor: PersonId, inventory: &Inventory) -> bool {
         let p = &self.state.people[self.person_index[&actor]];
         if let Location::AtArea(area) = p.location {
@@ -816,7 +713,9 @@ impl Simulation {
                 })
             })
             .sum();
-        u128::from(self.state.inventories[&source].quantity.0).saturating_sub(reserved) as u64
+        u128::from(self.state.inventories[&source].quantity.0)
+            .saturating_sub(reserved + u128::from(self.health_reserved_stock(source, excluding)))
+            as u64
     }
 
     pub(crate) fn transfer_capacity(&self, destination: InventoryId, amount: u64) -> bool {
@@ -847,32 +746,6 @@ impl Simulation {
             if !a.vitals.alive {
                 continue;
             }
-            let p = &self.state.people[self.person_index[id]];
-            if a.vitals.health < world.rules.max_health
-                && (p.hunger_exempt
-                    || a.activity == Activity::Rest && a.vitals.hunger < world.rules.hunger_harm)
-            {
-                dt = dt.min(world.rules.max_health - a.vitals.health);
-            }
-            if !p.hunger_exempt {
-                let until_harm = world.rules.hunger_harm.saturating_sub(a.vitals.hunger);
-                if until_harm > 0 {
-                    dt = dt.min(until_harm);
-                }
-                dt = dt.min(until_harm.saturating_add(a.vitals.health));
-            }
-            if matches!(
-                a.activity,
-                Activity::Gather { .. }
-                    | Activity::Work { .. }
-                    | Activity::Load { .. }
-                    | Activity::Take { .. }
-                    | Activity::Construct { .. }
-                    | Activity::Play { .. }
-                    | Activity::Cultivate { .. }
-            ) {
-                dt = dt.min(world.rules.fatigue_limit.saturating_sub(a.vitals.fatigue));
-            }
             if matches!(a.activity, Activity::Work { .. })
                 && let Some(job) = &a.job
             {
@@ -890,60 +763,145 @@ impl Simulation {
         SimTime(self.state.time.0 + dt.max(1).min(limit.0 - self.state.time.0))
     }
 
+    fn body_context(
+        &self,
+        actor: PersonId,
+    ) -> Result<
+        (
+            game_physiology::BodySnapshot,
+            game_physiology::BodyLimits,
+            game_physiology::ActivityFlags,
+            bool,
+        ),
+        Error,
+    > {
+        let world = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        let body = &world.actors[&actor];
+        let person = &self.state.people[self.person_index[&actor]];
+        let exerting = matches!(
+            body.activity,
+            Activity::Work { .. }
+                | Activity::Gather { .. }
+                | Activity::Load { .. }
+                | Activity::Take { .. }
+                | Activity::Construct { .. }
+                | Activity::Combat { .. }
+                | Activity::Play { .. }
+                | Activity::Cultivate { .. }
+        ) || matches!(person.location, Location::InTransit { .. })
+            || self.health_work_exerting(actor)
+            || self.social_activity_is_practical(actor);
+        let resting = body.activity == Activity::Rest || self.health_patient_resting(actor);
+        Ok((
+            game_physiology::BodySnapshot {
+                vitals: body.vitals.clone(),
+                fatigue_remainder: body.fatigue_remainder,
+                health_remainder: body.health_remainder,
+            },
+            game_physiology::BodyLimits {
+                hunger_harm: world.rules.hunger_harm,
+                fatigue_limit: world.rules.fatigue_limit,
+                max_health: world.rules.max_health,
+            },
+            game_physiology::ActivityFlags { exerting, resting },
+            person.hunger_exempt,
+        ))
+    }
+
+    /// Assemble facts from domain owners; arithmetic and clamping live in the
+    /// independently compiled physiology kernel.
+    pub(crate) fn integrated_vitals(
+        &self,
+        actor: PersonId,
+        elapsed: u64,
+    ) -> Result<(Vitals, u16, u16), Error> {
+        let (snapshot, limits, activity, exempt) = self.body_context(actor)?;
+        let health = self.health_body_delta(actor, elapsed)?;
+        let (strain, injury) = self.invocation_rates(actor);
+        let contributions = [
+            game_physiology::Contribution {
+                health_milli: health.health_milli,
+                fatigue_milli: health.fatigue_milli,
+            },
+            game_physiology::Contribution {
+                health_milli: i128::from(elapsed)
+                    .checked_mul(i128::from(injury))
+                    .and_then(i128::checked_neg)
+                    .ok_or(Error::Overflow)?,
+                fatigue_milli: i128::from(elapsed)
+                    .checked_mul(i128::from(strain))
+                    .ok_or(Error::Overflow)?,
+            },
+        ];
+        let result = game_physiology::integrate(
+            &snapshot,
+            limits,
+            game_physiology::BodyInput {
+                elapsed_ms: elapsed,
+                hunger_exempt: exempt,
+                immortal: exempt,
+                activity,
+                contributions: &contributions,
+            },
+        )?;
+        Ok((
+            result.vitals,
+            result.fatigue_remainder,
+            result.health_remainder,
+        ))
+    }
+
+    pub(crate) fn body_boundary(&self, limit: SimTime) -> Result<SimTime, Error> {
+        let Some(world) = &self.state.physical else {
+            return Ok(limit);
+        };
+        let mut next = limit;
+        // Hunger changes the healing/harm slope. Clip that transition before
+        // searching crossings so a recovery followed by starvation cannot hide
+        // an earlier boundary at the interval endpoint.
+        for (actor, body) in &world.actors {
+            let exempt = self.state.people[self.person_index[actor]].hunger_exempt;
+            if body.vitals.alive && !exempt && body.vitals.hunger < world.rules.hunger_harm {
+                let remaining = world.rules.hunger_harm - body.vitals.hunger;
+                if remaining < next.0 - self.state.time.0 {
+                    next = SimTime(self.state.time.0 + remaining);
+                }
+            }
+        }
+        for (actor, body) in &world.actors {
+            if !body.vitals.alive {
+                continue;
+            }
+            let elapsed = next.0 - self.state.time.0;
+            let before = &body.vitals;
+            let incapacitation = self.state.combat.as_ref().map(|w| w.rules.incapacitation);
+            let crossed = |dt| {
+                let (after, _, _) = self.integrated_vitals(*actor, dt)?;
+                Ok(!after.alive
+                    || before.fatigue < world.rules.fatigue_limit
+                        && after.fatigue >= world.rules.fatigue_limit
+                    || before.fatigue > 0 && after.fatigue == 0
+                    || before.health < world.rules.max_health
+                        && after.health >= world.rules.max_health
+                    || incapacitation.is_some_and(|threshold| {
+                        (before.health > threshold) != (after.health > threshold)
+                    }))
+            };
+            if let Some(dt) = game_physiology::first_crossing(elapsed, crossed)? {
+                next = SimTime(self.state.time.0 + dt);
+            }
+        }
+        Ok(next)
+    }
+
     pub(crate) fn evaluate_physical(&self, elapsed: u64) -> Result<Vec<Outcome>, Error> {
         let Some(world) = &self.state.physical else {
             return Ok(Vec::new());
         };
         let equipment = self.equipment_availability();
         let work = |(id, a): (&PersonId, &Actor)| -> Result<Outcome, Error> {
-            let p = &self.state.people[self.person_index[id]];
-            let mut vitals = a.vitals.clone();
-            if vitals.alive {
-                if !p.hunger_exempt {
-                    vitals.hunger = vitals.hunger.checked_add(elapsed).ok_or(Error::Overflow)?;
-                    let harm = vitals.hunger.saturating_sub(world.rules.hunger_harm)
-                        - a.vitals.hunger.saturating_sub(world.rules.hunger_harm);
-                    vitals.health = vitals.health.saturating_sub(harm);
-                }
-                let exerting = matches!(
-                    a.activity,
-                    Activity::Work { .. }
-                        | Activity::Gather { .. }
-                        | Activity::Load { .. }
-                        | Activity::Take { .. }
-                        | Activity::Construct { .. }
-                        | Activity::Combat { .. }
-                        | Activity::Play { .. }
-                        | Activity::Cultivate { .. }
-                ) || matches!(p.location, Location::InTransit { .. });
-                if exerting {
-                    vitals.fatigue = vitals
-                        .fatigue
-                        .saturating_add(elapsed)
-                        .min(world.rules.fatigue_limit);
-                } else if a.activity == Activity::Rest {
-                    vitals.fatigue = vitals.fatigue.saturating_sub(elapsed.saturating_mul(2));
-                }
-                if p.hunger_exempt {
-                    vitals.health = vitals
-                        .health
-                        .saturating_add(elapsed)
-                        .min(world.rules.max_health);
-                } else if a.activity == Activity::Rest {
-                    let healing =
-                        elapsed.min(world.rules.hunger_harm.saturating_sub(a.vitals.hunger));
-                    vitals.health = vitals
-                        .health
-                        .saturating_add(healing)
-                        .min(world.rules.max_health);
-                }
-                if vitals.health == 0 && !p.hunger_exempt {
-                    vitals.alive = false;
-                }
-            }
-            if let Some(joint) = self.joint_invocation_vitals(*id, elapsed)? {
-                vitals = joint;
-            }
+            let (vitals, fatigue_remainder, health_remainder) =
+                self.integrated_vitals(*id, elapsed)?;
             let (remaining, work_remainder) = if let Some(job) = &a.job {
                 if matches!(a.activity, Activity::Work { .. })
                     && equipment.get(id).copied().unwrap_or(false)
@@ -963,6 +921,8 @@ impl Simulation {
             Ok(Outcome {
                 id: *id,
                 vitals,
+                fatigue_remainder,
+                health_remainder,
                 remaining,
                 work_remainder,
             })
@@ -981,6 +941,17 @@ impl Simulation {
             .activity
             .clone();
         let mut success = false;
+        if matches!(
+            activity,
+            Activity::Social { .. } | Activity::Instruction { .. } | Activity::Practice { .. }
+        ) {
+            self.complete_social(actor);
+            return;
+        }
+        if matches!(activity, Activity::EnforcementTalk { .. }) {
+            self.complete_enforcement_talk(actor);
+            return;
+        }
         if matches!(activity, Activity::Gather { .. }) {
             self.complete_gathering(actor);
             return;
@@ -1182,6 +1153,20 @@ impl Simulation {
                     && self.can_use(actor, &self.state.inventories[&source])
                     && self.state.inventories[&source].quantity >= quantity
                 {
+                    if self.state.inventories[&source].good == Good::Water
+                        && self.health_water_given(child, source, quantity).is_err()
+                    {
+                        self.emit(EventKind::Interrupted { actor });
+                        self.state
+                            .physical
+                            .as_mut()
+                            .unwrap()
+                            .actors
+                            .get_mut(&actor)
+                            .unwrap()
+                            .activity = Activity::Idle;
+                        return;
+                    }
                     let food = self.state.inventories.get_mut(&source).unwrap();
                     food.quantity.0 -= quantity.0;
                     food.last_granted = Some(actor);
@@ -1271,15 +1256,22 @@ impl Simulation {
                 .take_while(|e| e.time == self.state.time)
                 .any(|e| {
                     matches!(e.kind, EventKind::Ate { actor: id, .. } if id == actor)
-                        || matches!(e.kind, EventKind::Cared { child: id, .. } if id == actor)
+                        || matches!(e.kind, EventKind::Cared { child: id, source, .. } if id == actor && self.state.inventories[&source].good == Good::Food)
                 });
             if ate {
                 vitals.hunger = vitals.hunger.saturating_sub(rules.meal_relief);
             }
             let job_done =
                 out.remaining == Some(0) && matches!(previous.activity, Activity::Work { .. });
-            let interrupted = (matches!(previous.activity, Activity::Work { .. })
-                && !equipment.get(&actor).copied().unwrap_or(false))
+            let interrupted = (self.social_activity_is_practical(actor)
+                && (vitals.fatigue >= rules.fatigue_limit
+                    || self.social_selected_tool(actor).is_some()
+                        && !equipment.get(&actor).copied().unwrap_or(false)))
+                || (self.health_work_exerting(actor) && vitals.fatigue >= rules.fatigue_limit)
+                || (self.health_selected_tool(actor).is_some()
+                    && !equipment.get(&actor).copied().unwrap_or(false))
+                || (matches!(previous.activity, Activity::Work { .. })
+                    && !equipment.get(&actor).copied().unwrap_or(false))
                 || vitals.fatigue >= rules.fatigue_limit
                     && matches!(
                         previous.activity,
@@ -1300,6 +1292,8 @@ impl Simulation {
                 .get_mut(&actor)
                 .unwrap();
             a.vitals = vitals.clone();
+            a.fatigue_remainder = out.fatigue_remainder;
+            a.health_remainder = out.health_remainder;
             if let (Some(job), Some(remaining)) = (&mut a.job, out.remaining) {
                 job.remaining = remaining;
                 job.work_remainder = out.work_remainder.unwrap();
@@ -1335,15 +1329,15 @@ impl Simulation {
                         .unwrap()
                         .last_granted = Some(actor);
                 } else {
-                    self.interrupt_physical(actor);
+                    self.interrupt_actor_activity(actor);
                     self.emit(EventKind::Interrupted { actor });
                 }
             } else if interrupted {
-                self.interrupt_physical(actor);
+                self.interrupt_actor_activity(actor);
                 self.emit(EventKind::Interrupted { actor });
             }
             if previously_alive && !vitals.alive {
-                self.interrupt_physical(actor);
+                self.interrupt_actor_activity(actor);
                 self.state
                     .physical
                     .as_mut()
@@ -1513,7 +1507,7 @@ impl Simulation {
             self.state.due.retain(|_, due| !due.is_empty());
             self.invalidate_pregnancies(actor, true);
         }
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         self.observe_lineage_deaths();
         self.observe_invocation_deaths()?;
         Ok(())

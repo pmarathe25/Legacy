@@ -487,7 +487,7 @@ fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
     let agreement = sim.agreement_view(owner).last().unwrap().id;
     sim.debug_agreement_action(previous, AgreementAction::Accept { agreement })
         .unwrap();
-    sim.debug_physical_command(previous, Command::Eat { source })
+    sim.debug_actor_command(previous, Command::Eat { source })
         .unwrap();
     sim.debug_move_actor(judge, AreaId(1)).unwrap();
     sim.advance(SimDuration(120_000)).unwrap();

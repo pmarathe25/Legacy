@@ -170,8 +170,7 @@ fn interrupting_either_lesson_participant_discards_unfinished_learning() {
         );
         sim.advance(SimDuration(30_000)).unwrap();
         if interrupt_teacher {
-            sim.debug_physical_command(teacher, Command::Cancel)
-                .unwrap();
+            sim.debug_actor_command(teacher, Command::Cancel).unwrap();
         } else {
             send(
                 &mut sim,
@@ -530,7 +529,7 @@ fn simultaneous_births_use_persistent_order_without_rebinding_to_the_second_chil
             )
             .unwrap();
         }
-        sim.debug_physical_command(first, Command::Conceive { partner: second })
+        sim.debug_actor_command(first, Command::Conceive { partner: second })
             .unwrap();
     }
     kill_ruler(&mut sim);
@@ -754,7 +753,7 @@ fn births_before_death_are_ineligible_and_an_unbounded_gap_manufactures_nothing(
         .collect();
     for citizen in citizens {
         // Stop any newly coupled conception using the physical cancellation path.
-        sim.debug_physical_command(citizen, Command::Cancel).ok();
+        sim.debug_actor_command(citizen, Command::Cancel).ok();
         sim.debug_set_personality(citizen, Personality::restful(), Dream::Comfort)
             .unwrap();
     }

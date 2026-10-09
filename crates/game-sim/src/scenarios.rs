@@ -11,6 +11,10 @@ pub struct Config {
     pub skills: skills::Rules,
     pub mentorship: lineage::MentorshipRules,
     pub invocation: invocation::Rules,
+    #[serde(default)]
+    pub health: HealthRules,
+    #[serde(default)]
+    pub social: social::Rules,
 }
 
 impl Default for Config {
@@ -28,6 +32,8 @@ impl Default for Config {
                 ..lineage::MentorshipRules::default()
             },
             invocation: invocation::Rules::human(),
+            health: HealthRules::human(),
+            social: social::Rules::default(),
         }
     }
 }
@@ -96,12 +102,15 @@ impl Simulation {
         sim.state.areas[2].name = "North wood".into();
         sim.prepare_playable_people(&config)?;
         sim.install_playable_domains(&config)?;
+        sim.initialize_social(config.social.clone())?;
         sim.seed_playable_resources()?;
         sim.seed_playable_workshop(id != "settlement-founder")?;
+        sim.seed_playable_family_plans()?;
         sim.establish_starting_custom(id != "settlement-founder")?;
         if id == "child-successor" {
             sim.author_child_opening()?;
         }
+        sim.seed_playable_shelters(&config.health, id != "settlement-founder")?;
         sim.update_property_events();
         sim.observe_agreement_events();
         sim.update_projects()?;
@@ -137,7 +146,7 @@ impl Simulation {
             .map(|person| person.id)
             .collect::<Vec<_>>()
         {
-            self.interrupt_physical(actor);
+            self.interrupt_actor_activity(actor);
             self.state
                 .physical
                 .as_mut()
@@ -350,15 +359,17 @@ impl Simulation {
             })
             .collect();
         self.state.agreements = Some(agreements::World {
-            agreements: BTreeMap::new(),
-            obligations: BTreeMap::new(),
-            amendments: BTreeMap::new(),
+            ledger: game_economy::agreements::State {
+                agreements: BTreeMap::new(),
+                obligations: BTreeMap::new(),
+                amendments: BTreeMap::new(),
+                last_event: self.state.next_event - 1,
+                next_search: BTreeMap::new(),
+                pending_work: BTreeMap::new(),
+                knowledge: BTreeMap::new(),
+                last_observation_event: self.state.next_event - 1,
+            },
             custodians,
-            last_event: self.state.next_event - 1,
-            next_search: BTreeMap::new(),
-            pending_work: BTreeMap::new(),
-            knowledge: BTreeMap::new(),
-            last_observation_event: self.state.next_event - 1,
         });
         self.state.property = Some(property::World {
             claims: BTreeMap::new(),
@@ -839,6 +850,39 @@ impl Simulation {
         Ok(())
     }
 
+    fn seed_playable_family_plans(&mut self) -> Result<(), Error> {
+        let first = self.state.people[3].id;
+        let second = self.state.people[4].id;
+        // This particular couple discussed parenthood before control begins.
+        // Affection alone never creates family intent for later generations.
+        let effect = self.state.social.as_mut().unwrap().finish_conversation(
+            first,
+            second,
+            SocialTopic::FamilyPlans,
+        )?;
+        for (actor, partner) in [(first, second), (second, first)] {
+            let relationship = self
+                .state
+                .decisions
+                .as_mut()
+                .unwrap()
+                .minds
+                .get_mut(&actor)
+                .unwrap()
+                .relationships
+                .get_mut(&partner)
+                .unwrap();
+            relationship.affection = (relationship.affection + effect.affection_gain).min(1_000);
+            relationship.trust = (relationship.trust + effect.trust_gain).min(1_000);
+        }
+        self.emit(EventKind::Socialized {
+            first,
+            second,
+            topic: SocialTopic::FamilyPlans,
+        });
+        Ok(())
+    }
+
     fn establish_starting_custom(&mut self, ruling_office: bool) -> Result<(), Error> {
         let ruler = self.state.ruler;
         let steward = self.state.people[4].id;
@@ -983,7 +1027,7 @@ impl Simulation {
         self.reconcile_institutions()?;
         self.carry_good(ruler, food, Quantity(1_000))?;
         self.advance(MINUTE)?;
-        self.debug_physical_command(
+        self.debug_actor_command(
             ruler,
             Command::Load {
                 source: self.state.people[self.person_index[&ruler]].inventory,
@@ -1015,7 +1059,7 @@ impl Simulation {
                     )
             })
         {
-            self.debug_physical_command(mother, Command::Conceive { partner: father })?;
+            self.debug_actor_command(mother, Command::Conceive { partner: father })?;
         }
         if let Some(completes) = self
             .state
@@ -1078,6 +1122,18 @@ impl Simulation {
         self.state.environment.as_mut().unwrap().jobs.clear();
         self.state.projects.as_mut().unwrap().jobs.clear();
         self.state.ecology.as_mut().unwrap().jobs.clear();
+        // This authored interval ends all previously active social tasks. Its
+        // scheduler epoch begins at this snapshot, as do the rebuilt physical
+        // deadlines; it does not replay unobserved prenatal interactions.
+        if let Some(social) = &mut self.state.social {
+            social.interactions.clear();
+            social.participants.clear();
+            social.last_review = death_at;
+            for record in social.development.values_mut() {
+                record.next_choice = death_at;
+            }
+        }
+
         for life in self.state.development.as_mut().unwrap().lives.values_mut() {
             let age = life
                 .initial_age
@@ -1198,6 +1254,95 @@ impl Simulation {
         }
         Ok(())
     }
+    fn seed_playable_shelters(&mut self, rules: &HealthRules, houses: bool) -> Result<(), Error> {
+        self.initialize_health(rules.clone())?;
+        let custodian = self.state.people[4].id;
+        let access: BTreeSet<_> = self
+            .state
+            .people
+            .iter()
+            .filter(|person| {
+                self.state.physical.as_ref().unwrap().actors[&person.id]
+                    .vitals
+                    .alive
+            })
+            .map(|person| person.id)
+            .collect();
+        // Residents remember this maintained source's history; later arrivals
+        // and newborns still learn water safety through observation or reports.
+        let potable: Vec<_> = self
+            .state
+            .inventories
+            .values()
+            .filter(|stock| stock.good == Good::Water && stock.quantity.0 > 0)
+            .map(|stock| stock.id)
+            .collect();
+        for observer in access.iter().copied() {
+            if self.state.development.as_ref().unwrap().lives[&observer].stage == LifeStage::Infant
+            {
+                continue;
+            }
+            for source in potable.iter().copied() {
+                self.seed_water_safety(observer, source)?;
+            }
+        }
+        for (area, capacity, insulation) in [
+            (
+                self.state.areas[0].id,
+                18_u32,
+                if houses { 750_u16 } else { 350 },
+            ),
+            (self.state.areas[1].id, 4_u32, 500_u16),
+        ] {
+            let materials = u128::from(capacity)
+                * u128::from(rules.shelter_timber_per_place.0)
+                * u128::from(500 + insulation);
+            let quantity =
+                Quantity(u64::try_from(materials.div_ceil(1_000)).map_err(|_| Error::Overflow)?);
+            // This allocated construction lot is authored prior property. The
+            // health constructor physically consumes it rather than awarding a
+            // cost-free building or giving a custodian title to other goods.
+            let source = self.add_inventory(
+                Good::Timber,
+                InventoryLocation::Area(area),
+                quantity,
+                quantity,
+                BTreeSet::from([custodian]),
+            )?;
+            self.state
+                .agreements
+                .as_mut()
+                .unwrap()
+                .custodians
+                .insert(source, custodian);
+            let built_at = SimTime(self.state.time.0.saturating_sub(2 * 86_400_000));
+            let shelter = self.seed_shelter(
+                area,
+                custodian,
+                access.clone(),
+                capacity,
+                insulation,
+                source,
+                quantity,
+                built_at,
+            )?;
+            let occupants: Vec<_> = self
+                .state
+                .people
+                .iter()
+                .filter(|person| {
+                    access.contains(&person.id) && person.location == Location::AtArea(area)
+                })
+                .take(capacity as usize)
+                .map(|person| person.id)
+                .collect();
+            for actor in occupants {
+                self.set_initial_shelter_occupancy(actor, shelter)?;
+            }
+        }
+        self.update_property_events();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1241,6 +1386,7 @@ mod tests {
                     && state.health.is_some()
                     && state.force.is_some()
                     && state.missions.is_some()
+                    && state.social.is_some()
             );
             assert_eq!(
                 state.environment.as_ref().unwrap().calendar.day,
@@ -1272,6 +1418,67 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{id}: {error}"));
             assert_eq!(sim.canonical_state(), restored.canonical_state());
+        }
+    }
+
+    #[test]
+    fn shelters_and_healing_supplies_have_actual_materials_and_personal_knowledge() {
+        for id in PLAYABLE {
+            let sim = opening(id, 1);
+            let world = sim.state.health.as_ref().unwrap();
+            assert_eq!(world.rules, HealthRules::human());
+            assert_eq!(world.shelters.len(), 2);
+            assert!(
+                world
+                    .shelters
+                    .values()
+                    .all(|shelter| shelter.timber_used.0 > 0 && shelter.labor_ms > 0)
+            );
+            let consumed: u64 = sim
+                .state
+                .events
+                .iter()
+                .filter_map(|event| match event.kind {
+                    EventKind::Consumed {
+                        source, quantity, ..
+                    } if sim.state.inventories[&source].good == Good::Timber => Some(quantity.0),
+                    _ => None,
+                })
+                .sum();
+            assert!(
+                consumed
+                    >= world
+                        .shelters
+                        .values()
+                        .map(|shelter| shelter.timber_used.0)
+                        .sum::<u64>()
+            );
+            let healer = sim.state.people[6].id;
+            assert!(sim.own_skill_level(healer, Skill::Medicine) > 0);
+            let water = sim
+                .state
+                .inventories
+                .values()
+                .find(|stock| stock.good == Good::Water && stock.quantity.0 > 0)
+                .unwrap()
+                .id;
+            assert!(world.known[&healer].water[&water].purified);
+            assert!(
+                sim.state
+                    .inventories
+                    .values()
+                    .any(|stock| stock.good == Good::Herb && stock.quantity.0 >= 20_000)
+            );
+            let ruler = sim.state.ruler;
+            assert!(world.occupancy.contains_key(&ruler));
+            if id == "child-successor" {
+                assert!(
+                    world
+                        .known
+                        .get(&ruler)
+                        .is_none_or(|known| !known.water.contains_key(&water))
+                );
+            }
         }
     }
 

@@ -276,7 +276,7 @@ impl Simulation {
             .ok_or(Error::Overflow)?;
         self.ensure_event_capacity(3)?;
         self.ensure_force_world();
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         self.state.force.as_mut().unwrap().restraints.insert(
             actor,
             Restraint {
@@ -337,7 +337,7 @@ impl Simulation {
         self.preflight_force_intervention()?;
         self.ensure_event_capacity(128)?;
         self.ensure_force_world();
-        self.interrupt_physical(actor);
+        self.interrupt_actor_activity(actor);
         self.state.force.as_mut().unwrap().escapes.insert(
             actor,
             Escape {
@@ -568,7 +568,7 @@ impl Simulation {
                             BTreeSet::from([actor]),
                         )
                         .expect("preflight restraint inventory");
-                    self.interrupt_physical(target);
+                    self.interrupt_actor_activity(target);
                     self.state.combat.as_mut().unwrap().captivity.insert(
                         target,
                         combat::Captivity {
@@ -1023,7 +1023,7 @@ impl Simulation {
         let accepted = match command {
             Command::Move { destination } => self.start_movement(guardian, destination),
             Command::Carry { source, quantity } => self.carry_good(guardian, source, quantity),
-            command => self.debug_physical_command(guardian, command),
+            command => self.debug_actor_command(guardian, command),
         };
         if let Err(error) = accepted {
             if let Some(previous) = previous {
@@ -1450,7 +1450,7 @@ mod tests {
             .map(|person| person.id)
             .collect::<Vec<_>>();
         for person in people {
-            sim.debug_physical_command(person, Command::Cancel).unwrap();
+            sim.debug_actor_command(person, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 person,
                 decisions::Personality::restful(),
@@ -1692,8 +1692,7 @@ mod tests {
             sim.state.development.as_ref().unwrap().lives[&requester].stage,
             LifeStage::Adult
         );
-        sim.debug_physical_command(guardian, Command::Cancel)
-            .unwrap();
+        sim.debug_actor_command(guardian, Command::Cancel).unwrap();
         let source = sim
             .state
             .inventories

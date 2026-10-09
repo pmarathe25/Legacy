@@ -5,6 +5,16 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-society.workspace = true
+game-lineage.workspace = true
+game-skills.workspace = true
+game-conflict.workspace = true
+game-invocation.workspace = true
+game-physiology.workspace = true
+game-health.workspace = true
+game-characters.workspace = true
+game-economy.workspace = true
+game-core.workspace = true
 game-api.workspace = true
 serde.workspace = true
 serde_json.workspace = true

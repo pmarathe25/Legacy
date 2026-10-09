@@ -203,7 +203,7 @@ fn interrupting_conception_cancels_both_primary_actions_and_creates_no_child() {
         .next()
         .unwrap()
         .clone();
-    sim.debug_physical_command(p.gestator, Command::Cancel)
+    sim.debug_actor_command(p.gestator, Command::Cancel)
         .unwrap();
     assert_eq!(
         sim.canonical_state().physical.as_ref().unwrap().actors[&p.partner].activity,
@@ -286,11 +286,11 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
     let caregiver = sim.canonical_state().people[5].id;
     let source = food(&sim);
     let before = sim.canonical_state().inventories[&source].quantity.0;
-    sim.debug_physical_command(caregiver, Command::Care { child, source })
+    sim.debug_actor_command(caregiver, Command::Care { child, source })
         .unwrap();
     let second = sim.canonical_state().people[6].id;
     assert_eq!(
-        sim.debug_physical_command(second, Command::Care { child, source }),
+        sim.debug_actor_command(second, Command::Care { child, source }),
         Err(Error::Unavailable)
     );
     sim.advance(MINUTE).unwrap();
@@ -386,7 +386,7 @@ fn a_motivated_nonparent_responds_to_observed_distress_without_player_orders() {
         .unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     let source = food(&sim);
-    sim.debug_physical_command(caregiver, Command::Eat { source })
+    sim.debug_actor_command(caregiver, Command::Eat { source })
         .unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { caregiver: id, child: baby, .. } if id == caregiver && baby == child)));
@@ -441,26 +441,18 @@ fn saving_mid_conception_and_gestation_preserves_continuation_and_new_ids() {
 }
 
 #[test]
-fn original_version_one_fixtures_load_without_losing_state_or_continuation() {
-    let mut original = Simulation::autonomy_fixture(1, Execution::default()).unwrap();
-    original.advance(SimDuration(123_456)).unwrap();
-    let mut legacy: serde_json::Value = serde_json::from_slice(&original.save().unwrap()).unwrap();
-    legacy["version"] = 1.into();
-    legacy["state"]
-        .as_object_mut()
-        .unwrap()
-        .remove("development");
-    for mind in legacy["state"]["decisions"]["minds"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
-    {
-        mind.as_object_mut().unwrap().remove("child_signals");
-    }
-    let mut loaded =
-        Simulation::load(&serde_json::to_vec(&legacy).unwrap(), Execution::default()).unwrap();
-    same(&original, &loaded);
-    original.advance(SimDuration(100_007)).unwrap();
-    loaded.advance(SimDuration(100_007)).unwrap();
-    same(&original, &loaded);
+fn current_saves_roundtrip_and_other_schema_versions_are_rejected() {
+    let sim = Simulation::life_fixture(7, Execution::default()).unwrap();
+    let bytes = sim.save().unwrap();
+    let restored = Simulation::load(&bytes, Execution::default()).unwrap();
+    assert_eq!(sim.canonical_state(), restored.canonical_state());
+    let mut different: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    different["version"] = 0.into();
+    assert!(
+        Simulation::load(
+            &serde_json::to_vec(&different).unwrap(),
+            Execution::default()
+        )
+        .is_err()
+    );
 }

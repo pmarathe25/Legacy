@@ -109,7 +109,7 @@ fn delivery(
     }
 }
 fn load(sim: &mut Simulation, actor: PersonId, source: InventoryId, destination: InventoryId) {
-    sim.debug_physical_command(
+    sim.debug_actor_command(
         actor,
         Command::Load {
             source,
@@ -548,7 +548,7 @@ fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
     );
     assert_eq!(known(&sim, guardian, id).status, AgreementStatus::Active);
     assert!(
-        sim.debug_physical_command(guardian, Command::Work { site })
+        sim.debug_actor_command(guardian, Command::Work { site })
             .is_err()
     );
     assert!(

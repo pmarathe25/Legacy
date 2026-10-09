@@ -77,15 +77,17 @@ impl Simulation {
             })
             .collect();
         sim.state.agreements = Some(agreements::World {
-            knowledge: BTreeMap::new(),
-            last_observation_event: sim.state.next_event - 1,
-            agreements: BTreeMap::new(),
-            obligations: BTreeMap::new(),
-            amendments: BTreeMap::new(),
+            ledger: game_economy::agreements::State {
+                knowledge: BTreeMap::new(),
+                last_observation_event: sim.state.next_event - 1,
+                agreements: BTreeMap::new(),
+                obligations: BTreeMap::new(),
+                amendments: BTreeMap::new(),
+                last_event: sim.state.next_event - 1,
+                next_search: BTreeMap::new(),
+                pending_work: BTreeMap::new(),
+            },
             custodians,
-            last_event: sim.state.next_event - 1,
-            next_search: BTreeMap::new(),
-            pending_work: BTreeMap::new(),
         });
         let custodian = sim.state.people[3].id;
         let food = sim
@@ -565,7 +567,7 @@ impl Simulation {
                 self.state.next_id.checked_add(4).ok_or(Error::Overflow)?;
                 self.ensure_event_capacity(self.state.people.len() * 8 + 8)?;
                 self.update_property_events();
-                self.interrupt_physical(actor);
+                self.interrupt_actor_activity(actor);
                 let incident = IncidentId(allocate(&mut self.state)?);
                 let mut remaining = self.state.property.as_ref().unwrap().portions[&source].clone();
                 let portions = remove_portions(&mut remaining, quantity.0);
@@ -659,7 +661,7 @@ impl Simulation {
                         .checked_add(60_000)
                         .ok_or(Error::Overflow)?,
                 );
-                self.interrupt_physical(actor);
+                self.interrupt_actor_activity(actor);
                 self.state
                     .physical
                     .as_mut()

@@ -1,5 +1,7 @@
 //! Voluntary local bargaining, chosen amendment procedures, and physical performance.
 use crate::*;
+pub use game_economy::agreements::{Agreement, Amendment, Obligation};
+use game_economy::agreements::{accrue_share, stream_ended};
 
 fn site_exists(state: &CanonicalState, site: SiteId) -> bool {
     state
@@ -85,82 +87,6 @@ fn output_share_valid(state: &CanonicalState, term: &AgreementTerm) -> bool {
             .inventories
             .get(destination)
             .is_some_and(|i| i.good == *good)
-}
-fn gcd(mut a: u64, mut b: u64) -> u64 {
-    while b != 0 {
-        let remainder = a % b;
-        a = b;
-        b = remainder;
-    }
-    a
-}
-/// A changed future share never rewrites the fraction already owed.
-fn accrue_share(
-    amount: u64,
-    remainder: u64,
-    scale: u64,
-    numerator: u64,
-    denominator: u64,
-    quantity: u128,
-) -> Result<(u64, u64, u64), Error> {
-    let product = quantity
-        .checked_mul(u128::from(numerator))
-        .ok_or(Error::Overflow)?;
-    let whole = u64::try_from(product / u128::from(denominator)).map_err(|_| Error::Overflow)?;
-    let fraction = (product % u128::from(denominator)) as u64;
-    let scale = if remainder == 0 {
-        1
-    } else if scale == 0 {
-        denominator
-    } else {
-        scale
-    };
-    let divisor = gcd(remainder, scale);
-    let old_remainder = remainder / divisor;
-    let old_scale = scale / divisor;
-    if fraction == 0 {
-        return Ok((
-            amount.checked_add(whole).ok_or(Error::Overflow)?,
-            old_remainder,
-            old_scale,
-        ));
-    }
-    let divisor = gcd(fraction, denominator);
-    let fraction = fraction / divisor;
-    let denominator = denominator / divisor;
-    let common = (old_scale / gcd(old_scale, denominator))
-        .checked_mul(denominator)
-        .ok_or(Error::Overflow)?;
-    let total = u128::from(old_remainder) * u128::from(common / old_scale)
-        + u128::from(fraction) * u128::from(common / denominator);
-    let extra = u64::try_from(total / u128::from(common)).map_err(|_| Error::Overflow)?;
-    let remaining = (total % u128::from(common)) as u64;
-    let divisor = gcd(remaining, common);
-    Ok((
-        amount
-            .checked_add(whole)
-            .and_then(|v| v.checked_add(extra))
-            .ok_or(Error::Overflow)?,
-        remaining / divisor,
-        common / divisor,
-    ))
-}
-fn stream_ended(term: &AgreementTerm, time: SimTime) -> bool {
-    !matches!(term,AgreementTerm::OutputShare {ends_at,..} if *ends_at>time)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Agreement {
-    pub id: AgreementId,
-    pub proposer: PersonId,
-    pub parties: BTreeSet<PersonId>,
-    pub accepted: BTreeSet<PersonId>,
-    pub terms: Vec<AgreementTerm>,
-    pub procedure: Option<AmendmentProcedure>,
-    pub obligations: Vec<ObligationId>,
-    pub status: AgreementStatus,
-    pub proposed_at: SimTime,
-    pub revision: u64,
 }
 
 fn refresh_known_status(view: &mut AgreementView) {
@@ -635,55 +561,23 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
     }
     true
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Obligation {
-    pub id: ObligationId,
-    pub agreement: AgreementId,
-    pub term: AgreementTerm,
-    pub performed: u64,
-    #[serde(default)]
-    pub accrued: u64,
-    #[serde(default)]
-    pub share_remainder: u64,
-    #[serde(default)]
-    pub share_scale: u64,
-    pub defaulted: bool,
-    /// Conserved cargo loaded from the agreed source, attributed once.
-    pub cargo: BTreeMap<InventoryId, u64>,
-}
-impl Obligation {
-    pub fn amount(&self) -> u64 {
-        if matches!(self.term, AgreementTerm::OutputShare { .. }) {
-            self.accrued
-        } else {
-            self.term.amount()
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Amendment {
-    pub id: AmendmentId,
-    pub agreement: AgreementId,
-    pub proposer: PersonId,
-    pub replacements: BTreeMap<u16, AgreementTerm>,
-    pub votes: BTreeMap<PersonId, bool>,
-    pub status: AmendmentStatus,
-    pub base_revision: u64,
-}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct World {
-    pub agreements: BTreeMap<AgreementId, Agreement>,
-    pub obligations: BTreeMap<ObligationId, Obligation>,
-    pub amendments: BTreeMap<AmendmentId, Amendment>,
-    /// Actual control of stores, independent of who has permission to use them.
+    pub ledger: game_economy::agreements::State,
+    /// Physical asset control remains outside the economic ledger.
     pub custodians: BTreeMap<InventoryId, PersonId>,
-    pub last_event: u64,
-    pub next_search: BTreeMap<PersonId, SimTime>,
-    pub pending_work: BTreeMap<ObligationId, u64>,
-    #[serde(default)]
-    pub knowledge: BTreeMap<PersonId, BTreeMap<AgreementId, AgreementView>>,
-    #[serde(default)]
-    pub last_observation_event: u64,
+}
+impl std::ops::Deref for World {
+    type Target = game_economy::agreements::State;
+    fn deref(&self) -> &Self::Target {
+        &self.ledger
+    }
+}
+impl std::ops::DerefMut for World {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ledger
+    }
 }
 
 impl Simulation {
@@ -718,15 +612,17 @@ impl Simulation {
             }
         }
         sim.state.agreements = Some(World {
-            agreements: BTreeMap::new(),
-            obligations: BTreeMap::new(),
-            amendments: BTreeMap::new(),
+            ledger: game_economy::agreements::State {
+                agreements: BTreeMap::new(),
+                obligations: BTreeMap::new(),
+                amendments: BTreeMap::new(),
+                last_event: sim.state.next_event - 1,
+                next_search: BTreeMap::new(),
+                pending_work: BTreeMap::new(),
+                knowledge: BTreeMap::new(),
+                last_observation_event: sim.state.next_event - 1,
+            },
             custodians,
-            last_event: sim.state.next_event - 1,
-            next_search: BTreeMap::new(),
-            pending_work: BTreeMap::new(),
-            knowledge: BTreeMap::new(),
-            last_observation_event: sim.state.next_event - 1,
         });
         Ok(sim)
     }
@@ -1201,34 +1097,6 @@ impl Simulation {
         }
     }
 
-    pub(crate) fn migrate_legacy_agreement_knowledge(&mut self) {
-        let Some(world) = &self.state.agreements else {
-            return;
-        };
-        let entries: Vec<_> = world
-            .agreements
-            .values()
-            .flat_map(|agreement| agreement.parties.iter().map(|actor| (*actor, agreement.id)))
-            .collect();
-        for (actor, agreement) in entries {
-            if let Some(view) = self.actual_agreement_snapshot(actor, agreement) {
-                self.state
-                    .agreements
-                    .as_mut()
-                    .unwrap()
-                    .knowledge
-                    .entry(actor)
-                    .or_default()
-                    .insert(agreement, view);
-            }
-        }
-        self.state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .last_observation_event = self.state.next_event - 1;
-    }
-
     pub(crate) fn start_agreement_report(
         &mut self,
         sender: PersonId,
@@ -1262,7 +1130,7 @@ impl Simulation {
                 .ok_or(Error::Overflow)?,
         );
         self.ensure_event_capacity(1)?;
-        self.interrupt_physical(sender);
+        self.interrupt_actor_activity(sender);
         self.state
             .physical
             .as_mut()
@@ -1855,179 +1723,164 @@ impl Simulation {
         Ok(())
     }
 
+    fn economic_terms_context(
+        &self,
+        terms: &[AgreementTerm],
+    ) -> game_economy::agreements::TermsContext {
+        use game_economy::agreements::{InventoryTerms, PermissionAsset, TermsContext};
+        let mut context = TermsContext {
+            now: self.state.time,
+            ..TermsContext::default()
+        };
+        for term in terms {
+            let inventories = match *term {
+                AgreementTerm::Delivery {
+                    source,
+                    destination,
+                    ..
+                } => vec![source, destination],
+                AgreementTerm::Access { inventory, .. } => vec![inventory],
+                AgreementTerm::OutputShare { destination, .. } => vec![destination],
+                _ => Vec::new(),
+            };
+            for id in inventories {
+                if let Some(stock) = self.state.inventories.get(&id) {
+                    context.inventories.insert(
+                        id,
+                        InventoryTerms {
+                            good: stock.good,
+                            capacity: stock.capacity,
+                        },
+                    );
+                }
+            }
+            match *term {
+                AgreementTerm::Labor { site, .. } => {
+                    if site_exists(&self.state, site) {
+                        context.sites.insert(site);
+                    }
+                }
+                AgreementTerm::ConstructionLabor { project, .. } => {
+                    if self
+                        .state
+                        .projects
+                        .as_ref()
+                        .is_some_and(|w| w.projects.contains_key(&project))
+                    {
+                        context.projects.insert(project);
+                    }
+                }
+                AgreementTerm::Access {
+                    grantor, inventory, ..
+                } => {
+                    if self.state.inventories.get(&inventory).is_some_and(|i| {
+                        self.state
+                            .agreements
+                            .as_ref()
+                            .unwrap()
+                            .custodians
+                            .get(&inventory)
+                            == Some(&grantor)
+                            || i.location == InventoryLocation::Carried(grantor)
+                    }) {
+                        context
+                            .grants
+                            .insert((PermissionAsset::Inventory(inventory), grantor));
+                    }
+                }
+                AgreementTerm::SiteAccess { grantor, site, .. } => {
+                    if site_custodian(&self.state, site) == Some(grantor) {
+                        context
+                            .grants
+                            .insert((PermissionAsset::Site(site), grantor));
+                    }
+                }
+                AgreementTerm::OutputShare { site, good, .. } => {
+                    if let Some(source) = output_source(&self.state, site, good) {
+                        context.outputs.insert((site, good), source);
+                    }
+                }
+                _ => {}
+            }
+        }
+        context
+    }
     fn validate_terms(
         &self,
         parties: &BTreeSet<PersonId>,
         terms: &[AgreementTerm],
         future: bool,
     ) -> Result<(), Error> {
-        if terms.is_empty() || terms.len() > 16 {
-            return Err(Error::Unavailable);
-        }
-        for term in terms {
-            let [a, b] = term.parties();
-            if a == b
-                || !parties.contains(&a)
-                || !parties.contains(&b)
-                || future
-                    && term.amount() == 0
-                    && !matches!(term, AgreementTerm::OutputShare { .. })
-                || (future && term.deadline().is_some_and(|d| d <= self.state.time))
-            {
-                return Err(Error::Unavailable);
-            }
-            match term {
-                AgreementTerm::Delivery {
-                    source,
-                    destination,
-                    quantity,
-                    ..
-                } => {
-                    let source = self
-                        .state
-                        .inventories
-                        .get(source)
-                        .ok_or(Error::Unavailable)?;
-                    let destination = self
-                        .state
-                        .inventories
-                        .get(destination)
-                        .ok_or(Error::Unavailable)?;
-                    if source.id == destination.id
-                        || source.good != destination.good
-                        || quantity.0 > destination.capacity.0
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                AgreementTerm::ConstructionLabor { project, .. } => {
-                    if !self
-                        .state
-                        .projects
-                        .as_ref()
-                        .is_some_and(|w| w.projects.contains_key(project))
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                AgreementTerm::SiteAccess { grantor, site, .. } => {
-                    if site_custodian(&self.state, *site) != Some(*grantor) {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                AgreementTerm::OutputShare { ends_at, .. } => {
-                    if !output_share_valid(&self.state, term)
-                        || future && *ends_at <= self.state.time
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                AgreementTerm::Labor { site, .. } => {
-                    if !site_exists(&self.state, *site) {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                AgreementTerm::Access {
-                    grantor, inventory, ..
-                } => {
-                    let w = self.state.agreements.as_ref().unwrap();
-                    if !self.state.inventories.get(inventory).is_some_and(|i| {
-                        w.custodians.get(inventory) == Some(grantor)
-                            || i.location == InventoryLocation::Carried(*grantor)
-                    }) {
-                        return Err(Error::Unavailable);
-                    }
-                }
-            }
-        }
-        Ok(())
+        game_economy::agreements::validate_terms(
+            parties,
+            terms,
+            &self.economic_terms_context(terms),
+            future,
+        )
     }
 
     fn activate_agreement(&mut self, id: AgreementId) -> Result<(), Error> {
         let terms = self.state.agreements.as_ref().unwrap().agreements[&id]
             .terms
             .clone();
-        for term in terms {
-            let obligation = ObligationId(allocate(&mut self.state)?);
-            let performed = self.apply_agreement_access(&term);
-            let world = self.state.agreements.as_mut().unwrap();
-            world.obligations.insert(
-                obligation,
-                Obligation {
-                    id: obligation,
-                    agreement: id,
-                    term,
-                    performed,
-                    defaulted: false,
-                    accrued: 0,
-                    share_remainder: 0,
-                    share_scale: 0,
-                    cargo: BTreeMap::new(),
-                },
-            );
-            world
-                .agreements
-                .get_mut(&id)
-                .unwrap()
-                .obligations
-                .push(obligation);
+        let count = u64::try_from(terms.len()).map_err(|_| Error::Overflow)?;
+        let next = self
+            .state
+            .next_id
+            .checked_add(count)
+            .ok_or(Error::Overflow)?;
+        let ids = (self.state.next_id..next)
+            .map(ObligationId)
+            .collect::<Vec<_>>();
+        let context = self.economic_terms_context(&terms);
+        let plan = self
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .ledger
+            .prepare_activation(id, &ids, &context)?;
+        // Physical effects and global IDs remain coordinator-owned. The domain
+        // plan cannot change permissions or allocate an entity by itself.
+        for permission in &plan.permissions {
+            self.apply_permission_effect(*permission);
         }
-        self.state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .agreements
-            .get_mut(&id)
-            .unwrap()
-            .status = AgreementStatus::Active;
-        self.refresh_agreement_status(id);
+        plan.commit(&mut self.state.agreements.as_mut().unwrap().ledger)?;
+        self.state.next_id = next;
         self.emit(EventKind::AgreementActivated { agreement: id });
         Ok(())
     }
-
-    fn apply_agreement_access(&mut self, term: &AgreementTerm) -> u64 {
-        if let AgreementTerm::SiteAccess {
-            grantee,
-            site,
-            allowed,
-            ..
-        } = term
-        {
-            let access = self
+    fn apply_permission_effect(&mut self, effect: game_economy::agreements::PermissionEffect) {
+        use game_economy::agreements::PermissionAsset;
+        let access = match effect.asset {
+            PermissionAsset::Inventory(inventory) => {
+                Some(&mut self.state.inventories.get_mut(&inventory).unwrap().access)
+            }
+            PermissionAsset::Site(site) => self
                 .state
                 .environment
                 .as_mut()
-                .and_then(|w| w.fields.get_mut(site))
+                .and_then(|w| w.fields.get_mut(&site))
                 .map(|f| &mut f.access)
                 .or_else(|| {
                     self.state
                         .ecology
                         .as_mut()
-                        .and_then(|w| w.plots.get_mut(site))
+                        .and_then(|w| w.plots.get_mut(&site))
                         .map(|p| &mut p.access)
-                });
-            if let Some(access) = access {
-                if *allowed {
-                    access.insert(*grantee);
-                } else {
-                    access.remove(grantee);
-                }
-            }
-            return 1;
-        }
-        if let AgreementTerm::Access {
-            grantee,
-            inventory,
-            allowed,
-            ..
-        } = term
-        {
-            let access = &mut self.state.inventories.get_mut(inventory).unwrap().access;
-            if *allowed {
-                access.insert(*grantee);
+                }),
+        };
+        if let Some(access) = access {
+            if effect.allowed {
+                access.insert(effect.grantee);
             } else {
-                access.remove(grantee);
+                access.remove(&effect.grantee);
             }
+        }
+    }
+    fn apply_agreement_access(&mut self, term: &AgreementTerm) -> u64 {
+        if let Some(effect) = game_economy::agreements::permission_effect(term) {
+            self.apply_permission_effect(effect);
             1
         } else {
             0
@@ -2195,19 +2048,13 @@ impl Simulation {
     }
 
     fn refresh_agreement_status(&mut self, id: AgreementId) {
-        let world = self.state.agreements.as_mut().unwrap();
-        let ids = &world.agreements[&id].obligations;
-        let status = if ids.iter().all(|id| {
-            world.obligations[id].performed >= world.obligations[id].amount()
-                && stream_ended(&world.obligations[id].term, self.state.time)
-        }) {
-            AgreementStatus::Fulfilled
-        } else if ids.iter().any(|id| world.obligations[id].defaulted) {
-            AgreementStatus::Breached
-        } else {
-            AgreementStatus::Active
-        };
-        world.agreements.get_mut(&id).unwrap().status = status;
+        self.state
+            .agreements
+            .as_mut()
+            .unwrap()
+            .ledger
+            .refresh_status(id, self.state.time)
+            .expect("validated agreement ledger");
     }
 
     pub(crate) fn next_agreement_deadline(&self) -> Option<SimTime> {
@@ -2233,84 +2080,48 @@ impl Simulation {
             .min()
     }
 
-    /// Each eligible work millisecond can satisfy at most one exclusive labor promise.
-    pub(crate) fn record_agreement_work(&mut self, actor: PersonId, site: SiteId, elapsed: u64) {
+    /// Physical eligibility comes from the coordinator; economic allocation is
+    /// performed by the independent ledger against this exact clock interval.
+    pub(crate) fn record_agreement_labor_batch(
+        &mut self,
+        from: SimTime,
+        to: SimTime,
+        assignments: &[game_economy::agreements::WorkAssignment],
+    ) -> Result<(), Error> {
         let Some(world) = self.state.agreements.as_mut() else {
-            return;
+            return Ok(());
         };
-        let mut remaining = elapsed;
-        let mut records = Vec::new();
-        for o in world.obligations.values_mut() {
-            if let AgreementTerm::Labor {
-                debtor,
-                site: promised,
-                millis,
-                ..
-            } = o.term
-                && debtor == actor
-                && promised == site
-            {
-                let credit = remaining.min(millis - o.performed);
-                o.performed += credit;
-                remaining -= credit;
-                if credit > 0 {
-                    records.push((o.id, o.agreement, credit));
-                }
-            }
-        }
-        for (obligation, agreement, quantity) in records {
-            *self
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .pending_work
-                .entry(obligation)
-                .or_default() += quantity;
-            self.refresh_agreement_status(agreement);
-        }
+        let prepared = world.ledger.prepare_labor(from, to, assignments)?;
+        prepared.commit(&mut world.ledger)
     }
-
+    pub(crate) fn record_agreement_work(&mut self, actor: PersonId, site: SiteId, elapsed: u64) {
+        let now = self.state.time;
+        self.record_agreement_labor_batch(
+            SimTime(now.0 - elapsed),
+            now,
+            &[game_economy::agreements::WorkAssignment {
+                actor,
+                target: game_economy::agreements::WorkTarget::Site(site),
+            }],
+        )
+        .expect("preflight eligible site work");
+    }
     pub(crate) fn record_agreement_construction(
         &mut self,
         actor: PersonId,
         project: ProjectId,
         elapsed: u64,
     ) {
-        let Some(world) = self.state.agreements.as_mut() else {
-            return;
-        };
-        let mut remaining = elapsed;
-        let mut records = Vec::new();
-        for o in world.obligations.values_mut() {
-            if let AgreementTerm::ConstructionLabor {
-                debtor,
-                project: promised,
-                millis,
-                ..
-            } = o.term
-                && debtor == actor
-                && promised == project
-            {
-                let credit = remaining.min(millis - o.performed);
-                o.performed += credit;
-                remaining -= credit;
-                if credit > 0 {
-                    records.push((o.id, o.agreement, credit));
-                }
-            }
-        }
-        for (obligation, agreement, quantity) in records {
-            *self
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .pending_work
-                .entry(obligation)
-                .or_default() += quantity;
-            self.refresh_agreement_status(agreement);
-        }
+        let now = self.state.time;
+        self.record_agreement_labor_batch(
+            SimTime(now.0 - elapsed),
+            now,
+            &[game_economy::agreements::WorkAssignment {
+                actor,
+                target: game_economy::agreements::WorkTarget::Project(project),
+            }],
+        )
+        .expect("preflight eligible construction work");
     }
 
     fn flush_agreement_work(&mut self) {
@@ -2389,43 +2200,26 @@ impl Simulation {
                 _ => Vec::new(),
             };
             for (producer, site, good, quantity) in productions {
-                for o in self
+                let fact = game_economy::agreements::ProductionFact {
+                    actor: producer,
+                    site,
+                    good,
+                    quantity,
+                    time: e.time,
+                };
+                let plan = self
                     .state
                     .agreements
-                    .as_mut()
+                    .as_ref()
                     .unwrap()
-                    .obligations
-                    .values_mut()
-                {
-                    if let AgreementTerm::OutputShare {
-                        site: target,
-                        good: wanted,
-                        numerator,
-                        denominator,
-                        ends_at,
-                        ..
-                    } = o.term
-                        && target == site
-                        && wanted == good
-                        && e.time < ends_at
-                    {
-                        let (amount, remainder, scale) = accrue_share(
-                            o.accrued,
-                            o.share_remainder,
-                            o.share_scale,
-                            numerator,
-                            denominator,
-                            u128::from(quantity.0),
-                        )?;
-                        let credit = amount - o.accrued;
-                        o.accrued = amount;
-                        o.share_remainder = remainder;
-                        o.share_scale = scale;
-                        if credit > 0 {
-                            accruals.push((o.id, producer, credit));
-                        }
-                    }
-                }
+                    .ledger
+                    .prepare_production(fact)?;
+                accruals.extend(
+                    plan.credits
+                        .iter()
+                        .map(|c| (c.obligation, c.actor, c.quantity.0)),
+                );
+                plan.commit(&mut self.state.agreements.as_mut().unwrap().ledger)?;
             }
             match e.kind {
                 EventKind::Transferred {
@@ -2551,29 +2345,28 @@ impl Simulation {
         for id in streams {
             self.refresh_agreement_status(id);
         }
-        let defaults: Vec<_> = self
+        let defaults = self
             .state
             .agreements
             .as_ref()
             .unwrap()
-            .obligations
-            .values()
-            .filter(|o| {
-                !o.defaulted
-                    && o.performed < o.amount()
-                    && o.term.deadline().is_some_and(|d| d <= self.state.time)
+            .ledger
+            .defaults_due(self.state.time)
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    self.state.agreements.as_ref().unwrap().obligations[&id].agreement,
+                )
             })
-            .map(|o| (o.id, o.agreement))
-            .collect();
+            .collect::<Vec<_>>();
         for (obligation, agreement) in defaults {
             self.state
                 .agreements
                 .as_mut()
                 .unwrap()
-                .obligations
-                .get_mut(&obligation)
-                .unwrap()
-                .defaulted = true;
+                .ledger
+                .mark_default(obligation, self.state.time)?;
             self.emit(EventKind::ObligationDefaulted { obligation });
             self.refresh_agreement_status(agreement);
         }
@@ -3149,7 +2942,7 @@ impl Simulation {
             if let Command::Move { destination } = command {
                 let _ = self.start_movement(actor, destination);
             } else {
-                let _ = self.debug_physical_command(actor, command);
+                let _ = self.debug_actor_command(actor, command);
             }
         }
     }

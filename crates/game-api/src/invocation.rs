@@ -2,14 +2,7 @@
 use crate::*;
 use std::collections::BTreeSet;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum InvocationCost {
-    Strain,
-    Emotional,
-    Identity,
-    LossOfControl,
-    Lifespan,
-}
+pub use game_invocation::InvocationCost;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InvocationAction {

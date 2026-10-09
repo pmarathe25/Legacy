@@ -94,15 +94,17 @@ impl Simulation {
             })
             .collect();
         sim.state.agreements = Some(agreements::World {
-            knowledge: BTreeMap::new(),
-            last_observation_event: sim.state.next_event - 1,
-            agreements: BTreeMap::new(),
-            obligations: BTreeMap::new(),
-            amendments: BTreeMap::new(),
+            ledger: game_economy::agreements::State {
+                knowledge: BTreeMap::new(),
+                last_observation_event: sim.state.next_event - 1,
+                agreements: BTreeMap::new(),
+                obligations: BTreeMap::new(),
+                amendments: BTreeMap::new(),
+                last_event: sim.state.next_event - 1,
+                next_search: BTreeMap::new(),
+                pending_work: BTreeMap::new(),
+            },
             custodians,
-            last_event: sim.state.next_event - 1,
-            next_search: BTreeMap::new(),
-            pending_work: BTreeMap::new(),
         });
         sim.state.missions = Some(World {
             missions: BTreeMap::new(),
@@ -703,7 +705,7 @@ impl Simulation {
                 .checked_add(60_000)
                 .ok_or(Error::Overflow)?,
         );
-        self.interrupt_physical(speaker);
+        self.interrupt_actor_activity(speaker);
         self.state
             .physical
             .as_mut()
@@ -1052,13 +1054,13 @@ impl Simulation {
             return;
         }
         if body.vitals.hunger >= rules.meal_relief {
-            if let Some(food)=mind.knowledge.values().filter(|k|k.good==Good::Food&&k.accessible&&k.quantity>=rules.meal_size&&k.area==area).min_by_key(|k|(!matches!(self.state.inventories[&k.inventory].location,InventoryLocation::Carried(carrier)if carrier==actor),k.inventory)){let source=food.inventory;let _=self.debug_physical_command(actor,Command::Eat {source});return;}
+            if let Some(food)=mind.knowledge.values().filter(|k|k.good==Good::Food&&k.accessible&&k.quantity>=rules.meal_size&&k.area==area).min_by_key(|k|(!matches!(self.state.inventories[&k.inventory].location,InventoryLocation::Carried(carrier)if carrier==actor),k.inventory)){let source=food.inventory;let _=self.debug_actor_command(actor,Command::Eat {source});return;}
             return;
         }
         if body.vitals.fatigue >= rules.fatigue_limit / 2
             || body.vitals.health < rules.max_health / 2
         {
-            let _ = self.debug_physical_command(actor, Command::Rest);
+            let _ = self.debug_actor_command(actor, Command::Rest);
             return;
         }
         let defaulted = self
@@ -1125,7 +1127,7 @@ impl Simulation {
                     self.mission_explain(id, actor, "Expected provisions are absent or depleted");
                     return;
                 }
-                let _ = self.debug_physical_command(
+                let _ = self.debug_actor_command(
                     actor,
                     Command::Carry {
                         source: supply.source,
@@ -1135,7 +1137,7 @@ impl Simulation {
                 return;
             }
             if m.status == MissionStatus::Preparing {
-                let _ = self.debug_physical_command(actor, Command::Rest);
+                let _ = self.debug_actor_command(actor, Command::Rest);
                 return;
             }
         }
@@ -1194,7 +1196,7 @@ impl Simulation {
                             .is_some_and(|w| w.captivity.contains_key(&person))
                     {
                         let _ = self
-                            .debug_physical_command(actor, Command::FreeCaptive { target: person });
+                            .debug_actor_command(actor, Command::FreeCaptive { target: person });
                     }
                 }
                 MissionObjective::Deliver {
@@ -1211,7 +1213,7 @@ impl Simulation {
                     if goal == Some(area)
                         && let Some((source, held)) = cargo
                     {
-                        let _ = self.debug_physical_command(
+                        let _ = self.debug_actor_command(
                             actor,
                             Command::Load {
                                 source,
@@ -1230,7 +1232,7 @@ impl Simulation {
                                 .0
                                 .min(quantity.0.saturating_sub(member.delivered)),
                         );
-                        let _ = self.debug_physical_command(
+                        let _ = self.debug_actor_command(
                             actor,
                             Command::Carry {
                                 source,
@@ -1240,7 +1242,7 @@ impl Simulation {
                     }
                 }
                 _ => {
-                    let _ = self.debug_physical_command(actor, Command::Rest);
+                    let _ = self.debug_actor_command(actor, Command::Rest);
                 }
             }
         } else {
@@ -3207,7 +3209,7 @@ mod tests {
             sim.state.missions.as_ref().unwrap().missions[&id].members[&actor].delivered,
             0
         );
-        sim.debug_physical_command(
+        sim.debug_actor_command(
             actor,
             Command::Load {
                 source,
@@ -3225,7 +3227,7 @@ mod tests {
             sim.state.missions.as_ref().unwrap().missions[&id].members[&actor].cargo[&carried],
             1_000
         );
-        sim.debug_physical_command(
+        sim.debug_actor_command(
             actor,
             Command::Load {
                 source: carried,
@@ -3558,9 +3560,16 @@ mod tests {
         let prototype = fixture();
         sim.state.missions = prototype.state.missions;
         sim.state.agreements = Some(agreements::World {
-            agreements: BTreeMap::new(),
-            obligations: BTreeMap::new(),
-            amendments: BTreeMap::new(),
+            ledger: game_economy::agreements::State {
+                agreements: BTreeMap::new(),
+                obligations: BTreeMap::new(),
+                amendments: BTreeMap::new(),
+                last_event: sim.state.next_event - 1,
+                next_search: BTreeMap::new(),
+                pending_work: BTreeMap::new(),
+                knowledge: BTreeMap::new(),
+                last_observation_event: sim.state.next_event - 1,
+            },
             custodians: sim
                 .state
                 .inventories
@@ -3575,11 +3584,6 @@ mod tests {
                     )
                 })
                 .collect(),
-            last_event: sim.state.next_event - 1,
-            next_search: BTreeMap::new(),
-            pending_work: BTreeMap::new(),
-            knowledge: BTreeMap::new(),
-            last_observation_event: sim.state.next_event - 1,
         });
         let guardian = sim.state.people[1].id;
         let forest = sim.state.areas[2].id;

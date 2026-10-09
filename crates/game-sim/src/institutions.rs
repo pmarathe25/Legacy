@@ -2,51 +2,7 @@
 //! Their rules create permissions and recognized duties, never physical payment.
 use crate::agreements::{Agreement, Obligation};
 use crate::*;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Institution {
-    pub id: InstitutionId,
-    pub origin: Option<InstitutionId>,
-    pub charter: InstitutionCharter,
-    pub members: BTreeSet<PersonId>,
-    pub declined: BTreeSet<PersonId>,
-    pub invited: BTreeSet<PersonId>,
-    pub status: InstitutionStatus,
-    pub concepts: Vec<ConceptId>,
-    pub office_support: BTreeMap<u16, BTreeSet<PersonId>>,
-    pub grants: BTreeMap<ConceptId, BTreeSet<PersonId>>,
-    pub applied: BTreeMap<ConceptId, BTreeMap<PersonId, AgreementId>>,
-    pub funding: Vec<AgreementId>,
-    pub revision: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RuleProposal {
-    pub id: RuleProposalId,
-    pub institution: InstitutionId,
-    pub proposer: PersonId,
-    pub change: InstitutionChange,
-    pub votes: BTreeMap<PersonId, bool>,
-    pub base_revision: u64,
-    pub status: RuleProposalStatus,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct SocialMemory {
-    pub cases: BTreeSet<CaseId>,
-    pub values: BTreeMap<ConceptId, decisions::Attachment>,
-    pub institutions: BTreeMap<InstitutionId, InstitutionView>,
-    pub search_after: SimTime,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub institutions: BTreeMap<InstitutionId, Institution>,
-    pub proposals: BTreeMap<RuleProposalId, RuleProposal>,
-    pub concepts: BTreeMap<ConceptId, InstitutionalRule>,
-    pub cases: BTreeMap<CaseId, SocialCaseView>,
-    pub memories: BTreeMap<PersonId, SocialMemory>,
-    pub last_event: u64,
-    pub exclusions: BTreeMap<PersonId, BTreeMap<InventoryId, CaseId>>,
-    pub heard: BTreeMap<CaseId, bool>,
-}
+pub use game_society::institutions::{Institution, RuleProposal, SocialMemory, World};
 
 impl Simulation {
     pub fn institution_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -358,6 +314,9 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
+                if !self.enforcement_change_actor_allowed(actor, i, change, true) {
+                    return Err(Error::Unavailable);
+                }
                 self.validate_change(i, change)?;
                 self.reserve_social_ids(1)?;
                 let base_revision = i.revision;
@@ -391,8 +350,12 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
+                if !self.enforcement_change_actor_allowed(actor, i, &p.change, false) {
+                    return Err(Error::Unavailable);
+                }
                 self.validate_change(i, &p.change)?;
                 i.revision.checked_add(1).ok_or(Error::Overflow)?;
+                self.reserve_social_ids(Self::enforcement_change_ids(&p.change))?;
                 if matches!(
                     p.change,
                     InstitutionChange::AddRule(_) | InstitutionChange::ReplaceRule { .. }
@@ -586,53 +549,56 @@ impl Simulation {
         self.reserve_social_ids(possible)
     }
 
-    fn subjects(&self, i: &Institution, subjects: &Subjects) -> BTreeSet<PersonId> {
-        let mut selected = subjects.named.clone();
-        if subjects.members {
-            selected.extend(i.members.iter().copied());
+    fn institution_authority_facts(
+        &self,
+        i: &Institution,
+    ) -> game_society::institutions::AuthorityFacts {
+        let needed = i
+            .charter
+            .offices
+            .iter()
+            .map(|o| o.holder)
+            .chain(
+                i.office_support
+                    .values()
+                    .flat_map(|people| people.iter().copied()),
+            )
+            .collect::<BTreeSet<_>>();
+        game_society::institutions::AuthorityFacts {
+            alive: needed
+                .into_iter()
+                .filter(|id| {
+                    self.state
+                        .physical
+                        .as_ref()
+                        .and_then(|w| w.actors.get(id))
+                        .is_some_and(|body| body.vitals.alive)
+                })
+                .collect(),
         }
-        for slot in &subjects.offices {
-            if let Some(office) = i.charter.offices.iter().find(|o| o.slot == *slot)
-                && self.office_effective(i, office)
-            {
-                selected.insert(office.holder);
-            }
-        }
-        selected
     }
-    fn office_effective(&self, i: &Institution, office: &OfficeMandate) -> bool {
-        i.status == InstitutionStatus::Active
-            && i.members.contains(&office.holder)
-            && self
-                .state
-                .physical
-                .as_ref()
-                .is_some_and(|w| w.actors[&office.holder].vitals.alive)
-            && i.office_support.get(&office.slot).map_or(0, |supporters| {
-                supporters
-                    .intersection(&i.members)
-                    .filter(|person| {
-                        self.state
-                            .physical
-                            .as_ref()
-                            .is_some_and(|w| w.actors[person].vitals.alive)
-                    })
-                    .count()
-            }) >= usize::from(office.minimum_support)
+    pub(crate) fn subjects(&self, i: &Institution, subjects: &Subjects) -> BTreeSet<PersonId> {
+        i.subjects(subjects, &self.institution_authority_facts(i))
+    }
+    pub(crate) fn office_effective(&self, i: &Institution, office: &OfficeMandate) -> bool {
+        i.office_effective(office, &self.institution_authority_facts(i))
     }
     pub(crate) fn institution_allows_access(
         &self,
         actor: PersonId,
         inventory: InventoryId,
     ) -> bool {
-        let Some(w) = &self.state.institutions else {
+        let Some(world) = &self.state.institutions else {
             return false;
         };
-        w.institutions.values().filter(|i| i.status == InstitutionStatus::Active).any(|i| i.concepts.iter().any(|concept| {
-            let rule = &w.concepts[concept];
-            let Some(office) = i.charter.offices.iter().find(|o| o.slot == rule.authority) else { return false };
-            matches!(rule.effect, SocialEffect::Access { inventory: target, allowed: true } if target == inventory) && self.office_effective(i, office) && i.grants.get(concept).is_some_and(|grantees| grantees.contains(&actor))
-        }))
+        let authority = game_society::institutions::AuthorityFacts {
+            alive: world
+                .institutions
+                .values()
+                .flat_map(|i| self.institution_authority_facts(i).alive)
+                .collect(),
+        };
+        world.allows_access(actor, inventory, &authority)
     }
 
     fn actual_institution_view(&self, i: &Institution) -> InstitutionView {
@@ -708,7 +674,7 @@ impl Simulation {
         }
     }
 
-    fn validate_subjects(&self, subjects: &Subjects, offices: &[OfficeMandate]) -> bool {
+    pub(crate) fn validate_subjects(&self, subjects: &Subjects, offices: &[OfficeMandate]) -> bool {
         (subjects.members || !subjects.named.is_empty() || !subjects.offices.is_empty())
             && subjects.named.len() <= 64
             && subjects
@@ -953,6 +919,9 @@ impl Simulation {
     }
     fn validate_change(&self, i: &Institution, change: &InstitutionChange) -> Result<(), Error> {
         match change {
+            InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. } => {
+                self.validate_enforcement_change(i, change)
+            }
             InstitutionChange::AddRule(rule) => {
                 if i.charter.rules.len() >= 16 {
                     return Err(Error::Unavailable);
@@ -1066,100 +1035,34 @@ impl Simulation {
         Ok(())
     }
     fn resolve_rule_proposal(&mut self, id: RuleProposalId) -> Result<(), Error> {
-        let w = self.state.institutions.as_ref().unwrap();
-        let p = w.proposals[&id].clone();
-        let i = &w.institutions[&p.institution];
-        let voters = self
-            .subjects(i, &i.charter.procedure.voters)
-            .intersection(&i.members)
-            .copied()
-            .collect::<BTreeSet<_>>();
-        let minimum = usize::from(i.charter.procedure.minimum_support);
-        let yes = voters
-            .iter()
-            .filter(|id| p.votes.get(id) == Some(&true))
-            .count();
-        let no = voters
-            .iter()
-            .filter(|id| p.votes.get(id) == Some(&false))
-            .count();
-        if yes < minimum {
-            if voters.len().saturating_sub(no) < minimum {
-                self.state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .proposals
-                    .get_mut(&id)
-                    .unwrap()
-                    .status = RuleProposalStatus::Rejected;
-            }
-            return Ok(());
-        }
-        let concept = match &p.change {
-            InstitutionChange::AddRule(rule) | InstitutionChange::ReplaceRule { rule, .. } => {
-                let concept = ConceptId(allocate(&mut self.state)?);
-                self.state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .concepts
-                    .insert(concept, rule.clone());
-                Some(concept)
-            }
-            _ => None,
+        let world = self.state.institutions.as_ref().unwrap();
+        let proposal = &world.proposals[&id];
+        let institution = &world.institutions[&proposal.institution];
+        let authority = self.institution_authority_facts(institution);
+        let outcome = world.proposal_outcome(id, &authority)?;
+        let concept = if outcome == RuleProposalStatus::Adopted
+            && matches!(
+                proposal.change,
+                InstitutionChange::AddRule(_) | InstitutionChange::ReplaceRule { .. }
+            ) {
+            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+            Some(ConceptId(self.state.next_id))
+        } else {
+            None
         };
-        let w = self.state.institutions.as_mut().unwrap();
-        let i = w.institutions.get_mut(&p.institution).unwrap();
-        match p.change {
-            InstitutionChange::AddRule(rule) => {
-                i.charter.rules.push(rule);
-                i.concepts.push(concept.unwrap());
-            }
-            InstitutionChange::ReplaceRule { index, rule } => {
-                let old = i.concepts[index as usize];
-                i.grants.remove(&old);
-                i.charter.rules[index as usize] = rule;
-                i.concepts[index as usize] = concept.unwrap();
-            }
-            InstitutionChange::RemoveRule { index } => {
-                let old = i.concepts.remove(index as usize);
-                i.grants.remove(&old);
-                i.charter.rules.remove(index as usize);
-            }
-            InstitutionChange::Procedure(procedure) => i.charter.procedure = procedure,
-            InstitutionChange::Appoint { office, holder } => {
-                let mandate = i
-                    .charter
-                    .offices
-                    .iter_mut()
-                    .find(|o| o.slot == office)
-                    .unwrap();
-                mandate.holder = holder;
-                i.office_support.insert(office, BTreeSet::from([holder]));
-            }
-            InstitutionChange::Invite(actor) => {
-                i.invited.insert(actor);
-            }
-            InstitutionChange::Dissolve => {
-                i.status = InstitutionStatus::Dissolved;
-                i.grants.clear();
-            }
+        let institution = proposal.institution;
+        let plan = world.prepare_resolution(id, &authority, concept)?;
+        plan.commit(self.state.institutions.as_mut().unwrap())?;
+        if concept.is_some() {
+            self.state.next_id += 1;
         }
-        i.revision += 1;
-        for proposal in w.proposals.values_mut() {
-            if proposal.institution == p.institution
-                && proposal.status == RuleProposalStatus::Proposed
-                && proposal.id != id
-            {
-                proposal.status = RuleProposalStatus::Rejected;
-            }
+        if outcome == RuleProposalStatus::Adopted {
+            self.emit(EventKind::InstitutionChanged {
+                institution,
+                proposal: id,
+            });
+            self.adopt_enforcement_change(institution, id)?;
         }
-        w.proposals.get_mut(&id).unwrap().status = RuleProposalStatus::Adopted;
-        self.emit(EventKind::InstitutionChanged {
-            institution: p.institution,
-            proposal: id,
-        });
         Ok(())
     }
 
@@ -1169,101 +1072,14 @@ impl Simulation {
         subject: PersonId,
         kind: SocialCaseKind,
     ) -> usize {
-        let w = self.state.institutions.as_ref().unwrap();
-        w.memories.get(&observer).map_or(0, |m| {
-            m.cases
-                .iter()
-                .rev()
-                .take(64)
-                .filter(|id| w.cases[id].subject == subject && w.cases[id].kind == kind)
-                .count()
-        })
+        self.state
+            .institutions
+            .as_ref()
+            .unwrap()
+            .known_case_count(observer, subject, kind)
     }
-    fn condition_holds(
-        &self,
-        i: &Institution,
-        observer: PersonId,
-        subject: PersonId,
-        e: &RuleExpression,
-    ) -> bool {
-        match e {
-            RuleExpression::All(items) => items
-                .iter()
-                .all(|e| self.condition_holds(i, observer, subject, e)),
-            RuleExpression::Any(items) => items
-                .iter()
-                .any(|e| self.condition_holds(i, observer, subject, e)),
-            RuleExpression::Not(e) => !self.condition_holds(i, observer, subject, e),
-            RuleExpression::Fact(fact) => match fact {
-                SocialCondition::Local => {
-                    self.social_area(subject).ok() == Some(i.charter.jurisdiction)
-                }
-                SocialCondition::Member => i.members.contains(&subject),
-                SocialCondition::HungerAtLeast(n) => {
-                    if observer == subject {
-                        self.state.physical.as_ref().unwrap().actors[&subject]
-                            .vitals
-                            .hunger
-                            >= *n
-                    } else {
-                        let w = self.state.institutions.as_ref().unwrap();
-                        w.memories[&observer].cases.iter().rev().take(64).any(|id| {
-                            let c = &w.cases[id];
-                            c.subject == subject
-                                && c.need_band > 0
-                                && u64::from(c.need_band) * 180_000 >= *n
-                        })
-                    }
-                }
-                SocialCondition::KnownStockAtLeast {
-                    inventory,
-                    quantity,
-                } => self.state.decisions.as_ref().unwrap().minds[&observer]
-                    .knowledge
-                    .get(inventory)
-                    .is_some_and(|k| k.quantity >= *quantity && k.area == i.charter.jurisdiction),
-                SocialCondition::Excluded { inventory } => {
-                    let w = self.state.institutions.as_ref().unwrap();
-                    if observer == subject
-                        && self.state.decisions.as_ref().unwrap().minds[&subject]
-                            .knowledge
-                            .get(inventory)
-                            .is_some_and(|k| k.accessible)
-                    {
-                        return false;
-                    }
-                    // The office knows its own decisions, not another controller's private grants.
-                    if i.concepts.iter().any(|id| matches!(w.concepts[id].effect, SocialEffect::Access { inventory: target, allowed: true } if target == *inventory) && i.grants.get(id).is_some_and(|people| people.contains(&subject))) { return false; }
-                    w.memories[&observer]
-                        .cases
-                        .iter()
-                        .rev()
-                        .take(64)
-                        .find_map(|id| {
-                            let c = &w.cases[id];
-                            (c.subject == subject
-                                && c.kind == SocialCaseKind::Exclusion
-                                && c.inventory == Some(*inventory))
-                            .then_some(c.outcome)
-                        })
-                        .is_some_and(|outcome| {
-                            matches!(outcome, SocialOutcome::Unresolved | SocialOutcome::Refused)
-                        })
-                }
-                SocialCondition::KnownCooperationAtLeast(n) => {
-                    self.known_case_count(observer, subject, SocialCaseKind::Cooperation)
-                        >= usize::from(*n)
-                }
-                SocialCondition::KnownDefaultsAtLeast(n) => {
-                    self.known_case_count(observer, subject, SocialCaseKind::Default)
-                        >= usize::from(*n)
-                }
-            },
-        }
-    }
-
     fn apply_institution_rules(&mut self) -> Result<(), Error> {
-        let ids: Vec<_> = self
+        let ids = self
             .state
             .institutions
             .as_ref()
@@ -1272,63 +1088,54 @@ impl Simulation {
             .values()
             .filter(|i| i.status == InstitutionStatus::Active)
             .map(|i| i.id)
-            .collect();
+            .collect::<Vec<_>>();
         for id in ids {
-            let i = self.state.institutions.as_ref().unwrap().institutions[&id].clone();
-            for (index, rule) in i.charter.rules.iter().enumerate() {
-                let concept = i.concepts[index];
-                let office = i
+            let institution = self.state.institutions.as_ref().unwrap().institutions[&id].clone();
+            let authority = self.institution_authority_facts(&institution);
+            for (index, rule) in institution.charter.rules.iter().enumerate() {
+                let office = institution
                     .charter
                     .offices
                     .iter()
                     .find(|o| o.slot == rule.authority)
                     .unwrap();
-                if !self.office_effective(&i, office)
-                    || self.social_area(office.holder).ok() != Some(i.charter.jurisdiction)
+                if !institution.office_effective(office, &authority)
+                    || self.social_area(office.holder).ok()
+                        != Some(institution.charter.jurisdiction)
                 {
                     continue;
                 }
-                for actor in self.subjects(&i, &rule.subjects) {
-                    if self.social_area(actor).ok() != Some(i.charter.jurisdiction)
-                        || !self.condition_holds(&i, office.holder, actor, &rule.when)
-                    {
+                for actor in institution.subjects(&rule.subjects, &authority) {
+                    let input = game_society::institutions::ConditionInput {
+                        observer: office.holder,
+                        subject: actor,
+                        subject_local: self.social_area(actor).ok()
+                            == Some(institution.charter.jurisdiction),
+                        own_hunger: self.state.physical.as_ref().unwrap().actors[&office.holder]
+                            .vitals
+                            .hunger,
+                        known_stocks: &self.state.decisions.as_ref().unwrap().minds[&office.holder]
+                            .knowledge,
+                    };
+                    let Some(intent) = self.state.institutions.as_ref().unwrap().rule_intent(
+                        &institution,
+                        index,
+                        &input,
+                        &authority,
+                        true,
+                        self.state.time,
+                    ) else {
                         continue;
-                    }
-                    match &rule.effect {
-                        SocialEffect::Access { inventory, allowed } => {
-                            let active = self.state.institutions.as_ref().unwrap();
-                            let mut changed = false;
-                            if *allowed {
-                                changed = self
-                                    .state
-                                    .institutions
-                                    .as_mut()
-                                    .unwrap()
-                                    .institutions
-                                    .get_mut(&id)
-                                    .unwrap()
-                                    .grants
-                                    .entry(concept)
-                                    .or_default()
-                                    .insert(actor);
-                            } else {
-                                let matching: Vec<_> = i.concepts.iter().filter(|id| matches!(active.concepts[id].effect, SocialEffect::Access { inventory: target, .. } if target == *inventory)).copied().collect();
-                                let grants = &mut self
-                                    .state
-                                    .institutions
-                                    .as_mut()
-                                    .unwrap()
-                                    .institutions
-                                    .get_mut(&id)
-                                    .unwrap()
-                                    .grants;
-                                for key in matching {
-                                    if let Some(grantees) = grants.get_mut(&key) {
-                                        changed |= grantees.remove(&actor);
-                                    }
-                                }
-                            }
-                            if changed {
+                    };
+                    match &intent {
+                        game_society::institutions::RuleIntent::Access { .. } => {
+                            if self
+                                .state
+                                .institutions
+                                .as_mut()
+                                .unwrap()
+                                .apply_access_intent(&intent)?
+                            {
                                 self.emit(EventKind::InstitutionRuleApplied {
                                     institution: id,
                                     rule: index as u16,
@@ -1337,78 +1144,13 @@ impl Simulation {
                                 });
                             }
                         }
-                        SocialEffect::Labor {
-                            beneficiary,
-                            due_after,
-                            ..
-                        }
-                        | SocialEffect::Delivery {
-                            beneficiary,
-                            due_after,
-                            ..
-                        } => {
-                            if !i.members.contains(&actor)
-                                || self.state.institutions.as_ref().unwrap().institutions[&id]
-                                    .applied
-                                    .get(&concept)
-                                    .is_some_and(|actors| actors.contains_key(&actor))
-                            {
-                                continue;
-                            }
-                            let beneficiary = match beneficiary {
-                                Beneficiary::Person(person) => *person,
-                                Beneficiary::Office(slot) => {
-                                    i.charter
-                                        .offices
-                                        .iter()
-                                        .find(|o| o.slot == *slot)
-                                        .unwrap()
-                                        .holder
-                                }
-                            };
-                            if actor == beneficiary || !i.members.contains(&beneficiary) {
-                                continue;
-                            }
-                            let Some(deadline) =
-                                self.state.time.0.checked_add(due_after.0).map(SimTime)
-                            else {
-                                continue;
-                            };
-                            let term = match &rule.effect {
-                                SocialEffect::Labor { site, millis, .. } => AgreementTerm::Labor {
-                                    debtor: actor,
-                                    creditor: beneficiary,
-                                    site: *site,
-                                    millis: *millis,
-                                    deadline,
-                                },
-                                SocialEffect::Delivery {
-                                    source,
-                                    destination,
-                                    quantity,
-                                    ..
-                                } => AgreementTerm::Delivery {
-                                    debtor: actor,
-                                    creditor: beneficiary,
-                                    source: *source,
-                                    destination: *destination,
-                                    quantity: *quantity,
-                                    deadline,
-                                },
-                                _ => unreachable!(),
-                            };
-                            let agreement = self.institutional_agreement(term)?;
+                        game_society::institutions::RuleIntent::Duty { term, .. } => {
+                            let agreement = self.institutional_agreement(term.clone())?;
                             self.state
                                 .institutions
                                 .as_mut()
                                 .unwrap()
-                                .institutions
-                                .get_mut(&id)
-                                .unwrap()
-                                .applied
-                                .entry(concept)
-                                .or_default()
-                                .insert(actor, agreement);
+                                .register_duty(&intent, agreement)?;
                             self.emit(EventKind::InstitutionRuleApplied {
                                 institution: id,
                                 rule: index as u16,
@@ -1449,37 +1191,22 @@ impl Simulation {
             .map(|p| p.id)
             .chain([case.subject])
             .collect();
-        let w = self.state.institutions.as_mut().unwrap();
-        w.cases.insert(id, case.clone());
-        for observer in observers {
-            let memory = w.memories.entry(observer).or_default();
-            memory.cases.insert(id);
-            if let Some(concept) = concept {
-                let attachment = memory
-                    .values
-                    .entry(concept)
-                    .or_insert(decisions::Attachment {
-                        weight: 0,
-                        experiences: 0,
-                    });
-                let empathy = self.state.decisions.as_ref().unwrap().minds[&observer]
-                    .personality
-                    .empathy;
-                let gain = match case.outcome {
-                    SocialOutcome::Shared | SocialOutcome::Contributed => {
-                        if observer == case.subject || observer == case.counterpart {
-                            500
-                        } else {
-                            i32::from(empathy) / 2
-                        }
-                    }
-                    SocialOutcome::Defaulted => -300,
-                    _ => 0,
-                };
-                attachment.weight = (attachment.weight + gain).clamp(-2_000, 2_000);
-                attachment.experiences = attachment.experiences.saturating_add(1);
-            }
-        }
+        let observers = observers
+            .into_iter()
+            .map(|observer| {
+                (
+                    observer,
+                    self.state.decisions.as_ref().unwrap().minds[&observer]
+                        .personality
+                        .empathy,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.state
+            .institutions
+            .as_mut()
+            .unwrap()
+            .remember_case(case.clone(), concept, &observers);
         self.emit(EventKind::SocialCaseRecorded {
             case: id,
             actor: case.subject,
@@ -1972,6 +1699,9 @@ impl Simulation {
         change: &InstitutionChange,
     ) -> i64 {
         match change {
+            InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. } => {
+                self.enforcement_vote_score(actor, i, change)
+            }
             InstitutionChange::AddRule(rule) => self.rule_vote_score(actor, &i.charter, rule),
             InstitutionChange::ReplaceRule { index, rule } => {
                 self.rule_vote_score(actor, &i.charter, rule)
@@ -1992,46 +1722,11 @@ impl Simulation {
     }
 
     fn precedent_score(&self, actor: PersonId, case: &SocialCaseView) -> i64 {
-        let w = self.state.institutions.as_ref().unwrap();
-        let Some(memory) = w.memories.get(&actor) else {
-            return 0;
-        };
-        let mut candidates: Vec<_> = memory
-            .cases
-            .iter()
-            .rev()
-            .take(64)
-            .filter_map(|id| {
-                let prior = &w.cases[id];
-                if prior.id == case.id
-                    || prior.kind != case.kind
-                    || prior.good != case.good
-                    || prior.outcome == SocialOutcome::Unresolved
-                {
-                    return None;
-                }
-                let distance = u16::from(prior.need_band.abs_diff(case.need_band)) * 2
-                    + u16::from(prior.reciprocal != case.reciprocal) * 3;
-                let judgment = match prior.outcome {
-                    SocialOutcome::Shared => 600,
-                    SocialOutcome::Contributed => 400,
-                    SocialOutcome::Defaulted => -600,
-                    SocialOutcome::Refused => -300,
-                    _ => 0,
-                };
-                Some((distance, prior.id, judgment))
-            })
-            .collect();
-        candidates.sort_by_key(|(distance, id, _)| (*distance, *id));
-        let selected: Vec<_> = candidates.into_iter().take(8).collect();
-        if selected.is_empty() {
-            return 0;
-        }
-        selected
-            .iter()
-            .map(|(distance, _, judgment)| judgment / (1 + i64::from(*distance)))
-            .sum::<i64>()
-            / selected.len() as i64
+        self.state
+            .institutions
+            .as_ref()
+            .unwrap()
+            .precedent_score(actor, case)
     }
     fn hear_known_cases(&mut self) -> Result<(), Error> {
         let w = self.state.institutions.as_ref().unwrap();
@@ -2210,7 +1905,7 @@ impl Simulation {
             }
         }
         for (actor, command) in intentions {
-            let _ = self.debug_physical_command(actor, command);
+            let _ = self.debug_actor_command(actor, command);
         }
     }
 

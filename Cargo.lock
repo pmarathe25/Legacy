@@ -37,7 +37,24 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 name = "game-api"
 version = "0.1.0"
 dependencies = [
+ "game-characters",
+ "game-conflict",
+ "game-core",
+ "game-economy",
+ "game-health",
+ "game-invocation",
+ "game-lineage",
+ "game-society",
  "serde",
+]
+
+[[package]]
+name = "game-characters"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -50,11 +67,97 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-conflict"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+]
+
+[[package]]
+name = "game-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "game-economy"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-health"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-invocation"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-lineage"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-physiology"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+]
+
+[[package]]
 name = "game-sim"
 version = "0.1.0"
 dependencies = [
  "game-api",
+ "game-characters",
+ "game-conflict",
+ "game-core",
+ "game-economy",
+ "game-health",
+ "game-invocation",
+ "game-lineage",
+ "game-physiology",
+ "game-skills",
+ "game-society",
  "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-skills"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+]
+
+[[package]]
+name = "game-society"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-economy",
  "serde",
  "serde_json",
 ]

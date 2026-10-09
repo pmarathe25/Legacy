@@ -56,7 +56,7 @@ fn reachable_food_requires_consumption_while_guardians_have_no_hunger_need() {
     assert_eq!(food_total(&sim), before - 20_000);
     assert!(sim.observe().physical.unwrap().vitals.alive);
     let guardian = sim.canonical_state().people[1].id;
-    sim.debug_physical_command(guardian, Command::Eat { source })
+    sim.debug_actor_command(guardian, Command::Eat { source })
         .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(food_total(&sim), before - 21_000);

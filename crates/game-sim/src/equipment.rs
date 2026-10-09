@@ -25,6 +25,10 @@ impl Simulation {
                     .as_ref()
                     .and_then(|world| world.fields.get(&field))
                     .map(|field| field.tool),
+                Activity::Instruction { .. } | Activity::Practice { .. } => {
+                    self.social_selected_tool(*actor)
+                }
+                Activity::HealthWork { .. } => self.health_selected_tool(*actor),
                 Activity::Gather { .. } => self.ecology_job_tool(*actor),
                 Activity::Construct { project, .. } => self
                     .state
@@ -64,6 +68,9 @@ impl Simulation {
                 matches!(
                     body.activity,
                     Activity::Work { .. }
+                        | Activity::Instruction { .. }
+                        | Activity::Practice { .. }
+                        | Activity::HealthWork { .. }
                         | Activity::Gather { .. }
                         | Activity::Cultivate { .. }
                         | Activity::Construct { .. }
@@ -307,7 +314,7 @@ impl Simulation {
                 BTreeSet::from([actor]),
             )?
         };
-        match self.debug_physical_command(
+        match self.debug_actor_command(
             actor,
             Command::Load {
                 source,
@@ -371,11 +378,11 @@ mod tests {
         let second = sim.state.people[3].id;
         let site = local_site(&sim);
         let other = duplicate_site(&mut sim, site);
-        sim.debug_physical_command(first, Command::Work { site })
+        sim.debug_actor_command(first, Command::Work { site })
             .unwrap();
         let before = sim.state.clone();
         assert!(
-            sim.debug_physical_command(second, Command::Work { site: other })
+            sim.debug_actor_command(second, Command::Work { site: other })
                 .is_err()
         );
         assert_eq!(sim.state, before);
@@ -389,7 +396,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(sim.select_work_tool(second, other), Some(alternate));
-        sim.debug_physical_command(second, Command::Work { site: other })
+        sim.debug_actor_command(second, Command::Work { site: other })
             .unwrap();
         assert!(sim.work_equipment_available(first));
         assert!(sim.work_equipment_available(second));
@@ -416,9 +423,9 @@ mod tests {
         let other = duplicate_site(&mut sim, site);
         let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
         sim.state.inventories.get_mut(&tool).unwrap().quantity = Quantity(2_000);
-        sim.debug_physical_command(first, Command::Work { site })
+        sim.debug_actor_command(first, Command::Work { site })
             .unwrap();
-        sim.debug_physical_command(second, Command::Work { site: other })
+        sim.debug_actor_command(second, Command::Work { site: other })
             .unwrap();
         sim.carry_good(carrier, tool, Quantity(1_000)).unwrap();
         sim.advance(MINUTE).unwrap();
@@ -465,7 +472,7 @@ mod tests {
             }
         }
         sim.advance(SimDuration(120_000)).unwrap();
-        sim.debug_physical_command(worker, Command::Cancel).unwrap();
+        sim.debug_actor_command(worker, Command::Cancel).unwrap();
         let land = sim
             .state
             .environment
@@ -510,7 +517,7 @@ mod tests {
                 last_granted: None,
             },
         );
-        sim.debug_physical_command(
+        sim.debug_actor_command(
             farmer,
             Command::Cultivate {
                 field: field.id,
@@ -523,7 +530,7 @@ mod tests {
         assert_eq!(sim.select_work_tool(worker, site), None);
         let before = sim.state.clone();
         assert!(
-            sim.debug_physical_command(worker, Command::Work { site })
+            sim.debug_actor_command(worker, Command::Work { site })
                 .is_err()
         );
         assert_eq!(sim.state, before);
@@ -531,7 +538,7 @@ mod tests {
         // completion; finishing cultivation cannot reassign its closing slot to
         // the other worker's elapsed shift.
         sim.state.inventories.get_mut(&field.tool).unwrap().quantity = Quantity(2_000);
-        sim.debug_physical_command(worker, Command::Work { site })
+        sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         let cargo = sim
             .debug_add_inventory(
@@ -586,7 +593,7 @@ mod tests {
                 BTreeSet::from([worker]),
             )
             .unwrap();
-        sim.debug_physical_command(worker, Command::Work { site })
+        sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         assert_eq!(
             sim.state.physical.as_ref().unwrap().actors[&worker]
@@ -604,7 +611,7 @@ mod tests {
         assert_eq!(body.activity, Activity::Idle);
         assert_eq!(body.job.as_ref().unwrap().remaining, 30_000);
         assert_eq!(sim.state.inventories[&recipe.tool].quantity, Quantity(0));
-        sim.debug_physical_command(worker, Command::Work { site })
+        sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         assert_eq!(
             sim.state.physical.as_ref().unwrap().actors[&worker]
@@ -639,7 +646,7 @@ mod tests {
         let carrier = sim.state.people[3].id;
         let site = local_site(&sim);
         let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
-        sim.debug_physical_command(worker, Command::Work { site })
+        sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         sim.carry_good(carrier, tool, Quantity(1_000)).unwrap();
         sim.advance(MINUTE).unwrap();
@@ -658,7 +665,7 @@ mod tests {
         let actor = sim.state.ruler;
         let site = local_site(&sim);
         let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
-        sim.debug_physical_command(actor, Command::Work { site })
+        sim.debug_actor_command(actor, Command::Work { site })
             .unwrap();
         sim.state
             .inventories
@@ -671,7 +678,7 @@ mod tests {
         assert!(sim.state.events.iter().any(|event| matches!(event.kind, EventKind::Produced { actor: worker, .. } if worker == actor)));
         let before = sim.state.clone();
         assert!(
-            sim.debug_physical_command(actor, Command::Work { site })
+            sim.debug_actor_command(actor, Command::Work { site })
                 .is_err()
         );
         assert_eq!(sim.state, before);
