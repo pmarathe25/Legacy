@@ -1,0 +1,896 @@
+//! Authoritative headless simulation. Debug fixtures are never player scenarios.
+#[doc(hidden)]
+pub mod benchmark;
+pub mod compute;
+pub mod decisions;
+mod persistence;
+pub mod physical;
+pub mod session;
+#[doc(hidden)]
+pub mod transactions;
+
+use game_api::*;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
+
+#[derive(Clone, Debug)]
+pub struct Execution {
+    pub workers: usize,
+    pub reverse_jobs: bool,
+}
+impl Default for Execution {
+    fn default() -> Self {
+        Self {
+            workers: 1,
+            reverse_jobs: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Profile {
+    pub evaluation_ns: u128,
+    pub arbitration_ns: u128,
+    pub commit_ns: u128,
+    pub evaluated_people: u64,
+    pub boundaries: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Link {
+    pub destination: AreaId,
+    pub duration: SimDuration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Area {
+    pub id: AreaId,
+    pub name: String,
+    pub links: Vec<Link>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Person {
+    pub id: PersonId,
+    pub role: Role,
+    pub location: Location,
+    pub inventory: InventoryId,
+    pub work_units: u64,
+    pub work_remainder: u64,
+    pub work_rate: u64,
+    pub route: Vec<AreaId>,
+    pub hunger_exempt: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InventoryLocation {
+    Area(AreaId),
+    Carried(PersonId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inventory {
+    pub id: InventoryId,
+    pub location: InventoryLocation,
+    pub quantity: Quantity,
+    pub capacity: Quantity,
+    pub access: BTreeSet<PersonId>,
+    pub last_granted: Option<PersonId>,
+    pub good: Good,
+    pub spoils_at: Option<SimTime>,
+}
+
+/// Explicit fixture intentions, not an interface for commanding citizens in play.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TransferIntent {
+    pub actor: PersonId,
+    pub source: InventoryId,
+    pub destination: InventoryId,
+    pub quantity: Quantity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum Due {
+    Arrive(PersonId),
+    Transfers(Vec<TransferIntent>),
+    Review,
+    Physical(PersonId),
+    Spoil(InventoryId),
+}
+
+/// Logical state in persistent ID order; excludes host publication counters and timings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanonicalState {
+    pub scenario: ScenarioInfo,
+    pub seed: u64,
+    pub time: SimTime,
+    pub next_id: u64,
+    pub ruler: PersonId,
+    pub areas: Vec<Area>,
+    // The common 10k-person storage spike favored typed rows over ECS adapters;
+    // explicit commit boundaries also avoid converting persistent IDs to handles.
+    pub people: Vec<Person>,
+    pub inventories: BTreeMap<InventoryId, Inventory>,
+    pub events: Vec<Event>,
+    pub physical: Option<physical::World>,
+    pub decisions: Option<decisions::World>,
+    due: BTreeMap<SimTime, Vec<Due>>,
+    accepted: BTreeMap<u64, (Command, CommandReceipt)>,
+    next_command: u64,
+    next_event: u64,
+}
+
+pub struct Simulation {
+    state: CanonicalState,
+    pool: rayon::ThreadPool,
+    execution: Execution,
+    revision: u64,
+    profile: Profile,
+    person_index: BTreeMap<PersonId, usize>,
+    inventory_index: BTreeMap<InventoryLocation, Vec<InventoryId>>,
+}
+
+pub fn scenarios() -> Vec<ScenarioInfo> {
+    vec![
+        ScenarioInfo {
+            id: "kernel-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
+            id: "survival-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
+            id: "autonomy-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+    ]
+}
+
+impl Simulation {
+    pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "survival-fixture" {
+            return Self::survival_fixture(seed, execution);
+        }
+        if scenario == "autonomy-fixture" {
+            return Self::autonomy_fixture(seed, execution);
+        }
+        if scenario != "kernel-fixture" {
+            return Err(Error::InvalidConfiguration("unknown scenario".into()));
+        }
+        Self::kernel_fixture(seed, 15, execution)
+    }
+
+    pub fn kernel_fixture(
+        seed: u64,
+        population: usize,
+        execution: Execution,
+    ) -> Result<Self, Error> {
+        if !(3..=100_000).contains(&population) {
+            return Err(Error::InvalidConfiguration(
+                "fixture population must be 3..=100000".into(),
+            ));
+        }
+        let mut state = CanonicalState {
+            scenario: scenarios().remove(0),
+            seed,
+            time: SimTime(0),
+            next_id: 1,
+            ruler: PersonId(0),
+            areas: Vec::new(),
+            people: Vec::new(),
+            inventories: BTreeMap::new(),
+            events: Vec::new(),
+            due: BTreeMap::new(),
+            accepted: BTreeMap::new(),
+            next_command: 1,
+            next_event: 1,
+            physical: None,
+            decisions: None,
+        };
+        for name in ["village", "farm", "forest"] {
+            let id = AreaId(allocate(&mut state)?);
+            state.areas.push(Area {
+                id,
+                name: name.into(),
+                links: Vec::new(),
+            });
+        }
+        for (a, b, minutes) in [(0, 1, 2), (0, 2, 3)] {
+            let a_id = state.areas[a].id;
+            let b_id = state.areas[b].id;
+            state.areas[a].links.push(Link {
+                destination: b_id,
+                duration: SimDuration(minutes * 60_000),
+            });
+            state.areas[b].links.push(Link {
+                destination: a_id,
+                duration: SimDuration(minutes * 60_000),
+            });
+        }
+        let village = state.areas[0].id;
+        for i in 0..population {
+            let id = PersonId(allocate(&mut state)?);
+            let inventory = InventoryId(allocate(&mut state)?);
+            let role = match i {
+                0 => Role::Ruler,
+                1 | 2 => Role::Guardian,
+                _ => Role::Citizen,
+            };
+            if i == 0 {
+                state.ruler = id;
+            }
+            state.people.push(Person {
+                id,
+                role,
+                location: Location::AtArea(village),
+                inventory,
+                work_units: 0,
+                work_remainder: 0,
+                work_rate: 1_000 + i as u64 % 7,
+                route: Vec::new(),
+                hunger_exempt: role == Role::Guardian,
+            });
+            state.inventories.insert(
+                inventory,
+                Inventory {
+                    id: inventory,
+                    location: InventoryLocation::Carried(id),
+                    quantity: Quantity(0),
+                    capacity: Quantity(10_000),
+                    access: BTreeSet::from([id]),
+                    last_granted: None,
+                    good: Good::Food,
+                    spoils_at: None,
+                },
+            );
+        }
+        let store = InventoryId(allocate(&mut state)?);
+        state.inventories.insert(
+            store,
+            Inventory {
+                id: store,
+                location: InventoryLocation::Area(village),
+                quantity: Quantity(1_000),
+                capacity: Quantity(1_000_000),
+                access: state.people.iter().map(|p| p.id).collect(),
+                last_granted: None,
+                good: Good::Food,
+                spoils_at: None,
+            },
+        );
+        state.due.insert(SimTime(60_000), vec![Due::Review]);
+        Self::from_state(state, execution, 0)
+    }
+
+    fn from_state(
+        state: CanonicalState,
+        execution: Execution,
+        revision: u64,
+    ) -> Result<Self, Error> {
+        if !(1..=64).contains(&execution.workers) {
+            return Err(Error::InvalidConfiguration(
+                "worker budget must be 1..=64".into(),
+            ));
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(execution.workers)
+            .build()
+            .map_err(|e| Error::InvalidConfiguration(e.to_string()))?;
+        let person_index = state
+            .people
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id, i))
+            .collect();
+        let mut inventory_index = BTreeMap::<_, Vec<_>>::new();
+        for i in state.inventories.values() {
+            inventory_index
+                .entry(i.location.clone())
+                .or_default()
+                .push(i.id);
+        }
+        Ok(Self {
+            state,
+            pool,
+            execution,
+            revision,
+            profile: Profile::default(),
+            person_index,
+            inventory_index,
+        })
+    }
+
+    pub fn canonical_state(&self) -> &CanonicalState {
+        &self.state
+    }
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+    pub fn time(&self) -> SimTime {
+        self.state.time
+    }
+
+    pub fn observe(&self) -> PlayerView {
+        let ruler = &self.state.people[self.person_index[&self.state.ruler]];
+        let origin = match ruler.location {
+            Location::AtArea(a) => a,
+            Location::InTransit { to, .. } => to,
+        };
+        // All three fixture links are authored ruler knowledge. No NPC or inventory
+        // internals are included in the normal observation.
+        let mut available_commands: Vec<_> = self
+            .state
+            .areas
+            .iter()
+            .filter(|a| a.id != origin)
+            .filter(|a| self.path(origin, a.id).is_ok())
+            .map(|a| Command::Move { destination: a.id })
+            .collect();
+        if let Some(world) = &self.state.physical {
+            let actor = &world.actors[&ruler.id];
+            if !actor.vitals.alive || actor.vitals.health == 0 {
+                available_commands.clear();
+            } else if matches!(ruler.location, Location::AtArea(_)) {
+                available_commands.extend([Command::Rest, Command::Cancel]);
+                if let Some(view) = self.physical_view() {
+                    available_commands.extend(
+                        view.local_sites
+                            .into_iter()
+                            .map(|site| Command::Work { site }),
+                    );
+                    if !ruler.hunger_exempt {
+                        available_commands.extend(
+                            view.local_stocks
+                                .iter()
+                                .filter(|s| {
+                                    s.can_access
+                                        && s.good == Good::Food
+                                        && s.quantity >= world.rules.meal_size
+                                })
+                                .map(|s| Command::Eat { source: s.id }),
+                        );
+                    }
+                }
+            }
+        }
+        PlayerView {
+            revision: self.revision,
+            time: self.state.time,
+            ruler: ruler.id,
+            location: ruler.location.clone(),
+            known_areas: self
+                .state
+                .areas
+                .iter()
+                .map(|a| AreaView {
+                    id: a.id,
+                    name: a.name.clone(),
+                })
+                .collect(),
+            available_commands,
+            physical: self.physical_view(),
+            known_stocks: self.state.decisions.as_ref().map_or_else(Vec::new, |w| {
+                w.minds[&ruler.id].knowledge.values().cloned().collect()
+            }),
+            nearby_people: self.nearby_people(0, 64),
+        }
+    }
+
+    pub fn nearby_people(&self, offset: usize, limit: usize) -> Vec<(PersonId, Role)> {
+        let ruler = &self.state.people[self.person_index[&self.state.ruler]];
+        self.state.people.iter().filter(|p| p.id != ruler.id && matches!((&p.location, &ruler.location), (Location::AtArea(a), Location::AtArea(b)) if a == b))
+            .skip(offset).take(limit.min(100)).map(|p| (p.id, p.role)).collect()
+    }
+
+    pub fn submit(&mut self, submission: Submission) -> Result<CommandReceipt, Error> {
+        if let Some((command, receipt)) = self.state.accepted.get(&submission.caller_sequence) {
+            return if command == &submission.command {
+                Ok(receipt.clone())
+            } else {
+                Err(Error::SequenceConflict)
+            };
+        }
+        if !matches!(submission.command, Command::Move { .. }) {
+            return self.submit_physical(submission);
+        }
+        let Command::Move { destination } = submission.command else {
+            unreachable!()
+        };
+        if self.state.physical.as_ref().is_some_and(|w| {
+            !w.actors[&self.state.ruler].vitals.alive
+                || w.actors[&self.state.ruler].vitals.health == 0
+        }) {
+            return Err(Error::Unavailable);
+        }
+        if !self.state.areas.iter().any(|a| a.id == destination) {
+            return Err(Error::UnknownArea);
+        }
+        let index = self.person_index[&self.state.ruler];
+        let origin = match self.state.people[index].location {
+            Location::AtArea(a) => a,
+            Location::InTransit { to, .. } => to,
+        };
+        let path = self.path(origin, destination)?;
+        if path.is_empty() {
+            return Err(Error::AlreadyThere);
+        }
+        let new_sequence = self
+            .state
+            .next_command
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
+        let departure = if matches!(self.state.people[index].location, Location::AtArea(_)) {
+            Some(self.departure(origin, path[0])?)
+        } else {
+            None
+        };
+        self.ensure_event_capacity(usize::from(departure.is_some()))?;
+        let receipt = CommandReceipt {
+            caller_sequence: submission.caller_sequence,
+            authoritative_sequence: self.state.next_command,
+            accepted_at: self.state.time,
+        };
+        self.state.next_command = new_sequence;
+        self.interrupt_physical(self.state.ruler);
+        self.state.people[index].route = path;
+        if let Some((to, arrives)) = departure {
+            self.depart(index, origin, to, arrives);
+        }
+        self.state.accepted.insert(
+            submission.caller_sequence,
+            (submission.command, receipt.clone()),
+        );
+        self.revision += 1;
+        Ok(receipt)
+    }
+
+    fn path(&self, origin: AreaId, destination: AreaId) -> Result<Vec<AreaId>, Error> {
+        let mut frontier = BTreeSet::from([(0_u64, Vec::<AreaId>::new(), origin)]);
+        let mut visited = BTreeSet::new();
+        while let Some((cost, path, area)) = frontier.pop_first() {
+            if !visited.insert(area) {
+                continue;
+            }
+            if area == destination {
+                return Ok(path);
+            }
+            let record = self
+                .state
+                .areas
+                .iter()
+                .find(|a| a.id == area)
+                .ok_or(Error::NoRoute)?;
+            for link in &record.links {
+                let mut next = path.clone();
+                next.push(link.destination);
+                frontier.insert((
+                    cost.checked_add(link.duration.0).ok_or(Error::Overflow)?,
+                    next,
+                    link.destination,
+                ));
+            }
+        }
+        Err(Error::NoRoute)
+    }
+
+    fn departure(&self, from: AreaId, to: AreaId) -> Result<(AreaId, SimTime), Error> {
+        let link = self
+            .state
+            .areas
+            .iter()
+            .find(|a| a.id == from)
+            .and_then(|a| a.links.iter().find(|l| l.destination == to))
+            .ok_or(Error::NoRoute)?;
+        Ok((
+            to,
+            SimTime(
+                self.state
+                    .time
+                    .0
+                    .checked_add(link.duration.0)
+                    .ok_or(Error::Overflow)?,
+            ),
+        ))
+    }
+
+    fn depart(&mut self, index: usize, from: AreaId, to: AreaId, arrives: SimTime) {
+        let actor = self.state.people[index].id;
+        self.state.people[index].route.remove(0);
+        self.state.people[index].location = Location::InTransit {
+            from,
+            to,
+            departed: self.state.time,
+            arrives,
+        };
+        self.state
+            .due
+            .entry(arrives)
+            .or_default()
+            .push(Due::Arrive(actor));
+        self.emit(EventKind::Departed {
+            actor,
+            from,
+            to,
+            arrives,
+        });
+    }
+
+    pub fn advance(&mut self, duration: SimDuration) -> Result<AdvanceResult, Error> {
+        let requested = SimTime(
+            self.state
+                .time
+                .0
+                .checked_add(duration.0)
+                .ok_or(Error::Overflow)?,
+        );
+        while self.state.time < requested {
+            let next = self
+                .state
+                .due
+                .first_key_value()
+                .map(|(t, _)| *t)
+                .unwrap_or(requested)
+                .min(requested);
+            let next = self.physical_boundary(next);
+            self.step(next)?;
+        }
+        Ok(AdvanceResult {
+            requested,
+            reached: self.state.time,
+            revision: self.revision,
+            reason: StopReason::TargetReached,
+        })
+    }
+
+    fn step(&mut self, next: SimTime) -> Result<(), Error> {
+        let started = Instant::now();
+        let elapsed = next.0 - self.state.time.0;
+        let input: Vec<_> = self
+            .state
+            .people
+            .iter()
+            .map(|p| compute::ProgressInput {
+                units: p.work_units,
+                remainder: p.work_remainder,
+                units_per_minute: if matches!(p.location, Location::AtArea(_))
+                    && self.physically_working(p.id)
+                {
+                    p.work_rate
+                } else {
+                    0
+                },
+                elapsed_ms: elapsed,
+            })
+            .collect();
+        let output = compute::evaluate(&self.pool, &input, self.execution.reverse_jobs)?;
+        let physical_output = self.evaluate_physical(elapsed)?;
+        self.profile.evaluation_ns += started.elapsed().as_nanos();
+        // Preflight boundary arithmetic before publishing any part of this interval.
+        let mut due = self.state.due.get(&next).cloned().unwrap_or_default();
+        due.sort_by_key(|d| match d {
+            Due::Spoil(id) => (0, id.0),
+            Due::Arrive(id) => (1, id.0),
+            Due::Physical(id) => (2, id.0),
+            Due::Review => (3, 0),
+            Due::Transfers(_) => (4, 0),
+        });
+        for event in &due {
+            match event {
+                Due::Review => {
+                    next.0
+                        .checked_add(if self.state.decisions.is_some() {
+                            120_000
+                        } else {
+                            60_000
+                        })
+                        .ok_or(Error::Overflow)?;
+                }
+                Due::Arrive(id) => {
+                    let p = &self.state.people[self.person_index[id]];
+                    if let Some(to) = p.route.first() {
+                        let Location::InTransit { to: from, .. } = p.location else {
+                            return Err(Error::InvalidSave("arrival outside transit".into()));
+                        };
+                        let duration = self
+                            .state
+                            .areas
+                            .iter()
+                            .find(|a| a.id == from)
+                            .and_then(|a| a.links.iter().find(|l| l.destination == *to))
+                            .ok_or(Error::NoRoute)?
+                            .duration
+                            .0;
+                        next.0.checked_add(duration).ok_or(Error::Overflow)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let event_bound: usize = due
+            .iter()
+            .map(|d| match d {
+                Due::Arrive(_) => 2,
+                Due::Transfers(v) => v.len(),
+                Due::Review => 0,
+                Due::Physical(_) | Due::Spoil(_) => 2,
+            })
+            .sum::<usize>()
+            + self.state.people.len() * 2;
+        self.ensure_event_capacity(event_bound)?;
+        let started = Instant::now();
+        let transfers: Vec<_> = due
+            .iter()
+            .filter_map(|d| {
+                if let Due::Transfers(v) = d {
+                    Some(v.as_slice())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .cloned()
+            .collect();
+        let opening_stock: BTreeMap<_, _> = transfers
+            .iter()
+            .map(|i| (i.source, self.state.inventories[&i.source].quantity.0))
+            .collect();
+        self.profile.arbitration_ns += started.elapsed().as_nanos();
+        let started = Instant::now();
+        for (p, out) in self.state.people.iter_mut().zip(output) {
+            p.work_units = out.units;
+            p.work_remainder = out.remainder;
+        }
+        self.state.time = next;
+        self.state.due.remove(&next);
+        for event in due {
+            match event {
+                Due::Review => self
+                    .state
+                    .due
+                    .entry(SimTime(next.0 + 60_000))
+                    .or_default()
+                    .push(Due::Review),
+                Due::Arrive(id) => {
+                    let index = self.person_index[&id];
+                    if let Location::InTransit { to, .. } = self.state.people[index].location {
+                        self.state.people[index].location = Location::AtArea(to);
+                        self.emit(EventKind::Arrived {
+                            actor: id,
+                            area: to,
+                        });
+                        if let Some(destination) = self.state.people[index].route.first().copied() {
+                            let (_, arrival) = self.departure(to, destination)?;
+                            self.depart(index, to, destination, arrival);
+                        }
+                    }
+                }
+                Due::Transfers(_) => {}
+                Due::Physical(actor) => self.complete_physical(actor),
+                Due::Spoil(inventory) => {
+                    let stock = self.state.inventories.get_mut(&inventory).unwrap();
+                    let quantity = stock.quantity;
+                    stock.quantity = Quantity(0);
+                    stock.spoils_at = None;
+                    self.emit(EventKind::Spoiled {
+                        inventory,
+                        quantity,
+                    });
+                }
+            }
+        }
+        let arbitration_started = Instant::now();
+        let resolved = self.resolve_transfers_from(transfers, Some(&opening_stock));
+        self.profile.arbitration_ns += arbitration_started.elapsed().as_nanos();
+        for (intent, granted) in resolved {
+            if granted {
+                self.state
+                    .inventories
+                    .get_mut(&intent.source)
+                    .unwrap()
+                    .quantity
+                    .0 -= intent.quantity.0;
+                let source = self.state.inventories.get_mut(&intent.source).unwrap();
+                source.last_granted = Some(intent.actor);
+                self.state
+                    .inventories
+                    .get_mut(&intent.destination)
+                    .unwrap()
+                    .quantity
+                    .0 += intent.quantity.0;
+                self.emit(EventKind::Transferred {
+                    actor: intent.actor,
+                    source: intent.source,
+                    destination: intent.destination,
+                    quantity: intent.quantity,
+                });
+            } else {
+                self.emit(EventKind::TransferFailed {
+                    actor: intent.actor,
+                    source: intent.source,
+                });
+            }
+        }
+        self.commit_physical(physical_output);
+        self.learn_from_work();
+        if self.state.time.0.is_multiple_of(60_000) {
+            self.review_decisions()?;
+        }
+        self.revision += 1;
+        self.profile.commit_ns += started.elapsed().as_nanos();
+        self.profile.evaluated_people += input.len() as u64;
+        self.profile.boundaries += 1;
+        Ok(())
+    }
+
+    fn inventory_area(&self, inventory: &Inventory) -> Option<AreaId> {
+        match inventory.location {
+            InventoryLocation::Area(a) => Some(a),
+            InventoryLocation::Carried(id) => {
+                match self.state.people[self.person_index[&id]].location {
+                    Location::AtArea(a) => Some(a),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    fn resolve_transfers(&self, intents: Vec<TransferIntent>) -> Vec<(TransferIntent, bool)> {
+        self.resolve_transfers_from(intents, None)
+    }
+
+    fn resolve_transfers_from(
+        &self,
+        intents: Vec<TransferIntent>,
+        opening_stock: Option<&BTreeMap<InventoryId, u64>>,
+    ) -> Vec<(TransferIntent, bool)> {
+        if intents.is_empty() {
+            return Vec::new();
+        }
+        let balances = self
+            .state
+            .inventories
+            .iter()
+            .map(|(id, i)| {
+                (
+                    *id,
+                    transactions::Balance {
+                        stock: opening_stock
+                            .and_then(|s| s.get(id))
+                            .copied()
+                            .unwrap_or(i.quantity.0)
+                            .min(i.quantity.0),
+                        capacity: i.capacity.0,
+                        last_granted: i.last_granted,
+                    },
+                )
+            })
+            .collect();
+        let mut carriers = BTreeMap::new();
+        let mut carried = BTreeMap::<PersonId, u64>::new();
+        if self.state.physical.is_some() {
+            for i in self.state.inventories.values() {
+                if let InventoryLocation::Carried(id) = i.location {
+                    carriers.insert(i.id, id);
+                    *carried.entry(id).or_default() += i.quantity.0;
+                }
+            }
+        }
+        let capacity = self
+            .state
+            .physical
+            .as_ref()
+            .map_or(0, |w| w.rules.carrying_capacity.0);
+        let free_capacity = carried
+            .into_iter()
+            .map(|(id, qty)| (id, capacity.saturating_sub(qty)))
+            .collect();
+        let requests = intents
+            .into_iter()
+            .map(|i| {
+                let source = &self.state.inventories[&i.source];
+                let destination = &self.state.inventories[&i.destination];
+                let actor = &self.state.people[self.person_index[&i.actor]];
+                let area = if let Location::AtArea(a) = actor.location {
+                    Some(a)
+                } else {
+                    None
+                };
+                transactions::Request {
+                    actor: i.actor,
+                    source: i.source,
+                    destination: i.destination,
+                    amount: i.quantity.0,
+                    eligible: source.good == destination.good
+                        && source.access.contains(&i.actor)
+                        && destination.access.contains(&i.actor)
+                        && area.is_some()
+                        && area == self.inventory_area(source)
+                        && area == self.inventory_area(destination),
+                }
+            })
+            .collect();
+        transactions::arbitrate_with_capacity(&balances, requests, &carriers, &free_capacity)
+            .into_iter()
+            .map(|(r, granted)| {
+                (
+                    TransferIntent {
+                        actor: r.actor,
+                        source: r.source,
+                        destination: r.destination,
+                        quantity: Quantity(r.amount),
+                    },
+                    granted,
+                )
+            })
+            .collect()
+    }
+
+    pub fn debug_schedule_transfers(
+        &mut self,
+        at: SimTime,
+        intents: Vec<TransferIntent>,
+    ) -> Result<(), Error> {
+        if at <= self.state.time {
+            return Err(Error::InvalidFixture(
+                "transfers must be scheduled in the future".into(),
+            ));
+        }
+        for i in &intents {
+            if i.quantity.0 == 0
+                || i.source == i.destination
+                || !self.person_index.contains_key(&i.actor)
+                || !self.state.inventories.contains_key(&i.source)
+                || !self.state.inventories.contains_key(&i.destination)
+            {
+                return Err(Error::InvalidFixture(
+                    "invalid transfer identity or amount".into(),
+                ));
+            }
+        }
+        self.state
+            .due
+            .entry(at)
+            .or_default()
+            .push(Due::Transfers(intents));
+        self.revision += 1;
+        Ok(())
+    }
+
+    pub fn debug_add_disconnected_area(&mut self, name: &str) -> Result<AreaId, Error> {
+        let id = AreaId(allocate(&mut self.state)?);
+        self.state.areas.push(Area {
+            id,
+            name: name.into(),
+            links: Vec::new(),
+        });
+        Ok(id)
+    }
+
+    fn ensure_event_capacity(&self, count: usize) -> Result<(), Error> {
+        self.state
+            .next_event
+            .checked_add(count as u64)
+            .ok_or(Error::Overflow)
+            .map(|_| ())
+    }
+    fn emit(&mut self, kind: EventKind) {
+        let id = EventId(self.state.next_event);
+        self.state.next_event += 1;
+        self.state.events.push(Event {
+            id,
+            time: self.state.time,
+            kind,
+        });
+    }
+}
+
+fn allocate(state: &mut CanonicalState) -> Result<u64, Error> {
+    let id = state.next_id;
+    state.next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+    Ok(id)
+}
