@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 10;
+const SAVE_VERSION: u32 = 11;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -73,6 +73,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "lineage-fixture"
             | "property-fixture"
             | "institution-fixture"
+            | "skills-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -87,6 +88,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "lineage-fixture"
                 | "property-fixture"
                 | "institution-fixture"
+                | "skills-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
@@ -96,19 +98,22 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "farming-fixture"
                 | "lineage-fixture"
                 | "property-fixture"
+                | "skills-fixture"
         ) != s.development.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "combat-fixture" | "lineage-fixture" | "property-fixture"
+            "combat-fixture" | "lineage-fixture" | "property-fixture" | "skills-fixture"
         ) != s.combat.is_some()
         || (s.scenario.id == "farming-fixture") != s.environment.is_some()
         || matches!(
             s.scenario.id.as_str(),
             "agreement-fixture" | "property-fixture" | "institution-fixture"
         ) != s.agreements.is_some()
-        || (s.scenario.id == "lineage-fixture") != s.lineage.is_some()
+        || matches!(s.scenario.id.as_str(), "lineage-fixture" | "skills-fixture")
+            != s.lineage.is_some()
         || (s.scenario.id == "property-fixture") != s.property.is_some()
         || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
+        || (s.scenario.id == "skills-fixture" && s.skills.is_none())
     {
         return Err(fail());
     }
@@ -969,6 +974,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     lineage::validate(s)?;
     property::validate(s)?;
     institutions::validate(s)?;
+    skills::validate(s)?;
     Ok(())
 }
 
@@ -1037,10 +1043,14 @@ fn validate_physical(
             return Err(fail());
         }
         if let Some(job) = &actor.job
-            && !world
-                .sites
-                .get(&job.site)
-                .is_some_and(|site| job.remaining <= site.duration.0)
+            && (job.rate.denominator != 1_000
+                || job.rate.numerator < 1_000
+                || job.rate.numerator > 2_000
+                || job.work_remainder >= job.rate.denominator
+                || !world
+                    .sites
+                    .get(&job.site)
+                    .is_some_and(|site| job.remaining <= site.duration.0))
         {
             return Err(fail());
         }

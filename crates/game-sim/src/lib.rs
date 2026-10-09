@@ -13,6 +13,7 @@ mod persistence;
 pub mod physical;
 pub mod property;
 pub mod session;
+pub mod skills;
 #[doc(hidden)]
 pub mod transactions;
 
@@ -139,6 +140,8 @@ pub struct CanonicalState {
     pub property: Option<property::World>,
     #[serde(default)]
     pub institutions: Option<institutions::World>,
+    #[serde(default)]
+    pub skills: Option<skills::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -215,11 +218,19 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "skills-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "skills-fixture" {
+            return Self::skills_fixture(seed, execution);
+        }
         if scenario == "institution-fixture" {
             return Self::institution_fixture(seed, execution);
         }
@@ -289,6 +300,7 @@ impl Simulation {
             lineage: None,
             property: None,
             institutions: None,
+            skills: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -658,6 +670,7 @@ impl Simulation {
             }
         }
         PlayerView {
+            skills: self.own_skill_view(ruler.id),
             institutions: self.institution_view(ruler.id),
             social_cases: self.social_case_view(ruler.id),
             property: self.property_view(ruler.id),
@@ -1012,6 +1025,7 @@ impl Simulation {
             .collect();
         let output = compute::evaluate(&self.pool, &input, self.execution.reverse_jobs)?;
         let physical_output = self.evaluate_physical(elapsed)?;
+        let skill_output = self.evaluate_skills(next)?;
         let environment_output = self.evaluate_environment(next)?;
         self.profile.evaluation_ns += started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
@@ -1197,6 +1211,7 @@ impl Simulation {
             }
         }
         self.commit_physical(physical_output);
+        self.commit_skills(skill_output);
         self.observe_lineage_deaths();
         for event in lifecycle {
             if let Due::CombatRound(encounter) = event {
@@ -1376,6 +1391,7 @@ impl Simulation {
     }
     fn emit(&mut self, kind: EventKind) {
         self.witness_lineage_event(&kind);
+        self.on_skill_event(&kind);
         let id = EventId(self.state.next_event);
         self.state.next_event += 1;
         self.state.events.push(Event {

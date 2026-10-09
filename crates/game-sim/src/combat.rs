@@ -621,6 +621,7 @@ impl Simulation {
             }
             _ => {}
         }
+        self.effective_combat_damage(actor, w.rules.damage)?;
         self.ensure_event_capacity(8)?;
         if matches!(action, CombatAction::Capture { .. }) {
             self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
@@ -649,10 +650,9 @@ impl Simulation {
             CombatAction::Attack { target } => {
                 let w = self.state.combat.as_ref().unwrap();
                 let defending = w.encounters[&id].fighters[&target].defending;
-                let damage =
-                    w.rules
-                        .damage
-                        .saturating_sub(if defending { w.rules.defence } else { 0 });
+                let damage = self
+                    .effective_combat_damage(actor, w.rules.damage)?
+                    .saturating_sub(if defending { w.rules.defence } else { 0 });
                 self.damage_from_combat(target, damage);
                 self.emit(EventKind::Struck {
                     encounter: id,

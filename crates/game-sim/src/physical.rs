@@ -19,6 +19,10 @@ pub struct Rules {
 pub struct Job {
     pub site: SiteId,
     pub remaining: u64,
+    #[serde(default)]
+    pub rate: SkillRate,
+    #[serde(default)]
+    pub work_remainder: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +58,7 @@ pub(crate) struct Outcome {
     id: PersonId,
     vitals: Vitals,
     remaining: Option<u64>,
+    work_remainder: Option<u64>,
 }
 
 impl Simulation {
@@ -617,6 +622,8 @@ impl Simulation {
                         Some(Job {
                             site,
                             remaining: site_record.duration.0,
+                            rate: self.effective_work_rate(actor, Skill::Craft),
+                            work_remainder: 0,
                         }),
                         Some((site_record.input, site_record.input_quantity)),
                     )
@@ -798,7 +805,10 @@ impl Simulation {
             if matches!(a.activity, Activity::Work { .. })
                 && let Some(job) = &a.job
             {
-                dt = dt.min(job.remaining);
+                dt = dt.min(
+                    skills::work_duration(job.remaining, job.rate, job.work_remainder)
+                        .expect("validated frozen skill rate"),
+                );
             }
         }
         // Inactive/dead records never impose a zero-length scheduling loop.
@@ -853,17 +863,22 @@ impl Simulation {
                     vitals.alive = false;
                 }
             }
-            let remaining = a.job.as_ref().map(|j| {
+            let (remaining, work_remainder) = if let Some(job) = &a.job {
                 if matches!(a.activity, Activity::Work { .. }) {
-                    j.remaining.saturating_sub(elapsed)
+                    let (work, remainder) =
+                        skills::advance_work(elapsed, job.rate, job.work_remainder)?;
+                    (Some(job.remaining.saturating_sub(work)), Some(remainder))
                 } else {
-                    j.remaining
+                    (Some(job.remaining), Some(job.work_remainder))
                 }
-            });
+            } else {
+                (None, None)
+            };
             Ok(Outcome {
                 id: *id,
                 vitals,
                 remaining,
+                work_remainder,
             })
         };
         self.pool.install(|| {
@@ -1174,6 +1189,7 @@ impl Simulation {
             a.vitals = vitals.clone();
             if let (Some(job), Some(remaining)) = (&mut a.job, out.remaining) {
                 job.remaining = remaining;
+                job.work_remainder = out.work_remainder.unwrap();
             }
             if job_done {
                 let site_id = a.job.as_ref().unwrap().site;

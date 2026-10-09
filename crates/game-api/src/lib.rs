@@ -7,6 +7,8 @@ pub mod property;
 pub use property::*;
 pub mod institutions;
 pub use institutions::*;
+pub mod skills;
+pub use skills::*;
 
 macro_rules! id {
     ($($name:ident),*) => {$(
@@ -172,6 +174,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub skills: Vec<SkillView>,
     pub institutions: Vec<InstitutionView>,
     pub social_cases: Vec<SocialCaseView>,
     pub property: PropertyView,

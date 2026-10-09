@@ -686,7 +686,9 @@ impl Simulation {
             .iter()
             .skip(world.last_learning_event as usize)
         {
-            if let EventKind::Produced { actor, .. } = event.kind {
+            if let EventKind::Produced { actor, .. } | EventKind::CropHarvested { actor, .. } =
+                event.kind
+            {
                 let attachment = world
                     .minds
                     .get_mut(&actor)

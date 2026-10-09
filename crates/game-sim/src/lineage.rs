@@ -410,10 +410,13 @@ impl Simulation {
         let teacher_mind = &self.state.decisions.as_ref().unwrap().minds[&teacher];
         let knows = match topic {
             LessonTopic::Invocation => world.guardians[&teacher].knows_invocation,
-            LessonTopic::Craft => teacher_mind
-                .interests
-                .get(&ChildhoodInterest::Craft)
-                .is_some_and(|skill| *skill > 0),
+            LessonTopic::Craft => {
+                self.own_skill_level(teacher, Skill::Craft) > 0
+                    || teacher_mind
+                        .interests
+                        .get(&ChildhoodInterest::Craft)
+                        .is_some_and(|skill| *skill > 0)
+            }
             LessonTopic::Travel => !teacher_mind.routes.is_empty(),
         };
         let unsafe_now = teacher_mind
@@ -531,10 +534,13 @@ impl Simulation {
                 ] {
                     let can_teach = match topic {
                         LessonTopic::Invocation => guard.knows_invocation,
-                        LessonTopic::Craft => mind
-                            .interests
-                            .get(&ChildhoodInterest::Craft)
-                            .is_some_and(|skill| *skill > 0),
+                        LessonTopic::Craft => {
+                            self.own_skill_level(*teacher, Skill::Craft) > 0
+                                || mind
+                                    .interests
+                                    .get(&ChildhoodInterest::Craft)
+                                    .is_some_and(|skill| *skill > 0)
+                        }
                         LessonTopic::Travel => !mind.routes.is_empty(),
                     };
                     if can_teach {
@@ -664,7 +670,8 @@ impl Simulation {
                     .interests
                     .get(&ChildhoodInterest::Craft)
                     .copied()
-                    .unwrap_or(0);
+                    .unwrap_or(0)
+                    .max(u64::from(self.own_skill_level(teacher, Skill::Craft)) * 10);
                 let learning = self
                     .state
                     .decisions
