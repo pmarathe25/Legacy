@@ -29,7 +29,7 @@ pub fn execute(
             *sim = loaded;
             Ok("loaded".into())
         }
-        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
+        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
 }
@@ -152,6 +152,62 @@ fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::er
         }
     };
     let command = match words {
+        ["learn", teacher, topic] => Command::Learn {
+            teacher: PersonId(teacher.parse()?),
+            topic: match *topic {
+                "invocation" => LessonTopic::Invocation,
+                "craft" => LessonTopic::Craft,
+                "travel" => LessonTopic::Travel,
+                _ => return Err("unknown lesson topic".into()),
+            },
+        },
+        ["guardian", guardian, "rest"] => Command::RequestGuardian {
+            guardian: PersonId(guardian.parse()?),
+            request: GuardianRequest::Rest,
+        },
+        ["guardian", guardian, "move", destination] => Command::RequestGuardian {
+            guardian: PersonId(guardian.parse()?),
+            request: GuardianRequest::Move {
+                destination: AreaId(destination.parse()?),
+            },
+        },
+        ["guardian", guardian, "work", site] => Command::RequestGuardian {
+            guardian: PersonId(guardian.parse()?),
+            request: GuardianRequest::Work {
+                site: SiteId(site.parse()?),
+            },
+        },
+        ["take", source, destination, quantity] => Command::Property {
+            action: PropertyAction::Take {
+                source: InventoryId(source.parse()?),
+                destination: InventoryId(destination.parse()?),
+                quantity: Quantity(quantity.parse()?),
+            },
+        },
+        ["request-access", inventory] => Command::Property {
+            action: PropertyAction::RequestAccess {
+                inventory: InventoryId(inventory.parse()?),
+            },
+        },
+        ["recognize", claim] => Command::Property {
+            action: PropertyAction::Recognize {
+                claim: ClaimId(claim.parse()?),
+            },
+        },
+        ["contest", claim] => Command::Property {
+            action: PropertyAction::Contest {
+                claim: ClaimId(claim.parse()?),
+            },
+        },
+        ["report-incident", recipient, incident] => Command::Property {
+            action: PropertyAction::ReportIncident {
+                recipient: PersonId(recipient.parse()?),
+                incident: IncidentId(incident.parse()?),
+            },
+        },
+        ["property", json @ ..] => Command::Property {
+            action: serde_json::from_str(&json.join(" "))?,
+        },
         ["agreement", json @ ..] => Command::Agreement {
             action: serde_json::from_str(&json.join(" "))?,
         },
@@ -246,7 +302,7 @@ pub fn execute_session(
         ["run",duration] => return Ok(SessionOutput::Advancing(session.run(parse_duration(duration)?)?)),
         ["save",path] => { save_file(std::path::Path::new(path),&session.save()?)?; "saved".into() },
         ["load",path] => { session.load(std::fs::read(path)?)?; "loaded".into() },
-        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
+        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | farm <field-id> <prepare|plant|tend|irrigate|harvest> | work <site-id> | tell <person> <known-stock> | learn <teacher> <invocation|craft|travel> | guardian <person> <rest|move area|work site> | signal <food|company> | play <interest> | take <source> <cargo> <quantity> | request-access <stock> | recognize <claim> | contest <claim> | report-incident <person> <incident> | property <JSON action> | agreement <JSON action> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | lineage | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
         _ => return Err("unknown command; use help".into()),
     };
     Ok(SessionOutput::Text(text))

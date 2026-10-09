@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 pub mod agreements;
 pub use agreements::*;
+pub mod property;
+pub use property::*;
 
 macro_rules! id {
     ($($name:ident),*) => {$(
@@ -17,6 +19,8 @@ id!(
     SiteId,
     ConceptId,
     AgreementId,
+    ClaimId,
+    IncidentId,
     AmendmentId,
     ObligationId,
     PregnancyId,
@@ -32,6 +36,17 @@ pub const MINUTE: SimDuration = SimDuration(60_000);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Learn {
+        teacher: PersonId,
+        topic: LessonTopic,
+    },
+    RequestGuardian {
+        guardian: PersonId,
+        request: GuardianRequest,
+    },
+    Property {
+        action: PropertyAction,
+    },
     Agreement {
         action: AgreementAction,
     },
@@ -149,6 +164,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub property: PropertyView,
     pub lineage: Option<LineageView>,
     pub agreements: Vec<AgreementView>,
     pub environment: Option<EnvironmentView>,
@@ -189,6 +205,23 @@ pub struct Vitals {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Lesson {
+        teacher: PersonId,
+        student: PersonId,
+        topic: LessonTopic,
+        completes: SimTime,
+    },
+    Take {
+        source: InventoryId,
+        destination: InventoryId,
+        quantity: Quantity,
+        completes: SimTime,
+    },
+    ReportIncident {
+        recipient: PersonId,
+        incident: IncidentId,
+        completes: SimTime,
+    },
     Cultivate {
         field: SiteId,
         operation: FarmOperation,
@@ -288,6 +321,66 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    LessonCompleted {
+        teacher: PersonId,
+        student: PersonId,
+        topic: LessonTopic,
+        gain: u64,
+    },
+    GuardianRefused {
+        guardian: PersonId,
+        requester: PersonId,
+        reason: String,
+    },
+    PropertyClaimed {
+        claim: ClaimId,
+        actor: PersonId,
+        inventory: InventoryId,
+    },
+    ClaimRecognized {
+        claim: ClaimId,
+        actor: PersonId,
+        support: bool,
+    },
+    PermissionShared {
+        actor: PersonId,
+        inventory: InventoryId,
+        recipient: PersonId,
+        allowed: bool,
+    },
+    TakingAttempted {
+        incident: IncidentId,
+        actor: PersonId,
+        source: InventoryId,
+        destination: InventoryId,
+        quantity: Quantity,
+    },
+    Taken {
+        incident: IncidentId,
+        actor: PersonId,
+        source: InventoryId,
+        destination: InventoryId,
+        quantity: Quantity,
+    },
+    TakingInterrupted {
+        incident: IncidentId,
+        actor: PersonId,
+    },
+    IncidentReported {
+        sender: PersonId,
+        recipient: PersonId,
+        incident: IncidentId,
+    },
+    AccessRequested {
+        actor: PersonId,
+        custodian: PersonId,
+        inventory: InventoryId,
+    },
+    AccessRefused {
+        actor: PersonId,
+        custodian: PersonId,
+        inventory: InventoryId,
+    },
     AgreementProposed {
         agreement: AgreementId,
         proposer: PersonId,
@@ -594,6 +687,8 @@ pub struct FieldView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineageView {
+    pub invocation_learning: u64,
+    pub invocation_ready: bool,
     pub current: Option<PersonId>,
     pub incarnations: Vec<PersonId>,
     pub waiting_since: Option<SimTime>,
@@ -601,6 +696,9 @@ pub struct LineageView {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuardianSearchView {
+    pub ready: bool,
+    pub assessment: String,
+    pub explanation: String,
     pub guardian: PersonId,
     pub location: Location,
     pub goal: GuardianGoalView,
@@ -613,4 +711,17 @@ pub enum GuardianGoalView {
     Mentoring,
     Confined,
     Recovering,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LessonTopic {
+    Invocation,
+    Craft,
+    Travel,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuardianRequest {
+    Move { destination: AreaId },
+    Rest,
+    Work { site: SiteId },
 }

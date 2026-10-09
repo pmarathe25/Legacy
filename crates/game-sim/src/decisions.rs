@@ -336,6 +336,8 @@ impl Simulation {
             return Ok(());
         };
         self.observe_local_facts();
+        self.observe_property();
+        self.review_property_sharing();
         self.review_lineage()?;
         self.review_agreements()?;
         self.review_conception()?;
@@ -436,6 +438,9 @@ impl Simulation {
                 | Activity::Express { .. }
                 | Activity::Play { .. }
                 | Activity::Cultivate { .. }
+                | Activity::Take { .. }
+                | Activity::ReportIncident { .. }
+                | Activity::Lesson { .. }
         ) || matches!(actor.activity, Activity::Work { .. }) && !urgent
         {
             return none();
@@ -454,6 +459,9 @@ impl Simulation {
                 },
             ))
         };
+        if let Some(command) = self.property_candidate(id) {
+            add(command, Goal::Survival, 9_000, 0, 0);
+        }
         if !p.hunger_exempt && urgent {
             for fact in mind.knowledge.values().filter(|f| {
                 f.good == Good::Food && f.accessible && f.quantity >= physical.rules.meal_size

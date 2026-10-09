@@ -65,6 +65,415 @@ fn quiet_other_caregivers(sim: &mut Simulation, child: PersonId) {
     }
 }
 
+fn child_for_mentorship(workers: usize) -> Simulation {
+    let mut sim = fixture(workers);
+    kill_ruler(&mut sim);
+    sim.advance(SimDuration(900_000)).unwrap();
+    let child = sim.canonical_state().ruler;
+    quiet_other_caregivers(&mut sim, child);
+    send(
+        &mut sim,
+        Command::Signal {
+            preference: ChildhoodInterest::Food,
+        },
+    );
+    sim.advance(SimDuration(300_000)).unwrap();
+    assert_eq!(sim.observe().life_stage, Some(LifeStage::Child));
+    sim
+}
+
+fn send(sim: &mut Simulation, command: Command) {
+    sim.submit(Submission {
+        caller_sequence: sim.next_caller_sequence().unwrap(),
+        command,
+    })
+    .unwrap();
+}
+
+#[test]
+fn guided_childhood_learning_takes_two_real_primary_actions_and_does_not_grant_readiness() {
+    let mut sim = child_for_mentorship(1);
+    let child = sim.canonical_state().ruler;
+    let teacher = guardians(&sim)[0];
+    assert!(
+        sim.observe()
+            .lineage
+            .unwrap()
+            .guardians
+            .iter()
+            .all(|g| !g.ready)
+    );
+    assert!(!sim.observe().lineage.unwrap().invocation_ready);
+    assert!(sim.observe().available_commands.contains(&Command::Learn {
+        teacher,
+        topic: LessonTopic::Invocation
+    }));
+    send(
+        &mut sim,
+        Command::Learn {
+            teacher,
+            topic: LessonTopic::Invocation,
+        },
+    );
+    for actor in [child, teacher] {
+        assert!(matches!(
+            sim.canonical_state().physical.as_ref().unwrap().actors[&actor].activity,
+            Activity::Lesson { .. }
+        ));
+    }
+    let pending = sim.canonical_state().clone();
+    let other_teacher = guardians(&sim)[1];
+    assert!(
+        sim.submit(Submission {
+            caller_sequence: sim.next_caller_sequence().unwrap(),
+            command: Command::RequestGuardian {
+                guardian: other_teacher,
+                request: GuardianRequest::Rest
+            },
+        })
+        .is_err()
+    );
+    assert_eq!(sim.canonical_state(), &pending);
+    sim.advance(SimDuration(59_999)).unwrap();
+    assert_eq!(sim.observe().lineage.unwrap().invocation_learning, 0);
+    sim.advance(SimDuration(1)).unwrap();
+    assert_eq!(sim.observe().lineage.unwrap().invocation_learning, 100);
+    assert!(!sim.observe().lineage.unwrap().invocation_ready);
+    send(
+        &mut sim,
+        Command::Learn {
+            teacher,
+            topic: LessonTopic::Invocation,
+        },
+    );
+    sim.advance(MINUTE).unwrap();
+    let view = sim.observe().lineage.unwrap();
+    assert_eq!(view.invocation_learning, 200);
+    assert!(view.invocation_ready);
+    assert!(view.guardians.iter().all(|g| !g.ready));
+    assert_eq!(sim.canonical_state().events.iter().filter(|event| matches!(event.kind,
+        EventKind::LessonCompleted { student, topic: LessonTopic::Invocation, gain: 100, .. } if student == child)).count(), 2);
+}
+
+#[test]
+fn interrupting_either_lesson_participant_discards_unfinished_learning() {
+    for interrupt_teacher in [false, true] {
+        let mut sim = child_for_mentorship(1);
+        let child = sim.canonical_state().ruler;
+        let teacher = guardians(&sim)[0];
+        send(
+            &mut sim,
+            Command::Learn {
+                teacher,
+                topic: LessonTopic::Invocation,
+            },
+        );
+        sim.advance(SimDuration(30_000)).unwrap();
+        if interrupt_teacher {
+            sim.debug_physical_command(teacher, Command::Cancel)
+                .unwrap();
+        } else {
+            send(
+                &mut sim,
+                Command::Move {
+                    destination: AreaId(2),
+                },
+            );
+        }
+        assert!(!matches!(
+            sim.canonical_state().physical.as_ref().unwrap().actors[&teacher].activity,
+            Activity::Lesson { .. }
+        ));
+        assert!(!matches!(
+            sim.canonical_state().physical.as_ref().unwrap().actors[&child].activity,
+            Activity::Lesson { .. }
+        ));
+        sim.advance(SimDuration(90_000)).unwrap();
+        assert_eq!(
+            sim.canonical_state()
+                .lineage
+                .as_ref()
+                .unwrap()
+                .invocation_learning
+                .get(&child)
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+        assert!(
+            !sim.canonical_state()
+                .events
+                .iter()
+                .any(|event| matches!(event.kind,
+            EventKind::LessonCompleted { student, .. } if student == child))
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+}
+
+#[test]
+fn guardians_disagree_from_observed_conduct_and_do_not_credit_unseen_practice() {
+    let mut sim = child_for_mentorship(1);
+    let child = sim.canonical_state().ruler;
+    let observers = guardians(&sim);
+    sim.debug_set_personality(observers[0], Personality::restful(), Dream::SupportOthers)
+        .unwrap();
+    sim.debug_set_personality(
+        observers[1],
+        Personality::industrious(),
+        Dream::SupportOthers,
+    )
+    .unwrap();
+    send(
+        &mut sim,
+        Command::Play {
+            interest: ChildhoodInterest::Craft,
+        },
+    );
+    sim.advance(MINUTE).unwrap();
+    send(
+        &mut sim,
+        Command::Move {
+            destination: AreaId(2),
+        },
+    );
+    let world = sim.canonical_state().lineage.as_ref().unwrap();
+    let flexible = &world.guardians[&observers[0]].assessments[&child];
+    let careful = &world.guardians[&observers[1]].assessments[&child];
+    assert!(flexible.ready);
+    assert!(!careful.ready);
+    assert_eq!(flexible.independence, careful.independence);
+    assert_eq!(flexible.competence, careful.competence);
+    assert_ne!(flexible.explanation, careful.explanation);
+
+    let mut unseen = child_for_mentorship(1);
+    let child = unseen.canonical_state().ruler;
+    for observer in guardians(&unseen) {
+        unseen.debug_move_actor(observer, AreaId(3)).unwrap();
+    }
+    send(
+        &mut unseen,
+        Command::Play {
+            interest: ChildhoodInterest::Craft,
+        },
+    );
+    unseen.advance(SimDuration(360_000)).unwrap();
+    assert_eq!(
+        unseen.observe().interests,
+        vec![(ChildhoodInterest::Craft, 100)]
+    );
+    assert!(
+        unseen
+            .canonical_state()
+            .lineage
+            .as_ref()
+            .unwrap()
+            .guardians
+            .values()
+            .all(|g| g.assessments[&child].competence == 0 && !g.assessments[&child].ready)
+    );
+}
+
+#[test]
+fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
+    let mut sim = child_for_mentorship(1);
+    let child = sim.canonical_state().ruler;
+    let guardian = guardians(&sim)[0];
+    sim.debug_set_personality(guardian, Personality::restful(), Dream::SupportOthers)
+        .unwrap();
+    let food = sim
+        .debug_add_inventory(
+            Good::Food,
+            InventoryLocation::Carried(child),
+            Quantity(1_000),
+            Quantity(1_000),
+            std::collections::BTreeSet::from([child]),
+        )
+        .unwrap();
+    send(
+        &mut sim,
+        Command::Play {
+            interest: ChildhoodInterest::Craft,
+        },
+    );
+    sim.advance(MINUTE).unwrap();
+    send(&mut sim, Command::Eat { source: food });
+    sim.advance(MINUTE).unwrap();
+    assert!(
+        sim.canonical_state().lineage.as_ref().unwrap().guardians[&guardian].assessments[&child]
+            .ready
+    );
+    let site = sim
+        .canonical_state()
+        .physical
+        .as_ref()
+        .unwrap()
+        .sites
+        .values()
+        .find(|site| site.area == AreaId(1))
+        .unwrap()
+        .id;
+    send(
+        &mut sim,
+        Command::RequestGuardian {
+            guardian,
+            request: GuardianRequest::Work { site },
+        },
+    );
+    assert!(matches!(
+        sim.canonical_state().physical.as_ref().unwrap().actors[&guardian].activity,
+        Activity::Work { .. }
+    ));
+    sim.advance(MINUTE).unwrap();
+    assert!(sim.canonical_state().events.iter().any(|event| matches!(event.kind, EventKind::Produced { actor, site: source, .. } if actor == guardian && source == site)));
+    assert!(
+        sim.canonical_state().lineage.as_ref().unwrap().guardians[&guardian]
+            .assignment
+            .is_none()
+    );
+    let mut save: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+    save["state"]["physical"]["sites"][site.0.to_string()]["access"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|id| id != &serde_json::json!(guardian.0));
+    save["state"]["decisions"]["minds"][guardian.0.to_string()]["sites"][site.0.to_string()]["access"] =
+        serde_json::json!(false);
+    let mut restricted =
+        Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
+    let stocks = restricted.canonical_state().inventories.clone();
+    send(
+        &mut restricted,
+        Command::RequestGuardian {
+            guardian,
+            request: GuardianRequest::Work { site },
+        },
+    );
+    assert_eq!(restricted.canonical_state().inventories, stocks);
+    assert!(
+        matches!(restricted.canonical_state().events.last().unwrap().kind, EventKind::GuardianRefused { guardian: person, .. } if person == guardian)
+    );
+    assert_eq!(
+        restricted
+            .canonical_state()
+            .lineage
+            .as_ref()
+            .unwrap()
+            .guardians[&guardian]
+            .target,
+        Some(child)
+    );
+    assert!(
+        restricted
+            .observe()
+            .lineage
+            .unwrap()
+            .guardians
+            .iter()
+            .find(|g| g.guardian == guardian)
+            .unwrap()
+            .explanation
+            .contains("permissions")
+    );
+}
+
+#[test]
+fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknown_craft() {
+    let sim = child_for_mentorship(1);
+    let child = sim.canonical_state().ruler;
+    let teacher = guardians(&sim)[0];
+    let mut save: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+    save["state"]["decisions"]["minds"][teacher.0.to_string()]["routes"]
+        .as_object_mut()
+        .unwrap()
+        .remove("3");
+    let mut sim =
+        Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
+    assert!(
+        !sim.canonical_state().decisions.as_ref().unwrap().minds[&child]
+            .routes
+            .contains_key(&AreaId(2))
+    );
+    send(
+        &mut sim,
+        Command::Learn {
+            teacher,
+            topic: LessonTopic::Travel,
+        },
+    );
+    sim.advance(MINUTE).unwrap();
+    let routes = &sim.canonical_state().decisions.as_ref().unwrap().minds[&child].routes;
+    assert!(routes.contains_key(&AreaId(2)));
+    assert!(!routes.contains_key(&AreaId(3)));
+    assert_eq!(sim.observe().lineage.unwrap().invocation_learning, 0);
+    send(
+        &mut sim,
+        Command::Learn {
+            teacher,
+            topic: LessonTopic::Craft,
+        },
+    );
+    let view = sim.observe().lineage.unwrap();
+    assert!(
+        view.guardians
+            .iter()
+            .find(|g| g.guardian == teacher)
+            .unwrap()
+            .explanation
+            .contains("cannot teach")
+    );
+    assert!(sim.observe().interests.is_empty());
+}
+
+#[test]
+fn pending_coupled_lessons_preserve_exactly_once_learning_across_workers_saves_and_queries() {
+    let mut a = child_for_mentorship(1);
+    let teacher = guardians(&a)[0];
+    let child = a.canonical_state().ruler;
+    send(
+        &mut a,
+        Command::Learn {
+            teacher,
+            topic: LessonTopic::Invocation,
+        },
+    );
+    a.advance(SimDuration(30_000)).unwrap();
+    let saved = a.save().unwrap();
+    let mut invalid: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    invalid["state"]["physical"]["actors"][child.0.to_string()]["activity"]["Lesson"]["topic"] =
+        serde_json::json!("Travel");
+    assert!(
+        Simulation::load(&serde_json::to_vec(&invalid).unwrap(), Execution::default()).is_err()
+    );
+    let mut b = Simulation::load(
+        &saved,
+        Execution {
+            workers: 4,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    let before = a.canonical_state().clone();
+    for _ in 0..100 {
+        a.observe();
+    }
+    assert_eq!(a.canonical_state(), &before);
+    a.advance(SimDuration(90_000)).unwrap();
+    for dt in [1, 29_999, 60_000] {
+        b.advance(SimDuration(dt)).unwrap();
+    }
+    assert_eq!(a.canonical_state(), b.canonical_state());
+    assert_eq!(a.observe().lineage.unwrap().invocation_learning, 100);
+    assert_eq!(
+        a.canonical_state()
+            .events
+            .iter()
+            .filter(|event| matches!(event.kind,
+        EventKind::LessonCompleted { student, .. } if student == child))
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn guardian_spectating_exists_only_in_the_gap_and_never_reveals_a_future_child() {
     let mut sim = fixture(1);

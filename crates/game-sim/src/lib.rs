@@ -10,6 +10,7 @@ pub mod environment;
 pub mod lineage;
 mod persistence;
 pub mod physical;
+pub mod property;
 pub mod session;
 #[doc(hidden)]
 pub mod transactions;
@@ -133,6 +134,8 @@ pub struct CanonicalState {
     pub agreements: Option<agreements::World>,
     #[serde(default)]
     pub lineage: Option<lineage::World>,
+    #[serde(default)]
+    pub property: Option<property::World>,
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
@@ -199,11 +202,19 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "property-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
+        if scenario == "property-fixture" {
+            return Self::property_fixture(seed, execution);
+        }
         if scenario == "lineage-fixture" {
             return Self::lineage_fixture(seed, execution);
         }
@@ -265,6 +276,7 @@ impl Simulation {
             environment: None,
             agreements: None,
             lineage: None,
+            property: None,
         };
         for name in ["village", "farm", "forest"] {
             let id = AreaId(allocate(&mut state)?);
@@ -576,6 +588,8 @@ impl Simulation {
         }
         available_commands.extend(self.available_cultivation(ruler.id));
         available_commands.extend(self.available_agreement_commands(ruler.id));
+        available_commands.extend(self.available_property_commands(ruler.id));
+        available_commands.extend(self.available_lesson_commands(ruler.id));
         if self.in_combat(ruler.id) {
             available_commands.clear();
             if let Some(view) = self.tactical_view()
@@ -627,6 +641,7 @@ impl Simulation {
             }
         }
         PlayerView {
+            property: self.property_view(ruler.id),
             lineage: self.lineage_view(),
             agreements: self.agreement_view(ruler.id),
             environment: self.environment_view(ruler.id),
@@ -686,7 +701,13 @@ impl Simulation {
             .into_iter()
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>();
+        let learning = current
+            .and_then(|id| world.invocation_learning.get(&id))
+            .copied()
+            .unwrap_or(0);
         Some(LineageView {
+            invocation_learning: learning,
+            invocation_ready: learning >= world.rules.invocation_access_threshold,
             current,
             incarnations: world.incarnations.iter().map(|life| life.person).collect(),
             waiting_since: world.waiting.as_ref().map(|w| w.died_at),
@@ -695,6 +716,16 @@ impl Simulation {
                 .iter()
                 .filter(|(id, _)| current.is_none() || local.contains(id))
                 .map(|(id, guardian)| GuardianSearchView {
+                    ready: current
+                        .and_then(|id| guardian.assessments.get(&id))
+                        .is_some_and(|a| a.ready),
+                    assessment: current
+                        .and_then(|id| guardian.assessments.get(&id))
+                        .map_or_else(
+                            || "Readiness remains unassessed".into(),
+                            |a| a.explanation.clone(),
+                        ),
+                    explanation: guardian.explanation.clone(),
                     guardian: *id,
                     location: self.state.people[self.person_index[id]].location.clone(),
                     target: guardian.target,
@@ -1154,6 +1185,7 @@ impl Simulation {
                 self.complete_development(event);
             }
         }
+        self.update_property_events();
         self.reconcile_agreements()?;
         self.learn_from_work();
         if self.state.time.0.is_multiple_of(60_000) {
@@ -1322,6 +1354,7 @@ impl Simulation {
             .map(|_| ())
     }
     fn emit(&mut self, kind: EventKind) {
+        self.witness_lineage_event(&kind);
         let id = EventId(self.state.next_event);
         self.state.next_event += 1;
         self.state.events.push(Event {

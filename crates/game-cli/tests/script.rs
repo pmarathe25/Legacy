@@ -489,3 +489,107 @@ fn session_stops_at_successor_birth_and_switches_to_the_newborns_real_agency() {
         Some(ChildhoodInterest::Food)
     );
 }
+
+#[test]
+fn text_client_exposes_refusal_and_resistance_without_granting_goods() {
+    let mut sim = Simulation::new("property-fixture", 1, Execution::default()).unwrap();
+    let execution = Execution::default();
+    let view = sim.observe();
+    let source = view
+        .physical
+        .unwrap()
+        .local_stocks
+        .iter()
+        .find(|s| s.good == Good::Food && !s.can_access && s.quantity.0 >= 1_000)
+        .unwrap()
+        .id;
+    let cargo = sim
+        .canonical_state()
+        .people
+        .iter()
+        .find(|p| p.id == view.ruler)
+        .unwrap()
+        .inventory;
+    game_cli::execute(
+        &mut sim,
+        &format!("request-access {}", source.0),
+        &execution,
+    )
+    .unwrap();
+    assert!(
+        !sim.observe()
+            .physical
+            .unwrap()
+            .local_stocks
+            .iter()
+            .find(|s| s.id == source)
+            .unwrap()
+            .can_access
+    );
+    let stock = sim.canonical_state().inventories[&source].quantity;
+    game_cli::execute(
+        &mut sim,
+        &format!("take {} {} 1000", source.0, cargo.0),
+        &execution,
+    )
+    .unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    assert_eq!(
+        view.property.incidents[0].outcome,
+        IncidentOutcome::Interrupted
+    );
+    assert!(view.combat.is_some());
+    assert_eq!(sim.canonical_state().inventories[&source].quantity, stock);
+    assert_eq!(
+        sim.canonical_state().inventories[&cargo].quantity,
+        Quantity(0)
+    );
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}
+
+#[test]
+fn childhood_guidance_requires_completed_lessons_in_the_text_client() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("lineage-fixture", 1, execution.clone()).unwrap();
+    sim.debug_injure(
+        sim.observe().ruler,
+        sim.canonical_state()
+            .physical
+            .as_ref()
+            .unwrap()
+            .rules
+            .max_health,
+    )
+    .unwrap();
+    game_cli::execute(&mut sim, "run 5m", &execution).unwrap();
+    game_cli::execute(&mut sim, "signal food", &execution).unwrap();
+    game_cli::execute(&mut sim, "run 5m", &execution).unwrap();
+    let teacher = sim
+        .observe()
+        .available_commands
+        .iter()
+        .find_map(|c| match c {
+            Command::Learn {
+                teacher,
+                topic: LessonTopic::Invocation,
+            } => Some(*teacher),
+            _ => None,
+        })
+        .unwrap();
+    for expected in [100, 200] {
+        game_cli::execute(
+            &mut sim,
+            &format!("learn {} invocation", teacher.0),
+            &execution,
+        )
+        .unwrap();
+        let before = sim.observe().lineage.unwrap().invocation_learning;
+        game_cli::execute(&mut sim, "run 59999ms", &execution).unwrap();
+        assert_eq!(sim.observe().lineage.unwrap().invocation_learning, before);
+        game_cli::execute(&mut sim, "run 1ms", &execution).unwrap();
+        assert_eq!(sim.observe().lineage.unwrap().invocation_learning, expected);
+    }
+    assert!(sim.observe().lineage.unwrap().invocation_ready);
+    Simulation::load(&sim.save().unwrap(), execution).unwrap();
+}

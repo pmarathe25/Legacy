@@ -257,6 +257,18 @@ impl Simulation {
         command: Command,
     ) -> Result<(), Error> {
         self.preflight_agreements()?;
+        if let Command::Learn { teacher, topic } = command {
+            return self.start_lesson(actor, teacher, topic);
+        }
+        if let Command::RequestGuardian { guardian, request } = command {
+            return self.request_guardian(actor, guardian, request);
+        }
+        if let Command::Property { action } = command {
+            self.debug_property_action(actor, action)?;
+            self.update_property_events();
+            self.reconcile_agreements()?;
+            return Ok(());
+        }
         if let Command::Agreement { ref action } = command {
             self.agreement_command(actor, action)?;
             self.revision += 1;
@@ -662,12 +674,15 @@ impl Simulation {
                 .or_default()
                 .push(Due::Physical(actor));
         }
+        self.update_property_events();
         self.reconcile_agreements()?;
         self.revision += 1;
         Ok(())
     }
 
     pub(crate) fn interrupt_physical(&mut self, actor: PersonId) {
+        self.interrupt_lesson(actor);
+        self.interrupt_property_action(actor);
         self.interrupt_cultivation(actor);
         self.invalidate_pregnancies(actor, false);
         if let Some(world) = &mut self.state.physical {
@@ -766,6 +781,7 @@ impl Simulation {
                 a.activity,
                 Activity::Work { .. }
                     | Activity::Load { .. }
+                    | Activity::Take { .. }
                     | Activity::Play { .. }
                     | Activity::Cultivate { .. }
             ) {
@@ -799,6 +815,7 @@ impl Simulation {
                     a.activity,
                     Activity::Work { .. }
                         | Activity::Load { .. }
+                        | Activity::Take { .. }
                         | Activity::Combat { .. }
                         | Activity::Play { .. }
                         | Activity::Cultivate { .. }
@@ -855,6 +872,17 @@ impl Simulation {
             .activity
             .clone();
         let mut success = false;
+        if matches!(activity, Activity::Lesson { .. }) {
+            self.complete_lesson(actor);
+            return;
+        }
+        if matches!(
+            activity,
+            Activity::Take { .. } | Activity::ReportIncident { .. }
+        ) {
+            self.complete_property_action(actor);
+            return;
+        }
         if matches!(activity, Activity::Cultivate { .. }) {
             self.complete_cultivation(actor);
             return;
@@ -1123,6 +1151,7 @@ impl Simulation {
                     previous.activity,
                     Activity::Work { .. }
                         | Activity::Load { .. }
+                        | Activity::Take { .. }
                         | Activity::Play { .. }
                         | Activity::Cultivate { .. }
                 );
@@ -1203,6 +1232,19 @@ impl Simulation {
     }
 
     pub fn debug_add_inventory(
+        &mut self,
+        good: Good,
+        location: InventoryLocation,
+        quantity: Quantity,
+        capacity: Quantity,
+        access: BTreeSet<PersonId>,
+    ) -> Result<InventoryId, Error> {
+        let id = self.add_inventory(good, location, quantity, capacity, access)?;
+        self.update_property_events();
+        Ok(id)
+    }
+
+    pub(crate) fn add_inventory(
         &mut self,
         good: Good,
         location: InventoryLocation,

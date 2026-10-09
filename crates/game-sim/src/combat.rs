@@ -275,6 +275,7 @@ impl Simulation {
             }
             _ => return Err(Error::Unavailable),
         }
+        self.update_property_events();
         self.reconcile_agreements()?;
         let receipt = CommandReceipt {
             caller_sequence: submission.caller_sequence,
@@ -694,7 +695,7 @@ impl Simulation {
                 let source = self.binding_stock(actor).unwrap();
                 self.state.inventories.get_mut(&source).unwrap().quantity.0 -= 1_000;
                 let binding = self
-                    .debug_add_inventory(
+                    .add_inventory(
                         Good::Binding,
                         InventoryLocation::Area(area),
                         Quantity(1_000),

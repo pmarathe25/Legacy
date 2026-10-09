@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 8;
+const SAVE_VERSION: u32 = 9;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, 4, 5, 6, 7, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, 5, 6, 7, 8, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -71,6 +71,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "farming-fixture"
             | "agreement-fixture"
             | "lineage-fixture"
+            | "property-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -83,6 +84,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "farming-fixture"
                 | "agreement-fixture"
                 | "lineage-fixture"
+                | "property-fixture"
         ) != s.decisions.is_some()
         || matches!(
             s.scenario.id.as_str(),
@@ -91,12 +93,19 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 | "childhood-fixture"
                 | "farming-fixture"
                 | "lineage-fixture"
+                | "property-fixture"
         ) != s.development.is_some()
-        || matches!(s.scenario.id.as_str(), "combat-fixture" | "lineage-fixture")
-            != s.combat.is_some()
+        || matches!(
+            s.scenario.id.as_str(),
+            "combat-fixture" | "lineage-fixture" | "property-fixture"
+        ) != s.combat.is_some()
         || (s.scenario.id == "farming-fixture") != s.environment.is_some()
-        || (s.scenario.id == "agreement-fixture") != s.agreements.is_some()
+        || matches!(
+            s.scenario.id.as_str(),
+            "agreement-fixture" | "property-fixture"
+        ) != s.agreements.is_some()
         || (s.scenario.id == "lineage-fixture") != s.lineage.is_some()
+        || (s.scenario.id == "property-fixture") != s.property.is_some()
     {
         return Err(fail());
     }
@@ -115,6 +124,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if let Some(world) = &s.physical {
         for id in world.sites.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
+    if let Some(world) = &s.property {
+        for id in world
+            .claims
+            .keys()
+            .map(|id| id.0)
+            .chain(world.incidents.keys().map(|id| id.0))
+        {
+            if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
@@ -235,7 +256,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -565,6 +586,125 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
+            EventKind::LessonCompleted {
+                teacher,
+                student,
+                gain,
+                ..
+            } => {
+                if !people.contains_key(&teacher) || !people.contains_key(&student) || gain > 1_000
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::GuardianRefused {
+                guardian,
+                requester,
+                ..
+            } => {
+                if !people.contains_key(&guardian) || !people.contains_key(&requester) {
+                    return Err(fail());
+                }
+            }
+            EventKind::PropertyClaimed {
+                claim,
+                actor,
+                inventory,
+            } => {
+                if !people.contains_key(&actor)
+                    || !s.inventories.contains_key(&inventory)
+                    || !s
+                        .property
+                        .as_ref()
+                        .is_some_and(|w| w.claims.contains_key(&claim))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::ClaimRecognized { claim, actor, .. } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .property
+                        .as_ref()
+                        .is_some_and(|w| w.claims.contains_key(&claim))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::PermissionShared {
+                actor,
+                recipient,
+                inventory,
+                ..
+            }
+            | EventKind::AccessRequested {
+                actor,
+                custodian: recipient,
+                inventory,
+            }
+            | EventKind::AccessRefused {
+                actor,
+                custodian: recipient,
+                inventory,
+            } => {
+                if !people.contains_key(&actor)
+                    || !people.contains_key(&recipient)
+                    || !s.inventories.contains_key(&inventory)
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::TakingAttempted {
+                incident,
+                actor,
+                source,
+                destination,
+                quantity,
+            }
+            | EventKind::Taken {
+                incident,
+                actor,
+                source,
+                destination,
+                quantity,
+            } => {
+                if quantity.0 == 0
+                    || !people.contains_key(&actor)
+                    || !s.inventories.contains_key(&source)
+                    || !s.inventories.contains_key(&destination)
+                    || !s
+                        .property
+                        .as_ref()
+                        .is_some_and(|w| w.incidents.contains_key(&incident))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::TakingInterrupted { incident, actor } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .property
+                        .as_ref()
+                        .is_some_and(|w| w.incidents.contains_key(&incident))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::IncidentReported {
+                incident,
+                sender,
+                recipient,
+            } => {
+                if !people.contains_key(&sender)
+                    || !people.contains_key(&recipient)
+                    || !s
+                        .property
+                        .as_ref()
+                        .is_some_and(|w| w.incidents.contains_key(&incident))
+                {
+                    return Err(fail());
+                }
+            }
             EventKind::AgreementProposed {
                 agreement,
                 proposer,
@@ -762,6 +902,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     development::validate(s)?;
     combat::validate(s)?;
     lineage::validate(s)?;
+    property::validate(s)?;
     Ok(())
 }
 
@@ -848,6 +989,9 @@ fn validate_physical(
                 | Activity::Comfort { .. }
                 | Activity::Express { .. }
                 | Activity::Play { .. }
+                | Activity::Lesson { .. }
+                | Activity::Take { .. }
+                | Activity::ReportIncident { .. }
                 | Activity::Cultivate { .. }
         );
         if timed != deadlines.contains(id) {
