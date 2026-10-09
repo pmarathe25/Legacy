@@ -60,6 +60,15 @@ pub enum Command {
     FreeCaptive {
         target: PersonId,
     },
+    Comfort {
+        child: PersonId,
+    },
+    Signal {
+        preference: ChildhoodInterest,
+    },
+    Play {
+        interest: ChildhoodInterest,
+    },
     CombatTurn {
         encounter: EncounterId,
         movement: Option<Point>,
@@ -139,6 +148,9 @@ pub struct PlayerView {
     pub nearby_people: Vec<(PersonId, Role)>,
     pub nearby_life_stages: Vec<(PersonId, LifeStage)>,
     pub combat: Option<TacticalView>,
+    pub interests: Vec<(ChildhoodInterest, u64)>,
+    pub life_stage: Option<LifeStage>,
+    pub preference: Option<ChildhoodInterest>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -160,6 +172,10 @@ pub struct Vitals {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Comfort {
+        child: PersonId,
+        completes: SimTime,
+    },
     Idle,
     Rest,
     Eat {
@@ -194,6 +210,14 @@ pub enum Activity {
     },
     Unbind {
         target: PersonId,
+        completes: SimTime,
+    },
+    Express {
+        preference: ChildhoodInterest,
+        completes: SimTime,
+    },
+    Play {
+        interest: ChildhoodInterest,
         completes: SimTime,
     },
 }
@@ -242,6 +266,19 @@ pub struct StockKnowledge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    Comforted {
+        caregiver: PersonId,
+        child: PersonId,
+    },
+    Expressed {
+        actor: PersonId,
+        preference: ChildhoodInterest,
+    },
+    Practiced {
+        actor: PersonId,
+        interest: ChildhoodInterest,
+        gain: u64,
+    },
     EncounterStarted {
         encounter: EncounterId,
         area: AreaId,
@@ -371,6 +408,14 @@ pub enum LifeStage {
     Child,
     Adult,
     Elder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ChildhoodInterest {
+    Food,
+    Company,
+    Movement,
+    Craft,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

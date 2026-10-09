@@ -273,10 +273,13 @@ impl Simulation {
         if self.in_combat(actor) {
             return Err(Error::Unavailable);
         }
-        if !self.independent(actor) {
+        if !self.independent(actor) && !matches!(command, Command::Signal { .. } | Command::Cancel)
+        {
             return Err(Error::Unavailable);
         }
-        if self.care_index.contains_key(&actor) {
+        if self.care_index.contains_key(&actor)
+            && !matches!(command, Command::Signal { .. } | Command::Cancel)
+        {
             return Err(Error::Unavailable);
         }
         let world = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
@@ -290,6 +293,64 @@ impl Simulation {
         };
         let rules = &world.rules;
         let (activity, new_job, consume) = match command {
+            Command::Signal { preference } => {
+                let life = self
+                    .state
+                    .development
+                    .as_ref()
+                    .and_then(|w| w.lives.get(&actor))
+                    .ok_or(Error::Unavailable)?;
+                if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
+                    || !matches!(
+                        preference,
+                        ChildhoodInterest::Food | ChildhoodInterest::Company
+                    )
+                {
+                    return Err(Error::Unavailable);
+                }
+                let completes = SimTime(
+                    self.state
+                        .time
+                        .0
+                        .checked_add(6_000)
+                        .ok_or(Error::Overflow)?,
+                );
+                completes.0.checked_add(300_000).ok_or(Error::Overflow)?;
+                (
+                    Activity::Express {
+                        preference,
+                        completes,
+                    },
+                    None,
+                    None,
+                )
+            }
+            Command::Play { interest } => {
+                let life = self
+                    .state
+                    .development
+                    .as_ref()
+                    .and_then(|w| w.lives.get(&actor))
+                    .ok_or(Error::Unavailable)?;
+                if life.stage != LifeStage::Child || a.vitals.fatigue >= rules.fatigue_limit {
+                    return Err(Error::Unavailable);
+                }
+                let completes = SimTime(
+                    self.state
+                        .time
+                        .0
+                        .checked_add(MINUTE.0)
+                        .ok_or(Error::Overflow)?,
+                );
+                (
+                    Activity::Play {
+                        interest,
+                        completes,
+                    },
+                    None,
+                    None,
+                )
+            }
             Command::Rest => (Activity::Rest, None, None),
             Command::Cancel => (Activity::Idle, None, None),
             Command::FreeCaptive { target } => {
@@ -304,6 +365,31 @@ impl Simulation {
                         .ok_or(Error::Overflow)?,
                 );
                 (Activity::Unbind { target, completes }, None, None)
+            }
+            Command::Comfort { child } => {
+                let life = self
+                    .state
+                    .development
+                    .as_ref()
+                    .and_then(|w| w.lives.get(&child))
+                    .ok_or(Error::Unavailable)?;
+                if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
+                    || child == actor
+                    || !world.actors[&child].vitals.alive
+                    || self.state.people[self.person_index[&child]].location
+                        != Location::AtArea(area)
+                    || self.care_index.contains_key(&child)
+                {
+                    return Err(Error::Unavailable);
+                }
+                let completes = SimTime(
+                    self.state
+                        .time
+                        .0
+                        .checked_add(MINUTE.0)
+                        .ok_or(Error::Overflow)?,
+                );
+                (Activity::Comfort { child, completes }, None, None)
             }
             Command::Care { child, source } => {
                 let life = self
@@ -475,6 +561,11 @@ impl Simulation {
                 )
             }
             Command::Work { site } => {
+                if self.state.development.as_ref().is_some_and(|w| {
+                    !matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)
+                }) {
+                    return Err(Error::Unavailable);
+                }
                 let site_record = world.sites.get(&site).ok_or(Error::Unavailable)?;
                 let input = &self.state.inventories[&site_record.input];
                 let tool = &self.state.inventories[&site_record.tool];
@@ -534,7 +625,7 @@ impl Simulation {
                 .knowledge
                 .insert(fact.inventory, fact.clone());
         }
-        if let Activity::Care { child, .. } = activity {
+        if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = activity {
             self.care_index.insert(child, actor);
         }
         if let Some(job) = new_job {
@@ -548,7 +639,10 @@ impl Simulation {
             | Activity::Load { completes, .. }
             | Activity::Tell { completes, .. }
             | Activity::Care { completes, .. }
-            | Activity::Unbind { completes, .. } => Some(completes),
+            | Activity::Unbind { completes, .. }
+            | Activity::Comfort { completes, .. }
+            | Activity::Express { completes, .. }
+            | Activity::Play { completes, .. } => Some(completes),
             _ => None,
         };
         if let Some(deadline) = deadline {
@@ -566,7 +660,7 @@ impl Simulation {
         self.invalidate_pregnancies(actor, false);
         if let Some(world) = &mut self.state.physical {
             let a = world.actors.get_mut(&actor).unwrap();
-            if let Activity::Care { child, .. } = a.activity {
+            if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = a.activity {
                 self.care_index.remove(&child);
             }
             a.activity = Activity::Idle;
@@ -656,7 +750,10 @@ impl Simulation {
                 }
                 dt = dt.min(until_harm.saturating_add(a.vitals.health));
             }
-            if matches!(a.activity, Activity::Work { .. } | Activity::Load { .. }) {
+            if matches!(
+                a.activity,
+                Activity::Work { .. } | Activity::Load { .. } | Activity::Play { .. }
+            ) {
                 dt = dt.min(world.rules.fatigue_limit.saturating_sub(a.vitals.fatigue));
             }
             if matches!(a.activity, Activity::Work { .. })
@@ -685,7 +782,10 @@ impl Simulation {
                 }
                 let exerting = matches!(
                     a.activity,
-                    Activity::Work { .. } | Activity::Load { .. } | Activity::Combat { .. }
+                    Activity::Work { .. }
+                        | Activity::Load { .. }
+                        | Activity::Combat { .. }
+                        | Activity::Play { .. }
                 ) || matches!(p.location, Location::InTransit { .. });
                 if exerting {
                     vitals.fatigue = vitals
@@ -747,6 +847,83 @@ impl Simulation {
             return;
         }
         match activity {
+            Activity::Comfort { child, .. } => {
+                self.care_index.remove(&child);
+                if self.state.physical.as_ref().unwrap().actors[&child]
+                    .vitals
+                    .alive
+                    && self.state.people[self.person_index[&child]].location
+                        == self.state.people[self.person_index[&actor]].location
+                {
+                    let life = self
+                        .state
+                        .development
+                        .as_mut()
+                        .unwrap()
+                        .lives
+                        .get_mut(&child)
+                        .unwrap();
+                    if life
+                        .preference
+                        .is_some_and(|(p, _)| p == ChildhoodInterest::Company)
+                    {
+                        life.preference = None;
+                    }
+                    let relationship = self
+                        .state
+                        .decisions
+                        .as_mut()
+                        .unwrap()
+                        .minds
+                        .get_mut(&child)
+                        .unwrap()
+                        .relationships
+                        .entry(actor)
+                        .or_insert(decisions::Relationship {
+                            trust: 0,
+                            affection: 0,
+                        });
+                    relationship.affection = (relationship.affection + 50).min(1_000);
+                    self.emit(EventKind::Comforted {
+                        caregiver: actor,
+                        child,
+                    });
+                    success = true;
+                }
+            }
+            Activity::Express { preference, .. } => {
+                self.state
+                    .development
+                    .as_mut()
+                    .unwrap()
+                    .lives
+                    .get_mut(&actor)
+                    .unwrap()
+                    .preference = Some((preference, SimTime(self.state.time.0 + 300_000)));
+                self.emit(EventKind::Expressed { actor, preference });
+                success = true;
+            }
+            Activity::Play { interest, .. } => {
+                let experience = self
+                    .state
+                    .decisions
+                    .as_mut()
+                    .unwrap()
+                    .minds
+                    .get_mut(&actor)
+                    .unwrap()
+                    .interests
+                    .entry(interest)
+                    .or_default();
+                let gain = 100_u64.min(1_000 - *experience);
+                *experience += gain;
+                self.emit(EventKind::Practiced {
+                    actor,
+                    interest,
+                    gain,
+                });
+                success = true;
+            }
             Activity::Eat { source, .. } => {
                 let quantity = self.state.physical.as_ref().unwrap().rules.meal_size;
                 if self.can_use(actor, &self.state.inventories[&source])
@@ -857,6 +1034,20 @@ impl Simulation {
                         });
                     relationship.trust = (relationship.trust + 50).min(1_000);
                     relationship.affection = (relationship.affection + 50).min(1_000);
+                    let life = self
+                        .state
+                        .development
+                        .as_mut()
+                        .unwrap()
+                        .lives
+                        .get_mut(&child)
+                        .unwrap();
+                    if life
+                        .preference
+                        .is_some_and(|(p, _)| p == ChildhoodInterest::Food)
+                    {
+                        life.preference = None;
+                    }
                     self.emit(EventKind::Cared {
                         caregiver: actor,
                         child,
@@ -910,7 +1101,7 @@ impl Simulation {
             let interrupted = vitals.fatigue >= rules.fatigue_limit
                 && matches!(
                     previous.activity,
-                    Activity::Work { .. } | Activity::Load { .. }
+                    Activity::Work { .. } | Activity::Load { .. } | Activity::Play { .. }
                 );
             let a = self
                 .state

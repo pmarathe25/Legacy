@@ -170,6 +170,11 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: true,
         },
+        ScenarioInfo {
+            id: "childhood-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
@@ -180,6 +185,9 @@ impl Simulation {
         }
         if scenario == "autonomy-fixture" {
             return Self::autonomy_fixture(seed, execution);
+        }
+        if scenario == "childhood-fixture" {
+            return Self::childhood_fixture(seed, execution);
         }
         if scenario == "combat-fixture" {
             return Self::combat_fixture(seed, execution);
@@ -341,7 +349,9 @@ impl Simulation {
             w.actors
                 .iter()
                 .filter_map(|(id, a)| {
-                    if let Activity::Care { child, .. } = a.activity {
+                    if let Activity::Care { child, .. } | Activity::Comfort { child, .. } =
+                        a.activity
+                    {
                         Some((child, *id))
                     } else {
                         None
@@ -393,8 +403,16 @@ impl Simulation {
             Location::AtArea(a) => a,
             Location::InTransit { to, .. } => to,
         };
-        // All three fixture links are authored ruler knowledge. No NPC or inventory
-        // internals are included in the normal observation.
+        let known_routes = self
+            .state
+            .decisions
+            .as_ref()
+            .map(|w| &w.minds[&ruler.id].routes);
+        let known_area = |id: AreaId| {
+            known_routes.is_none_or(|routes| {
+                routes.contains_key(&id) || routes.values().any(|links| links.contains_key(&id))
+            })
+        };
         let mut available_commands: Vec<_> = self
             .state
             .areas
@@ -404,7 +422,12 @@ impl Simulation {
                     || matches!(ruler.location, Location::InTransit { .. })
                         && !ruler.route.is_empty()
             })
-            .filter(|a| self.path(origin, a.id).is_ok())
+            .filter(|a| {
+                known_routes.map_or_else(
+                    || self.path(origin, a.id).is_ok(),
+                    |routes| decisions::known_path(routes, origin, a.id).is_ok(),
+                )
+            })
             .map(|a| Command::Move { destination: a.id })
             .collect();
         if let Some(world) = &self.state.physical {
@@ -452,6 +475,9 @@ impl Simulation {
                     }
                     if let Some(children) = self.dependent_index.get(&origin) {
                         for child in children {
+                            if *child != ruler.id {
+                                available_commands.push(Command::Comfort { child: *child });
+                            }
                             for source in view.local_stocks.iter().filter(|s| {
                                 s.good == Good::Food
                                     && s.can_access
@@ -463,6 +489,49 @@ impl Simulation {
                                 });
                             }
                         }
+                    }
+                }
+            }
+        }
+        if let Some(world) = &self.state.development {
+            let stage = world.lives[&ruler.id].stage;
+            if stage == LifeStage::Infant {
+                available_commands.clear();
+                if self.state.physical.as_ref().unwrap().actors[&ruler.id]
+                    .vitals
+                    .alive
+                {
+                    available_commands.push(Command::Cancel);
+                }
+            } else if stage == LifeStage::Child {
+                available_commands.retain(|c| !matches!(c, Command::Work { .. }));
+            }
+            if matches!(stage, LifeStage::Infant | LifeStage::Child)
+                && self.state.physical.as_ref().unwrap().actors[&ruler.id]
+                    .vitals
+                    .alive
+                && self.state.physical.as_ref().unwrap().actors[&ruler.id]
+                    .vitals
+                    .health
+                    > 0
+                && matches!(ruler.location, Location::AtArea(_))
+            {
+                for preference in [
+                    ChildhoodInterest::Food,
+                    ChildhoodInterest::Company,
+                    ChildhoodInterest::Movement,
+                    ChildhoodInterest::Craft,
+                ] {
+                    if matches!(
+                        preference,
+                        ChildhoodInterest::Food | ChildhoodInterest::Company
+                    ) {
+                        available_commands.push(Command::Signal { preference });
+                    }
+                    if stage == LifeStage::Child {
+                        available_commands.push(Command::Play {
+                            interest: preference,
+                        });
                     }
                 }
             }
@@ -526,6 +595,7 @@ impl Simulation {
                 .state
                 .areas
                 .iter()
+                .filter(|a| known_area(a.id))
                 .map(|a| AreaView {
                     id: a.id,
                     name: a.name.clone(),
@@ -537,6 +607,24 @@ impl Simulation {
                 w.minds[&ruler.id].knowledge.values().cloned().collect()
             }),
             combat: self.tactical_view(),
+            life_stage: self
+                .state
+                .development
+                .as_ref()
+                .map(|w| w.lives[&ruler.id].stage),
+            preference: self.state.development.as_ref().and_then(|w| {
+                w.lives[&ruler.id]
+                    .preference
+                    .filter(|(_, until)| *until >= self.state.time)
+                    .map(|(p, _)| p)
+            }),
+            interests: self.state.decisions.as_ref().map_or_else(Vec::new, |w| {
+                w.minds[&ruler.id]
+                    .interests
+                    .iter()
+                    .map(|(i, p)| (*i, *p))
+                    .collect()
+            }),
             nearby_people: self.nearby_people(0, 64),
             nearby_life_stages: self.state.development.as_ref().map_or_else(Vec::new, |w| {
                 self.nearby_people(0, 64)

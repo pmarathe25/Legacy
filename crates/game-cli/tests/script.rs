@@ -263,3 +263,30 @@ fn a_hosted_combat_run_returns_input_requests_instead_of_spinning() {
     assert_eq!(result.reached, SimTime(6_000));
     assert_eq!(result.reason, StopReason::CombatInput { encounter });
 }
+
+#[test]
+fn player_childhood_choices_are_playable_through_normal_views_and_text() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("childhood-fixture", 1, execution.clone()).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    assert_eq!(view.life_stage, Some(LifeStage::Infant));
+    assert!(view.available_commands.contains(&Command::Signal {
+        preference: ChildhoodInterest::Food
+    }));
+    game_cli::execute(&mut sim, "signal food", &execution).unwrap();
+    game_cli::execute(&mut sim, "run 5m", &execution).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    assert_eq!(view.life_stage, Some(LifeStage::Child));
+    game_cli::execute(&mut sim, "play craft", &execution).unwrap();
+    game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
+    let view: PlayerView =
+        serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
+    assert_eq!(view.interests, vec![(ChildhoodInterest::Craft, 100)]);
+    assert!(
+        view.known_areas
+            .iter()
+            .all(|a| [AreaId(1), AreaId(2), AreaId(3)].contains(&a.id))
+    );
+}

@@ -28,7 +28,7 @@ pub fn execute(
             *sim = loaded;
             Ok("loaded".into())
         }
-        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | conceive <partner> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
+        ["help"] => Ok("status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into()),
         _ => Err("unknown command; use help".into()),
     }
 }
@@ -141,9 +141,27 @@ fn parse_combat_turn(
 }
 
 fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::error::Error>> {
+    let interest = |name: &str| -> Result<ChildhoodInterest, Box<dyn std::error::Error>> {
+        match name {
+            "food" => Ok(ChildhoodInterest::Food),
+            "company" => Ok(ChildhoodInterest::Company),
+            "movement" => Ok(ChildhoodInterest::Movement),
+            "craft" => Ok(ChildhoodInterest::Craft),
+            _ => Err("unknown childhood interest".into()),
+        }
+    };
     let command = match words {
         ["move", area] => Command::Move {
             destination: AreaId(area.parse()?),
+        },
+        ["comfort", child] => Command::Comfort {
+            child: PersonId(child.parse()?),
+        },
+        ["signal", name] => Command::Signal {
+            preference: interest(name)?,
+        },
+        ["play", name] => Command::Play {
+            interest: interest(name)?,
         },
         ["rest"] => Command::Rest,
         ["cancel"] => Command::Cancel,
@@ -212,7 +230,7 @@ pub fn execute_session(
         ["run",duration] => return Ok(SessionOutput::Advancing(session.run(parse_duration(duration)?)?)),
         ["save",path] => { save_file(std::path::Path::new(path),&session.save()?)?; "saved".into() },
         ["load",path] => { session.load(std::fs::read(path)?)?; "loaded".into() },
-        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | conceive <partner> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
+        ["help"] => "status | pause | run <integer>[ms|s|m|h|d] | move <area-id> | rest | eat <stock-id> | load <source> <destination> <fixed-point quantity> | work <site-id> | tell <person> <known-stock> | signal <food|company> | play <interest> | conceive <partner> | comfort <child> | care <child> <food-stock> | engage <person> | combat | turn <encounter> <attack|capture|release|breach|retreat|defend|wait|surrender> [target] [x-mm y-mm] | free <captive> | cancel | debug (omniscient) | save <path> | load <path> | quit".into(),
         _ => return Err("unknown command; use help".into()),
     };
     Ok(SessionOutput::Text(text))

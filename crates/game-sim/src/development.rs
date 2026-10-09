@@ -41,6 +41,8 @@ pub struct Life {
     pub reproduction: Reproduction,
     pub parents: Vec<PersonId>,
     pub caregivers: BTreeSet<PersonId>,
+    #[serde(default)]
+    pub preference: Option<(ChildhoodInterest, SimTime)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PregnancyState {
@@ -99,6 +101,7 @@ impl Simulation {
                         },
                         parents: Vec::new(),
                         caregivers: BTreeSet::new(),
+                        preference: None,
                     },
                 )
             })
@@ -132,6 +135,33 @@ impl Simulation {
                 },
             );
         }
+        Ok(sim)
+    }
+
+    pub fn childhood_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
+        let mut sim = Self::life_fixture(seed, execution)?;
+        let predecessor = sim.state.ruler;
+        sim.debug_injure(
+            predecessor,
+            sim.state.physical.as_ref().unwrap().rules.max_health,
+        )?;
+        sim.advance(SimDuration(300_000))?;
+        let child = sim
+            .state
+            .development
+            .as_ref()
+            .unwrap()
+            .lives
+            .values()
+            .find(|l| l.born == SimTime(300_000) && !l.parents.is_empty())
+            .ok_or_else(|| Error::InvalidFixture("fixture did not produce its child".into()))?
+            .id;
+        // Explicit scenario control chooses this actual post-death newborn. This
+        // fixture does not establish the game's unresolved succession policy.
+        sim.state.people[sim.person_index[&predecessor]].role = Role::Citizen;
+        sim.state.people[sim.person_index[&child]].role = Role::Ruler;
+        sim.state.ruler = child;
+        sim.state.scenario = scenarios().remove(5);
         Ok(sim)
     }
 
@@ -505,10 +535,12 @@ impl Simulation {
                 },
                 parents: parents.to_vec(),
                 caregivers: BTreeSet::new(),
+                preference: None,
             },
         );
         world.pregnancies.get_mut(&id).unwrap().state = PregnancyState::Born(child);
         let mut mind = self.state.decisions.as_ref().unwrap().minds[&pregnancy.gestator].clone();
+        mind.interests.clear();
         mind.routes.clear();
         mind.last_failure = None;
         mind.child_signals.clear();

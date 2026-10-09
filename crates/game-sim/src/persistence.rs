@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 4;
+const SAVE_VERSION: u32 = 5;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -29,7 +29,7 @@ impl Simulation {
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        if ![1, 2, 3, SAVE_VERSION].contains(&header.version) {
+        if ![1, 2, 3, 4, SAVE_VERSION].contains(&header.version) {
             return Err(Error::InvalidSave("unsupported save version".into()));
         }
         let mut save: Save =
@@ -67,15 +67,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | "autonomy-fixture"
             | "life-fixture"
             | "combat-fixture"
+            | "childhood-fixture"
     ) || s.scenario.version != 1
         || !s.scenario.debug_fixture
         || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
         || matches!(
             s.scenario.id.as_str(),
-            "autonomy-fixture" | "life-fixture" | "combat-fixture"
+            "autonomy-fixture" | "life-fixture" | "combat-fixture" | "childhood-fixture"
         ) != s.decisions.is_some()
-        || matches!(s.scenario.id.as_str(), "life-fixture" | "combat-fixture")
-            != s.development.is_some()
+        || matches!(
+            s.scenario.id.as_str(),
+            "life-fixture" | "combat-fixture" | "childhood-fixture"
+        ) != s.development.is_some()
         || (s.scenario.id == "combat-fixture") != s.combat.is_some()
     {
         return Err(fail());
@@ -195,7 +198,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -525,7 +528,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
-            EventKind::Developed { actor, .. } => {
+            EventKind::Comforted { caregiver, child } => {
+                if !people.contains_key(&caregiver) || !people.contains_key(&child) {
+                    return Err(fail());
+                }
+            }
+            EventKind::Developed { actor, .. }
+            | EventKind::Expressed { actor, .. }
+            | EventKind::Practiced { actor, .. } => {
                 if !people.contains_key(&actor) {
                     return Err(fail());
                 }
@@ -559,6 +569,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
         for (id, mind) in &world.minds {
             if !people.contains_key(id)
+                || mind.interests.values().any(|v| *v > 1_000)
                 || [
                     mind.personality.discipline,
                     mind.personality.ambition,
@@ -715,6 +726,9 @@ fn validate_physical(
                 | Activity::Care { .. }
                 | Activity::Conceive { .. }
                 | Activity::Unbind { .. }
+                | Activity::Comfort { .. }
+                | Activity::Express { .. }
+                | Activity::Play { .. }
         );
         if timed != deadlines.contains(id) {
             return Err(fail());
@@ -723,8 +737,36 @@ fn validate_physical(
             return Err(fail());
         }
         match actor.activity {
+            Activity::Express { completes, .. } | Activity::Play { completes, .. } => {
+                let life = s
+                    .development
+                    .as_ref()
+                    .and_then(|w| w.lives.get(id))
+                    .ok_or_else(fail)?;
+                let duration = if matches!(actor.activity, Activity::Play { .. }) {
+                    MINUTE.0
+                } else {
+                    6_000
+                };
+                let started = completes.0.checked_sub(duration).ok_or_else(fail)?;
+                let age = started
+                    .checked_sub(life.born.0)
+                    .and_then(|v| v.checked_add(life.initial_age.0))
+                    .ok_or_else(fail)?;
+                let rules = &s.development.as_ref().unwrap().rules;
+                if started > s.time.0
+                    || age >= rules.adulthood.0
+                    || matches!(actor.activity, Activity::Play { .. }) && age < rules.infancy.0
+                {
+                    return Err(fail());
+                }
+            }
             Activity::Unbind { target, .. } if !people.contains_key(&target) => return Err(fail()),
-            Activity::Care { child, .. } if !care_targets.insert(child) => return Err(fail()),
+            Activity::Care { child, .. } | Activity::Comfort { child, .. }
+                if !care_targets.insert(child) =>
+            {
+                return Err(fail());
+            }
             Activity::Eat { source, .. } => {
                 if !s
                     .inventories
@@ -768,6 +810,7 @@ fn validate_physical(
             {
                 return Err(fail());
             }
+            Activity::Comfort { child, .. } if !people.contains_key(&child) => return Err(fail()),
             Activity::Care { child, source, .. }
                 if !people.contains_key(&child)
                     || !s

@@ -101,12 +101,16 @@ pub struct SiteKnowledge {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChildSignal {
+    #[serde(default)]
+    pub preference: Option<ChildhoodInterest>,
     pub area: AreaId,
     pub urgency: i64,
     pub observed_at: SimTime,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mind {
+    #[serde(default)]
+    pub interests: BTreeMap<ChildhoodInterest, u64>,
     #[serde(default)]
     pub routes: BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>,
     #[serde(default)]
@@ -154,6 +158,7 @@ impl Simulation {
                 (
                     p.id,
                     Mind {
+                        interests: BTreeMap::new(),
                         // These test villagers have an authored map of the three
                         // fixture areas. Newborns learn routes by observation.
                         routes: fixture_routes(&sim.state.areas),
@@ -273,16 +278,28 @@ impl Simulation {
             for child in self.dependent_index.get(&area).into_iter().flatten() {
                 let vitals = &self.state.physical.as_ref().unwrap().actors[child].vitals;
                 let rules = &self.state.physical.as_ref().unwrap().rules;
-                let urgency = if vitals.hunger >= rules.hunger_harm {
+                let mut urgency = if vitals.hunger >= rules.hunger_harm {
                     20_000
                 } else if vitals.hunger >= rules.meal_relief {
                     3_000
                 } else {
                     0
                 };
+                if self.state.development.as_ref().unwrap().lives[child]
+                    .preference
+                    .is_some_and(|(p, until)| {
+                        p == ChildhoodInterest::Food && until >= self.state.time
+                    })
+                {
+                    urgency = urgency.max(3_000);
+                }
                 mind.child_signals.insert(
                     *child,
                     ChildSignal {
+                        preference: self.state.development.as_ref().unwrap().lives[child]
+                            .preference
+                            .filter(|(_, until)| *until >= self.state.time)
+                            .map(|(p, _)| p),
                         area,
                         urgency,
                         observed_at: self.state.time,
@@ -412,6 +429,9 @@ impl Simulation {
                 | Activity::Care { .. }
                 | Activity::Conceive { .. }
                 | Activity::Unbind { .. }
+                | Activity::Comfort { .. }
+                | Activity::Express { .. }
+                | Activity::Play { .. }
         ) || matches!(actor.activity, Activity::Work { .. }) && !urgent
         {
             return none();
@@ -469,7 +489,9 @@ impl Simulation {
             }
         }
         for (child, signal) in mind.child_signals.iter().filter(|(_, signal)| {
-            signal.area == area && signal.urgency > 0 && signal.observed_at == self.state.time
+            signal.area == area
+                && (signal.urgency > 0 || signal.preference == Some(ChildhoodInterest::Company))
+                && signal.observed_at == self.state.time
         }) {
             if *child == id {
                 continue;
@@ -480,6 +502,18 @@ impl Simulation {
                 .map_or(0, |r| r.affection.max(0));
             let motivation = i64::from(mind.personality.empathy) / 2 + i64::from(attachment);
             if motivation < 300 {
+                continue;
+            }
+            if signal.preference == Some(ChildhoodInterest::Company) {
+                add(
+                    Command::Comfort { child: *child },
+                    Goal::Care,
+                    500,
+                    motivation,
+                    0,
+                );
+            }
+            if signal.urgency == 0 {
                 continue;
             }
             for fact in mind.knowledge.values().filter(|f| {
@@ -517,7 +551,38 @@ impl Simulation {
                 .values
                 .get(&self.state.decisions.as_ref().unwrap().work_concept)
                 .map_or(0, |v| i64::from(v.weight));
-            for site in mind.sites.values().filter(|s| s.area == area && s.access) {
+            let child = self
+                .state
+                .development
+                .as_ref()
+                .is_some_and(|w| w.lives[&id].stage == LifeStage::Child);
+            if child {
+                for interest in [
+                    ChildhoodInterest::Food,
+                    ChildhoodInterest::Company,
+                    ChildhoodInterest::Movement,
+                    ChildhoodInterest::Craft,
+                ] {
+                    let inclination = match interest {
+                        ChildhoodInterest::Company => mind.personality.sociability,
+                        ChildhoodInterest::Craft => mind.personality.discipline,
+                        ChildhoodInterest::Movement => mind.personality.risk_tolerance,
+                        ChildhoodInterest::Food => mind.personality.hedonism,
+                    };
+                    add(
+                        Command::Play { interest },
+                        Goal::Practice,
+                        0,
+                        i64::from(inclination) / 2,
+                        mind.interests.get(&interest).copied().unwrap_or(0) as i64 / 4,
+                    );
+                }
+            }
+            for site in mind
+                .sites
+                .values()
+                .filter(|s| !child && s.area == area && s.access)
+            {
                 let feasible = mind
                     .knowledge
                     .get(&site.input)
@@ -541,7 +606,13 @@ impl Simulation {
                         Goal::Practice,
                         0,
                         benefit,
-                        work_value,
+                        work_value
+                            + mind
+                                .interests
+                                .get(&ChildhoodInterest::Craft)
+                                .copied()
+                                .unwrap_or(0) as i64
+                                / 4,
                     );
                 }
             }
