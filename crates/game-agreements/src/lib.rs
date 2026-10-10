@@ -1184,3 +1184,6 @@ mod obligation_tests {
 
 #[cfg(test)]
 mod transition_tests;
+
+mod resources;
+pub use resources::*;

@@ -272,12 +272,95 @@ impl Simulation {
                 at.0.checked_add(duration.0).ok_or(Error::Overflow)?;
             }
         }
-        let possible = (self.state.people.len() as u64)
-            .checked_mul(8)
-            .and_then(|v| v.checked_add((w.institutions.len() as u64).saturating_mul(64 * 16 * 4)))
-            .and_then(|v| v.checked_add(64))
-            .ok_or(Error::Overflow)?;
-        self.reserve_social_ids(possible)
+        Ok(())
+    }
+
+    pub(crate) fn closing_institution_demand(
+        &self,
+        population: u64,
+        review: bool,
+        ledger: game_agreements::ClosingReceiptDemand,
+        direct: u64,
+    ) -> Result<game_society::institutions::InstitutionResourceDemand, Error> {
+        let Some(world) = &self.state.institutions else {
+            return Ok(Default::default());
+        };
+        use game_society::institutions::CaseReceipt;
+        let mut receipts = Vec::new();
+        for event in self.state.events.iter().skip(world.last_event as usize) {
+            let receipt = match event.kind {
+                EventKind::ObligationPerformed {
+                    obligation, actor, ..
+                } => match self.state.agreements.as_ref().unwrap().obligations[&obligation].term {
+                    AgreementTerm::Labor { site, .. } => Some(CaseReceipt::Labor { actor, site }),
+                    AgreementTerm::Delivery { destination, .. }
+                        if self
+                            .inventory_area(&self.state.inventories[&destination])
+                            .is_some() =>
+                    {
+                        Some(CaseReceipt::Ledger)
+                    }
+                    _ => None,
+                },
+                EventKind::ObligationDefaulted { obligation } => {
+                    let term =
+                        &self.state.agreements.as_ref().unwrap().obligations[&obligation].term;
+                    (matches!(
+                        term,
+                        AgreementTerm::Labor { .. } | AgreementTerm::Delivery { .. }
+                    ) && matches!(
+                        self.state.people[self.person_index[&term.parties()[0]]].location,
+                        Location::AtArea(_)
+                    ))
+                    .then_some(CaseReceipt::Ledger)
+                }
+                EventKind::Produced {
+                    actor,
+                    site,
+                    output,
+                    ..
+                } if self
+                    .state
+                    .agreements
+                    .as_ref()
+                    .unwrap()
+                    .custodians
+                    .get(&output)
+                    .is_some_and(|owner| *owner != actor) =>
+                {
+                    Some(CaseReceipt::Production { actor, site })
+                }
+                EventKind::Ate { actor, source, .. }
+                    if world
+                        .exclusions
+                        .get(&actor)
+                        .is_some_and(|stores| stores.contains_key(&source)) =>
+                {
+                    Some(CaseReceipt::Support)
+                }
+                EventKind::Transferred {
+                    actor,
+                    source,
+                    destination,
+                    ..
+                } if self.state.inventories[&source].good == Good::Food
+                    && self.state.inventories[&destination].location
+                        == InventoryLocation::Carried(actor)
+                    && world
+                        .exclusions
+                        .get(&actor)
+                        .is_some_and(|stores| stores.contains_key(&source)) =>
+                {
+                    Some(CaseReceipt::Support)
+                }
+                _ => None,
+            };
+            if let Some(receipt) = receipt {
+                receipts.push(receipt);
+            }
+        }
+        let pending = game_society::institutions::case_receipt_demand(&receipts)?;
+        world.closing_resource_demand(population, review, ledger, pending, direct)
     }
 
     fn institution_authority_facts(
@@ -2176,4 +2259,151 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod closing_resource_tests {
+    use super::*;
+    fn many_defaults() -> Simulation {
+        let mut sim = Simulation::institution_fixture(61, Execution::default()).unwrap();
+        for person in sim.state.people.clone() {
+            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+            sim.debug_set_personality(
+                person.id,
+                decisions::Personality::restful(),
+                decisions::Aspiration::Comfort,
+            )
+            .unwrap();
+        }
+        let debtor = sim.state.ruler;
+        let creditor = sim.state.people[3].id;
+        let area = sim.state.areas[0].id;
+        let source = sim
+            .state
+            .inventories
+            .values()
+            .find(|stock| {
+                stock.good == Good::Timber && stock.location == InventoryLocation::Area(area)
+            })
+            .unwrap()
+            .id;
+        let destination = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Area(area),
+                Quantity(0),
+                Quantity(10000),
+                BTreeSet::from([creditor]),
+            )
+            .unwrap();
+        let parties = BTreeSet::from([debtor, creditor]);
+        for _ in 0..1000 {
+            let agreement = AgreementId(allocate(&mut sim.state).unwrap());
+            let obligation = ObligationId(allocate(&mut sim.state).unwrap());
+            let term = AgreementTerm::Delivery {
+                debtor,
+                creditor,
+                source,
+                destination,
+                quantity: Quantity(1),
+                deadline: SimTime(1),
+            };
+            let world = sim.state.agreements.as_mut().unwrap();
+            world.agreements.insert(
+                agreement,
+                game_agreements::Agreement {
+                    id: agreement,
+                    proposer: debtor,
+                    parties: parties.clone(),
+                    accepted: parties.clone(),
+                    terms: vec![term.clone()],
+                    procedure: None,
+                    obligations: vec![obligation],
+                    status: AgreementStatus::Active,
+                    proposed_at: SimTime(0),
+                    revision: 0,
+                },
+            );
+            world.obligations.insert(
+                obligation,
+                game_agreements::Obligation {
+                    id: obligation,
+                    agreement,
+                    term,
+                    performed: 0,
+                    accrued: 0,
+                    share_remainder: 0,
+                    share_scale: 0,
+                    defaulted: false,
+                    cargo: BTreeMap::new(),
+                },
+            );
+        }
+        sim.state.next_id = u64::MAX - 500;
+        // Loading is the full canonical validator, not an unchecked test setup.
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap()
+    }
+    #[test]
+    fn closing_defaults_must_preflight_every_social_case_before_publishing() {
+        let mut sim = many_defaults();
+        assert!(
+            sim.state
+                .institutions
+                .as_ref()
+                .unwrap()
+                .institutions
+                .is_empty()
+        );
+        assert_eq!(sim.state.people.len(), 15);
+        let before = sim.state.clone();
+        assert_eq!(sim.advance(SimDuration(1)), Err(Error::Overflow));
+        assert!(
+            sim.state == before,
+            "overflow must precede clock, defaults, social cases and counters"
+        );
+    }
+    #[test]
+    fn pending_unreconciled_default_receipts_are_also_preflighted_from_a_valid_save() {
+        let mut sim = many_defaults();
+        sim.state.next_id = 10000;
+        sim.state.time = SimTime(1);
+        sim.reconcile_agreements().unwrap();
+        assert_eq!(
+            sim.state
+                .events
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::ObligationDefaulted { .. }))
+                .count(),
+            1000
+        );
+        assert!(sim.state.institutions.as_ref().unwrap().cases.is_empty());
+        sim.state.next_id = u64::MAX - 500;
+        let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+        let before = sim.state.clone();
+        assert_eq!(sim.advance(SimDuration(1)), Err(Error::Overflow));
+        assert!(
+            sim.state == before,
+            "unreconciled receipts must not publish partial cases"
+        );
+    }
+    #[test]
+    fn sufficient_closing_case_headroom_commits_the_whole_valid_ledger_without_unused_review_reserves()
+     {
+        let mut sim = many_defaults();
+        sim.state.next_id = u64::MAX - 1000;
+        let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+        sim.advance(SimDuration(1)).unwrap();
+        assert_eq!(sim.state.next_id, u64::MAX);
+        assert_eq!(sim.state.institutions.as_ref().unwrap().cases.len(), 1000);
+        assert!(
+            sim.state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .obligations
+                .values()
+                .all(|obligation| obligation.defaulted)
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
 }

@@ -318,6 +318,12 @@ pub(crate) struct PendingInvocation {
     at: SimTime,
     updates: Vec<(PersonId, Burden)>,
     reached_cost: bool,
+    event_demand: u64,
+}
+impl PendingInvocation {
+    pub(crate) fn event_demand(&self) -> u64 {
+        self.event_demand
+    }
 }
 
 impl Simulation {
@@ -832,6 +838,7 @@ impl Simulation {
                 at: next,
                 updates: Vec::new(),
                 reached_cost: false,
+                event_demand: 0,
             });
         };
         let mut updates = Vec::new();
@@ -864,11 +871,22 @@ impl Simulation {
             .next_id
             .checked_add(self.invocation_allocation_bound(next))
             .ok_or(Error::Overflow)?;
-        self.ensure_event_capacity(16 + w.actions.len() * 3)?;
+        // Existing bounded control/cost publications and native continuation
+        // reserve, plus up to three publications per memory action. Expose the
+        // same checked demand to the composed opening resource envelope.
+        let event_demand = (w.actions.len() as u64)
+            .checked_mul(3)
+            .and_then(|n| n.checked_add(16))
+            .ok_or(Error::Overflow)?;
+        self.state
+            .next_event
+            .checked_add(event_demand)
+            .ok_or(Error::Overflow)?;
         Ok(PendingInvocation {
             at: next,
             updates,
             reached_cost: true,
+            event_demand,
         })
     }
     pub(crate) fn invocation_allocation_bound(&self, next: SimTime) -> u64 {

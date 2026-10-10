@@ -124,19 +124,23 @@ impl Simulation {
         let capacity = self.delivery_carrying_room(actor);
         let cargo = self.delivery_cargo(actor, delivery, source_cargo);
         let stocks = self.delivery_known_stocks(actor);
-        let contacts = self
-            .state
-            .people
-            .iter()
-            .filter(|person| {
-                self.state
+        let contacts = match delivery.destination {
+            game_logistics::Destination::Inventory(_) => BTreeSet::new(),
+            game_logistics::Destination::Contact(recipient) => {
+                if self
+                    .state
                     .physical
                     .as_ref()
-                    .is_some_and(|w| w.actors[&person.id].vitals.alive)
-                    && self.transport_same_place(actor, person.id)
-            })
-            .map(|person| person.id)
-            .collect();
+                    .and_then(|world| world.actors.get(&recipient))
+                    .is_some_and(|body| body.vitals.alive)
+                    && self.transport_same_place(actor, recipient)
+                {
+                    BTreeSet::from([recipient])
+                } else {
+                    BTreeSet::new()
+                }
+            }
+        };
         let wanted = Quantity(delivery.remaining.0.max(minimum_handoff.0).min(capacity.0));
         let mut requested = BTreeMap::from([(delivery.requirement.good, wanted)]);
         for prerequisite in additional_offers

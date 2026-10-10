@@ -1347,49 +1347,79 @@ impl Simulation {
         }
         self.preflight_output_shares(&possible_outputs)?;
         self.preflight_prepared_maintenance(next, &possible_outputs)?;
-        let construction_ids = self.project_allocation_bound(next)?;
-        let birth_ids = due.iter().filter(|d| matches!(d, Due::Birth(_))).count() as u64 * 3;
-        self.state
-            .next_id
-            .checked_add(construction_ids)
-            .and_then(|id| id.checked_add(birth_ids))
-            .and_then(|id| id.checked_add(self.invocation_allocation_bound(next)))
-            .and_then(|id| id.checked_add(self.force_allocation_bound(&due)))
-            .and_then(|id| id.checked_add(self.realm_allocation_bound()))
-            .and_then(|id| id.checked_add(self.army_allocation_bound()))
-            .and_then(|id| id.checked_add(self.mission_allocation_bound()))
-            .and_then(|id| id.checked_add(self.health_allocation_bound(next)))
-            .and_then(|id| id.checked_add(self.enforcement_allocation_bound()))
+        let births = due.iter().filter(|d| matches!(d, Due::Birth(_))).count() as u64;
+        let population = (self.state.people.len() as u64)
+            .checked_add(births)
             .ok_or(Error::Overflow)?;
+        let (ledger_demand, direct_cases) =
+            self.closing_agreement_demand(next, &due, &possible_outputs)?;
+        let society_demand = self.closing_institution_demand(
+            population,
+            next.0.is_multiple_of(60_000),
+            ledger_demand,
+            direct_cases,
+        )?;
+        let funding_proposals = self.project_funding_proposal_bound(next)?;
+        let mut resources = engine_adapter::ResourceEnvelope::default();
+        for demand in [
+            self.project_allocation_bound(next)?,
+            births.checked_mul(3).ok_or(Error::Overflow)?,
+            self.invocation_allocation_bound(next),
+            self.force_allocation_bound(&due),
+            self.realm_allocation_bound(),
+            self.army_allocation_bound(),
+            self.mission_allocation_bound(),
+            self.health_allocation_bound(next),
+            self.enforcement_allocation_bound(),
+            society_demand.ids,
+            funding_proposals,
+        ] {
+            resources.add_ids(demand)?;
+        }
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
         self.preflight_force(&due)?;
         self.preflight_health(next)?;
         self.preflight_armies_at(next)?;
         self.preflight_missions()?;
-        self.preflight_agreements()?;
         self.preflight_institutions_at(next)?;
-        let event_bound: usize = due
-            .iter()
-            .map(|d| match d {
-                Due::Arrive(_) => 2,
-                Due::Transfers(v) => v.len(),
-                Due::Review => 0,
-                Due::Physical(_) | Due::Spoil(_) => 4,
-                Due::Birth(_) | Due::Age(_) => 2,
-                Due::CombatRound(_) => self.state.people.len() * 8,
-            })
-            .sum::<usize>()
-            + self.state.people.len() * 2
-            + self.mission_event_bound()
-            + self.army_event_bound()
-            + self.health_event_bound()
-            + self
-                .state
+        let mut event_bound = 0u64;
+        for event in &due {
+            event_bound = event_bound
+                .checked_add(match event {
+                    Due::Arrive(_) => 2,
+                    Due::Transfers(transfers) => transfers.len() as u64,
+                    Due::Review => 0,
+                    Due::Physical(_) | Due::Spoil(_) => 4,
+                    Due::Birth(_) | Due::Age(_) => 2,
+                    Due::CombatRound(_) => population.checked_mul(8).ok_or(Error::Overflow)?,
+                })
+                .ok_or(Error::Overflow)?;
+        }
+        resources.add_events(event_bound)?;
+        for demand in [
+            population.checked_mul(2).ok_or(Error::Overflow)?,
+            self.mission_event_bound() as u64,
+            self.army_event_bound() as u64,
+            self.health_event_bound() as u64,
+            self.state
                 .agriculture
                 .as_ref()
-                .map_or(0, |w| w.fields.len());
-        self.ensure_event_capacity(event_bound)?;
+                .map_or(0, |world| world.fields.len() as u64),
+            ledger_demand.events()?,
+            society_demand.events,
+            invocation_output.event_demand(),
+            funding_proposals.checked_mul(2).ok_or(Error::Overflow)?,
+        ] {
+            resources.add_events(demand)?;
+        }
+        if funding_proposals > 0 {
+            // A native funding proposal may flush pending work; that work is
+            // already in ledger demand, and its admission guard also needs a
+            // three-event continuation margin after earlier publications.
+            resources.add_events(3)?;
+        }
+        resources.check(self.state.next_id, self.state.next_event)?;
         let started = Instant::now();
         let lifecycle: Vec<_> = due
             .iter()

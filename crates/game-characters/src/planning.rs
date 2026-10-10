@@ -352,17 +352,10 @@ impl<A: Clone> Mind<A> {
             sequence,
         })
     }
-    pub fn decide(
-        &self,
-        facts: &PersonalFacts,
-        candidates: &[Candidate<A>],
-        work_concept: ConceptId,
-        margin: i64,
-    ) -> Decision<A> {
-        let none = || Decision {
-            plan: None,
-            explanation: self.explanation.clone(),
-        };
+
+    /// Providers need not assemble opportunities when this person cannot revise
+    /// their action. Captivity still permits consideration of a physical escape.
+    pub fn needs_candidates(&self, facts: &PersonalFacts) -> bool {
         let own_urgent = facts.vitals.hunger >= facts.limits.meal_relief;
         let critical_hydration = self.child_signals.iter().any(|(child, signal)| {
             signal.hydration_urgency >= 20_000
@@ -380,9 +373,42 @@ impl<A: Clone> Mind<A> {
             && facts.vitals.health >= facts.limits.max_health / 2
             && !critical_child
         {
-            return none();
+            return false;
         }
         if facts.control != Control::Autonomous || !facts.vitals.alive || facts.vitals.health == 0 {
+            return false;
+        }
+        if facts.freedom_restricted {
+            return true;
+        }
+        if !facts.independent {
+            return false;
+        }
+        if !matches!(facts.place, Place::Area(_)) {
+            return matches!(facts.activity, Activity::Idle | Activity::Rest);
+        }
+        facts.activity != Activity::Committed
+            && !(facts.activity == Activity::Working && !own_urgent && !critical_hydration)
+    }
+
+    pub fn decide(
+        &self,
+        facts: &PersonalFacts,
+        candidates: &[Candidate<A>],
+        work_concept: ConceptId,
+        margin: i64,
+    ) -> Decision<A> {
+        let none = || Decision {
+            plan: None,
+            explanation: self.explanation.clone(),
+        };
+        let own_urgent = facts.vitals.hunger >= facts.limits.meal_relief;
+        let critical_hydration = self.child_signals.iter().any(|(child, signal)| {
+            signal.hydration_urgency >= 20_000
+                && signal.observed_at == facts.now
+                && facts.observed_contacts.contains(child)
+        });
+        if !self.needs_candidates(facts) {
             return none();
         }
         if let Some(candidate) = candidates
@@ -1040,6 +1066,75 @@ mod tests {
             explanation: explanation(Goal::Rest, 0, 0, 0),
             retry_after: SimTime(0),
         }
+    }
+
+    #[test]
+    fn candidate_admission_skips_inactive_people_but_preserves_a_captives_escape() {
+        let mind = mind();
+        let mut facts = facts();
+        let escape = Candidate {
+            action: 9,
+            key: IntentionKey::Relief {
+                need: NeedRef::Freedom,
+                beneficiary: facts.actor,
+            },
+            motives: vec![Motive::Relieve {
+                need: NeedRef::Freedom,
+                beneficiary: facts.actor,
+            }],
+            prospects: Prospects::default(),
+            shape: ActionShape::Other,
+            delivery: None,
+        };
+        for control in [Control::Manual, Control::Delegated] {
+            facts.control = control;
+            assert!(!mind.needs_candidates(&facts));
+            assert!(
+                mind.decide(&facts, std::slice::from_ref(&escape), ConceptId(1), 0)
+                    .plan
+                    .is_none()
+            );
+        }
+        facts.control = Control::Autonomous;
+        facts.activity = Activity::Committed;
+        assert!(!mind.needs_candidates(&facts));
+        facts.freedom_restricted = true;
+        assert!(mind.needs_candidates(&facts));
+        assert_eq!(
+            mind.decide(&facts, &[escape], ConceptId(1), 0)
+                .plan
+                .unwrap()
+                .action,
+            9
+        );
+        facts.vitals.alive = false;
+        assert!(!mind.needs_candidates(&facts));
+    }
+
+    #[test]
+    fn working_caregivers_request_opportunities_for_fresh_critical_distress() {
+        let mut mind = mind();
+        let mut facts = facts();
+        facts.activity = Activity::Working;
+        assert!(!mind.needs_candidates(&facts));
+        let child = PersonId(9);
+        mind.child_signals.insert(
+            child,
+            ChildSignal {
+                location: Location::AtArea(AreaId(1)),
+                urgency: 0,
+                hydration_urgency: 20_000,
+                preference: None,
+                observed_at: facts.now,
+            },
+        );
+        assert!(!mind.needs_candidates(&facts));
+        facts.observed_contacts.insert(child);
+        assert!(mind.needs_candidates(&facts));
+        facts.now.0 += 1;
+        assert!(!mind.needs_candidates(&facts));
+        facts.vitals.hunger = facts.limits.meal_relief;
+        assert!(mind.needs_candidates(&facts));
     }
 
     #[test]

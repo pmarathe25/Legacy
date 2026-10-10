@@ -5,6 +5,8 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod resources;
+pub use resources::*;
 mod commands;
 mod validation;
 pub use commands::*;

@@ -563,6 +563,17 @@ impl Simulation {
                 .as_ref()
                 .is_some_and(|world| world.captivity.contains_key(&id)),
         };
+        if !mind.needs_candidates(&facts) {
+            return Intention {
+                actor: id,
+                decision: mind.decide(
+                    &facts,
+                    &[],
+                    self.state.decisions.as_ref().unwrap().work_concept,
+                    margin,
+                ),
+            };
+        }
         let care_goals = mind.care_deliveries(&facts);
         let mut candidates = Vec::new();
         let mut add = |action: Command,

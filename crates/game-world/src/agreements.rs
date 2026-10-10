@@ -1517,17 +1517,128 @@ impl Simulation {
         }
         Ok(())
     }
-    pub(crate) fn preflight_agreements(&self) -> Result<(), Error> {
-        if let Some(w) = &self.state.agreements {
-            let maximum = (w.obligations.len() as u64)
-                .checked_mul(3)
-                .and_then(|v| v.checked_add(2))
-                .ok_or(Error::Overflow)?;
-            self.state
-                .next_event
-                .checked_add(maximum)
-                .ok_or(Error::Overflow)?;
+    pub(crate) fn closing_agreement_demand(
+        &self,
+        at: SimTime,
+        due: &[Due],
+        outputs: &[(SiteId, Good, Quantity)],
+    ) -> Result<(game_agreements::ClosingReceiptDemand, u64), Error> {
+        let Some(world) = &self.state.agreements else {
+            return Ok((Default::default(), 0));
+        };
+        let mut receipts = Vec::new();
+        let mut direct = outputs.len() as u64;
+        for event in self.state.events.iter().skip(world.last_event as usize) {
+            match event.kind {
+                EventKind::Transferred {
+                    actor,
+                    source,
+                    destination,
+                    ..
+                } => receipts.push(game_agreements::ClosingReceipt::Transfer {
+                    actor,
+                    source,
+                    destination,
+                }),
+                EventKind::Produced {
+                    actor,
+                    site,
+                    output,
+                    ..
+                } => receipts.push(game_agreements::ClosingReceipt::Production {
+                    actor: Some(actor),
+                    site,
+                    good: self.state.inventories[&output].good,
+                }),
+                EventKind::CropHarvested { actor, field, .. } => {
+                    for good in [Good::Food, Good::Seed] {
+                        receipts.push(game_agreements::ClosingReceipt::Production {
+                            actor: Some(actor),
+                            site: field,
+                            good,
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
+        for (site, good, _) in outputs {
+            receipts.push(game_agreements::ClosingReceipt::Production {
+                actor: None,
+                site: *site,
+                good: *good,
+            });
+        }
+        for event in due {
+            let transfers = match event {
+                Due::Transfers(transfers) => transfers.clone(),
+                Due::Physical(actor) => {
+                    match self.state.physical.as_ref().unwrap().actors[actor].activity {
+                        Activity::Load {
+                            source,
+                            destination,
+                            quantity,
+                            ..
+                        } => vec![TransferIntent {
+                            actor: *actor,
+                            source,
+                            destination,
+                            quantity,
+                        }],
+                        Activity::Eat { .. } => {
+                            direct = direct.checked_add(1).ok_or(Error::Overflow)?;
+                            Vec::new()
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+                _ => Vec::new(),
+            };
+            for transfer in transfers {
+                direct = direct.checked_add(1).ok_or(Error::Overflow)?;
+                receipts.push(game_agreements::ClosingReceipt::Transfer {
+                    actor: transfer.actor,
+                    source: transfer.source,
+                    destination: transfer.destination,
+                });
+            }
+        }
+        let work = self
+            .state
+            .physical
+            .as_ref()
+            .into_iter()
+            .flat_map(|physical| physical.actors.iter())
+            .filter_map(|(actor, body)| {
+                if at <= self.state.time || !body.vitals.alive || body.vitals.health == 0 {
+                    return None;
+                }
+                let target = match body.activity {
+                    Activity::Work { site } => game_agreements::WorkTarget::Site(site),
+                    Activity::Cultivate { field, .. } => game_agreements::WorkTarget::Site(field),
+                    Activity::Construct { project, .. } => {
+                        game_agreements::WorkTarget::Project(project)
+                    }
+                    _ => return None,
+                };
+                Some(game_agreements::WorkAssignment {
+                    actor: *actor,
+                    target,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok((
+            world.ledger.closing_receipt_demand(at, &receipts, &work)?,
+            direct,
+        ))
+    }
+
+    pub(crate) fn preflight_agreements(&self) -> Result<(), Error> {
+        let (demand, _) = self.closing_agreement_demand(self.state.time, &[], &[])?;
+        self.state
+            .next_event
+            .checked_add(demand.events()?.checked_add(2).ok_or(Error::Overflow)?)
+            .ok_or(Error::Overflow)?;
         Ok(())
     }
 

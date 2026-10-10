@@ -3,6 +3,30 @@
 use crate::*;
 use game_sim::{Clock, ClockWorld, Engine, Interval, Module, ModuleId, PhaseId, PhaseKey};
 
+/// One opening checked sum of closing IDs and publications. Domain demands
+/// stay with their owners; checking the sum prevents individually valid bounds
+/// from exhausting the shared counters halfway through publication.
+#[derive(Default)]
+pub(crate) struct ResourceEnvelope {
+    ids: u64,
+    events: u64,
+}
+impl ResourceEnvelope {
+    pub(crate) fn add_ids(&mut self, count: u64) -> Result<(), Error> {
+        self.ids = self.ids.checked_add(count).ok_or(Error::Overflow)?;
+        Ok(())
+    }
+    pub(crate) fn add_events(&mut self, count: u64) -> Result<(), Error> {
+        self.events = self.events.checked_add(count).ok_or(Error::Overflow)?;
+        Ok(())
+    }
+    pub(crate) fn check(&self, next_id: u64, next_event: u64) -> Result<(), Error> {
+        next_id.checked_add(self.ids).ok_or(Error::Overflow)?;
+        next_event.checked_add(self.events).ok_or(Error::Overflow)?;
+        Ok(())
+    }
+}
+
 pub(crate) type WorldEngine = Engine<Simulation, StopReason>;
 pub(crate) const PREPARE: PhaseKey = PhaseKey {
     module: ModuleId(100),
@@ -152,4 +176,24 @@ pub(crate) struct PreparedWorldStep {
     pub evaluated_people: usize,
     pub evaluation_ns: u128,
     pub arbitration_ns: u128,
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+    #[test]
+    fn individually_fitting_domains_must_fit_the_same_checked_counter_together() {
+        let mut ids = ResourceEnvelope::default();
+        ids.add_ids(3).unwrap();
+        ids.add_ids(3).unwrap();
+        assert!((u64::MAX - 5).checked_add(3).is_some());
+        assert_eq!(ids.check(u64::MAX - 5, 1), Err(Error::Overflow));
+        assert_eq!(ids.check(u64::MAX - 6, 1), Ok(()));
+        let mut events = ResourceEnvelope::default();
+        events.add_events(4).unwrap();
+        events.add_events(4).unwrap();
+        assert!((u64::MAX - 6).checked_add(4).is_some());
+        assert_eq!(events.check(1, u64::MAX - 6), Err(Error::Overflow));
+        assert_eq!(events.check(1, u64::MAX - 8), Ok(()));
+    }
 }

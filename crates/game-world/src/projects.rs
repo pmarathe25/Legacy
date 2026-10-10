@@ -781,6 +781,15 @@ impl Simulation {
             .as_ref()
             .map_or(Ok(0), |world| world.allocation_bound(next))
     }
+    pub(crate) fn project_funding_proposal_bound(&self, next: SimTime) -> Result<u64, Error> {
+        if self.state.decisions.is_none() || !next.0.is_multiple_of(60_000) {
+            return Ok(0);
+        }
+        self.state
+            .projects
+            .as_ref()
+            .map_or(Ok(0), |world| world.funding_proposal_bound(next))
+    }
     pub(crate) fn evaluate_projects(&self, next: SimTime) -> Result<Option<World>, Error> {
         let Some(world) = &self.state.projects else {
             return Ok(None);
@@ -1230,52 +1239,30 @@ impl Simulation {
             let Some(destination) = destination else {
                 continue;
             };
-            let plot = match plan.kind {
-                ProjectKind::Farm { plot, .. } => plot,
-                _ => unreachable!(),
+            let calendar = &self.state.environment.as_ref().unwrap().calendar;
+            let game_projects::FundingChoice::Available(funding) = plan.prepare_farm_funding(
+                &self.state.projects.as_ref().unwrap().rules,
+                game_projects::FundingFacts {
+                    now: self.state.time,
+                    financier: supporter,
+                    source,
+                    repayment_destination: destination,
+                },
+                game_projects::FundingCalendar {
+                    day: calendar.day,
+                    year_days: calendar.year_days(),
+                },
+            ) else {
+                // A future promise that cannot be represented is unavailable.
+                // No agreement, support record or retry state has been changed.
+                continue;
             };
-            let year = self
-                .state
-                .environment
-                .as_ref()
-                .unwrap()
-                .calendar
-                .year_days()
-                .checked_mul(self.state.environment.as_ref().unwrap().calendar.day.0)
-                .ok_or(Error::Overflow)?;
-            let ends_at = SimTime(self.state.time.0.checked_add(year).ok_or(Error::Overflow)?);
-            let pay_by = SimTime(
-                ends_at
-                    .0
-                    .checked_add(7 * self.state.environment.as_ref().unwrap().calendar.day.0)
-                    .ok_or(Error::Overflow)?,
-            );
             let before = self.state.next_id;
             self.agreement_command(
                 actor,
                 &AgreementAction::Propose {
-                    parties: BTreeSet::from([actor, supporter]),
-                    terms: vec![
-                        AgreementTerm::Delivery {
-                            debtor: supporter,
-                            creditor: actor,
-                            source,
-                            destination: plan.materials,
-                            quantity: required,
-                            deadline: plan.finish_by,
-                        },
-                        AgreementTerm::OutputShare {
-                            debtor: actor,
-                            creditor: supporter,
-                            site: plot,
-                            good: Good::Food,
-                            numerator: 1,
-                            denominator: 10,
-                            destination,
-                            pay_by,
-                            ends_at,
-                        },
-                    ],
+                    parties: funding.parties,
+                    terms: funding.terms,
                     procedure: None,
                 },
             )?;
@@ -1296,16 +1283,12 @@ impl Simulation {
                     agreement,
                 },
             )?;
-            self.state.projects.as_mut().unwrap().next_search.insert(
-                actor,
-                SimTime(
-                    self.state
-                        .time
-                        .0
-                        .checked_add(120_000)
-                        .ok_or(Error::Overflow)?,
-                ),
-            );
+            self.state
+                .projects
+                .as_mut()
+                .unwrap()
+                .next_search
+                .insert(actor, funding.next_search);
         }
         Ok(())
     }
@@ -1356,19 +1339,12 @@ impl Simulation {
             {
                 continue;
             }
-            let needed = if plan.enterprise.is_some() {
-                3 * self.state.projects.as_ref().unwrap().rules.recipe_timber.0
-            } else {
-                self.state
-                    .projects
-                    .as_ref()
-                    .unwrap()
-                    .rules
-                    .construction_timber
-                    .0
-                    + 3 * self.state.projects.as_ref().unwrap().rules.recipe_timber.0
+            let Ok(needed) =
+                plan.workshop_funding_materials(&self.state.projects.as_ref().unwrap().rules)
+            else {
+                continue;
             };
-            if self.state.inventories[&plan.materials].quantity.0 >= needed {
+            if self.state.inventories[&plan.materials].quantity >= needed {
                 continue;
             }
             let donor = mind
@@ -1378,7 +1354,7 @@ impl Simulation {
                     fact.good == Good::Timber
                         && fact.area == plan.area
                         && fact.inventory != plan.materials
-                        && fact.quantity.0 >= needed
+                        && fact.quantity >= needed
                 })
                 .find_map(|fact| {
                     self.state
@@ -1417,68 +1393,24 @@ impl Simulation {
             let Some(destination) = recipient else {
                 continue;
             };
-            let loading = self.state.physical.as_ref().unwrap().rules.loading_time.0;
-            let funding_window = loading.saturating_mul(4).saturating_add(120_000);
-            let production_window = self
-                .state
-                .projects
-                .as_ref()
-                .unwrap()
-                .rules
-                .construction_labor
-                .0
-                .saturating_add(
-                    self.state
-                        .projects
-                        .as_ref()
-                        .unwrap()
-                        .rules
-                        .recipe_time
-                        .0
-                        .saturating_mul(3),
-                )
-                .saturating_add(loading.saturating_mul(10))
-                .saturating_mul(2)
-                .saturating_add(120_000);
-            let funding_deadline = SimTime(
-                self.state
-                    .time
-                    .0
-                    .checked_add(funding_window)
-                    .ok_or(Error::Overflow)?,
-            );
-            let repayment_deadline = SimTime(
-                self.state
-                    .time
-                    .0
-                    .checked_add(production_window)
-                    .ok_or(Error::Overflow)?,
-            );
+            let game_projects::FundingChoice::Available(funding) = plan.prepare_workshop_funding(
+                &self.state.projects.as_ref().unwrap().rules,
+                game_projects::FundingFacts {
+                    now: self.state.time,
+                    financier,
+                    source,
+                    repayment_destination: destination,
+                },
+                self.state.physical.as_ref().unwrap().rules.loading_time,
+            ) else {
+                continue;
+            };
             let before = self.state.next_id;
             self.debug_agreement_action(
                 actor,
                 AgreementAction::Propose {
-                    parties: BTreeSet::from([actor, financier]),
-                    terms: vec![
-                        AgreementTerm::Delivery {
-                            debtor: financier,
-                            creditor: actor,
-                            source,
-                            destination: plan.materials,
-                            quantity: Quantity(needed),
-                            deadline: funding_deadline,
-                        },
-                        AgreementTerm::Delivery {
-                            debtor: actor,
-                            creditor: financier,
-                            source: plan.output,
-                            destination,
-                            quantity: Quantity(
-                                3 * self.state.projects.as_ref().unwrap().rules.recipe_tools.0,
-                            ),
-                            deadline: repayment_deadline,
-                        },
-                    ],
+                    parties: funding.parties,
+                    terms: funding.terms,
                     procedure: None,
                 },
             )?;
@@ -1504,7 +1436,7 @@ impl Simulation {
                 .as_mut()
                 .unwrap()
                 .next_search
-                .insert(actor, SimTime(self.state.time.0.saturating_add(600_000)));
+                .insert(actor, funding.next_search);
         }
         Ok(())
     }
@@ -2254,6 +2186,130 @@ mod farm_tests {
         agriculture.crop.harvest_labor = MINUTE;
         agriculture.crop.ripe_degree_days = 3;
         sim
+    }
+
+    fn ensure_unfunded_proposal(sim: &mut Simulation, actor: PersonId, farm: bool) {
+        if sim
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects
+            .values()
+            .any(|plan| {
+                plan.sponsor == actor && matches!(plan.kind, ProjectKind::Farm { .. }) == farm
+            })
+        {
+            return;
+        }
+        let command = sim
+            .project_opportunities(actor)
+            .into_iter()
+            .find(|command| {
+                matches!(
+                    command,
+                    Command::Project {
+                        action: ProjectAction::ProposeFarm { .. }
+                    }
+                ) && farm
+                    || matches!(
+                        command,
+                        Command::Project {
+                            action: ProjectAction::Propose { .. }
+                        }
+                    ) && !farm
+            })
+            .expect("fixture offers a real locally known project");
+        sim.debug_actor_command(actor, command).unwrap();
+        sim.observe_projects();
+    }
+
+    #[test]
+    fn valid_farm_with_unrepresentable_harvest_promise_declines_funding_without_mutation() {
+        let mut sim = fixture();
+        let farmer = sim.state.people[3].id;
+        ensure_unfunded_proposal(&mut sim, farmer, true);
+        let saved = sim.save().unwrap();
+        let mut representable = Simulation::load(&saved, Execution::default()).unwrap();
+        let agreements_before = representable
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .agreements
+            .len();
+        representable.seek_farm_support().unwrap();
+        assert!(
+            representable
+                .state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .agreements
+                .len()
+                > agreements_before
+        );
+
+        let environment = sim.state.environment.as_ref().unwrap();
+        let mut calendar = environment.calendar.clone();
+        calendar.day = SimDuration(u64::MAX / calendar.year_days());
+        sim.state.environment = Some(
+            game_environment::World::new(
+                game_environment::Config {
+                    calendar,
+                    climate: environment.climate.clone(),
+                },
+                sim.state.time,
+                sim.state.seed,
+            )
+            .unwrap(),
+        );
+        let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+        let before = sim.save().unwrap();
+        sim.seek_farm_support().unwrap();
+        assert_eq!(sim.save().unwrap(), before);
+        // Reach the actual review phase through the normal coordinator. Bodies,
+        // decisions and physical production continue at their configured rates.
+        sim.advance(MINUTE).unwrap();
+        assert!(
+            sim.state.physical.as_ref().unwrap().actors[&farmer]
+                .vitals
+                .alive
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+
+    #[test]
+    fn valid_workshop_with_unrepresentable_financing_windows_declines_before_publication() {
+        let mut sim = Simulation::project_fixture(73, Execution::default()).unwrap();
+        let sponsor = sim.state.people[3].id;
+        ensure_unfunded_proposal(&mut sim, sponsor, false);
+        let saved = sim.save().unwrap();
+        let mut representable = Simulation::load(&saved, Execution::default()).unwrap();
+        let agreements_before = representable
+            .state
+            .agreements
+            .as_ref()
+            .unwrap()
+            .agreements
+            .len();
+        representable.seek_workshop_support().unwrap();
+        assert!(
+            representable
+                .state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .agreements
+                .len()
+                > agreements_before
+        );
+
+        sim.state.physical.as_mut().unwrap().rules.loading_time = SimDuration(u64::MAX / 10);
+        let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+        let before = sim.save().unwrap();
+        sim.seek_workshop_support().unwrap();
+        assert_eq!(sim.save().unwrap(), before);
     }
     #[test]
     fn citizen_bargains_for_actual_timber_constructs_farmland_and_accrues_harvest_rent() {
