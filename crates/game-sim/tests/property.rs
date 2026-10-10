@@ -79,6 +79,63 @@ fn take(sim: &mut Simulation, quantity: u64) {
 }
 
 #[test]
+fn newly_created_cargo_keeps_complete_ownership_bookkeeping_after_real_loading() {
+    let mut sim = fixture(1);
+    let ruler = sim.canonical_state().ruler;
+    let source = sim
+        .debug_add_inventory(
+            Good::Water,
+            InventoryLocation::Area(AreaId(1)),
+            Quantity(3_000),
+            Quantity(3_000),
+            BTreeSet::from([ruler]),
+        )
+        .unwrap();
+    let mut replay = Simulation::load(
+        &sim.save().unwrap(),
+        Execution {
+            workers: 3,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    for world in [&mut sim, &mut replay] {
+        world
+            .submit(Submission {
+                caller_sequence: world.next_caller_sequence().unwrap(),
+                command: Command::Carry {
+                    source,
+                    quantity: Quantity(2_000),
+                },
+            })
+            .unwrap();
+    }
+    sim.advance(MINUTE).unwrap();
+    replay.advance(SimDuration(17_001)).unwrap();
+    replay.advance(SimDuration(MINUTE.0 - 17_001)).unwrap();
+    assert_eq!(sim.canonical_state(), replay.canonical_state());
+    let state = sim.canonical_state();
+    let cargo = state
+        .inventories
+        .values()
+        .find(|i| i.good == Good::Water && i.location == InventoryLocation::Carried(ruler))
+        .unwrap();
+    assert_eq!(state.inventories[&source].quantity, Quantity(1_000));
+    assert_eq!(cargo.quantity, Quantity(2_000));
+    let portions = &state.property.as_ref().unwrap().portions;
+    assert_eq!(portions.len(), state.inventories.len());
+    for (id, inventory) in &state.inventories {
+        assert_eq!(portions[id].values().sum::<u64>(), inventory.quantity.0);
+    }
+    assert_eq!(
+        state,
+        Simulation::load(&sim.save().unwrap(), Execution::default())
+            .unwrap()
+            .canonical_state()
+    );
+}
+
+#[test]
 fn theft_uses_loading_time_conserves_goods_and_keeps_claims_attached_to_cargo() {
     let mut sim = fixture(1);
     let ruler = actor(&sim, 0);

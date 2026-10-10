@@ -1033,90 +1033,94 @@ impl Simulation {
         // Newly created inventories may contain goods before a creation event.
         // Reconstruct their opening balance from this batch rather than copying
         // a closing balance and then applying the same transfer twice.
-        for stock in self.state.inventories.values() {
-            if self
-                .state
-                .property
-                .as_ref()
-                .unwrap()
-                .portions
-                .contains_key(&stock.id)
-            {
-                continue;
-            }
-            let mut opening = i128::from(stock.quantity.0);
-            for event in &events {
-                match event.kind {
-                    EventKind::Transferred {
-                        source,
-                        destination,
-                        quantity,
-                        ..
-                    } => {
-                        if source == stock.id {
+        // Portion keys are validated inventory IDs; inventories retain their
+        // identity even when empty. Equal counts therefore mean full coverage.
+        if world.portions.len() != self.state.inventories.len() {
+            for stock in self.state.inventories.values() {
+                if self
+                    .state
+                    .property
+                    .as_ref()
+                    .unwrap()
+                    .portions
+                    .contains_key(&stock.id)
+                {
+                    continue;
+                }
+                let mut opening = i128::from(stock.quantity.0);
+                for event in &events {
+                    match event.kind {
+                        EventKind::Transferred {
+                            source,
+                            destination,
+                            quantity,
+                            ..
+                        } => {
+                            if source == stock.id {
+                                opening += i128::from(quantity.0);
+                            }
+                            if destination == stock.id {
+                                opening -= i128::from(quantity.0);
+                            }
+                        }
+                        EventKind::Ate {
+                            source, quantity, ..
+                        }
+                        | EventKind::Consumed {
+                            source, quantity, ..
+                        }
+                        | EventKind::Cared {
+                            source, quantity, ..
+                        } if source == stock.id => {
                             opening += i128::from(quantity.0);
                         }
-                        if destination == stock.id {
+                        EventKind::Spoiled {
+                            inventory,
+                            quantity,
+                        } if inventory == stock.id => {
+                            opening += i128::from(quantity.0);
+                        }
+                        EventKind::Produced {
+                            output, quantity, ..
+                        }
+                        | EventKind::ResourceCollected {
+                            destination: output,
+                            quantity,
+                            ..
+                        } if output == stock.id => {
                             opening -= i128::from(quantity.0);
                         }
-                    }
-                    EventKind::Ate {
-                        source, quantity, ..
-                    }
-                    | EventKind::Consumed {
-                        source, quantity, ..
-                    }
-                    | EventKind::Cared {
-                        source, quantity, ..
-                    } if source == stock.id => {
-                        opening += i128::from(quantity.0);
-                    }
-                    EventKind::Spoiled {
-                        inventory,
-                        quantity,
-                    } if inventory == stock.id => {
-                        opening += i128::from(quantity.0);
-                    }
-                    EventKind::Produced {
-                        output, quantity, ..
-                    }
-                    | EventKind::ResourceCollected {
-                        destination: output,
-                        quantity,
-                        ..
-                    } if output == stock.id => {
-                        opening -= i128::from(quantity.0);
-                    }
-                    EventKind::CropHarvested {
-                        field, food, seed, ..
-                    } => {
-                        if let Some(field) = self
-                            .state
-                            .environment
-                            .as_ref()
-                            .and_then(|world| world.fields.get(&field))
-                        {
-                            if field.food == stock.id {
-                                opening -= i128::from(food.0);
-                            }
-                            if field.seed == stock.id {
-                                opening -= i128::from(seed.0);
+                        EventKind::CropHarvested {
+                            field, food, seed, ..
+                        } => {
+                            if let Some(field) = self
+                                .state
+                                .environment
+                                .as_ref()
+                                .and_then(|world| world.fields.get(&field))
+                            {
+                                if field.food == stock.id {
+                                    opening -= i128::from(food.0);
+                                }
+                                if field.seed == stock.id {
+                                    opening -= i128::from(seed.0);
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                let opening = u64::try_from(opening)
+                    .expect("physical events conserve inventory opening balances");
+                self.state.property.as_mut().unwrap().portions.insert(
+                    stock.id,
+                    if opening > 0 {
+                        BTreeMap::from([(ClaimId(0), opening)])
+                    } else {
+                        BTreeMap::new()
+                    },
+                );
             }
-            let opening = u64::try_from(opening)
-                .expect("physical events conserve inventory opening balances");
-            self.state.property.as_mut().unwrap().portions.insert(
-                stock.id,
-                if opening > 0 {
-                    BTreeMap::from([(ClaimId(0), opening)])
-                } else {
-                    BTreeMap::new()
-                },
-            );
         }
         for event in events {
             match event.kind {
