@@ -1161,3 +1161,72 @@ fn single_lot_prerequisites_consolidate_actual_cargo_before_using_equipment() {
     f.cargo[1].quantity = Quantity(0);
     assert_eq!(delivery.plan(&f.input()), Step::Acquire(42));
 }
+
+#[test]
+fn empty_compartments_can_receive_qualified_consolidation_for_deliveries_and_prerequisites() {
+    let target = Destination::Contact(PersonId(4));
+    let mut delivery = delivery(Good::Tool, 1_000, target);
+    delivery.requirement.source = Some(InventoryId(8));
+    let mut f = frame(Good::Tool, target);
+    f.minimum = Quantity(1_000);
+    f.stocks.clear();
+    let mut a = cargo(20, Good::Tool, 500);
+    let mut b = cargo(21, Good::Tool, 500);
+    for lot in [&mut a, &mut b] {
+        lot.origin = Some(InventoryId(8));
+        lot.origin_quantity = Quantity(500);
+        lot.room = Quantity(0);
+    }
+    f.cargo = vec![a, b, cargo(22, Good::Tool, 0)];
+    assert_eq!(
+        delivery.plan(&f.input()),
+        Step::Transfer {
+            source: InventoryId(20),
+            destination: InventoryId(22),
+            quantity: Quantity(500),
+        }
+    );
+    f.cargo[0].quantity = Quantity(0);
+    f.cargo[0].origin_quantity = Quantity(0);
+    f.cargo[2].quantity = Quantity(500);
+    // Material with no origin receipt cannot satisfy the source-qualified goal.
+    assert_eq!(
+        delivery.plan(&f.input()),
+        Step::Blocked(BlockReason::NoSupply)
+    );
+    f.cargo[2].origin = Some(InventoryId(8));
+    f.cargo[2].origin_quantity = Quantity(500);
+    assert_eq!(
+        delivery.plan(&f.input()),
+        Step::Transfer {
+            source: InventoryId(21),
+            destination: InventoryId(22),
+            quantity: Quantity(500),
+        }
+    );
+    let food = Delivery::new(
+        Requirement {
+            good: Good::Food,
+            quantity: Quantity(1_000),
+            source: None,
+        },
+        target,
+    )
+    .unwrap();
+    let mut equipment = prerequisite(Good::Tool, 1_000, PrerequisitePlacement::CarriedInOneLot);
+    equipment.requirement.source = Some(InventoryId(8));
+    f.offers.push(offer(Good::Food, 1, 42, vec![equipment]));
+    f.cargo[0].quantity = Quantity(500);
+    f.cargo[0].origin_quantity = Quantity(500);
+    f.cargo[2].quantity = Quantity(0);
+    f.cargo[2].origin_quantity = Quantity(0);
+    assert_eq!(
+        food.plan(&f.input()),
+        Step::Transfer {
+            source: InventoryId(20),
+            destination: InventoryId(22),
+            quantity: Quantity(500),
+        }
+    );
+    assert_eq!(f.cargo[2].quantity, Quantity(0));
+}

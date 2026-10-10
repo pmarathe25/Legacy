@@ -285,16 +285,21 @@ impl Delivery {
             .map(|cargo| u128::from(cargo_quantity(cargo, &self.requirement).0))
             .sum::<u128>();
         if held >= u128::from(input.minimum_handoff.0) {
-            if let Some(target) =
-                matching
-                    .iter()
-                    .filter(|cargo| cargo.room.0 > 0)
-                    .max_by_key(|cargo| {
-                        (
-                            cargo_quantity(cargo, &self.requirement),
-                            std::cmp::Reverse(cargo.inventory),
-                        )
-                    })
+            if let Some(target) = input
+                .cargo
+                .iter()
+                .filter(|cargo| {
+                    cargo.good == self.requirement.good
+                        && u128::from(cargo_quantity(cargo, &self.requirement).0)
+                            + u128::from(cargo.room.0)
+                            >= u128::from(input.minimum_handoff.0)
+                })
+                .max_by_key(|cargo| {
+                    (
+                        cargo_quantity(cargo, &self.requirement),
+                        std::cmp::Reverse(cargo.inventory),
+                    )
+                })
                 && let Some(source) = matching
                     .iter()
                     .filter(|cargo| cargo.inventory != target.inventory)
@@ -545,7 +550,7 @@ impl<A: Clone> Composition<'_, '_, A> {
                 let mut lots = input
                     .cargo
                     .iter()
-                    .filter(|cargo| cargo_quantity(cargo, requirement).0 > 0)
+                    .filter(|cargo| cargo.good == requirement.good)
                     .collect::<Vec<_>>();
                 lots.sort_by_key(|cargo| {
                     (
@@ -562,10 +567,9 @@ impl<A: Clone> Composition<'_, '_, A> {
                 if let Some(target) = lots.iter().find(|cargo| {
                     u128::from(cargo_quantity(cargo, requirement).0) + u128::from(cargo.room.0)
                         >= u128::from(requirement.quantity.0)
-                }) && let Some(source) = lots
-                    .iter()
-                    .find(|cargo| cargo.inventory != target.inventory)
-                {
+                }) && let Some(source) = lots.iter().find(|cargo| {
+                    cargo.inventory != target.inventory && cargo_quantity(cargo, requirement).0 > 0
+                }) {
                     return Some(Step::Transfer {
                         source: source.inventory,
                         destination: target.inventory,
