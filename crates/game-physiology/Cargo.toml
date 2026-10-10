@@ -4,5 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+genetics = ["dep:game-genetics"]
+
 [dependencies]
+game-genetics = { workspace = true, optional = true }
 game-core.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

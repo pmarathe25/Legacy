@@ -1,0 +1,66 @@
+# Physical expression belongs to physiology; these are the human defaults.
+id = "human/physiology"
+version = 1
+
+[data]
+expression_period_ms = 86400000
+strength_growth_base = 500
+strength_maturity_divisor = 2
+health_growth_base = 800
+health_maturity_divisor = 5
+min_strength = 250
+max_strength = 2000
+max_training = 200
+training_per_level = 2
+
+[[data.traits]]
+kind = "strength"
+spread = 200
+[data.traits.inheritance]
+locus = "body.strength"
+chromosome = "body"
+position = 0
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true
+
+[[data.traits]]
+kind = "constitution"
+spread = 250
+[data.traits.inheritance]
+locus = "body.constitution"
+chromosome = "body"
+position = 1
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true
+
+[[data.traits]]
+kind = "metabolism"
+spread = 150
+[data.traits.inheritance]
+locus = "body.metabolism"
+chromosome = "body"
+position = 2
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true
+
+[[data.traits]]
+kind = "cold_adaptation"
+spread = 400
+[data.traits.inheritance]
+locus = "body.cold_adaptation"
+chromosome = "body"
+position = 3
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true

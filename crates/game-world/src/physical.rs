@@ -117,19 +117,13 @@ impl Simulation {
         else {
             return;
         };
-        if old_health_milli == 0 {
-            return;
-        }
-        let health = (u128::from(body.vitals.health) * 1_000 + u128::from(body.health_remainder))
-            * u128::from(new_health_milli)
-            / u128::from(old_health_milli);
-        body.vitals.health = (health / 1_000).min(u128::from(u64::MAX)) as u64;
-        body.health_remainder = (health % 1_000) as u16;
-        // Changing expression preserves existing injury and never revives death.
-        if !body.vitals.alive {
-            body.vitals.health = 0;
-            body.health_remainder = 0;
-        }
+        (body.vitals.health, body.health_remainder) = game_physiology::traits::rescale_health(
+            body.vitals.health,
+            body.health_remainder,
+            body.vitals.alive,
+            old_health_milli,
+            new_health_milli,
+        );
     }
     pub(crate) fn initialize_physical_people(&mut self, rules: Rules) -> Result<(), Error> {
         if self.state.physical.is_some()
@@ -1781,11 +1775,7 @@ pub(crate) fn rules_for(state: &CanonicalState, actor: PersonId) -> Rules {
         .expect("physical body rules")
         .rules
         .clone();
-    if let Some(phenotype) = state
-        .genetics
-        .as_ref()
-        .and_then(|world| world.phenotype(actor).ok())
-    {
+    if let Some(phenotype) = genetics::phenotype(state, actor) {
         let scale = |value: u64, numerator: u64, denominator: u64| {
             (u128::from(value) * u128::from(numerator) / u128::from(denominator))
                 .min(u128::from(u64::MAX)) as u64

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/game-workshop", "crates/game-cargo", "crates/game-logistics", "crates/game-property", "crates/game-world", "crates/game-environment", "crates/game-ecology", "crates/game-agriculture", "crates/game-agreements", "crates/game-projects", "crates/game-lifecycle", "crates/game-session", "crates/game-armies", "crates/game-realm", "crates/game-transport", "crates/game-genetics", "crates/game-missions", "crates/game-society", "crates/game-lineage", "crates/game-skills", "crates/game-conflict", "crates/game-invocation", "crates/game-physiology", "crates/game-health", "crates/game-characters", "crates/game-core", "crates/game-api", "crates/game-sim", "crates/game-cli"]
+members = ["crates/game-content", "crates/game-workshop", "crates/game-cargo", "crates/game-logistics", "crates/game-property", "crates/game-world", "crates/game-environment", "crates/game-ecology", "crates/game-agriculture", "crates/game-agreements", "crates/game-projects", "crates/game-lifecycle", "crates/game-session", "crates/game-armies", "crates/game-realm", "crates/game-transport", "crates/game-genetics", "crates/game-missions", "crates/game-society", "crates/game-lineage", "crates/game-skills", "crates/game-conflict", "crates/game-invocation", "crates/game-physiology", "crates/game-health", "crates/game-characters", "crates/game-core", "crates/game-api", "crates/game-sim", "crates/game-cli"]
 resolver = "3"
 
 [workspace.package]
@@ -8,6 +8,7 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+game-content = { path = "crates/game-content" }
 game-workshop = { path = "crates/game-workshop" }
 game-cargo = { path = "crates/game-cargo" }
 game-logistics = { path = "crates/game-logistics" }
@@ -38,6 +39,7 @@ game-api = { path = "crates/game-api" }
 game-sim = { path = "crates/game-sim" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = { version = "1.1.3", default-features = false, features = ["std", "serde", "parse"] }
 rayon = "1"
 
 [profile.dev]

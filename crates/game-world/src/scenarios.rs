@@ -19,11 +19,11 @@ pub struct Config {
     #[serde(default)]
     pub social: social::Rules,
     #[serde(default = "default_genetics")]
-    pub genetics: Option<genetics::Rules>,
+    pub genetics: Option<genetics::Config>,
 }
 
-fn default_genetics() -> Option<genetics::Rules> {
-    Some(genetics::Rules::default())
+fn default_genetics() -> Option<genetics::Config> {
+    Some(genetics::Config::default())
 }
 
 impl Default for Config {
@@ -100,12 +100,7 @@ impl Simulation {
                 .max(3 * 24 * 3_600_000),
         );
         let environment = sim.state.environment.as_mut().unwrap();
-        environment.weather_day = sim.state.time.0 / environment.calendar.day.0;
-        environment.weather = environment.climate.weather(
-            seed,
-            environment.weather_day,
-            environment.calendar.season(sim.state.time),
-        );
+        environment.reset_epoch(sim.state.time, seed)?;
         sim.state.scenario = ScenarioInfo {
             id: id.into(),
             version: 1,
@@ -1147,13 +1142,8 @@ impl Simulation {
         // This authored interval ends all previously active social tasks. Its
         // scheduler epoch begins at this snapshot, as do the rebuilt physical
         // deadlines; it does not replay unobserved prenatal interactions.
-        if let Some(genetics) = &mut self.state.genetics {
-            genetics.next_expression = SimTime(
-                death_at
-                    .0
-                    .checked_add(genetics.rules.expression_period_ms)
-                    .ok_or(Error::Overflow)?,
-            );
+        if let Some(traits) = &mut self.state.physical_traits {
+            traits.reset_epoch(death_at)?;
         }
         if let Some(social) = &mut self.state.social {
             social.interactions.clear();
@@ -1203,14 +1193,9 @@ impl Simulation {
             .push(Due::Review);
         let environment = self.state.environment.as_mut().unwrap();
         let day = self.state.time.0 / environment.calendar.day.0;
-        environment.weather_day = day;
+        environment.reset_epoch(self.state.time, self.state.seed)?;
         self.state.ecology.as_mut().unwrap().day = day;
         self.state.agriculture.as_mut().unwrap().day = day;
-        environment.weather = environment.climate.weather(
-            self.state.seed,
-            day,
-            environment.calendar.season(self.state.time),
-        );
         let old = self.state.ruler;
         self.debug_injure(old, self.body_rules(old).max_health)?;
         self.observe_invocation_deaths()?;

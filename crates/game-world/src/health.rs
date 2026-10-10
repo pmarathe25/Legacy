@@ -2294,28 +2294,41 @@ mod integration_tests {
     use super::*;
     fn expressed_health_fixture() -> Simulation {
         let mut sim = Simulation::health_fixture(57, Execution::default()).unwrap();
-        sim.initialize_genetics(game_genetics::Rules {
-            metabolism_spread: 500,
-            cold_span_centi: 400,
-            expression_period_ms: 1_000_000,
-            ..game_genetics::Rules::default()
-        })
-        .unwrap();
-        let actor = sim.state.ruler;
-        let genes = sim.state.genetics.as_mut().unwrap();
-        for locus in [
-            game_genetics::Locus::Metabolism,
-            game_genetics::Locus::ColdAdaptation,
-        ] {
-            let variant = *genes
-                .variants
-                .iter()
-                .find(|(_, variant)| variant.locus == locus && variant.effect == 1_000)
-                .unwrap()
-                .0;
-            for homolog in &mut genes.people.get_mut(&actor).unwrap().genome.autosomes[0].homologs {
-                homolog.variants[locus.index()] = variant;
+        let mut content = genetics::Content::read(genetics::Config::default().content_dir).unwrap();
+        content.physiology.data.expression_period_ms = 1_000_000;
+        for definition in &mut content.physiology.data.traits {
+            match definition.kind {
+                game_physiology::traits::PhysicalTrait::Metabolism => definition.spread = 500,
+                game_physiology::traits::PhysicalTrait::ColdAdaptation => definition.spread = 400,
+                _ => {}
             }
+        }
+        sim.initialize_trait_content(content).unwrap();
+        let actor = sim.state.ruler;
+        let loci: Vec<_> = sim
+            .state
+            .physical_traits
+            .as_ref()
+            .unwrap()
+            .definitions
+            .traits
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.kind,
+                    game_physiology::traits::PhysicalTrait::Metabolism
+                        | game_physiology::traits::PhysicalTrait::ColdAdaptation
+                )
+            })
+            .map(|t| game_genetics::LocusId(t.inheritance.locus.clone()))
+            .collect();
+        for locus in loci {
+            sim.state
+                .genetics
+                .as_mut()
+                .unwrap()
+                .set_alleles(actor, &locus, [1_000; 2])
+                .unwrap();
         }
         sim
     }
@@ -2408,12 +2421,17 @@ mod integration_tests {
         let before = sim.evaluate_health(SimTime(1_003)).unwrap();
         let before_delta = sim.health_body_delta(actor, 1_003).unwrap();
         let before_physiology = sim.health_physiology(actor);
-        sim.initialize_genetics(game_genetics::Rules {
-            metabolism_spread: 0,
-            cold_span_centi: 0,
-            ..game_genetics::Rules::default()
-        })
-        .unwrap();
+        let mut content = genetics::Content::read(genetics::Config::default().content_dir).unwrap();
+        for definition in &mut content.physiology.data.traits {
+            if matches!(
+                definition.kind,
+                game_physiology::traits::PhysicalTrait::Metabolism
+                    | game_physiology::traits::PhysicalTrait::ColdAdaptation
+            ) {
+                definition.spread = 0;
+            }
+        }
+        sim.initialize_trait_content(content).unwrap();
         let after = sim.evaluate_health(SimTime(1_003)).unwrap();
         assert_eq!(before.clinical, after.clinical);
         assert_eq!(before.jobs, after.jobs);

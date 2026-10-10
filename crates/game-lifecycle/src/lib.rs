@@ -3,6 +3,8 @@
 mod transitions;
 pub use transitions::*;
 
+pub mod heredity;
+
 use game_core::{
     ChildhoodInterest, Error, LifeStage, MINUTE, PersonId, PregnancyId, SimDuration, SimTime,
 };
@@ -101,6 +103,15 @@ impl Life {
             .checked_sub(self.born.0)
             .and_then(|elapsed| elapsed.checked_add(self.initial_age.0))
             .ok_or(Error::Overflow)
+    }
+    pub fn maturity_milli(&self, rules: &Rules, now: SimTime) -> Result<u16, Error> {
+        if rules.adulthood.0 == 0 {
+            return Err(Error::InvalidConfiguration("zero adulthood age".into()));
+        }
+        Ok(
+            (u128::from(self.age_at(now)?) * 1_000 / u128::from(rules.adulthood.0)).min(1_000)
+                as u16,
+        )
     }
     pub fn next_age_deadline(
         &self,

@@ -1,5 +1,5 @@
 # game-genetics
 
-This crate gives people inherited predispositions for strength, constitution, metabolism, cold adaptation, and four temperament traits. Each genome has two linked copies of each set of loci. At conception, each parent passes recombined genetic material; configured mutations can alter transmitted variants. The resulting child genome is fixed at conception and determines sex and inherited effects.
+This crate passes opaque genetic material between parents and children. Trait owners supply stable locus IDs, chromosome positions, allele bounds, and mutation settings through `HeritableCharacteristic`; they interpret the inherited values themselves.
 
-Phenotype combines those effects with development and experience. Maturity changes strength and health, physical training adds strength, and care, company, practice, guidance, or harm shift temperament within configured bounds. Temperament also blends inherited scores with a personal baseline. Skills and memories are not encoded in the genome.
+Each parent contributes a linked chromosome copy, with configured crossover and mutation. The child’s genome and parental transmission traces are fixed at conception. Genetics validates and saves this substrate without knowing about physical traits, temperament, development, or reproductive eligibility.

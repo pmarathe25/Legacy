@@ -1,0 +1,15 @@
+# Calendar and climate forcing. Game mechanics consume the resulting weather.
+id = "environment/temperate"
+version = 1
+
+[data.calendar]
+day = 86400000 # simulation milliseconds
+season_days = [92, 92, 91, 90]
+starting_day = 0
+
+[data.climate]
+seasonal_temperature = [12, 20, 10, 0] # Celsius
+seasonal_rain = [6, 4, 6, 3]
+seasonal_evaporation = [3, 5, 2, 1]
+temperature_variation = 3
+rainfall_variation = 3

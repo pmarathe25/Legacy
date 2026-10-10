@@ -65,7 +65,7 @@ fn physical(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     Ok(world.physical_boundary(interval.to))
 }
 fn environment(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
-    Ok(world.environment_boundary(interval.to))
+    world.environment_boundary(interval.to)
 }
 fn projects(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     Ok(world.project_boundary(interval.to))
@@ -92,7 +92,7 @@ fn transport(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     world.transport_boundary(interval.to)
 }
 fn genetics(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
-    Ok(world.genetics_boundary(interval.to))
+    Ok(world.traits_boundary(interval.to))
 }
 fn skills(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     world.skill_boundary(interval.to)

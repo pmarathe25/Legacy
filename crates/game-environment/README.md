@@ -1,5 +1,7 @@
 # game-environment
 
-This crate maps simulation time to calendar days and seasons, and generates deterministic daily weather from the world seed, day, and seasonal climate rules. Its world state holds the calendar, climate, and current weather.
+This crate owns calendar time, seasons, and deterministic daily weather. Its saved runtime holds its own epoch, seed, calendar, climate, and current weather.
 
-When time crosses a day boundary, the crate returns facts for the elapsed day, including its day of year and weather, then publishes the next day's weather. Independently owned systems consume these facts; this crate owns no crops or resources.
+The runtime sets its next deadline and prepares elapsed-day facts before publishing new weather. Commit rejects stale or altered preparations. Other features consume its small weather observations and completed-day facts; this crate needs no crops, resources, or people.
+
+The optional `content` feature loads calendar and climate definitions from TOML, such as `content/environment/temperate.toml`. Saves retain those definitions and their validated content fingerprint, so later edits do not change an existing world's weather.

@@ -1,186 +1,79 @@
-//! A bounded diploid inheritance model. Linked variants recombine into gametes;
-//! immutable genomes supply predispositions, while expression has separate
-//! developmental and experiential inputs. No skills, memories or social roles
-//! are part of the genome.
+//! Trait-independent diploid inheritance, linked crossover, and mutation.
+//! Trait owners supply locus definitions and interpret raw allele values.
 use game_core::{Error, PersonId, PregnancyId, SimTime};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-const LOCI: usize = 8;
-const CHROMOSOMES: usize = 2;
-const PER_CHROMOSOME: usize = 4;
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LocusId(pub String);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Locus {
-    Strength,
-    Constitution,
-    Metabolism,
-    ColdAdaptation,
-    Discipline,
-    Sociability,
-    Empathy,
-    RiskTolerance,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocusDefinition {
+    pub id: LocusId,
+    pub chromosome: String,
+    pub position: u16,
+    pub min: i32,
+    pub max: i32,
+    pub initial_alleles: Vec<i32>,
+    pub mutation_step: u16,
+    pub mutable: bool,
 }
-impl Locus {
-    pub const ALL: [Self; LOCI] = [
-        Self::Strength,
-        Self::Constitution,
-        Self::Metabolism,
-        Self::ColdAdaptation,
-        Self::Discipline,
-        Self::Sociability,
-        Self::Empathy,
-        Self::RiskTolerance,
-    ];
-    pub fn index(self) -> usize {
-        Self::ALL.iter().position(|locus| *locus == self).unwrap()
-    }
+
+/// Implemented by owners of inheritable characteristics. Values remain opaque
+/// to genetics; expression, development, and eligibility belong to those owners.
+pub trait HeritableCharacteristic {
+    fn loci(&self) -> Vec<LocusDefinition>;
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct VariantId(pub u64);
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Variant {
-    pub locus: Locus,
-    pub effect: u16,
+    pub locus: LocusId,
+    pub value: i32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Chromosome {
-    pub variants: [VariantId; PER_CHROMOSOME],
+    pub variants: Vec<VariantId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChromosomePair {
     pub homologs: [Chromosome; 2],
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SexChromosome {
-    X,
-    Y,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Sex {
-    Female,
-    Male,
-}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Genome {
-    pub autosomes: [ChromosomePair; CHROMOSOMES],
-    pub sex: [SexChromosome; 2],
-}
-impl Genome {
-    pub fn sex(&self) -> Result<Sex, Error> {
-        match self.sex {
-            [SexChromosome::X, SexChromosome::X] => Ok(Sex::Female),
-            [SexChromosome::X, SexChromosome::Y] | [SexChromosome::Y, SexChromosome::X] => {
-                Ok(Sex::Male)
-            }
-            _ => Err(Error::InvalidConfiguration(
-                "unsupported sex chromosome pair".into(),
-            )),
-        }
-    }
+    pub chromosomes: Vec<ChromosomePair>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rules {
-    /// Per transmitted allele, on a 0..10,000 scale. These are coarse game loci.
+    /// Mutation probability per transmitted allele, on a 0..10,000 scale.
     pub mutation_chance: u16,
-    pub mutation_step: u16,
-    /// Per boundary between linked loci, on a 0..1,000 scale.
+    /// Crossover probability between linked loci, on a 0..1,000 scale.
     pub crossover_chance: u16,
-    pub temperament_influence: u16,
-    pub learned_temperament_limit: u16,
-    pub strength_spread: u16,
-    pub constitution_spread: u16,
-    pub metabolism_spread: u16,
-    pub cold_span_centi: u16,
-    pub expression_period_ms: u64,
 }
 impl Default for Rules {
     fn default() -> Self {
         Self {
             mutation_chance: 10,
-            mutation_step: 100,
             crossover_chance: 350,
-            temperament_influence: 400,
-            learned_temperament_limit: 150,
-            strength_spread: 200,
-            constitution_spread: 250,
-            metabolism_spread: 150,
-            cold_span_centi: 400,
-            expression_period_ms: 86_400_000,
         }
     }
 }
 impl Rules {
     pub fn valid(&self) -> bool {
-        self.mutation_chance <= 10_000
-            && (1..=1_000).contains(&self.mutation_step)
-            && self.crossover_chance <= 1_000
-            && self.temperament_influence <= 1_000
-            && self.learned_temperament_limit <= 500
-            && [
-                self.strength_spread,
-                self.constitution_spread,
-                self.metabolism_spread,
-            ]
-            .into_iter()
-            .all(|spread| spread <= 500)
-            && self.cold_span_centi <= 2_000
-            && self.expression_period_ms > 0
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Temperament {
-    pub discipline: u16,
-    pub sociability: u16,
-    pub empathy: u16,
-    pub risk_tolerance: u16,
-}
-impl Default for Temperament {
-    fn default() -> Self {
-        Self {
-            discipline: 500,
-            sociability: 500,
-            empathy: 500,
-            risk_tolerance: 500,
-        }
-    }
-}
-impl Temperament {
-    fn valid(self) -> bool {
-        [
-            self.discipline,
-            self.sociability,
-            self.empathy,
-            self.risk_tolerance,
-        ]
-        .into_iter()
-        .all(|value| value <= 1_000)
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Expression {
-    pub maturity_milli: u16,
-    pub physical_training_milli: u16,
-    pub learned_temperament: [i16; 4],
-}
-impl Default for Expression {
-    fn default() -> Self {
-        Self {
-            maturity_milli: 1_000,
-            physical_training_milli: 0,
-            learned_temperament: [0; 4],
-        }
+        self.mutation_chance <= 10_000 && self.crossover_chance <= 1_000
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonGenome {
     pub genome: Genome,
-    pub baseline: Temperament,
-    pub expression: Expression,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transmission {
-    pub locus: Locus,
+    pub locus: LocusId,
     pub source_homolog: u8,
     pub source_variant: VariantId,
     pub transmitted_variant: VariantId,
@@ -192,148 +85,301 @@ pub struct Inheritance {
     pub parents: [PersonId; 2],
     pub conceived_at: SimTime,
     pub genome: Option<Genome>,
-    pub transmissions: [[Transmission; LOCI]; 2],
+    pub transmissions: [Vec<Transmission>; 2],
     pub born: Option<PersonId>,
     pub ended_at: Option<SimTime>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct World {
     pub rules: Rules,
+    pub definitions: Vec<LocusDefinition>,
     pub variants: BTreeMap<VariantId, Variant>,
     pub people: BTreeMap<PersonId, PersonGenome>,
     pub pregnancies: BTreeMap<PregnancyId, Inheritance>,
-    pub next_expression: SimTime,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Phenotype {
-    pub sex: Sex,
-    pub strength_milli: u16,
-    pub max_health_milli: u16,
-    pub metabolism_milli: u16,
-    pub cold_tolerance_centi: i16,
-    pub temperament: Temperament,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Learning {
-    GaveCare,
-    ReceivedCare,
-    Company,
-    Practice,
-    Guidance,
-    ExperiencedHarm,
 }
 
+fn configuration(message: &str) -> Error {
+    Error::InvalidConfiguration(message.into())
+}
+fn canonicalize(mut definitions: Vec<LocusDefinition>) -> Result<Vec<LocusDefinition>, Error> {
+    let mut ids = BTreeSet::new();
+    let mut positions = BTreeSet::new();
+    for definition in &mut definitions {
+        if definition.id.0.trim().is_empty()
+            || definition.id.0.trim() != definition.id.0
+            || definition.chromosome.trim().is_empty()
+            || definition.chromosome.trim() != definition.chromosome
+            || !ids.insert(definition.id.clone())
+            || !positions.insert((definition.chromosome.clone(), definition.position))
+            || definition.min > definition.max
+            || definition.initial_alleles.is_empty()
+            || definition.mutable && definition.mutation_step == 0
+            || definition
+                .initial_alleles
+                .iter()
+                .any(|value| *value < definition.min || *value > definition.max)
+        {
+            return Err(configuration(
+                "invalid or duplicate genetic locus definition",
+            ));
+        }
+        definition.initial_alleles.sort_unstable();
+        if definition
+            .initial_alleles
+            .windows(2)
+            .any(|pair| pair[0] == pair[1])
+        {
+            return Err(configuration("duplicate initial allele"));
+        }
+    }
+    definitions.sort_by(|a, b| {
+        (&a.chromosome, a.position, &a.id).cmp(&(&b.chromosome, b.position, &b.id))
+    });
+    Ok(definitions)
+}
 fn mix(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
     value ^ (value >> 31)
 }
-fn key(seed: u64, identity: u64, side: u64, chromosome: u64, locus: u64, purpose: u64) -> u64 {
+fn name_key(name: &str) -> u64 {
+    name.as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
+}
+fn key(
+    seed: u64,
+    identity: u64,
+    side: u64,
+    chromosome: &str,
+    locus: &LocusId,
+    purpose: u64,
+) -> u64 {
     mix(seed
         ^ mix(identity)
         ^ mix(side.wrapping_add(0x9e3779b97f4a7c15))
-        ^ mix(chromosome.wrapping_add(0x632be59bd9b4e019))
-        ^ mix(locus.wrapping_add(0x94d049bb133111eb))
+        ^ mix(name_key(chromosome))
+        ^ mix(name_key(&locus.0))
         ^ mix(purpose))
 }
-fn initial_id(locus: usize, index: u64) -> VariantId {
-    VariantId((locus as u64) * 21 + index + 1)
+fn standing_variant(locus: &LocusId, value: i32) -> VariantId {
+    VariantId((mix(name_key(&locus.0) ^ mix(value as u32 as u64)) & !(1 << 63)).max(1))
 }
-
+fn insert_variant(
+    variants: &mut BTreeMap<VariantId, Variant>,
+    id: VariantId,
+    value: Variant,
+) -> Result<(), Error> {
+    if variants.get(&id).is_some_and(|existing| existing != &value) {
+        return Err(configuration("genetic variant identity collision"));
+    }
+    variants.insert(id, value);
+    Ok(())
+}
 struct Gamete {
-    chromosomes: [Chromosome; CHROMOSOMES],
-    sex: SexChromosome,
-    transmissions: [Transmission; LOCI],
+    chromosomes: Vec<Chromosome>,
+    transmissions: Vec<Transmission>,
     mutations: BTreeMap<VariantId, Variant>,
 }
 impl World {
-    pub fn new(rules: Rules, now: SimTime) -> Result<Self, Error> {
+    pub fn new(rules: Rules, definitions: Vec<LocusDefinition>) -> Result<Self, Error> {
         if !rules.valid() {
-            return Err(Error::InvalidConfiguration("invalid genetic rules".into()));
+            return Err(configuration("invalid genetic rules"));
         }
-        let next_expression = SimTime(
-            now.0
-                .checked_add(rules.expression_period_ms)
-                .ok_or(Error::Overflow)?,
-        );
-        let mut world = Self {
-            rules,
-            next_expression,
-            ..Self::default()
-        };
-        for (locus_index, locus) in Locus::ALL.into_iter().enumerate() {
-            for index in 0..=20 {
-                world.variants.insert(
-                    initial_id(locus_index, index),
+        let definitions = canonicalize(definitions)?;
+        let mut variants = BTreeMap::new();
+        for definition in &definitions {
+            for value in &definition.initial_alleles {
+                insert_variant(
+                    &mut variants,
+                    standing_variant(&definition.id, *value),
                     Variant {
-                        locus,
-                        effect: (index * 50) as u16,
+                        locus: definition.id.clone(),
+                        value: *value,
                     },
-                );
+                )?;
             }
         }
-        Ok(world)
+        Ok(Self {
+            rules,
+            definitions,
+            variants,
+            people: BTreeMap::new(),
+            pregnancies: BTreeMap::new(),
+        })
     }
-    pub fn seed_person(
-        &mut self,
-        seed: u64,
-        person: PersonId,
-        sex: Sex,
-        baseline: Temperament,
-        expression: Expression,
-    ) -> Result<(), Error> {
-        if self.people.contains_key(&person)
-            || !baseline.valid()
-            || expression.maturity_milli > 1_000
-            || expression.physical_training_milli > 200
-            || expression
-                .learned_temperament
-                .iter()
-                .any(|offset| offset.unsigned_abs() > self.rules.learned_temperament_limit)
-        {
-            return Err(Error::InvalidConfiguration(
-                "duplicate genetic person or invalid baseline".into(),
-            ));
+    fn groups(&self) -> Vec<&[LocusDefinition]> {
+        let mut groups = Vec::new();
+        let mut start = 0;
+        while start < self.definitions.len() {
+            let end = start
+                + self.definitions[start..]
+                    .iter()
+                    .take_while(|definition| {
+                        definition.chromosome == self.definitions[start].chromosome
+                    })
+                    .count();
+            groups.push(&self.definitions[start..end]);
+            start = end;
         }
-        let autosomes = std::array::from_fn(|chromosome| ChromosomePair {
-            homologs: std::array::from_fn(|side| Chromosome {
-                variants: std::array::from_fn(|locus| {
-                    let index = key(
-                        seed,
-                        person.0,
-                        side as u64,
-                        chromosome as u64,
-                        locus as u64,
-                        1,
-                    ) % 11
-                        + key(
-                            seed,
-                            person.0,
-                            side as u64,
-                            chromosome as u64,
-                            locus as u64,
-                            2,
-                        ) % 11;
-                    initial_id(chromosome * PER_CHROMOSOME + locus, index)
+        groups
+    }
+    fn location(&self, locus: &LocusId) -> Result<(usize, usize, &LocusDefinition), Error> {
+        self.location_named(&locus.0)
+    }
+    fn location_named(&self, locus: &str) -> Result<(usize, usize, &LocusDefinition), Error> {
+        let mut chromosome = 0;
+        let mut position = 0;
+        let mut previous_chromosome = None;
+        for definition in &self.definitions {
+            if let Some(previous) = previous_chromosome
+                && previous != definition.chromosome.as_str()
+            {
+                chromosome += 1;
+                position = 0;
+            }
+            if definition.id.0 == locus {
+                return Ok((chromosome, position, definition));
+            }
+            previous_chromosome = Some(definition.chromosome.as_str());
+            position += 1;
+        }
+        Err(Error::Unavailable)
+    }
+    pub fn seed_person(&mut self, seed: u64, person: PersonId) -> Result<(), Error> {
+        if self.people.contains_key(&person) {
+            return Err(configuration("duplicate genetic person"));
+        }
+        let chromosomes = self
+            .groups()
+            .into_iter()
+            .map(|definitions| ChromosomePair {
+                homologs: std::array::from_fn(|side| Chromosome {
+                    variants: definitions
+                        .iter()
+                        .map(|definition| {
+                            let count = definition.initial_alleles.len() as u64;
+                            // Two independent draws bias the index toward its center without
+                            // assuming any semantic meaning for the allele values.
+                            let first = key(
+                                seed,
+                                person.0,
+                                side as u64,
+                                &definition.chromosome,
+                                &definition.id,
+                                1,
+                            ) % count.div_ceil(2);
+                            let second = key(
+                                seed,
+                                person.0,
+                                side as u64,
+                                &definition.chromosome,
+                                &definition.id,
+                                2,
+                            ) % (count / 2 + 1);
+                            let index = first + second;
+                            standing_variant(
+                                &definition.id,
+                                definition.initial_alleles[index as usize],
+                            )
+                        })
+                        .collect(),
                 }),
-            }),
-        });
-        let genome = Genome {
-            autosomes,
-            sex: match sex {
-                Sex::Female => [SexChromosome::X, SexChromosome::X],
-                Sex::Male => [SexChromosome::X, SexChromosome::Y],
-            },
-        };
+            })
+            .collect();
         self.people.insert(
             person,
             PersonGenome {
-                genome,
-                baseline,
-                expression,
+                genome: Genome { chromosomes },
             },
         );
         Ok(())
+    }
+    /// Sets explicit founder substrate before that genome has participated in
+    /// reproduction. Acquired characteristics never update these values.
+    pub fn set_alleles(
+        &mut self,
+        person: PersonId,
+        locus: &LocusId,
+        values: [i32; 2],
+    ) -> Result<(), Error> {
+        if self.pregnancies.values().any(|inheritance| {
+            inheritance.parents.contains(&person) || inheritance.born == Some(person)
+        }) {
+            return Err(Error::Unavailable);
+        }
+        let (chromosome, position, definition) = self.location(locus)?;
+        if values
+            .iter()
+            .any(|value| *value < definition.min || *value > definition.max)
+        {
+            return Err(configuration("founder allele outside locus bounds"));
+        }
+        self.allele_ids(person, locus)?;
+        let ids = values.map(|value| standing_variant(locus, value));
+        let mut additions = BTreeMap::new();
+        for (id, value) in ids.into_iter().zip(values) {
+            let variant = Variant {
+                locus: locus.clone(),
+                value,
+            };
+            if self
+                .variants
+                .get(&id)
+                .is_some_and(|existing| existing != &variant)
+            {
+                return Err(configuration("genetic variant identity collision"));
+            }
+            insert_variant(&mut additions, id, variant)?;
+        }
+        let record = self.people.get_mut(&person).unwrap();
+        for (side, id) in ids.into_iter().enumerate() {
+            record.genome.chromosomes[chromosome].homologs[side].variants[position] = id;
+        }
+        self.variants.extend(additions);
+        Ok(())
+    }
+    pub fn allele_ids(&self, person: PersonId, locus: &LocusId) -> Result<[VariantId; 2], Error> {
+        self.allele_ids_named(person, &locus.0)
+    }
+    /// Reads an owner's borrowed locus name without allocating an identifier.
+    pub fn allele_ids_named(&self, person: PersonId, locus: &str) -> Result<[VariantId; 2], Error> {
+        let (chromosome, position, _) = self.location_named(locus)?;
+        let pair = self
+            .people
+            .get(&person)
+            .ok_or(Error::Unavailable)?
+            .genome
+            .chromosomes
+            .get(chromosome)
+            .ok_or_else(|| configuration("malformed person genome"))?;
+        let mut ids = [VariantId(0); 2];
+        for (side, id) in ids.iter_mut().enumerate() {
+            *id = *pair.homologs[side]
+                .variants
+                .get(position)
+                .ok_or_else(|| configuration("malformed person genome"))?;
+        }
+        Ok(ids)
+    }
+    pub fn alleles(&self, person: PersonId, locus: &LocusId) -> Result<[i32; 2], Error> {
+        self.alleles_named(person, &locus.0)
+    }
+    /// Returns opaque allele values for an owner's borrowed locus name.
+    pub fn alleles_named(&self, person: PersonId, locus: &str) -> Result<[i32; 2], Error> {
+        let ids = self.allele_ids_named(person, locus)?;
+        let mut values = [0; 2];
+        for (id, value) in ids.into_iter().zip(&mut values) {
+            let variant = self
+                .variants
+                .get(&id)
+                .filter(|variant| variant.locus.0 == locus)
+                .ok_or_else(|| configuration("unknown or mismatched genetic variant"))?;
+            *value = variant.value;
+        }
+        Ok(values)
     }
     fn gamete(
         &self,
@@ -342,113 +388,85 @@ impl World {
         side: usize,
         parent: &Genome,
     ) -> Result<Gamete, Error> {
-        let mut mutations = BTreeMap::new();
-        let mut traces = std::array::from_fn(|index| Transmission {
-            locus: Locus::ALL[index],
-            source_homolog: 0,
-            source_variant: VariantId(0),
-            transmitted_variant: VariantId(0),
-            crossed_before: false,
-            mutated: false,
-        });
-        let mut chromosomes = Vec::new();
-        for chromosome in 0..CHROMOSOMES {
-            let mut homolog =
-                (key(seed, pregnancy.0, side as u64, chromosome as u64, 0, 3) % 2) as usize;
-            let mut transmitted = [VariantId(0); PER_CHROMOSOME];
-            for (locus, slot) in transmitted.iter_mut().enumerate() {
-                let crossed = locus > 0
-                    && key(
+        if !self.genome_valid(parent) {
+            return Err(configuration("malformed parental genome"));
+        }
+        let mut result = Gamete {
+            chromosomes: Vec::new(),
+            transmissions: Vec::new(),
+            mutations: BTreeMap::new(),
+        };
+        for (chromosome, definitions) in self.groups().into_iter().enumerate() {
+            let first = &definitions[0];
+            let mut homolog = (key(
+                seed,
+                pregnancy.0,
+                side as u64,
+                &first.chromosome,
+                &first.id,
+                3,
+            ) % 2) as usize;
+            let mut transmitted = Vec::new();
+            for (position, definition) in definitions.iter().enumerate() {
+                let draw = |purpose| {
+                    key(
                         seed,
                         pregnancy.0,
                         side as u64,
-                        chromosome as u64,
-                        locus as u64,
-                        4,
-                    ) % 1_000
-                        < u64::from(self.rules.crossover_chance);
+                        &definition.chromosome,
+                        &definition.id,
+                        purpose,
+                    )
+                };
+                let crossed =
+                    position > 0 && draw(4) % 1_000 < u64::from(self.rules.crossover_chance);
                 if crossed {
                     homolog ^= 1;
                 }
-                let source = parent.autosomes[chromosome].homologs[homolog].variants[locus];
-                let variant = *self.variants.get(&source).ok_or_else(|| {
-                    Error::InvalidConfiguration("unknown inherited variant".into())
-                })?;
-                if variant.locus != Locus::ALL[chromosome * PER_CHROMOSOME + locus] {
-                    return Err(Error::InvalidConfiguration(
-                        "variant belongs to a different locus".into(),
-                    ));
-                }
-                let mutated = key(
-                    seed,
-                    pregnancy.0,
-                    side as u64,
-                    chromosome as u64,
-                    locus as u64,
-                    5,
-                ) % 10_000
-                    < u64::from(self.rules.mutation_chance);
+                let source = parent.chromosomes[chromosome].homologs[homolog].variants[position];
+                let variant = &self.variants[&source];
+                let mutated =
+                    definition.mutable && draw(5) % 10_000 < u64::from(self.rules.mutation_chance);
                 let target = if mutated {
-                    let delta = (key(
-                        seed,
-                        pregnancy.0,
-                        side as u64,
-                        chromosome as u64,
-                        locus as u64,
-                        6,
-                    ) % (u64::from(self.rules.mutation_step) * 2 + 1))
-                        as i32
-                        - i32::from(self.rules.mutation_step);
-                    let id = VariantId(
-                        key(
-                            seed,
-                            pregnancy.0,
-                            side as u64,
-                            chromosome as u64,
-                            locus as u64,
-                            7,
-                        ) ^ mix(source.0)
-                            | 1 << 63,
-                    );
+                    let delta = (draw(6) % (u64::from(definition.mutation_step) * 2 + 1)) as i64
+                        - i64::from(definition.mutation_step);
+                    let id = VariantId((draw(7) ^ mix(source.0)) | 1 << 63);
+                    if id == source {
+                        return Err(configuration("genetic variant identity collision"));
+                    }
                     let value = Variant {
-                        locus: variant.locus,
-                        effect: (i32::from(variant.effect) + delta).clamp(0, 1_000) as u16,
+                        locus: definition.id.clone(),
+                        value: (i64::from(variant.value) + delta)
+                            .clamp(i64::from(definition.min), i64::from(definition.max))
+                            as i32,
                     };
                     if self
                         .variants
                         .get(&id)
-                        .is_some_and(|existing| *existing != value)
+                        .is_some_and(|existing| existing != &value)
                     {
-                        return Err(Error::InvalidConfiguration(
-                            "genetic variant identity collision".into(),
-                        ));
+                        return Err(configuration("genetic variant identity collision"));
                     }
-                    mutations.insert(id, value);
+                    insert_variant(&mut result.mutations, id, value)?;
                     id
                 } else {
                     source
                 };
-                *slot = target;
-                traces[chromosome * PER_CHROMOSOME + locus] = Transmission {
-                    locus: variant.locus,
+                transmitted.push(target);
+                result.transmissions.push(Transmission {
+                    locus: definition.id.clone(),
                     source_homolog: homolog as u8,
                     source_variant: source,
                     transmitted_variant: target,
                     crossed_before: crossed,
                     mutated,
-                };
+                });
             }
-            chromosomes.push(Chromosome {
+            result.chromosomes.push(Chromosome {
                 variants: transmitted,
             });
         }
-        let sex = parent.sex[(key(seed, pregnancy.0, side as u64, 2, 0, 8) % 2) as usize];
-        Ok(Gamete {
-            chromosomes: chromosomes.try_into().unwrap(),
-            sex,
-            transmissions: traces,
-            mutations,
-        })
+        Ok(result)
     }
     pub fn conceive(
         &mut self,
@@ -477,24 +495,21 @@ impl World {
             .get(&parents[1])
             .ok_or(Error::Unavailable)?
             .genome;
-        if first.sex() != Ok(Sex::Female) || second.sex() != Ok(Sex::Male) {
-            return Err(Error::Unavailable);
-        }
         let a = self.gamete(seed, pregnancy, 0, first)?;
         let b = self.gamete(seed, pregnancy, 1, second)?;
         if a.mutations
             .iter()
             .any(|(id, variant)| b.mutations.get(id).is_some_and(|other| other != variant))
         {
-            return Err(Error::InvalidConfiguration(
-                "genetic variant identity collision".into(),
-            ));
+            return Err(configuration("genetic variant identity collision"));
         }
         let genome = Genome {
-            autosomes: std::array::from_fn(|index| ChromosomePair {
-                homologs: [a.chromosomes[index].clone(), b.chromosomes[index].clone()],
-            }),
-            sex: [a.sex, b.sex],
+            chromosomes: a
+                .chromosomes
+                .into_iter()
+                .zip(b.chromosomes)
+                .map(|(a, b)| ChromosomePair { homologs: [a, b] })
+                .collect(),
         };
         self.variants.extend(a.mutations);
         self.variants.extend(b.mutations);
@@ -516,10 +531,10 @@ impl World {
         pregnancy: PregnancyId,
         child: PersonId,
         now: SimTime,
-    ) -> Result<Phenotype, Error> {
+    ) -> Result<(), Error> {
         let inheritance = self.pregnancies.get(&pregnancy).ok_or(Error::Unavailable)?;
         if inheritance.born == Some(child) {
-            return self.phenotype(child);
+            return Ok(());
         }
         if inheritance.born.is_some()
             || inheritance.ended_at.is_some()
@@ -530,199 +545,164 @@ impl World {
             return Err(Error::Unavailable);
         }
         let genome = inheritance.genome.clone().ok_or(Error::Unavailable)?;
-        let record = PersonGenome {
-            genome,
-            baseline: Temperament::default(),
-            expression: Expression {
-                maturity_milli: 0,
-                ..Expression::default()
-            },
-        };
-        let phenotype = self.express(&record)?;
-        self.people.insert(child, record);
+        if !self.genome_valid(&genome) {
+            return Err(configuration("malformed inherited genome"));
+        }
+        self.people.insert(child, PersonGenome { genome });
         let inheritance = self.pregnancies.get_mut(&pregnancy).unwrap();
         inheritance.genome = None;
         inheritance.born = Some(child);
-        Ok(phenotype)
+        Ok(())
     }
     pub fn end_pregnancy(&mut self, pregnancy: PregnancyId, now: SimTime) {
         if let Some(record) = self.pregnancies.get_mut(&pregnancy)
             && record.born.is_none()
+            && record.ended_at.is_none()
             && now >= record.conceived_at
         {
             record.ended_at = Some(now);
         }
     }
-    pub fn phenotype(&self, person: PersonId) -> Result<Phenotype, Error> {
-        let record = self.people.get(&person).ok_or(Error::Unavailable)?;
-        self.express(record)
-    }
-    fn express(&self, record: &PersonGenome) -> Result<Phenotype, Error> {
-        let mut scores = [0_i32; LOCI];
-        for (index, score) in scores.iter_mut().enumerate() {
-            let pair = &record.genome.autosomes[index / PER_CHROMOSOME];
-            let first = self
-                .variants
-                .get(&pair.homologs[0].variants[index % PER_CHROMOSOME])
-                .ok_or(Error::Unavailable)?;
-            let second = self
-                .variants
-                .get(&pair.homologs[1].variants[index % PER_CHROMOSOME])
-                .ok_or(Error::Unavailable)?;
-            *score = (i32::from(first.effect) + i32::from(second.effect)) / 2;
-        }
-        let factor = |score: i32, spread: u16| 1_000 + (score - 500) * i32::from(spread) / 500;
-        let growth = 500 + i32::from(record.expression.maturity_milli) / 2;
-        let strength = (factor(scores[0], self.rules.strength_spread) * growth / 1_000
-            + i32::from(record.expression.physical_training_milli))
-        .clamp(250, 2_000) as u16;
-        let health_growth = 800 + i32::from(record.expression.maturity_milli) / 5;
-        let baseline = [
-            record.baseline.discipline,
-            record.baseline.sociability,
-            record.baseline.empathy,
-            record.baseline.risk_tolerance,
-        ];
-        let temperament: [u16; 4] = std::array::from_fn(|index| {
-            ((i32::from(baseline[index]) * (1_000 - i32::from(self.rules.temperament_influence))
-                + scores[index + 4] * i32::from(self.rules.temperament_influence))
-                / 1_000
-                + i32::from(record.expression.learned_temperament[index]))
-            .clamp(0, 1_000) as u16
-        });
-        Ok(Phenotype {
-            sex: record.genome.sex()?,
-            strength_milli: strength,
-            max_health_milli: (factor(scores[1], self.rules.constitution_spread) * health_growth
-                / 1_000) as u16,
-            metabolism_milli: factor(scores[2], self.rules.metabolism_spread) as u16,
-            cold_tolerance_centi: ((scores[3] - 500) * i32::from(self.rules.cold_span_centi) / 500)
-                as i16,
-            temperament: Temperament {
-                discipline: temperament[0],
-                sociability: temperament[1],
-                empathy: temperament[2],
-                risk_tolerance: temperament[3],
-            },
-        })
-    }
-    pub fn develop(&mut self, person: PersonId, maturity: u16, training: u16) -> Result<(), Error> {
-        if maturity > 1_000 || training > 200 {
-            return Err(Error::InvalidConfiguration(
-                "invalid developmental genetic expression".into(),
-            ));
-        }
-        let record = self.people.get_mut(&person).ok_or(Error::Unavailable)?;
-        record.expression.maturity_milli = maturity;
-        record.expression.physical_training_milli = training;
-        Ok(())
-    }
-    pub fn learn(&mut self, person: PersonId, event: Learning) {
-        let Some(record) = self.people.get_mut(&person) else {
-            return;
-        };
-        let delta = match event {
-            Learning::GaveCare => [1, 0, 1, 0],
-            Learning::ReceivedCare => [0, 1, 1, 0],
-            Learning::Company => [0, 1, 0, 0],
-            Learning::Practice => [1, 0, 0, 0],
-            Learning::Guidance => [1, 1, 0, 0],
-            Learning::ExperiencedHarm => [0, 0, 0, -1],
-        };
-        let bound = self.rules.learned_temperament_limit as i16;
-        for (offset, delta) in record.expression.learned_temperament.iter_mut().zip(delta) {
-            *offset = (*offset + delta).clamp(-bound, bound);
-        }
+    fn genome_valid(&self, genome: &Genome) -> bool {
+        let groups = self.groups();
+        genome.chromosomes.len() == groups.len()
+            && genome
+                .chromosomes
+                .iter()
+                .zip(groups)
+                .all(|(pair, definitions)| {
+                    pair.homologs.iter().all(|homolog| {
+                        homolog.variants.len() == definitions.len()
+                            && homolog
+                                .variants
+                                .iter()
+                                .zip(definitions)
+                                .all(|(id, definition)| {
+                                    self.variants.get(id).is_some_and(|variant| {
+                                        variant.locus == definition.id
+                                            && variant.value >= definition.min
+                                            && variant.value <= definition.max
+                                    })
+                                })
+                    })
+                })
     }
 }
 
 pub fn validate(world: &World, now: SimTime) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent genetic state".into());
     if !world.rules.valid()
-        || world.next_expression <= now
-        || world
-            .variants
-            .iter()
-            .any(|(id, variant)| id.0 == 0 || variant.effect > 1_000)
+        || canonicalize(world.definitions.clone()).map_err(|_| fail())? != world.definitions
     {
         return Err(fail());
     }
-    let genome_valid = |genome: &Genome| -> bool {
-        genome.sex().is_ok()
-            && genome
-                .autosomes
-                .iter()
-                .enumerate()
-                .all(|(chromosome, pair)| {
-                    pair.homologs.iter().all(|homolog| {
-                        homolog.variants.iter().enumerate().all(|(locus, id)| {
-                            world.variants.get(id).is_some_and(|variant| {
-                                variant.locus == Locus::ALL[chromosome * PER_CHROMOSOME + locus]
-                            })
-                        })
-                    })
-                })
-    };
-    for record in world.people.values() {
-        if !genome_valid(&record.genome)
-            || !record.baseline.valid()
-            || record.expression.maturity_milli > 1_000
-            || record.expression.physical_training_milli > 200
-            || record
-                .expression
-                .learned_temperament
-                .iter()
-                .any(|offset| offset.unsigned_abs() > world.rules.learned_temperament_limit)
-        {
+    let definitions: BTreeMap<_, _> = world
+        .definitions
+        .iter()
+        .map(|definition| (&definition.id, definition))
+        .collect();
+    for (id, variant) in &world.variants {
+        let definition = definitions.get(&variant.locus).ok_or_else(fail)?;
+        if id.0 == 0 || variant.value < definition.min || variant.value > definition.max {
             return Err(fail());
         }
     }
+    for definition in &world.definitions {
+        for value in &definition.initial_alleles {
+            if world
+                .variants
+                .get(&standing_variant(&definition.id, *value))
+                != Some(&Variant {
+                    locus: definition.id.clone(),
+                    value: *value,
+                })
+            {
+                return Err(fail());
+            }
+        }
+    }
+    if world
+        .people
+        .values()
+        .any(|record| !world.genome_valid(&record.genome))
+    {
+        return Err(fail());
+    }
+    let mut children = BTreeSet::new();
     for inheritance in world.pregnancies.values() {
         if inheritance.parents[0] == inheritance.parents[1]
             || inheritance.conceived_at > now
             || inheritance.ended_at.is_some_and(|ended| {
                 ended < inheritance.conceived_at || ended > now || inheritance.born.is_some()
             })
-            || !world.people.contains_key(&inheritance.parents[0])
-            || !world.people.contains_key(&inheritance.parents[1])
+            || inheritance
+                .parents
+                .iter()
+                .any(|parent| !world.people.contains_key(parent))
         {
             return Err(fail());
         }
         let genome = match (&inheritance.genome, inheritance.born) {
             (Some(genome), None) => genome,
-            (None, Some(child)) if !inheritance.parents.contains(&child) => {
+            (None, Some(child))
+                if !inheritance.parents.contains(&child) && children.insert(child) =>
+            {
                 &world.people.get(&child).ok_or_else(fail)?.genome
             }
             _ => return Err(fail()),
         };
-        if !genome_valid(genome) {
+        if !world.genome_valid(genome) {
             return Err(fail());
         }
         for (side, traces) in inheritance.transmissions.iter().enumerate() {
+            if traces.len() != world.definitions.len() {
+                return Err(fail());
+            }
             let parent = &world.people[&inheritance.parents[side]].genome;
-            for (index, trace) in traces.iter().enumerate() {
-                if trace.locus != Locus::ALL[index]
-                    || trace.source_homolog > 1
-                    || index % PER_CHROMOSOME == 0 && trace.crossed_before
-                    || world
-                        .variants
-                        .get(&trace.source_variant)
-                        .is_none_or(|variant| variant.locus != trace.locus)
-                    || world
+            let mut index = 0;
+            for (chromosome, group) in world.groups().into_iter().enumerate() {
+                let mut previous = None;
+                for (position, definition) in group.iter().enumerate() {
+                    let trace = &traces[index];
+                    index += 1;
+                    let source = world.variants.get(&trace.source_variant).ok_or_else(fail)?;
+                    let target = world
                         .variants
                         .get(&trace.transmitted_variant)
-                        .is_none_or(|variant| variant.locus != trace.locus)
-                    || parent.autosomes[index / PER_CHROMOSOME].homologs
-                        [usize::from(trace.source_homolog)]
-                    .variants[index % PER_CHROMOSOME]
-                        != trace.source_variant
-                    || genome.autosomes[index / PER_CHROMOSOME].homologs[side].variants
-                        [index % PER_CHROMOSOME]
-                        != trace.transmitted_variant
-                    || !trace.mutated && trace.source_variant != trace.transmitted_variant
-                    || trace.mutated && trace.source_variant == trace.transmitted_variant
-                {
-                    return Err(fail());
+                        .ok_or_else(fail)?;
+                    if trace.locus != definition.id
+                        || trace.source_homolog > 1
+                        || source.locus != trace.locus
+                        || target.locus != trace.locus
+                        || position == 0 && trace.crossed_before
+                        || position > 0
+                            && previous
+                                != Some(trace.source_homolog ^ u8::from(trace.crossed_before))
+                        || trace.crossed_before && world.rules.crossover_chance == 0
+                        || position > 0
+                            && !trace.crossed_before
+                            && world.rules.crossover_chance == 1_000
+                        || parent.chromosomes[chromosome].homologs
+                            [usize::from(trace.source_homolog)]
+                        .variants[position]
+                            != trace.source_variant
+                        || genome.chromosomes[chromosome].homologs[side].variants[position]
+                            != trace.transmitted_variant
+                        || !trace.mutated && trace.source_variant != trace.transmitted_variant
+                        || trace.mutated
+                            && (!definition.mutable
+                                || world.rules.mutation_chance == 0
+                                || trace.source_variant == trace.transmitted_variant
+                                || trace.transmitted_variant.0 & (1 << 63) == 0
+                                || i64::from(source.value).abs_diff(i64::from(target.value))
+                                    > u64::from(definition.mutation_step))
+                        || definition.mutable
+                            && world.rules.mutation_chance == 10_000
+                            && !trace.mutated
+                    {
+                        return Err(fail());
+                    }
+                    previous = Some(trace.source_homolog);
                 }
             }
         }
@@ -733,70 +713,107 @@ pub fn validate(world: &World, now: SimTime) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn definitions() -> Vec<LocusDefinition> {
+        [
+            ("opaque.alpha", "a", 2),
+            ("opaque.beta", "a", 7),
+            ("foreign.choice", "b", 0),
+        ]
+        .into_iter()
+        .map(|(id, chromosome, position)| LocusDefinition {
+            id: LocusId(id.into()),
+            chromosome: chromosome.into(),
+            position,
+            min: -500,
+            max: 500,
+            initial_alleles: vec![-500, -250, 0, 250, 500],
+            mutation_step: 100,
+            mutable: true,
+        })
+        .collect()
+    }
     fn parents(rules: Rules) -> World {
-        let mut world = World::new(rules, SimTime(0)).unwrap();
-        world
-            .seed_person(
-                7,
-                PersonId(1),
-                Sex::Female,
-                Temperament::default(),
-                Expression::default(),
-            )
-            .unwrap();
-        world
-            .seed_person(
-                7,
-                PersonId(2),
-                Sex::Male,
-                Temperament::default(),
-                Expression::default(),
-            )
-            .unwrap();
+        let mut world = World::new(rules, definitions()).unwrap();
+        world.seed_person(7, PersonId(1)).unwrap();
+        world.seed_person(7, PersonId(2)).unwrap();
+        for definition in definitions() {
+            world
+                .set_alleles(PersonId(1), &definition.id, [-500, 500])
+                .unwrap();
+            world
+                .set_alleles(PersonId(2), &definition.id, [-250, 250])
+                .unwrap();
+        }
         world
     }
     #[test]
-    fn each_transmitted_variant_has_an_actual_parental_homolog_and_linked_crossover() {
-        let rules = Rules {
+    fn schema_and_rng_are_independent_of_definition_and_operation_order() {
+        let mut reversed = definitions();
+        reversed.reverse();
+        reversed[0].initial_alleles.reverse();
+        let mut a = World::new(Rules::default(), definitions()).unwrap();
+        let mut b = World::new(Rules::default(), reversed).unwrap();
+        for person in [PersonId(1), PersonId(2)] {
+            a.seed_person(7, person).unwrap();
+        }
+        for person in [PersonId(2), PersonId(1)] {
+            b.seed_person(7, person).unwrap();
+        }
+        for pregnancy in [PregnancyId(3), PregnancyId(4)] {
+            a.conceive(9, pregnancy, [PersonId(1), PersonId(2)], SimTime(1))
+                .unwrap();
+        }
+        for pregnancy in [PregnancyId(4), PregnancyId(3)] {
+            b.conceive(9, pregnancy, [PersonId(1), PersonId(2)], SimTime(1))
+                .unwrap();
+        }
+        assert_eq!(a, b);
+        validate(&a, SimTime(1)).unwrap();
+    }
+    #[test]
+    fn linked_crossover_traces_identify_actual_parental_homologs() {
+        let mut world = parents(Rules {
             mutation_chance: 0,
             crossover_chance: 1_000,
-            ..Rules::default()
-        };
-        let mut world = parents(rules);
+        });
         world
             .conceive(4, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
             .unwrap();
-        for (side, traces) in world.pregnancies[&PregnancyId(3)]
-            .transmissions
-            .iter()
-            .enumerate()
-        {
-            let mut previous = None;
+        let inheritance = &world.pregnancies[&PregnancyId(3)];
+        for (side, traces) in inheritance.transmissions.iter().enumerate() {
+            assert_eq!(traces.len(), 3);
+            assert!(!traces[0].crossed_before);
+            assert!(traces[1].crossed_before);
+            assert_ne!(traces[0].source_homolog, traces[1].source_homolog);
+            assert!(!traces[2].crossed_before);
             for trace in traces {
                 assert!(!trace.mutated);
                 assert_eq!(trace.source_variant, trace.transmitted_variant);
-                let index = trace.locus.index();
                 assert_eq!(
-                    world.people[&PersonId(side as u64 + 1)].genome.autosomes[index / 4].homologs
-                        [usize::from(trace.source_homolog)]
-                    .variants[index % 4],
+                    world
+                        .allele_ids(PersonId(side as u64 + 1), &trace.locus)
+                        .unwrap()[usize::from(trace.source_homolog)],
                     trace.source_variant
                 );
-                if index % 4 > 0 {
-                    assert!(trace.crossed_before);
-                    assert_ne!(previous, Some(trace.source_homolog));
-                }
-                previous = Some(trace.source_homolog);
             }
         }
         validate(&world, SimTime(1)).unwrap();
     }
     #[test]
-    fn mutation_creates_explicit_new_variants_without_rewriting_parent_genomes() {
-        let mut world = parents(Rules {
-            mutation_chance: 10_000,
-            ..Rules::default()
-        });
+    fn mutation_respects_owner_bounds_and_immutable_loci_without_rewriting_parents() {
+        let mut definitions = definitions();
+        definitions[2].mutable = false;
+        definitions[2].mutation_step = 0;
+        let mut world = World::new(
+            Rules {
+                mutation_chance: 10_000,
+                crossover_chance: 0,
+            },
+            definitions,
+        )
+        .unwrap();
+        world.seed_person(3, PersonId(1)).unwrap();
+        world.seed_person(3, PersonId(2)).unwrap();
         let before = world.people.clone();
         world
             .conceive(4, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
@@ -807,121 +824,288 @@ mod tests {
             .iter()
             .flatten()
         {
-            assert!(trace.mutated);
-            assert_ne!(trace.source_variant, trace.transmitted_variant);
-            let old = world.variants[&trace.source_variant];
-            let new = world.variants[&trace.transmitted_variant];
-            assert_eq!(old.locus, new.locus);
-            assert!(old.effect.abs_diff(new.effect) <= 100);
+            if trace.locus.0 == "foreign.choice" {
+                assert!(!trace.mutated);
+                assert_eq!(trace.source_variant, trace.transmitted_variant);
+            } else {
+                assert!(trace.mutated);
+                assert_ne!(trace.source_variant, trace.transmitted_variant);
+                let old = &world.variants[&trace.source_variant];
+                let new = &world.variants[&trace.transmitted_variant];
+                assert!(old.value.abs_diff(new.value) <= 100);
+                assert!((-500..=500).contains(&new.value));
+            }
         }
         validate(&world, SimTime(1)).unwrap();
     }
     #[test]
-    fn keyed_gametes_are_replay_order_and_save_independent() {
-        let mut first = parents(Rules::default());
-        let mut second = first.clone();
-        for id in [3, 4, 5] {
-            first
-                .conceive(42, PregnancyId(id), [PersonId(1), PersonId(2)], SimTime(1))
-                .unwrap();
-        }
-        for id in [5, 3, 4] {
-            second
-                .conceive(42, PregnancyId(id), [PersonId(1), PersonId(2)], SimTime(1))
-                .unwrap();
-        }
-        assert_eq!(first, second);
-        let saved = serde_json::to_vec(&first).unwrap();
-        let mut restored: World = serde_json::from_slice(&saved).unwrap();
-        restored
-            .conceive(42, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
-            .unwrap();
-        assert_eq!(first, restored);
-        assert_eq!(
-            first.born(PregnancyId(3), PersonId(6), SimTime(2)).unwrap(),
-            restored
-                .born(PregnancyId(3), PersonId(6), SimTime(2))
-                .unwrap()
-        );
-        assert_eq!(first, restored);
-    }
-    #[test]
-    fn conception_is_frozen_when_parents_develop_and_learn_later() {
+    fn frozen_conception_birth_retry_and_save_roundtrip() {
         let mut world = parents(Rules::default());
         world
-            .conceive(9, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
+            .conceive(8, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
             .unwrap();
         let frozen = world.pregnancies[&PregnancyId(3)].genome.clone().unwrap();
-        for _ in 0..100 {
-            world.learn(PersonId(1), Learning::GaveCare);
-            world.learn(PersonId(2), Learning::ExperiencedHarm);
-        }
-        world.develop(PersonId(1), 1_000, 200).unwrap();
+        assert_eq!(
+            world.set_alleles(PersonId(1), &LocusId("opaque.alpha".into()), [0, 0]),
+            Err(Error::Unavailable)
+        );
+        let before_retry = world.clone();
+        world
+            .conceive(999, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
+            .unwrap();
+        assert_eq!(world, before_retry);
+        assert_eq!(
+            world.conceive(8, PregnancyId(3), [PersonId(2), PersonId(1)], SimTime(1)),
+            Err(Error::SequenceConflict)
+        );
         world.born(PregnancyId(3), PersonId(4), SimTime(2)).unwrap();
         assert_eq!(world.people[&PersonId(4)].genome, frozen);
+        let before_retry = world.clone();
+        world.born(PregnancyId(3), PersonId(4), SimTime(3)).unwrap();
+        assert_eq!(world, before_retry);
         assert_eq!(
-            world.people[&PersonId(4)].expression.learned_temperament,
-            [0; 4]
+            world.born(PregnancyId(3), PersonId(5), SimTime(3)),
+            Err(Error::Unavailable)
         );
-        assert_eq!(
-            world.people[&PersonId(4)]
-                .expression
-                .physical_training_milli,
-            0
-        );
-        assert!(world.pregnancies[&PregnancyId(3)].genome.is_none());
-        validate(&world, SimTime(2)).unwrap();
+        let restored: World = serde_json::from_slice(&serde_json::to_vec(&world).unwrap()).unwrap();
+        assert_eq!(world, restored);
+        validate(&restored, SimTime(3)).unwrap();
     }
     #[test]
-    fn parental_similarity_is_inherited_while_maturity_training_and_care_change_expression() {
-        let mut world = parents(Rules {
-            mutation_chance: 0,
-            temperament_influence: 1_000,
-            ..Rules::default()
-        });
-        // Both biological parents carry the same high variants at every locus.
-        for record in world.people.values_mut() {
-            for (chromosome, pair) in record.genome.autosomes.iter_mut().enumerate() {
-                for homolog in &mut pair.homologs {
-                    for (locus, slot) in homolog.variants.iter_mut().enumerate() {
-                        *slot = initial_id(chromosome * 4 + locus, 18);
-                    }
-                }
-            }
-        }
+    fn pregnancy_ending_retains_frozen_trace_and_prevents_birth() {
+        let mut world = parents(Rules::default());
         world
-            .conceive(1, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
+            .conceive(8, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(2))
             .unwrap();
-        let newborn = world.born(PregnancyId(3), PersonId(4), SimTime(2)).unwrap();
-        assert_eq!(newborn.temperament.empathy, 900);
-        assert!(newborn.strength_milli < world.phenotype(PersonId(1)).unwrap().strength_milli);
-        let genome = world.people[&PersonId(4)].genome.clone();
-        world.develop(PersonId(4), 1_000, 100).unwrap();
-        for _ in 0..30 {
-            world.learn(PersonId(4), Learning::ReceivedCare);
-        }
-        let grown = world.phenotype(PersonId(4)).unwrap();
-        assert!(grown.strength_milli > newborn.strength_milli);
-        assert!(grown.max_health_milli > newborn.max_health_milli);
-        assert!(grown.temperament.empathy > newborn.temperament.empathy);
-        assert_eq!(world.people[&PersonId(4)].genome, genome);
+        world.end_pregnancy(PregnancyId(3), SimTime(1));
+        assert_eq!(world.pregnancies[&PregnancyId(3)].ended_at, None);
+        world.end_pregnancy(PregnancyId(3), SimTime(3));
+        world.end_pregnancy(PregnancyId(3), SimTime(4));
+        assert_eq!(
+            world.pregnancies[&PregnancyId(3)].ended_at,
+            Some(SimTime(3))
+        );
+        assert_eq!(
+            world.born(PregnancyId(3), PersonId(4), SimTime(4)),
+            Err(Error::Unavailable)
+        );
+        validate(&world, SimTime(4)).unwrap();
     }
     #[test]
-    fn genomes_contain_neither_learned_mastery_nor_goals_titles_or_caregivers() {
+    fn arbitrary_schema_sizes_and_empty_schema_need_no_trait_enumeration() {
+        for size in [0, 1, 7, 19] {
+            let definitions = (0..size)
+                .map(|index| LocusDefinition {
+                    id: LocusId(format!("external.{index}")),
+                    chromosome: format!("group.{}", index / 3),
+                    position: index,
+                    min: i32::MIN,
+                    max: i32::MAX,
+                    initial_alleles: vec![i32::MIN, 0, i32::MAX],
+                    mutation_step: u16::MAX,
+                    mutable: true,
+                })
+                .collect();
+            let mut world = World::new(
+                Rules {
+                    mutation_chance: 10_000,
+                    crossover_chance: 1_000,
+                },
+                definitions,
+            )
+            .unwrap();
+            world.seed_person(3, PersonId(1)).unwrap();
+            world.seed_person(3, PersonId(2)).unwrap();
+            world
+                .conceive(3, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
+                .unwrap();
+            world.born(PregnancyId(3), PersonId(4), SimTime(2)).unwrap();
+            assert_eq!(
+                world.pregnancies[&PregnancyId(3)].transmissions[0].len(),
+                usize::from(size)
+            );
+            validate(&world, SimTime(2)).unwrap();
+        }
+    }
+    #[test]
+    fn founder_assignment_is_atomic_and_raw_values_are_available_to_owners() {
+        let mut world = parents(Rules::default());
+        let locus = LocusId("opaque.alpha".into());
+        let before = world.clone();
+        assert!(world.set_alleles(PersonId(1), &locus, [20, 501]).is_err());
+        assert_eq!(world, before);
+        world.set_alleles(PersonId(1), &locus, [20, 21]).unwrap();
+        assert_eq!(world.alleles(PersonId(1), &locus).unwrap(), [20, 21]);
+        validate(&world, SimTime(0)).unwrap();
+    }
+    #[test]
+    fn borrowed_and_typed_allele_lookups_agree_across_chromosome_boundaries() {
         let world = parents(Rules::default());
-        let value = serde_json::to_value(&world.people[&PersonId(1)].genome).unwrap();
-        let keys = value.as_object().unwrap();
-        assert_eq!(keys.len(), 2);
-        assert!(keys.contains_key("autosomes") && keys.contains_key("sex"));
-        let mut invalid = world;
-        invalid
-            .people
-            .get_mut(&PersonId(1))
-            .unwrap()
-            .genome
-            .autosomes[0]
-            .homologs[0]
-            .variants[0] = VariantId(0);
-        assert!(validate(&invalid, SimTime(0)).is_err());
+        for definition in &world.definitions {
+            assert_eq!(
+                world.alleles(PersonId(1), &definition.id),
+                world.alleles_named(PersonId(1), &definition.id.0)
+            );
+            assert_eq!(
+                world.allele_ids(PersonId(2), &definition.id),
+                world.allele_ids_named(PersonId(2), &definition.id.0)
+            );
+        }
+        assert_eq!(
+            world.alleles_named(PersonId(1), "missing"),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            world.alleles_named(PersonId(99), "opaque.alpha"),
+            Err(Error::Unavailable)
+        );
+    }
+    #[test]
+    fn borrowed_lookup_preserves_malformed_genome_and_variant_errors() {
+        let original = parents(Rules::default());
+        let locus = LocusId("foreign.choice".into());
+        let mutations: [fn(&mut World); 3] = [
+            |world| {
+                world
+                    .people
+                    .get_mut(&PersonId(1))
+                    .unwrap()
+                    .genome
+                    .chromosomes
+                    .pop();
+            },
+            |world| {
+                world
+                    .people
+                    .get_mut(&PersonId(1))
+                    .unwrap()
+                    .genome
+                    .chromosomes[1]
+                    .homologs[1]
+                    .variants
+                    .clear();
+            },
+            |world| {
+                let id = world
+                    .allele_ids_named(PersonId(1), "foreign.choice")
+                    .unwrap()[0];
+                world.variants.get_mut(&id).unwrap().locus = LocusId("opaque.alpha".into());
+            },
+        ];
+        for mutate in mutations {
+            let mut world = original.clone();
+            mutate(&mut world);
+            let typed = world.alleles(PersonId(1), &locus);
+            assert!(matches!(typed, Err(Error::InvalidConfiguration(_))));
+            assert_eq!(typed, world.alleles_named(PersonId(1), &locus.0));
+        }
+    }
+    #[test]
+    fn invalid_definitions_are_rejected() {
+        let original = definitions();
+        let mut duplicate = original.clone();
+        duplicate.push(duplicate[0].clone());
+        assert!(World::new(Rules::default(), duplicate).is_err());
+        let mut duplicate_position = original.clone();
+        duplicate_position[1].position = duplicate_position[0].position;
+        assert!(World::new(Rules::default(), duplicate_position).is_err());
+        let mutations: [fn(&mut LocusDefinition); 6] = [
+            |d: &mut LocusDefinition| d.min = d.max + 1,
+            |d: &mut LocusDefinition| d.initial_alleles.clear(),
+            |d: &mut LocusDefinition| d.initial_alleles.push(999),
+            |d: &mut LocusDefinition| d.initial_alleles.push(0),
+            |d: &mut LocusDefinition| d.mutation_step = 0,
+            |d: &mut LocusDefinition| d.id.0.clear(),
+        ];
+        for mutate in mutations {
+            let mut definitions = original.clone();
+            mutate(&mut definitions[0]);
+            assert!(World::new(Rules::default(), definitions).is_err());
+        }
+        assert!(
+            World::new(
+                Rules {
+                    mutation_chance: 10_001,
+                    crossover_chance: 0
+                },
+                original
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn malformed_saves_reject_schema_genome_and_transmission_inconsistencies() {
+        let mut original = parents(Rules {
+            mutation_chance: 10_000,
+            crossover_chance: 1_000,
+        });
+        original
+            .conceive(8, PregnancyId(3), [PersonId(1), PersonId(2)], SimTime(1))
+            .unwrap();
+        let mutations: [fn(&mut World); 7] = [
+            |w: &mut World| w.definitions.reverse(),
+            |w: &mut World| {
+                w.people
+                    .get_mut(&PersonId(1))
+                    .unwrap()
+                    .genome
+                    .chromosomes
+                    .pop();
+            },
+            |w: &mut World| {
+                w.pregnancies
+                    .get_mut(&PregnancyId(3))
+                    .unwrap()
+                    .transmissions[0][1]
+                    .crossed_before = false
+            },
+            |w: &mut World| {
+                w.pregnancies
+                    .get_mut(&PregnancyId(3))
+                    .unwrap()
+                    .transmissions[0][0]
+                    .mutated = false
+            },
+            |w: &mut World| {
+                w.pregnancies
+                    .get_mut(&PregnancyId(3))
+                    .unwrap()
+                    .transmissions[0][0]
+                    .source_homolog = 2
+            },
+            |w: &mut World| {
+                w.pregnancies
+                    .get_mut(&PregnancyId(3))
+                    .unwrap()
+                    .transmissions[0]
+                    .pop();
+            },
+            |w: &mut World| {
+                let id = w.pregnancies[&PregnancyId(3)].transmissions[0][0].transmitted_variant;
+                w.variants.get_mut(&id).unwrap().value = 900;
+            },
+        ];
+        for mutate in mutations {
+            let mut world = original.clone();
+            mutate(&mut world);
+            assert!(matches!(
+                validate(&world, SimTime(1)),
+                Err(Error::InvalidSave(_))
+            ));
+        }
+    }
+    #[test]
+    fn missing_or_same_parent_conception_has_no_effect() {
+        let mut world = parents(Rules::default());
+        let before = world.clone();
+        assert_eq!(
+            world.conceive(1, PregnancyId(3), [PersonId(1), PersonId(1)], SimTime(1)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            world.conceive(1, PregnancyId(3), [PersonId(1), PersonId(9)], SimTime(1)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(world, before);
     }
 }

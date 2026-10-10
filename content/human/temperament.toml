@@ -1,0 +1,92 @@
+# Inherited predispositions and acquired changes remain separate.
+id = "human/temperament"
+version = 1
+
+[data]
+learned_limit = 150
+[data.newborn_personality]
+discipline = 500
+ambition = 500
+sociability = 500
+risk_tolerance = 500
+hedonism = 400
+empathy = 500
+aggression = 200
+honesty = 500
+patience = 500
+
+[[data.traits]]
+kind = "discipline"
+influence = 400
+[data.traits.inheritance]
+locus = "temperament.discipline"
+chromosome = "temperament"
+position = 0
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true
+
+[[data.traits]]
+kind = "sociability"
+influence = 400
+[data.traits.inheritance]
+locus = "temperament.sociability"
+chromosome = "temperament"
+position = 1
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true
+
+[[data.traits]]
+kind = "empathy"
+influence = 400
+[data.traits.inheritance]
+locus = "temperament.empathy"
+chromosome = "temperament"
+position = 2
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true
+
+[[data.traits]]
+kind = "risk_tolerance"
+influence = 400
+[data.traits.inheritance]
+locus = "temperament.risk_tolerance"
+chromosome = "temperament"
+position = 3
+min = 0
+max = 1000
+initial_alleles = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000]
+mutation_step = 100
+mutable = true
+
+[[data.learning]]
+id = "gave_care"
+deltas = [1, 0, 1, 0]
+
+[[data.learning]]
+id = "received_care"
+deltas = [0, 1, 1, 0]
+
+[[data.learning]]
+id = "company"
+deltas = [0, 1, 0, 0]
+
+[[data.learning]]
+id = "practice"
+deltas = [1, 0, 0, 0]
+
+[[data.learning]]
+id = "guidance"
+deltas = [1, 1, 0, 0]
+
+[[data.learning]]
+id = "experienced_harm"
+deltas = [0, 0, 0, -1]

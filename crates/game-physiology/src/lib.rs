@@ -1,5 +1,7 @@
 //! Numerical body rules. External systems supply contributions; this crate has
 //! no knowledge of health, invocation, inventories, decisions, or Simulation.
+pub mod traits;
+
 use game_core::{Error, Vitals};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

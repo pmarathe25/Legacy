@@ -55,7 +55,7 @@ impl SessionEngine for FakeEngine {
             armies: Vec::new(),
             realm: RealmView::default(),
             transport: None,
-            genetics: None,
+            traits: None,
             social: None,
             enforcement: EnforcementView::default(),
             health: None,

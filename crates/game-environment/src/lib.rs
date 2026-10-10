@@ -2,6 +2,7 @@
 use game_core::{Error, SimDuration, SimTime};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Calendar {
     pub day: SimDuration,
     pub season_days: [u32; 4],
@@ -34,6 +35,7 @@ impl Calendar {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Climate {
     /// Degrees Celsius and water units per day, intentionally fixed point free.
     pub seasonal_temperature: [i32; 4],
@@ -95,6 +97,7 @@ fn mix(mut value: u64) -> u64 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub calendar: Calendar,
     pub climate: Climate,
@@ -108,6 +111,12 @@ impl Default for Config {
     }
 }
 impl Config {
+    #[cfg(feature = "content")]
+    pub fn read(path: impl AsRef<std::path::Path>) -> Result<game_content::Document<Self>, Error> {
+        let document: game_content::Document<Self> = game_content::read(path)?;
+        document.data.validate()?;
+        Ok(document)
+    }
     pub fn validate(&self) -> Result<(), Error> {
         if self.calendar.day.0 == 0
             || self.calendar.season_days.contains(&0)
@@ -140,6 +149,22 @@ pub struct World {
     pub climate: Climate,
     pub weather: Weather,
     pub weather_day: u64,
+    /// The runtime owns its temporal position, independently of a host clock.
+    at: SimTime,
+    seed: u64,
+    #[cfg(feature = "content")]
+    content: Option<game_content::Stamp>,
+}
+
+/// Calendar and weather facts at the runtime's current epoch. Consumers decide
+/// whether a person can observe these facts; no person or visibility rules live here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Observation {
+    pub at: SimTime,
+    pub day: u64,
+    pub day_of_year: u64,
+    pub season: u8,
+    pub weather: Weather,
 }
 
 /// One completed day's forcing. `day` is the closing day count; weather and
@@ -154,6 +179,7 @@ pub struct DayFacts {
 pub struct Step {
     pub world: World,
     pub elapsed_day: Option<DayFacts>,
+    opening: World,
 }
 impl World {
     pub fn new(config: Config, at: SimTime, seed: u64) -> Result<Self, Error> {
@@ -167,7 +193,56 @@ impl World {
             climate: config.climate,
             weather,
             weather_day,
+            at,
+            seed,
+            #[cfg(feature = "content")]
+            content: None,
         })
+    }
+    #[cfg(feature = "content")]
+    pub fn from_content(
+        document: game_content::Document<Config>,
+        at: SimTime,
+        seed: u64,
+    ) -> Result<Self, Error> {
+        document.data.validate()?;
+        let content = document.stamp()?;
+        let mut runtime = Self::new(document.data, at, seed)?;
+        runtime.content = Some(content);
+        Ok(runtime)
+    }
+    #[cfg(feature = "content")]
+    pub fn content_stamp(&self) -> Option<&game_content::Stamp> {
+        self.content.as_ref()
+    }
+    pub fn epoch(&self) -> SimTime {
+        self.at
+    }
+    pub fn observe(&self) -> Observation {
+        Observation {
+            at: self.at,
+            day: self.weather_day,
+            day_of_year: self.calendar.day_of_year(self.at),
+            season: self.calendar.season(self.at) as u8,
+            weather: self.weather.clone(),
+        }
+    }
+    /// Place a configured scenario at its opening epoch. This does not emit
+    /// elapsed-day effects and must not be used to advance an active simulation.
+    pub fn reset_epoch(&mut self, at: SimTime, seed: u64) -> Result<(), Error> {
+        let configured = Config {
+            calendar: self.calendar.clone(),
+            climate: self.climate.clone(),
+        };
+        let replacement = Self::new(configured, at, seed)?;
+        #[cfg(feature = "content")]
+        let replacement = Self {
+            content: self.content.clone(),
+            ..replacement
+        };
+        replacement.validate(at, seed)?;
+        *self = replacement;
+        Ok(())
     }
     pub fn validate(&self, at: SimTime, seed: u64) -> Result<(), Error> {
         Config {
@@ -175,7 +250,25 @@ impl World {
             climate: self.climate.clone(),
         }
         .validate()?;
-        if self.weather_day != at.0 / self.calendar.day.0
+        #[cfg(feature = "content")]
+        if let Some(content) = &self.content {
+            let document = game_content::Document {
+                id: content.id.clone(),
+                version: content.version,
+                data: Config {
+                    calendar: self.calendar.clone(),
+                    climate: self.climate.clone(),
+                },
+            };
+            if &document.stamp()? != content {
+                return Err(Error::InvalidSave(
+                    "environment definitions do not match their content stamp".into(),
+                ));
+            }
+        }
+        if self.at != at
+            || self.seed != seed
+            || self.weather_day != at.0 / self.calendar.day.0
             || self.weather
                 != self
                     .climate
@@ -188,7 +281,7 @@ impl World {
         Ok(())
     }
     pub fn boundary(&self, from: SimTime, requested: SimTime) -> Result<SimTime, Error> {
-        if requested < from || self.calendar.day.0 == 0 {
+        if from != self.at || requested < from || self.calendar.day.0 == 0 {
             return Err(Error::InvalidConfiguration(
                 "invalid environmental interval".into(),
             ));
@@ -200,6 +293,30 @@ impl World {
             .unwrap_or(requested)
             .min(requested))
     }
+    pub fn deadline(&self, requested: SimTime) -> Result<SimTime, Error> {
+        self.boundary(self.at, requested)
+    }
+    /// Prepare an immutable transition. Foreign features can consume the
+    /// completed-day facts before any runtime publishes its closing state.
+    pub fn prepare(&self, next: SimTime) -> Result<Step, Error> {
+        self.advance(self.at, next, self.seed)
+    }
+    pub fn admit(&self, step: &Step) -> Result<(), Error> {
+        if self != &step.opening {
+            return Err(Error::SequenceConflict);
+        }
+        // A public output may have been changed by the host after preparation.
+        let expected = self.prepare(step.world.at)?;
+        if step.world != expected.world || step.elapsed_day != expected.elapsed_day {
+            return Err(Error::SequenceConflict);
+        }
+        Ok(())
+    }
+    pub fn commit(&mut self, step: Step) -> Result<(), Error> {
+        self.admit(&step)?;
+        *self = step.world;
+        Ok(())
+    }
     pub fn advance(&self, from: SimTime, next: SimTime, seed: u64) -> Result<Step, Error> {
         self.validate(from, seed)?;
         if next < from || next > self.boundary(from, next)? {
@@ -208,6 +325,7 @@ impl World {
             ));
         }
         let mut world = self.clone();
+        world.at = next;
         let next_day = next.0 / self.calendar.day.0;
         let elapsed_day = if next_day != self.weather_day {
             Some(DayFacts {
@@ -224,7 +342,11 @@ impl World {
                 .climate
                 .weather(seed, next_day, self.calendar.season(next));
         }
-        Ok(Step { world, elapsed_day })
+        Ok(Step {
+            world,
+            elapsed_day,
+            opening: self.clone(),
+        })
     }
 }
 

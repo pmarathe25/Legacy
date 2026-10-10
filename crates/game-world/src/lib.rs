@@ -123,6 +123,10 @@ pub struct CanonicalState {
     pub realm: Option<realm::World>,
     pub transport: Option<game_transport::World>,
     pub genetics: Option<game_genetics::World>,
+    pub physical_traits: Option<game_physiology::traits::World>,
+    pub temperament: Option<game_characters::temperament::World>,
+    pub heredity: Option<game_lifecycle::heredity::Definition>,
+    pub content: BTreeMap<String, game_content::Stamp>,
     pub scenario: ScenarioInfo,
     pub seed: u64,
     pub time: SimTime,
@@ -426,6 +430,10 @@ impl Simulation {
         let mut state = CanonicalState {
             transport: None,
             genetics: None,
+            physical_traits: None,
+            temperament: None,
+            heredity: None,
+            content: BTreeMap::new(),
             scenario: scenarios().remove(0),
             seed,
             time: SimTime(0),
@@ -863,7 +871,7 @@ impl Simulation {
             armies: self.army_view(ruler.id),
             realm: self.realm_view(ruler.id),
             transport: self.transport_view(ruler.id),
-            genetics: self.genetic_phenotype(ruler.id),
+            traits: self.inherited_traits_view(ruler.id),
             social: self.social_view(ruler.id),
             enforcement: self.enforcement_view(ruler.id),
             health: self.health_view(ruler.id),
@@ -1473,19 +1481,10 @@ impl Simulation {
                 .checked_add(world.rules.review.0)
                 .ok_or(Error::Overflow)?;
         }
-        if let Some(world) = &self.state.genetics
+        if let Some(world) = &self.state.physical_traits
             && world.next_expression <= next
         {
-            let steps = (next.0 - world.next_expression.0) / world.rules.expression_period_ms + 1;
-            world
-                .next_expression
-                .0
-                .checked_add(
-                    steps
-                        .checked_mul(world.rules.expression_period_ms)
-                        .ok_or(Error::Overflow)?,
-                )
-                .ok_or(Error::Overflow)?;
+            world.prepare_refresh_time(next)?;
             if let Some(lives) = &self.state.development {
                 for actor in world.people.keys() {
                     lives.lives[actor].age_at(next)?;
@@ -1571,7 +1570,7 @@ impl Simulation {
         // state once, rather than being overwritten by an opening snapshot.
         self.commit_health(health_output)?;
         self.commit_projects(project_output);
-        self.commit_environment(environment_output.map(|step| step.world));
+        self.commit_environment(environment_output)?;
         self.commit_agriculture(agriculture_output);
         self.commit_ecology(ecology_output);
         self.state.due.remove(&next);
@@ -1781,9 +1780,9 @@ impl Simulation {
         self.profile
             .record_phase("commit.learn_from_work", phase_started);
         let phase_started = Instant::now();
-        self.refresh_genetics()?;
+        self.refresh_traits()?;
         self.profile
-            .record_phase("commit.refresh_genetics", phase_started);
+            .record_phase("commit.refresh_traits", phase_started);
         let phase_started = Instant::now();
         self.review_social()?;
         self.profile
@@ -1995,7 +1994,7 @@ impl Simulation {
         }
         self.on_health_event(&kind);
         self.on_social_event(&kind);
-        self.on_genetic_event(&kind);
+        self.on_trait_event(&kind);
         self.update_water_event(&kind);
         self.witness_lineage_event(&kind);
         self.on_skill_event(&kind);

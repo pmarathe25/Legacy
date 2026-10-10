@@ -14,6 +14,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut script = None;
     let mut environment_config = None;
     let mut scenario_config = None;
+    let mut content_root =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -24,27 +26,40 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--config" => {
                 scenario_config = Some(args.next().ok_or("missing scenario config path")?)
             }
+            "--content" => {
+                content_root = args.next().ok_or("missing content directory")?.into();
+            }
             "--environment" => {
                 environment_config = Some(args.next().ok_or("missing environment config path")?)
             }
             "--help" => {
                 println!(
-                    "game-cli [--scenario settlement-founder|established-ruler|child-successor|random] [--seed N] [--workers N] [--script PATH] [--config SCENARIO.json] [--environment ENVIRONMENT.json]\nDefault: settlement-founder. Debug fixtures remain selectable by their fixture IDs. Type help for commands."
+                    "game-cli [--scenario settlement-founder|established-ruler|child-successor|random] [--seed N] [--workers N] [--script PATH] [--config SCENARIO.json] [--environment ENVIRONMENT.toml] [--content DIRECTORY]\nDefault: settlement-founder. Debug fixtures remain selectable by their fixture IDs. Type help for commands."
                 );
                 return Ok(());
             }
             _ => return Err(format!("unknown option {arg}").into()),
         }
     }
-    let sim =
+    let mut environment_document = None;
+    let mut sim =
         if game_world::scenarios::PLAYABLE.contains(&scenario.as_str()) || scenario == "random" {
+            let explicit_config = scenario_config.is_some();
             let mut config: game_world::scenarios::Config = if let Some(path) = scenario_config {
                 serde_json::from_slice(&std::fs::read(path)?)?
             } else {
                 game_world::scenarios::Config::default()
             };
-            if let Some(path) = environment_config {
-                config.environment = serde_json::from_slice(&std::fs::read(path)?)?;
+            if let Some(genetics) = &mut config.genetics {
+                genetics.content_dir = content_root.join("human");
+            }
+            if environment_config.is_some() || !explicit_config {
+                let path = environment_config
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| content_root.join("environment/temperate.toml"));
+                let document = game_world::environment::Config::read(path)?;
+                config.environment = document.data.clone();
+                environment_document = Some(document);
             }
             Simulation::playable_scenario(&scenario, seed, execution.clone(), config)?
         } else {
@@ -58,7 +73,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             .into(),
                     );
                 }
-                let config = serde_json::from_slice(&std::fs::read(path)?)?;
+                let document = game_world::environment::Config::read(path)?;
+                let config = document.data.clone();
+                environment_document = Some(document);
                 Simulation::farming_with_config(
                     seed,
                     execution.clone(),
@@ -71,6 +88,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Simulation::new(&scenario, seed, execution.clone())?
             }
         };
+    if let Some(document) = environment_document {
+        sim.attach_environment_content(document)?;
+    }
     let selected = sim.canonical_state().scenario.clone();
     let session = game_session::Session::spawn(sim)?;
     let interactive = script.is_none() && io::stdin().is_terminal();

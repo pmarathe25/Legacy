@@ -164,11 +164,17 @@ pub struct AreaView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraitsView {
+    pub physical: game_physiology::traits::Phenotype,
+    pub temperament: game_characters::temperament::Temperament,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
     pub armies: Vec<ArmyView>,
     pub realm: RealmView,
     pub transport: Option<TransportView>,
-    pub genetics: Option<game_genetics::Phenotype>,
+    pub traits: Option<TraitsView>,
     pub social: Option<SocialView>,
     pub enforcement: EnforcementView,
     pub health: Option<HealthView>,

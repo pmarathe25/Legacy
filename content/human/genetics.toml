@@ -1,0 +1,7 @@
+id = "human/genetics"
+version = 1
+
+[data]
+# Probabilities per 10000 transmitted alleles and per 1000 linked boundaries.
+mutation_chance = 10
+crossover_chance = 350
