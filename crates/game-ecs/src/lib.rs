@@ -49,6 +49,9 @@ impl Schema {
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.components.keys().map(String::as_str)
     }
+    pub fn is_registered<C: Component>(&self) -> bool {
+        self.registration::<C>().is_ok()
+    }
     fn registration<C: Component>(&self) -> Result<&backend::Registration, Error> {
         self.components
             .values()
@@ -397,6 +400,8 @@ mod tests {
         assert!(store.get_mut::<StableId>(StableId(1)).is_none());
         assert_eq!(store.snapshot().unwrap(), before);
         let mut schema = schema();
+        assert!(schema.is_registered::<Count>());
+        assert!(!schema.is_registered::<StableId>());
         assert!(
             schema
                 .register::<Count>("different/count", |_| Ok(()))

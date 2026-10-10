@@ -629,6 +629,7 @@ name = "game-physiology"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "game-genetics",
  "serde",
  "serde_json",
@@ -715,6 +716,7 @@ version = "0.1.0"
 dependencies = [
  "game-cargo",
  "game-core",
+ "game-ecs",
  "game-skills",
  "serde",
  "serde_json",

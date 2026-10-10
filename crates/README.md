@@ -41,11 +41,11 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-lifecycle` | `game-genetics` (optional) | Opaque inheritable reproductive characteristics |
 | `game-lineage` | `game-logistics` | Care provision delivery requirements and receipts |
 | `game-missions` | `game-agreements` | Agreement terms in mission objectives |
-| `game-physiology` | `game-genetics` (optional) | Opaque inheritable physical characteristics |
+| `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components and numerical integration; opaque inheritable physical characteristics |
 | `game-projects` | `game-agreements` | Project funding terms |
 | `game-realm` | `game-agreements`, `game-missions` | Diplomatic terms and objectives |
 | `game-society` | `game-agreements` | Obligations and disputes |
-| `game-workshop` | `game-cargo`, `game-skills` | Material inputs and outputs; work rates and craft practice effects |
+| `game-workshop` | `game-ecs`, `game-cargo`, `game-skills` | Optional job components; material inputs and outputs; work rates and craft practice effects |
 
 `game-agreements`, `game-cargo`, `game-ecology`, `game-genetics`, `game-health`, `game-invocation`, `game-logistics`, `game-property`, `game-skills`, and `game-transport` have no other production dependencies. Existing optional integrations remain available; making every feature optional is no longer an architecture requirement.
 

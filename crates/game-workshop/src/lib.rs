@@ -4,6 +4,8 @@ use game_cargo::{Inventory, InventoryLocation};
 use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+mod components;
+pub use components::{insert_job, job, job_mut, jobs, register_components, remove_job};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Job {
@@ -284,6 +286,33 @@ pub struct Production {
 }
 
 impl Production {
+    /// Read-only admission of the exact job, site and stock rows captured at
+    /// completion. Host finance and event guards run before publication.
+    pub fn validate(
+        &self,
+        job: Option<&Job>,
+        site: &Site,
+        output: &Inventory,
+    ) -> Result<(), Error> {
+        if self.actor != self.admitted_actor
+            || self.site != self.expected_site.id
+            || self.output != self.expected_output.id
+            || self.quantity != self.expected_site.output_quantity
+            || job != Some(&self.expected_job)
+            || site != &self.expected_site
+            || output != &self.expected_output
+            || output.room()? < self.quantity
+        {
+            return Err(Error::Unavailable);
+        }
+        output
+            .quantity
+            .0
+            .checked_add(self.quantity.0)
+            .ok_or(Error::Overflow)?;
+        Ok(())
+    }
+
     /// All guards run before the output, job or fairness cursor is changed.
     /// The host publishes the corresponding Produced receipt after success.
     pub fn commit(
@@ -292,23 +321,25 @@ impl Production {
         site: &mut Site,
         output: &mut Inventory,
     ) -> Result<(), Error> {
-        if self.actor != self.admitted_actor
-            || self.site != self.expected_site.id
-            || self.output != self.expected_output.id
-            || self.quantity != self.expected_site.output_quantity
-            || job.as_ref() != Some(&self.expected_job)
-            || site != &self.expected_site
-            || output != &self.expected_output
-            || output.room()? < self.quantity
-        {
-            return Err(Error::Unavailable);
-        }
-        output.quantity.0 = output
-            .quantity
-            .0
-            .checked_add(self.quantity.0)
-            .ok_or(Error::Overflow)?;
+        self.validate(job.as_ref(), site, output)?;
+        output.quantity.0 += self.quantity.0;
         *job = None;
+        site.last_granted = Some(self.actor);
+        Ok(())
+    }
+
+    /// Completes the authoritative job component without an aggregate actor or
+    /// a duplicate job slot. Removing the component is the only structural edit;
+    /// the host refreshes its query bindings after the commit barrier.
+    pub fn commit_to_store(
+        self,
+        store: &mut game_ecs::Store,
+        site: &mut Site,
+        output: &mut Inventory,
+    ) -> Result<(), Error> {
+        self.validate(job(store, self.actor), site, output)?;
+        remove_job(store, self.actor)?;
+        output.quantity.0 += self.quantity.0;
         site.last_granted = Some(self.actor);
         Ok(())
     }

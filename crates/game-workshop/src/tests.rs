@@ -422,3 +422,136 @@ fn craft_practice_tracks_actual_work_even_when_output_is_blocked() {
     assert!(job.practice(PersonId(1), 37, false, true).is_none());
     assert!(job.practice(PersonId(1), 37, true, false).is_none());
 }
+
+fn job_store() -> game_ecs::Store {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_ecs::Store::with_schema(schema)
+}
+
+#[test]
+fn missing_work_and_paused_fractional_jobs_roundtrip_without_an_aggregate_actor() {
+    let mut store = job_store();
+    assert!(job(&store, PersonId(1)).is_none());
+    assert!(job_mut(&mut store, PersonId(1)).is_none());
+    assert!(remove_job(&mut store, PersonId(1)).unwrap().is_none());
+    let mut paused = start().job;
+    paused.remaining = 77;
+    paused.work_remainder = 2;
+    paused.tool = None;
+    insert_job(&mut store, PersonId(1), paused.clone()).unwrap();
+    let bytes = serde_json::to_vec(&store.snapshot().unwrap()).unwrap();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    let mut restored =
+        game_ecs::Store::restore(schema, serde_json::from_slice(&bytes).unwrap()).unwrap();
+    assert_eq!(job(&restored, PersonId(1)), Some(&paused));
+    assert_eq!(
+        jobs(&restored).map(|(id, _)| id).collect::<Vec<_>>(),
+        vec![PersonId(1)]
+    );
+    let progress = job(&restored, PersonId(1))
+        .unwrap()
+        .evaluate(7, paused.rate, true, true)
+        .unwrap();
+    job_mut(&mut restored, PersonId(1))
+        .unwrap()
+        .apply_progress(progress);
+    assert_eq!(job(&restored, PersonId(1)).unwrap().remaining, 60);
+    assert_eq!(job(&restored, PersonId(1)).unwrap().work_remainder, 0);
+}
+
+#[test]
+fn invalid_job_components_cannot_create_entities_or_replace_admitted_work() {
+    let mut store = job_store();
+    let admitted = start().job;
+    insert_job(&mut store, PersonId(1), admitted.clone()).unwrap();
+    let before = store.snapshot().unwrap();
+    for change in 0..6 {
+        let mut invalid = admitted.clone();
+        match change {
+            0 => invalid.site = SiteId(0),
+            1 => invalid.tool = Some(InventoryId(0)),
+            2 => invalid.rate.numerator = 0,
+            3 => invalid.body_rate.denominator = 0,
+            4 => invalid.work_remainder = invalid.rate.denominator,
+            5 => invalid.body_rate.numerator = 0,
+            _ => unreachable!(),
+        }
+        assert!(insert_job(&mut store, PersonId(99), invalid.clone()).is_err());
+        assert_eq!(store.snapshot().unwrap(), before);
+        let mut corrupted = before.clone();
+        corrupted.columns.get_mut("workshop/job").unwrap()[0].value =
+            serde_json::value::to_raw_value(&invalid).unwrap();
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).unwrap();
+        assert!(game_ecs::Store::restore(schema, corrupted).is_err());
+    }
+    let mut blocked = admitted;
+    blocked.remaining = 0;
+    insert_job(&mut store, PersonId(2), blocked).unwrap();
+}
+
+#[test]
+fn production_commits_the_exact_job_component_once_and_preserves_foreign_data() {
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct ForeignTag(u64);
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<ForeignTag>("fixture/tag", |_| Ok(()))
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    let mut work = start().job;
+    work.remaining = 0;
+    insert_job(&mut store, PersonId(1), work.clone()).unwrap();
+    store.insert(game_ecs::StableId(1), ForeignTag(9)).unwrap();
+    let mut site = site();
+    let mut output = stock(3, Good::Food, 0);
+    let production = work
+        .prepare_completion(&site, &output, closing(1, true))
+        .unwrap()
+        .unwrap();
+    production
+        .validate(job(&store, PersonId(1)), &site, &output)
+        .unwrap();
+    job_mut(&mut store, PersonId(1)).unwrap().work_remainder = 1;
+    let before = (store.snapshot().unwrap(), site.clone(), output.clone());
+    assert!(
+        production
+            .clone()
+            .commit_to_store(&mut store, &mut site, &mut output)
+            .is_err()
+    );
+    assert_eq!(
+        (store.snapshot().unwrap(), site.clone(), output.clone()),
+        before
+    );
+    *job_mut(&mut store, PersonId(1)).unwrap() = work;
+    production
+        .clone()
+        .commit_to_store(&mut store, &mut site, &mut output)
+        .unwrap();
+    assert!(job(&store, PersonId(1)).is_none());
+    assert_eq!(output.quantity, Quantity(4_000));
+    assert_eq!(site.last_granted, Some(PersonId(1)));
+    assert_eq!(
+        store.get::<ForeignTag>(game_ecs::StableId(1)),
+        Some(&ForeignTag(9))
+    );
+    let completed = (store.snapshot().unwrap(), site.clone(), output.clone());
+    assert!(
+        production
+            .commit_to_store(&mut store, &mut site, &mut output)
+            .is_err()
+    );
+    assert_eq!((store.snapshot().unwrap(), site, output), completed);
+}
+
+#[test]
+fn a_missing_job_schema_cannot_leave_an_empty_entity() {
+    let mut store = game_ecs::Store::with_schema(game_ecs::Schema::new());
+    let before = store.snapshot().unwrap();
+    assert!(insert_job(&mut store, PersonId(1), start().job).is_err());
+    assert_eq!(store.snapshot().unwrap(), before);
+}

@@ -89,6 +89,11 @@ impl Runtime {
         id: SiteId,
         component: T,
     ) -> Result<(), Error> {
+        if !store.schema().is_registered::<T>() {
+            return Err(Error::InvalidConfiguration(
+                "agricultural component is not registered".into(),
+            ));
+        }
         store.ensure(StableId(id.0))?;
         store.insert(StableId(id.0), component)
     }

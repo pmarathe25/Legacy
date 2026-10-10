@@ -2,10 +2,14 @@
 //! no knowledge of health, invocation, inventories, decisions, or Simulation.
 pub mod traits;
 
-use game_core::{Error, Vitals};
+use game_core::{Error, PersonId, Vitals};
+use serde::{Deserialize, Serialize};
+mod components;
+pub use components::{bodies, body, body_mut, insert_body, register_components, remove_body};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BodySnapshot {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Body {
     pub vitals: Vitals,
     pub fatigue_remainder: u16,
     pub health_remainder: u16,
@@ -44,7 +48,7 @@ pub struct BaseTerms {
 }
 
 pub fn base_terms(
-    before: &BodySnapshot,
+    before: &Body,
     limits: BodyLimits,
     input: BodyInput<'_>,
 ) -> Result<BaseTerms, Error> {
@@ -86,24 +90,17 @@ pub fn base_terms(
     })
 }
 
-pub fn integrate(
-    before: &BodySnapshot,
-    limits: BodyLimits,
-    input: BodyInput<'_>,
-) -> Result<BodySnapshot, Error> {
-    if before.fatigue_remainder >= 1_000
-        || before.health_remainder >= 1_000
-        || limits.max_health == 0
+pub fn integrate(before: &Body, limits: BodyLimits, input: BodyInput<'_>) -> Result<Body, Error> {
+    before.validate()?;
+    if limits.max_health == 0
         || limits.fatigue_limit == 0
         || before.vitals.health > limits.max_health
         || before.vitals.fatigue > limits.fatigue_limit
     {
-        return Err(Error::InvalidConfiguration(
-            "invalid body snapshot or limits".into(),
-        ));
+        return Err(Error::InvalidConfiguration("invalid body or limits".into()));
     }
     if !before.vitals.alive {
-        return Ok(BodySnapshot {
+        return Ok(Body {
             vitals: before.vitals.clone(),
             fatigue_remainder: 0,
             health_remainder: 0,
@@ -139,7 +136,7 @@ pub fn integrate(
     } else {
         0
     };
-    Ok(BodySnapshot {
+    Ok(Body {
         vitals,
         fatigue_remainder: (fatigue_milli % 1_000) as u16,
         health_remainder,
@@ -171,8 +168,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn body(health: u64) -> BodySnapshot {
-        BodySnapshot {
+    fn body(health: u64) -> Body {
+        Body {
             vitals: Vitals {
                 hunger: 0,
                 fatigue: 0,
@@ -317,5 +314,115 @@ mod tests {
         let mut bad = start;
         bad.health_remainder = 1_000;
         assert!(integrate(&bad, limits(), input(1, &[])).is_err());
+    }
+    fn body_store() -> game_ecs::Store {
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).unwrap();
+        game_ecs::Store::with_schema(schema)
+    }
+    #[test]
+    fn missing_body_is_an_absent_capability_and_registration_does_not_create_one() {
+        let mut store = body_store();
+        store.ensure(game_ecs::StableId(9)).unwrap();
+        assert!(super::body(&store, PersonId(9)).is_none());
+        assert!(body_mut(&mut store, PersonId(9)).is_none());
+        assert_eq!(bodies(&store).count(), 0);
+        assert!(remove_body(&mut store, PersonId(99)).unwrap().is_none());
+        insert_body(&mut store, PersonId(9), body(0)).unwrap();
+        assert!(super::body(&store, PersonId(9)).unwrap().vitals.alive);
+        assert_eq!(
+            bodies(&store).map(|(id, _)| id).collect::<Vec<_>>(),
+            vec![PersonId(9)]
+        );
+    }
+    #[test]
+    fn authoritative_body_roundtrip_preserves_fractional_integration_across_slices() {
+        let mut store = body_store();
+        let start = body(100);
+        insert_body(&mut store, PersonId(9), start.clone()).unwrap();
+        let rates = |elapsed| {
+            [Contribution {
+                health_milli: -333 * i128::from(elapsed),
+                fatigue_milli: 71 * i128::from(elapsed),
+            }]
+        };
+        let partial = integrate(
+            super::body(&store, PersonId(9)).unwrap(),
+            limits(),
+            input(11, &rates(11)),
+        )
+        .unwrap();
+        *body_mut(&mut store, PersonId(9)).unwrap() = partial;
+        let encoded = serde_json::to_vec(&store.snapshot().unwrap()).unwrap();
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).unwrap();
+        let mut restored =
+            game_ecs::Store::restore(schema, serde_json::from_slice(&encoded).unwrap()).unwrap();
+        let rest = integrate(
+            super::body(&restored, PersonId(9)).unwrap(),
+            limits(),
+            input(26, &rates(26)),
+        )
+        .unwrap();
+        *body_mut(&mut restored, PersonId(9)).unwrap() = rest;
+        assert_eq!(
+            super::body(&restored, PersonId(9)).unwrap(),
+            &integrate(&start, limits(), input(37, &rates(37))).unwrap()
+        );
+        assert_eq!(
+            remove_body(&mut restored, PersonId(9))
+                .unwrap()
+                .unwrap()
+                .health_remainder,
+            679
+        );
+        assert!(super::body(&restored, PersonId(9)).is_none());
+    }
+    #[test]
+    fn intrinsic_body_validation_is_inert_and_keeps_contextual_limits_separate() {
+        let mut store = body_store();
+        insert_body(&mut store, PersonId(9), body(100)).unwrap();
+        let before = store.snapshot().unwrap();
+        for invalid in [
+            Body {
+                fatigue_remainder: 1_000,
+                ..body(100)
+            },
+            Body {
+                health_remainder: 1_000,
+                ..body(100)
+            },
+            Body {
+                vitals: Vitals {
+                    alive: false,
+                    ..body(100).vitals
+                },
+                ..body(100)
+            },
+        ] {
+            assert!(insert_body(&mut store, PersonId(99), invalid.clone()).is_err());
+            assert_eq!(store.snapshot().unwrap(), before);
+            let mut corrupted = before.clone();
+            corrupted.columns.get_mut("physiology/body").unwrap()[0].value =
+                serde_json::value::to_raw_value(&invalid).unwrap();
+            let mut schema = game_ecs::Schema::new();
+            register_components(&mut schema).unwrap();
+            assert!(game_ecs::Store::restore(schema, corrupted).is_err());
+        }
+        let mut beyond_current_limits = body(200);
+        beyond_current_limits.vitals.fatigue = 200;
+        insert_body(&mut store, PersonId(10), beyond_current_limits.clone()).unwrap();
+        assert!(integrate(&beyond_current_limits, limits(), input(0, &[])).is_err());
+        let mut dead = body(0);
+        dead.vitals.alive = false;
+        dead.fatigue_remainder = 713;
+        insert_body(&mut store, PersonId(11), dead).unwrap();
+    }
+    #[test]
+    fn a_missing_body_schema_cannot_leave_an_empty_entity() {
+        let mut store = game_ecs::Store::with_schema(game_ecs::Schema::new());
+        let before = store.snapshot().unwrap();
+        assert!(insert_body(&mut store, PersonId(9), body(100)).is_err());
+        assert_eq!(store.snapshot().unwrap(), before);
     }
 }

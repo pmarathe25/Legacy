@@ -1206,3 +1206,37 @@ fn shared_host_foreign_components_survive_agricultural_commits_and_bind_after_st
         Some(&ForeignTag { value: 8 })
     );
 }
+
+#[test]
+fn missing_component_registration_cannot_leave_partial_entities() {
+    let fixture = world();
+    let runtime = &fixture.runtime;
+    let mut store = game_ecs::Store::with_schema(game_ecs::Schema::new());
+    let before = store.snapshot().unwrap();
+    assert!(
+        runtime
+            .insert_field(&mut store, fixture.field(SiteId(1)).unwrap().clone())
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(
+        runtime
+            .insert_crop(
+                &mut store,
+                SiteId(1),
+                fixture.crop(SiteId(1)).unwrap().clone()
+            )
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(
+        runtime
+            .insert_soil(
+                &mut store,
+                SiteId(1),
+                fixture.soil(SiteId(1)).unwrap().clone()
+            )
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}
