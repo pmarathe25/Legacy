@@ -342,7 +342,7 @@ impl Simulation {
                             };
                             if skill == Skill::Farming
                                 && !self.state.agriculture.as_ref().is_some_and(|w| {
-                                    w.fields.values().any(|field| {
+                                    w.fields().map(|(_, value)| value).any(|field| {
                                         field.area
                                             == match self.state.people[self.person_index[&teacher]]
                                                 .location

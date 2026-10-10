@@ -346,7 +346,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     if let Some(world) = &s.agriculture {
-        for id in world.fields.keys() {
+        for id in world.fields().map(|(id, _)| id) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -1659,7 +1659,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .agriculture
                         .as_ref()
-                        .is_some_and(|w| w.fields.contains_key(&field))
+                        .is_some_and(|w| w.field(field).is_some())
                 {
                     return Err(fail());
                 }
@@ -1668,7 +1668,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .agriculture
                     .as_ref()
-                    .is_some_and(|w| w.fields.contains_key(&field))
+                    .is_some_and(|w| w.field(field).is_some())
                 {
                     return Err(fail());
                 }

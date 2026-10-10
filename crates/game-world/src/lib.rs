@@ -1416,7 +1416,7 @@ impl Simulation {
             self.state
                 .agriculture
                 .as_ref()
-                .map_or(0, |world| world.fields.len() as u64),
+                .map_or(0, |world| world.fields().count() as u64),
             ledger_demand.events()?,
             society_demand.events,
             invocation_output.event_demand(),

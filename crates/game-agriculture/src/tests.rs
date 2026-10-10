@@ -35,9 +35,8 @@ fn world() -> World {
         0,
     )
     .unwrap();
-    world.fields.insert(
-        SiteId(1),
-        Field {
+    world
+        .insert_field(Field {
             id: SiteId(1),
             area: AreaId(2),
             access: BTreeSet::from([PersonId(3)]),
@@ -46,30 +45,34 @@ fn world() -> World {
             tool: InventoryId(5),
             water: InventoryId(6),
             food: InventoryId(7),
-        },
-    );
-    world.crops.insert(
-        SiteId(1),
-        Crop {
-            definition,
-            phase: CropPhase::Growing,
-            preparation_ms: rules.prepare_labor.0,
-            planting_ms: rules.plant_labor.0,
-            harvest_ms: 0,
-            degree_days_milli: 0,
-            stress_days: 0,
-            tending: 1_000,
-            contributions: BTreeMap::new(),
-        },
-    );
-    world.soils.insert(
-        SiteId(1),
-        Soil {
-            fertility: 900,
-            water: 75,
-            capacity: 120,
-        },
-    );
+        })
+        .unwrap();
+    world
+        .insert_crop(
+            SiteId(1),
+            Crop {
+                definition,
+                phase: CropPhase::Growing,
+                preparation_ms: rules.prepare_labor.0,
+                planting_ms: rules.plant_labor.0,
+                harvest_ms: 0,
+                degree_days_milli: 0,
+                stress_days: 0,
+                tending: 1_000,
+                contributions: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+    world
+        .insert_soil(
+            SiteId(1),
+            Soil {
+                fertility: 900,
+                water: 75,
+                capacity: 120,
+            },
+        )
+        .unwrap();
     world
 }
 fn day(number: u64, rain: u64) -> LocalWeatherDay {
@@ -133,12 +136,15 @@ fn growth_and_harvest_describe_component_changes_without_stock_storage() {
         .advance(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
         .unwrap();
     assert_eq!(world, before);
-    assert_eq!(first.crops[&SiteId(1)].phase, CropPhase::Growing);
+    assert_eq!(first.crop(SiteId(1)).unwrap().phase, CropPhase::Growing);
     let ripe = first
         .advance(SimTime(60_000), SimTime(120_000), Some(&day(2, 10)))
         .unwrap();
-    assert_eq!(ripe.crops[&SiteId(1)].phase, CropPhase::Ripe);
-    assert_eq!(ripe.fields, world.fields);
+    assert_eq!(ripe.crop(SiteId(1)).unwrap().phase, CropPhase::Ripe);
+    assert_eq!(
+        ripe.fields().collect::<Vec<_>>(),
+        world.fields().collect::<Vec<_>>()
+    );
     let job = Cultivation {
         field: SiteId(1),
         operation: FarmOperation::Harvest,
@@ -177,14 +183,14 @@ fn failure_and_fallow_recovery_consume_supplied_local_weather_only() {
         .next()
         .unwrap()
         .failure_stress_days = 2;
-    world.soils.get_mut(&SiteId(1)).unwrap().water = 0;
+    world.soil_mut(SiteId(1)).unwrap().water = 0;
     let first = world
         .advance(SimTime(0), SimTime(60_000), Some(&day(1, 0)))
         .unwrap();
     let failed = first
         .advance(SimTime(60_000), SimTime(120_000), Some(&day(2, 0)))
         .unwrap();
-    assert_eq!(failed.crops[&SiteId(1)].phase, CropPhase::Failed);
+    assert_eq!(failed.crop(SiteId(1)).unwrap().phase, CropPhase::Failed);
     let job = Cultivation {
         field: SiteId(1),
         operation: FarmOperation::Fallow,
@@ -207,8 +213,8 @@ fn failure_and_fallow_recovery_consume_supplied_local_weather_only() {
 #[test]
 fn planting_consumes_seed_once_and_resuming_requires_remaining_work() {
     let mut world = world();
-    world.crops.get_mut(&SiteId(1)).unwrap().phase = CropPhase::Prepared;
-    world.crops.get_mut(&SiteId(1)).unwrap().planting_ms = 0;
+    world.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Prepared;
+    world.crop_mut(SiteId(1)).unwrap().planting_ms = 0;
     assert_eq!(
         start(
             &world,
@@ -229,7 +235,7 @@ fn planting_consumes_seed_once_and_resuming_requires_remaining_work() {
         })
     );
     assert_eq!(effect.crop.phase, CropPhase::Planting);
-    world.crops.insert(SiteId(1), effect.crop);
+    world.insert_crop(SiteId(1), effect.crop).unwrap();
     world.jobs.insert(PersonId(3), effect.job);
     let half = world.advance(SimTime(0), SimTime(3_600_000), None).unwrap();
     let resumed = start(
@@ -252,8 +258,8 @@ fn planting_consumes_seed_once_and_resuming_requires_remaining_work() {
 #[test]
 fn labor_and_restore_are_identical_across_slices() {
     let mut world = world();
-    world.crops.get_mut(&SiteId(1)).unwrap().phase = CropPhase::Planting;
-    world.crops.get_mut(&SiteId(1)).unwrap().planting_ms = 0;
+    world.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Planting;
+    world.crop_mut(SiteId(1)).unwrap().planting_ms = 0;
     world.catalog.crops.values_mut().next().unwrap().plant_labor = SimDuration(120_000);
     world.jobs.insert(
         PersonId(3),
@@ -273,14 +279,17 @@ fn labor_and_restore_are_identical_across_slices() {
         .advance(SimTime(17_001), SimTime(60_000), Some(&day(1, 10)))
         .unwrap();
     assert_eq!(whole, split);
-    assert_eq!(whole.crops[&SiteId(1)].contributions[&PersonId(3)], 60_000);
-    assert_eq!(whole.crops[&SiteId(1)].phase, CropPhase::Planting);
+    assert_eq!(
+        whole.crop(SiteId(1)).unwrap().contributions[&PersonId(3)],
+        60_000
+    );
+    assert_eq!(whole.crop(SiteId(1)).unwrap().phase, CropPhase::Planting);
 }
 
 #[test]
 fn physical_ineligibility_and_early_completion_are_inert() {
     let mut world = world();
-    world.crops.get_mut(&SiteId(1)).unwrap().phase = CropPhase::Ripe;
+    world.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Ripe;
     let before = world.clone();
     assert_eq!(
         start(
@@ -340,10 +349,10 @@ fn duplicate_labor_days_and_overflow_cannot_partially_change_components() {
             .advance(SimTime(60_000), SimTime(61_000), Some(&day(1, 10)))
             .is_err()
     );
-    let mut crop = world.crops[&SiteId(1)].clone();
+    let mut crop = world.crop(SiteId(1)).unwrap().clone();
     crop.degree_days_milli = u64::MAX;
     let before = crop.clone();
-    let soil = world.soils[&SiteId(1)].clone();
+    let soil = world.soil(SiteId(1)).unwrap().clone();
     assert_eq!(
         grow(
             &crop,
@@ -354,7 +363,7 @@ fn duplicate_labor_days_and_overflow_cannot_partially_change_components() {
         Err(Error::Overflow)
     );
     assert_eq!(crop, before);
-    assert_eq!(world.soils[&SiteId(1)], soil);
+    assert_eq!(world.soil(SiteId(1)).unwrap(), &soil);
 }
 
 #[test]
@@ -371,7 +380,7 @@ fn calendar_validation_is_optional_and_has_no_climate_state_dependency() {
 #[test]
 fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
     let mut valid = world();
-    valid.crops.get_mut(&SiteId(1)).unwrap().tending = 0;
+    valid.crop_mut(SiteId(1)).unwrap().tending = 0;
     valid.jobs.insert(
         PersonId(3),
         Cultivation {
@@ -383,7 +392,7 @@ fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
     );
     valid.validate(SimTime(0), Some(365)).unwrap();
     let mut bad = valid.clone();
-    bad.crops.get_mut(&SiteId(1)).unwrap().phase = CropPhase::Prepared;
+    bad.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Prepared;
     assert!(bad.validate(SimTime(0), Some(365)).is_err());
     let mut bad = valid.clone();
     bad.jobs.get_mut(&PersonId(3)).unwrap().completes.0 += 1;
@@ -392,38 +401,41 @@ fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
     bad.jobs.insert(PersonId(8), bad.jobs[&PersonId(3)].clone());
     assert!(bad.validate(SimTime(0), None).is_err());
     let mut bad = valid.clone();
-    bad.crops
-        .get_mut(&SiteId(1))
+    bad.crop_mut(SiteId(1))
         .unwrap()
         .contributions
         .insert(PersonId(3), 1);
     assert!(bad.validate(SimTime(0), None).is_err());
     let mut bad = valid.clone();
-    bad.soils.clear();
+    for id in bad.soils().map(|(id, _)| id).collect::<Vec<_>>() {
+        bad.remove_soil(id).unwrap();
+    }
     assert!(bad.validate(SimTime(0), None).is_err());
 }
 
 #[test]
 fn different_crop_definitions_join_their_own_soil_and_weather_cells() {
     let mut world = world();
-    let mut crop = world.crops[&SiteId(1)].clone();
+    let mut crop = world.crop(SiteId(1)).unwrap().clone();
     crop.definition = CropId("test/slow".into());
     let mut rules = rules();
     rules.base_temperature = 9;
     world.catalog.crops.insert(crop.definition.clone(), rules);
-    world.crops.insert(SiteId(8), crop);
-    let mut field = world.fields[&SiteId(1)].clone();
+    world.insert_crop(SiteId(8), crop).unwrap();
+    let mut field = world.field(SiteId(1)).unwrap().clone();
     field.id = SiteId(8);
     field.area = AreaId(9);
-    world.fields.insert(field.id, field);
-    world.soils.insert(
-        SiteId(8),
-        Soil {
-            fertility: 400,
-            water: 25,
-            capacity: 30,
-        },
-    );
+    world.insert_field(field).unwrap();
+    world
+        .insert_soil(
+            SiteId(8),
+            Soil {
+                fertility: 400,
+                water: 25,
+                capacity: 30,
+            },
+        )
+        .unwrap();
     let mut weather = day(1, 10);
     weather.cells.insert(
         AreaId(9),
@@ -436,19 +448,22 @@ fn different_crop_definitions_join_their_own_soil_and_weather_cells() {
     let next = world
         .advance(SimTime(0), SimTime(60_000), Some(&weather))
         .unwrap();
-    assert_eq!(next.crops[&SiteId(1)].degree_days_milli, 10_000);
-    assert_eq!(next.crops[&SiteId(8)].degree_days_milli, 500);
-    assert_eq!(next.soils[&SiteId(1)].water, 83);
-    assert_eq!(next.soils[&SiteId(8)].water, 25);
-    assert_eq!(next.fields, world.fields);
+    assert_eq!(next.crop(SiteId(1)).unwrap().degree_days_milli, 10_000);
+    assert_eq!(next.crop(SiteId(8)).unwrap().degree_days_milli, 500);
+    assert_eq!(next.soil(SiteId(1)).unwrap().water, 83);
+    assert_eq!(next.soil(SiteId(8)).unwrap().water, 25);
+    assert_eq!(
+        next.fields().collect::<Vec<_>>(),
+        world.fields().collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn unmatched_growth_entities_are_skipped_and_missing_weather_preserves_labor() {
     let mut world = world();
-    let mut spare = world.crops[&SiteId(1)].clone();
+    let mut spare = world.crop(SiteId(1)).unwrap().clone();
     spare.tending = 0;
-    world.crops.insert(SiteId(8), spare);
+    world.insert_crop(SiteId(8), spare).unwrap();
     world.jobs.insert(
         PersonId(3),
         Cultivation {
@@ -463,16 +478,24 @@ fn unmatched_growth_entities_are_skipped_and_missing_weather_preserves_labor() {
     let next = world
         .advance(SimTime(0), SimTime(1), Some(&weather))
         .unwrap();
-    assert_eq!(next.crops[&SiteId(1)].degree_days_milli, 0);
-    assert_eq!(next.crops[&SiteId(1)].contributions[&PersonId(3)], 1);
-    assert_eq!(next.crops[&SiteId(8)], world.crops[&SiteId(8)]);
-    assert_eq!(next.soils, world.soils);
+    assert_eq!(next.crop(SiteId(1)).unwrap().degree_days_milli, 0);
+    assert_eq!(next.crop(SiteId(1)).unwrap().contributions[&PersonId(3)], 1);
+    assert_eq!(
+        next.crop(SiteId(8)).unwrap(),
+        world.crop(SiteId(8)).unwrap()
+    );
+    assert_eq!(
+        next.soils().collect::<Vec<_>>(),
+        world.soils().collect::<Vec<_>>()
+    );
     let mut partial = world.clone();
-    partial.soils.clear();
+    for id in partial.soils().map(|(id, _)| id).collect::<Vec<_>>() {
+        partial.remove_soil(id).unwrap();
+    }
     let next = partial
         .advance(SimTime(0), SimTime(1), Some(&day(1, 10)))
         .unwrap();
-    assert_eq!(next.crops[&SiteId(1)].degree_days_milli, 0);
+    assert_eq!(next.crop(SiteId(1)).unwrap().degree_days_milli, 0);
 }
 
 #[test]
@@ -484,20 +507,20 @@ fn absence_of_calendar_and_weather_only_disables_operations_that_need_them() {
         ..begin()
     };
     assert!(start(&world, FarmOperation::Tend, facts).is_err()); // Already fully tended.
-    world.crops.get_mut(&SiteId(1)).unwrap().tending = 0;
+    world.crop_mut(SiteId(1)).unwrap().tending = 0;
     start(&world, FarmOperation::Tend, facts).unwrap();
-    world.crops.get_mut(&SiteId(1)).unwrap().phase = CropPhase::Fallow;
+    world.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Fallow;
     assert_eq!(
         start(&world, FarmOperation::Prepare, facts),
         Err(Error::Unavailable)
     );
-    world.crops.get_mut(&SiteId(1)).unwrap().phase = CropPhase::Prepared;
-    world.crops.get_mut(&SiteId(1)).unwrap().planting_ms = 0;
+    world.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Prepared;
+    world.crop_mut(SiteId(1)).unwrap().planting_ms = 0;
     assert_eq!(
         start(&world, FarmOperation::Plant, facts),
         Err(Error::Unavailable)
     );
-    world.crops.get_mut(&SiteId(1)).unwrap().phase = CropPhase::Ripe;
+    world.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Ripe;
     start(&world, FarmOperation::Harvest, facts).unwrap();
 }
 
@@ -523,7 +546,7 @@ fn authored_crop_content_round_trips_and_edits_change_behavior_without_code_chan
         game_content::parse(&source.replace("food_yield = 6000000", "food_yield = 250")).unwrap();
     let changed = World::from_content(edited, 0).unwrap();
     assert_ne!(original.content, changed.content);
-    let crop = world().crops[&SiteId(1)].clone();
+    let crop = world().crop(SiteId(1)).unwrap().clone();
     let soil = Soil {
         fertility: 1_000,
         water: 50,
@@ -564,27 +587,35 @@ fn idle_intervals_prepare_no_rows_and_never_run_daily_growth() {
 fn sparse_growth_commits_preserve_unrelated_rows_and_metadata() {
     let mut world = world();
     world
-        .crops
-        .insert(SiteId(8), Crop::new(world.catalog.default_crop.clone()));
+        .insert_crop(SiteId(8), Crop::new(world.catalog.default_crop.clone()))
+        .unwrap();
     let batch = world
         .prepare_advance_serial(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
         .unwrap();
     assert_eq!(batch.changed_crop_rows(), 1);
     assert_eq!(batch.growth_rows(), 1);
     world
-        .fields
-        .get_mut(&SiteId(1))
+        .field_mut(SiteId(1))
         .unwrap()
         .access
         .insert(PersonId(99));
-    world.fields.get_mut(&SiteId(1)).unwrap().food = InventoryId(99);
-    world.crops.get_mut(&SiteId(8)).unwrap().tending = 500;
+    world.field_mut(SiteId(1)).unwrap().food = InventoryId(99);
+    world.crop_mut(SiteId(8)).unwrap().tending = 500;
     world.catalog.default_crop = CropId("unrelated/default-selection".into());
-    let metadata = world.fields.clone();
+    let metadata = world
+        .fields()
+        .map(|(id, value)| (id, value.clone()))
+        .collect::<BTreeMap<_, _>>();
     world.commit_advance(batch).unwrap();
-    assert_eq!(world.crops[&SiteId(1)].degree_days_milli, 10_000);
-    assert_eq!(world.crops[&SiteId(8)].tending, 500);
-    assert_eq!(world.fields, metadata);
+    assert_eq!(world.crop(SiteId(1)).unwrap().degree_days_milli, 10_000);
+    assert_eq!(world.crop(SiteId(8)).unwrap().tending, 500);
+    assert_eq!(
+        world
+            .fields()
+            .map(|(id, value)| (id, value.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        metadata
+    );
 }
 
 #[test]
@@ -596,9 +627,9 @@ fn stale_read_rows_reject_the_entire_sparse_commit_before_publication() {
     for mutation in 0..6 {
         let mut changed = world.clone();
         match mutation {
-            0 => changed.crops.get_mut(&SiteId(1)).unwrap().tending = 0,
-            1 => changed.soils.get_mut(&SiteId(1)).unwrap().water = 0,
-            2 => changed.fields.get_mut(&SiteId(1)).unwrap().area = AreaId(99),
+            0 => changed.crop_mut(SiteId(1)).unwrap().tending = 0,
+            1 => changed.soil_mut(SiteId(1)).unwrap().water = 0,
+            2 => changed.field_mut(SiteId(1)).unwrap().area = AreaId(99),
             3 => {
                 changed
                     .catalog
@@ -663,15 +694,15 @@ fn executor_errors_wrong_keys_and_foreign_writes_cannot_prepare_changes() {
 fn pure_growth_batches_are_identical_under_threaded_evaluation_and_zero_duration() {
     let mut world = world();
     for id in 8..24 {
-        let mut field = world.fields[&SiteId(1)].clone();
+        let mut field = world.field(SiteId(1)).unwrap().clone();
         field.id = SiteId(id);
-        world.fields.insert(field.id, field);
+        world.insert_field(field).unwrap();
         world
-            .crops
-            .insert(SiteId(id), world.crops[&SiteId(1)].clone());
+            .insert_crop(SiteId(id), world.crop(SiteId(1)).unwrap().clone())
+            .unwrap();
         world
-            .soils
-            .insert(SiteId(id), world.soils[&SiteId(1)].clone());
+            .insert_soil(SiteId(id), world.soil(SiteId(1)).unwrap().clone())
+            .unwrap();
     }
     world.jobs.insert(
         PersonId(3),
@@ -706,11 +737,180 @@ fn pure_growth_batches_are_identical_under_threaded_evaluation_and_zero_duration
     parallel_world.commit_advance(parallel).unwrap();
     assert_eq!(serial_world, parallel_world);
     assert_eq!(
-        parallel_world.crops[&SiteId(1)].contributions,
+        parallel_world.crop(SiteId(1)).unwrap().contributions,
         BTreeMap::new()
     );
     assert_eq!(
         world.next_boundary(SimTime(0), SimTime(120_000)),
         SimTime(60_000)
     );
+}
+
+#[test]
+fn native_component_allocation_order_clone_and_restore_do_not_change_growth_or_save() {
+    let sample = world();
+    let make = |reverse: bool| {
+        let mut world = World::new(sample.catalog.clone(), 0).unwrap();
+        let ids = if reverse {
+            [SiteId(8), SiteId(1)]
+        } else {
+            [SiteId(1), SiteId(8)]
+        };
+        for id in ids {
+            let mut field = sample.field(SiteId(1)).unwrap().clone();
+            field.id = id;
+            world.insert_field(field).unwrap();
+            world
+                .insert_crop(id, sample.crop(SiteId(1)).unwrap().clone())
+                .unwrap();
+            world
+                .insert_soil(id, sample.soil(SiteId(1)).unwrap().clone())
+                .unwrap();
+        }
+        world
+    };
+    let first = make(false);
+    let second = make(true);
+    assert_eq!(first, second);
+    assert_eq!(
+        serde_json::to_vec(&first).unwrap(),
+        serde_json::to_vec(&second).unwrap()
+    );
+    let restored: World = serde_json::from_slice(&serde_json::to_vec(&second).unwrap()).unwrap();
+    assert_eq!(restored, first);
+    let forcing = day(1, 10);
+    let outcomes: Vec<_> = [first.clone(), second, restored]
+        .into_iter()
+        .map(|mut world| {
+            let batch = world
+                .prepare_advance(SimTime(0), SimTime(60_000), Some(&forcing), |inputs| {
+                    assert_eq!(
+                        inputs.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                        vec![SiteId(1), SiteId(8)]
+                    );
+                    inputs
+                        .iter()
+                        .map(|(id, input)| Ok((*id, input.evaluate()?)))
+                        .collect()
+                })
+                .unwrap();
+            world.commit_advance(batch).unwrap();
+            world
+        })
+        .collect();
+    assert!(outcomes.windows(2).all(|pair| pair[0] == pair[1]));
+}
+
+#[test]
+fn structural_edits_refresh_native_matches_and_invalid_insertions_are_inert() {
+    let mut world = world();
+    let original = world.clone();
+    let soil = world.remove_soil(SiteId(1)).unwrap().unwrap();
+    let missing = world
+        .prepare_advance_serial(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
+        .unwrap();
+    assert_eq!(missing.growth_rows(), 0);
+    world.insert_soil(SiteId(1), soil).unwrap();
+    let complete = world
+        .prepare_advance_serial(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
+        .unwrap();
+    assert_eq!(complete.growth_rows(), 1);
+    assert_eq!(world, original);
+    let before = serde_json::to_vec(&world).unwrap();
+    assert!(
+        world
+            .insert_soil(
+                SiteId(99),
+                Soil {
+                    fertility: 1_001,
+                    water: 0,
+                    capacity: 1
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        world
+            .insert_crop(SiteId(99), Crop::new(CropId("missing".into())))
+            .is_err()
+    );
+    assert!(
+        world
+            .insert_field(Field {
+                id: SiteId(0),
+                ..world.field(SiteId(1)).unwrap().clone()
+            })
+            .is_err()
+    );
+    assert_eq!(serde_json::to_vec(&world).unwrap(), before);
+}
+
+#[test]
+fn dense_growth_and_sparse_labor_merge_once_in_stable_order() {
+    let mut world = world();
+    world.crop_mut(SiteId(1)).unwrap().tending = 0;
+    for id in [SiteId(8), SiteId(3)] {
+        let mut field = world.field(SiteId(1)).unwrap().clone();
+        field.id = id;
+        if id == SiteId(8) {
+            field.area = AreaId(9);
+        }
+        world.insert_field(field).unwrap();
+        let mut crop = world.crop(SiteId(1)).unwrap().clone();
+        if id == SiteId(8) {
+            crop.phase = CropPhase::Planting;
+            crop.planting_ms = 0;
+        }
+        world.insert_crop(id, crop).unwrap();
+        world
+            .insert_soil(id, world.soil(SiteId(1)).unwrap().clone())
+            .unwrap();
+    }
+    world.jobs.insert(
+        PersonId(3),
+        Cultivation {
+            field: SiteId(1),
+            operation: FarmOperation::Tend,
+            labor_ms: 0,
+            completes: SimTime(3_600_000),
+        },
+    );
+    world.jobs.insert(
+        PersonId(99),
+        Cultivation {
+            field: SiteId(8),
+            operation: FarmOperation::Plant,
+            labor_ms: 0,
+            completes: SimTime(7_200_000),
+        },
+    );
+    world.validate(SimTime(0), None).unwrap();
+    let batch = world
+        .prepare_advance_serial(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
+        .unwrap();
+    assert_eq!(
+        batch.changed_crops().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![SiteId(1), SiteId(3), SiteId(8)]
+    );
+    assert_eq!(batch.changed_crop_rows(), 3);
+    assert_eq!(batch.changed_job_rows(), 2);
+    assert_eq!(batch.growth_rows(), 2);
+    let mut stale = world.clone();
+    stale.soil_mut(SiteId(3)).unwrap().water = 0;
+    let before = stale.clone();
+    assert!(stale.commit_advance(batch.clone()).is_err());
+    assert_eq!(stale, before);
+    world.commit_advance(batch).unwrap();
+    assert_eq!(
+        world.crop(SiteId(1)).unwrap().contributions[&PersonId(3)],
+        60_000
+    );
+    assert_eq!(
+        world.crop(SiteId(8)).unwrap().contributions[&PersonId(99)],
+        60_000
+    );
+    assert_eq!(world.crop(SiteId(8)).unwrap().planting_ms, 60_000);
+    assert_eq!(world.crop(SiteId(8)).unwrap().degree_days_milli, 0);
+    assert_eq!(world.crop(SiteId(3)).unwrap().degree_days_milli, 10_000);
+    world.validate(SimTime(60_000), None).unwrap();
 }

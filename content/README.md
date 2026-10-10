@@ -8,7 +8,7 @@ content pack.
 `human/` defines physical predispositions, temperament influences, experience
 effects, newborn dispositions, reproductive allele interpretation, and genetic
 transmission probabilities. `environment/temperate.toml` defines the calendar
-and climate. Genes use opaque locus names; their owning features supply their
+and climate. `agriculture/crops.toml` defines crop types under stable IDs. Genes use opaque locus names; their owning features supply their
 meaning. Removing a physical or temperament influence also removes its locus
 from new worlds.
 
@@ -19,5 +19,5 @@ Saves retain the definitions and fingerprints used for that world, and loading a
 save does not require the original files.
 
 Adding a definition supported by an existing mechanic is content work. Adding a
-new mechanic still requires Rust code. Other authored goods, crops, recipes, and
+new mechanic still requires Rust code. Other authored goods, recipes, and
 opening populations are still being moved out of their current code definitions.

@@ -486,12 +486,18 @@ mod tests {
             .agriculture
             .as_ref()
             .unwrap()
-            .fields
-            .values()
-            .find(|field| field.access == BTreeSet::from([actor]))
+            .fields()
+            .find(|(_, field)| field.access == BTreeSet::from([actor]))
             .unwrap()
-            .id;
-        let area = farmer.state.agriculture.as_ref().unwrap().fields[&field].area;
+            .0;
+        let area = farmer
+            .state
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .field(field)
+            .unwrap()
+            .area;
         farmer.debug_move_actor(actor, area).unwrap();
         farmer.advance(SimDuration(120_000)).unwrap();
         farmer

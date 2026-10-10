@@ -31,43 +31,44 @@ impl Mode {
 fn initial_world(fields: usize, path: &PathBuf) -> Result<World, Error> {
     let mut world = World::from_content(Catalog::read(path)?, 0)?;
     let definition = world.catalog.default_crop.clone();
-    let rules = &world.catalog.crops[&definition];
+    let rules = world.catalog.crops[&definition].clone();
     for index in 0..fields {
         let id = SiteId(index as u64 + 1);
         let inventory = |slot| InventoryId(index as u64 * 4 + slot);
-        world.fields.insert(
+        world.insert_field(Field {
             id,
-            Field {
-                id,
-                area: AreaId(index as u64 / 100 + 1),
-                access: BTreeSet::new(),
-                custodian: None,
-                seed: inventory(1),
-                tool: inventory(2),
-                water: inventory(3),
-                food: inventory(4),
-            },
-        );
+            area: AreaId(index as u64 / 100 + 1),
+            access: BTreeSet::new(),
+            custodian: None,
+            seed: inventory(1),
+            tool: inventory(2),
+            water: inventory(3),
+            food: inventory(4),
+        })?;
         let mut crop = Crop::new(definition.clone());
         crop.phase = CropPhase::Growing;
         crop.preparation_ms = rules.prepare_labor.0;
         crop.planting_ms = rules.plant_labor.0;
         crop.tending = (index % 1_001) as u16;
-        world.crops.insert(id, crop);
-        world.soils.insert(
+        world.insert_crop(id, crop)?;
+        world.insert_soil(
             id,
             Soil {
                 fertility: 500 + (index % 501) as u16,
                 water: 40 + index as u64 % 21,
                 capacity: 100,
             },
-        );
+        )?;
     }
     world.validate(SimTime(0), Some(365))?;
     Ok(world)
 }
 fn weather(world: &World, days: u64) -> Vec<LocalWeatherDay> {
-    let areas: BTreeSet<_> = world.fields.values().map(|field| field.area).collect();
+    let areas: BTreeSet<_> = world
+        .fields()
+        .map(|(_, field)| field)
+        .map(|field| field.area)
+        .collect();
     (1..=days)
         .map(|day| LocalWeatherDay {
             day,
@@ -108,7 +109,7 @@ fn execute(
         let next = SimTime(day.day * DAY);
         match mode {
             Mode::Snapshot => {
-                growth_rows += world.fields.len();
+                growth_rows += world.fields().count();
                 world = world.advance(from, next, Some(day))?;
             }
             Mode::Serial => {
@@ -156,7 +157,7 @@ fn check_idle(world: &World) -> Result<(), Error> {
     assert_eq!(&next_world, world);
     println!(
         "mode=subday_idle fields={} jobs={} steps={IDLE_STEPS} growth_rows=0 callback_calls={callback_calls} elapsed_ms={milliseconds:.3}",
-        world.fields.len(),
+        world.fields().count(),
         world.jobs.len()
     );
     Ok(())
@@ -213,18 +214,18 @@ fn main() -> Result<(), Error> {
         restored.validate(SimTime(days.len() as u64 * DAY), Some(365))?;
         assert_eq!(final_world, restored);
         let growing = final_world
-            .crops
-            .values()
+            .crops()
+            .map(|(_, crop)| crop)
             .filter(|crop| crop.phase == CropPhase::Growing)
             .count();
         let ripe = final_world
-            .crops
-            .values()
+            .crops()
+            .map(|(_, crop)| crop)
             .filter(|crop| crop.phase == CropPhase::Ripe)
             .count();
         let failed = final_world
-            .crops
-            .values()
+            .crops()
+            .map(|(_, crop)| crop)
             .filter(|crop| crop.phase == CropPhase::Failed)
             .count();
         println!(

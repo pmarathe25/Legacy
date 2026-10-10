@@ -844,9 +844,11 @@ impl Simulation {
                 } else {
                     farm_tool
                 };
-                sim.state.agriculture.as_mut().unwrap().fields.insert(
-                    id,
-                    agriculture::Field {
+                sim.state
+                    .agriculture
+                    .as_mut()
+                    .unwrap()
+                    .insert_field(agriculture::Field {
                         id,
                         area: settlement.fields,
                         access: permission,
@@ -855,21 +857,25 @@ impl Simulation {
                         tool: field_tool,
                         water,
                         food: farm_food,
-                    },
-                );
+                    })
+                    .expect("validated component insertion");
                 let world = sim.state.agriculture.as_mut().unwrap();
-                world.crops.insert(
-                    id,
-                    agriculture::Crop::new(world.catalog.default_crop.clone()),
-                );
-                world.soils.insert(
-                    id,
-                    agriculture::Soil {
-                        fertility: 900,
-                        water: 75,
-                        capacity: 120,
-                    },
-                );
+                world
+                    .insert_crop(
+                        id,
+                        agriculture::Crop::new(world.catalog.default_crop.clone()),
+                    )
+                    .expect("validated component insertion");
+                world
+                    .insert_soil(
+                        id,
+                        agriculture::Soil {
+                            fertility: 900,
+                            water: 75,
+                            capacity: 120,
+                        },
+                    )
+                    .expect("validated component insertion");
             }
             // Initial existing residents remember their own settlement's public
             // supplies. No global inventory/map broadcast is performed.

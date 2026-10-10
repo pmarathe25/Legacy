@@ -1,0 +1,312 @@
+//! Private vendor adapter. No engine types escape the storage/query contracts.
+use super::*;
+use bevy_ecs::{
+    component::Component as NativeComponent,
+    entity::Entity,
+    query::QueryState,
+    world::{World, WorldId},
+};
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
+
+#[derive(NativeComponent)]
+struct Native<C: Component>(C);
+#[derive(NativeComponent, PartialEq, Eq)]
+#[component(immutable)]
+struct NativeId(StableId);
+
+type ReadRow = fn(&World, Entity) -> Result<Option<Box<RawValue>>, Error>;
+type EqualRow = fn(&World, Entity, &World, Entity) -> bool;
+type CloneRow = fn(&World, Entity, &mut World, Entity);
+type RestoreRow = dyn Fn(&mut World, Entity, &RawValue) -> Result<(), Error> + Send + Sync;
+#[derive(Clone)]
+pub(super) struct Registration {
+    component_type: TypeId,
+    // Only immutable validator callbacks are erased. Components remain typed
+    // native storage; no Any world or component bag is exposed to consumers.
+    validator: Arc<dyn Any + Send + Sync>,
+    initialize: fn(&mut World),
+    read: ReadRow,
+    equal: EqualRow,
+    clone_row: CloneRow,
+    restore: Arc<RestoreRow>,
+}
+pub(super) fn is_stable_id<C: Component>() -> bool {
+    TypeId::of::<C>() == TypeId::of::<StableId>()
+}
+impl Registration {
+    pub(super) fn matches<C: Component>(&self) -> bool {
+        self.component_type == TypeId::of::<C>()
+    }
+    pub(super) fn same_type(&self, other: &Self) -> bool {
+        self.component_type == other.component_type
+    }
+    pub(super) fn new<C: Component>(validate: fn(&C) -> Result<(), Error>) -> Self {
+        fn initialize<C: Component>(world: &mut World) {
+            world.register_component::<Native<C>>();
+        }
+        fn read<C: Component>(
+            world: &World,
+            entity: Entity,
+        ) -> Result<Option<Box<RawValue>>, Error> {
+            world
+                .get::<Native<C>>(entity)
+                .map(|component| serde_json::value::to_raw_value(&component.0))
+                .transpose()
+                .map_err(|error| Error::InvalidSave(format!("cannot serialize component: {error}")))
+        }
+        fn equal<C: Component>(a: &World, a_entity: Entity, b: &World, b_entity: Entity) -> bool {
+            a.get::<Native<C>>(a_entity).map(|component| &component.0)
+                == b.get::<Native<C>>(b_entity).map(|component| &component.0)
+        }
+        fn clone_row<C: Component>(
+            source: &World,
+            source_entity: Entity,
+            destination: &mut World,
+            destination_entity: Entity,
+        ) {
+            if let Some(component) = source.get::<Native<C>>(source_entity) {
+                destination
+                    .entity_mut(destination_entity)
+                    .insert(Native(component.0.clone()));
+            }
+        }
+        let restore = move |world: &mut World, entity: Entity, raw: &RawValue| {
+            let component: C = serde_json::from_str(raw.get())
+                .map_err(|error| Error::InvalidSave(format!("invalid component data: {error}")))?;
+            validate(&component)
+                .map_err(|error| Error::InvalidSave(format!("invalid component: {error:?}")))?;
+            world.entity_mut(entity).insert(Native(component));
+            Ok(())
+        };
+        Self {
+            component_type: TypeId::of::<C>(),
+            validator: Arc::new(validate),
+            initialize: initialize::<C>,
+            read: read::<C>,
+            equal: equal::<C>,
+            clone_row: clone_row::<C>,
+            restore: Arc::new(restore),
+        }
+    }
+}
+pub(super) struct Storage {
+    world: World,
+    entities: BTreeMap<StableId, Entity>,
+    schema: Schema,
+    structural_revision: u64,
+}
+impl Storage {
+    pub(super) fn new(schema: Schema) -> Self {
+        let mut world = World::new();
+        world.register_component::<NativeId>();
+        for registration in schema.components.values() {
+            (registration.initialize)(&mut world);
+        }
+        Self {
+            world,
+            entities: BTreeMap::new(),
+            schema,
+            structural_revision: 0,
+        }
+    }
+    pub(super) fn schema(&self) -> &Schema {
+        &self.schema
+    }
+    pub(super) fn len(&self) -> usize {
+        self.entities.len()
+    }
+    pub(super) fn ids(&self) -> impl Iterator<Item = StableId> + '_ {
+        self.entities.keys().copied()
+    }
+    pub(super) fn contains(&self, id: StableId) -> bool {
+        self.entities.contains_key(&id)
+    }
+    pub(super) fn spawn(&mut self, id: StableId) -> Result<(), Error> {
+        if id.0 == 0 {
+            return Err(Error::InvalidConfiguration("zero stable entity ID".into()));
+        }
+        if self.contains(id) {
+            return Err(Error::SequenceConflict);
+        }
+        let revision = self
+            .structural_revision
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
+        let entity = self.world.spawn(NativeId(id)).id();
+        self.entities.insert(id, entity);
+        self.structural_revision = revision;
+        Ok(())
+    }
+    pub(super) fn get<C: Component>(&self, id: StableId) -> Option<&C> {
+        self.world
+            .get::<Native<C>>(*self.entities.get(&id)?)
+            .map(|component| &component.0)
+    }
+    pub(super) fn get_mut<C: Component>(&mut self, id: StableId) -> Option<&mut C> {
+        self.schema.registration::<C>().ok()?;
+        self.world
+            .get_mut::<Native<C>>(*self.entities.get(&id)?)
+            .map(|component| &mut component.into_inner().0)
+    }
+    pub(super) fn insert<C: Component>(&mut self, id: StableId, component: C) -> Result<(), Error> {
+        let registration = self.schema.registration::<C>()?;
+        let validate = registration
+            .validator
+            .downcast_ref::<fn(&C) -> Result<(), Error>>()
+            .expect("registered validator type");
+        validate(&component)?;
+        let entity = *self.entities.get(&id).ok_or(Error::Unavailable)?;
+        let revision = if self.world.get::<Native<C>>(entity).is_some() {
+            self.structural_revision
+        } else {
+            self.structural_revision
+                .checked_add(1)
+                .ok_or(Error::Overflow)?
+        };
+        self.world.entity_mut(entity).insert(Native(component));
+        self.structural_revision = revision;
+        Ok(())
+    }
+    pub(super) fn remove<C: Component>(&mut self, id: StableId) -> Result<Option<C>, Error> {
+        self.schema.registration::<C>()?;
+        let entity = *self.entities.get(&id).ok_or(Error::Unavailable)?;
+        if self.world.get::<Native<C>>(entity).is_none() {
+            return Ok(None);
+        }
+        let revision = self
+            .structural_revision
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
+        let removed = self
+            .world
+            .entity_mut(entity)
+            .take::<Native<C>>()
+            .map(|component| component.0);
+        self.structural_revision = revision;
+        Ok(removed)
+    }
+    pub(super) fn iter<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> {
+        self.entities.iter().filter_map(|(id, entity)| {
+            self.world
+                .get::<Native<C>>(*entity)
+                .map(|component| (*id, &component.0))
+        })
+    }
+    pub(super) fn snapshot(&self) -> Result<Snapshot, Error> {
+        let mut columns = BTreeMap::new();
+        for (id, entity) in &self.entities {
+            if self.world.get::<NativeId>(*entity) != Some(&NativeId(*id)) {
+                return Err(Error::InvalidSave(
+                    "inconsistent stable entity index".into(),
+                ));
+            }
+        }
+        for (key, registration) in &self.schema.components {
+            let mut rows = Vec::new();
+            for (id, entity) in &self.entities {
+                if let Some(value) = (registration.read)(&self.world, *entity)? {
+                    rows.push(ComponentRow {
+                        entity: id.0,
+                        value,
+                    });
+                }
+            }
+            columns.insert(key.clone(), rows);
+        }
+        Ok(Snapshot {
+            version: 1,
+            entities: self.ids().map(|id| id.0).collect(),
+            columns,
+        })
+    }
+    pub(super) fn restore(schema: Schema, snapshot: Snapshot) -> Result<Self, Error> {
+        let invalid = || Error::InvalidSave("invalid component storage snapshot".into());
+        if snapshot.version != 1
+            || snapshot.entities.contains(&0)
+            || snapshot.entities.windows(2).any(|pair| pair[0] >= pair[1])
+            || snapshot.columns.keys().ne(schema.components.keys())
+        {
+            return Err(invalid());
+        }
+        let mut restored = Self::new(schema);
+        for id in snapshot.entities {
+            restored.spawn(StableId(id)).map_err(|_| invalid())?;
+        }
+        for (key, rows) in snapshot.columns {
+            if rows.windows(2).any(|pair| pair[0].entity >= pair[1].entity) {
+                return Err(invalid());
+            }
+            let registration = &restored.schema.components[&key];
+            for row in rows {
+                let entity = *restored
+                    .entities
+                    .get(&StableId(row.entity))
+                    .ok_or_else(invalid)?;
+                (registration.restore)(&mut restored.world, entity, &row.value)?;
+            }
+        }
+        // No cached queries exist in a freshly restored store.
+        Ok(restored)
+    }
+}
+impl Clone for Storage {
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new(self.schema.clone());
+        for (id, source_entity) in &self.entities {
+            cloned.spawn(*id).expect("stored stable IDs are valid");
+            let destination_entity = cloned.entities[id];
+            for registration in self.schema.components.values() {
+                (registration.clone_row)(
+                    &self.world,
+                    *source_entity,
+                    &mut cloned.world,
+                    destination_entity,
+                );
+            }
+        }
+        cloned
+    }
+}
+impl PartialEq for Storage {
+    fn eq(&self, other: &Self) -> bool {
+        self.schema == other.schema
+            && self.entities.keys().eq(other.entities.keys())
+            && self.schema.components.values().all(|registration| {
+                self.entities.iter().all(|(id, entity)| {
+                    (registration.equal)(&self.world, *entity, &other.world, other.entities[id])
+                })
+            })
+    }
+}
+fn cache_error() -> Error {
+    Error::InvalidConfiguration("component query belongs to another store or needs refresh".into())
+}
+macro_rules! queries {
+    ($name:ident; $($type:ident $value:ident),+) => {
+        pub(super) struct $name<$($type: Component),+> {
+            state: QueryState<(&'static NativeId, $(&'static Native<$type>),+)>,
+            world: WorldId,
+            revision: u64,
+        }
+        impl<$($type: Component),+> $name<$($type),+> {
+            pub(super) fn new(store: &mut Storage) -> Self {
+                Self { state: store.world.query(), world: store.world.id(), revision: store.structural_revision }
+            }
+            pub(super) fn refresh(&mut self, store: &Storage) -> Result<(), Error> {
+                if self.world != store.world.id() { return Err(cache_error()); }
+                self.state.update_archetypes(&store.world);
+                self.revision = store.structural_revision;
+                Ok(())
+            }
+            pub(super) fn iter<'a>(&'a self, store: &'a Storage) -> Result<impl Iterator<Item = (StableId, $(&'a $type),+)> + 'a, Error> {
+                if self.world != store.world.id() || self.revision != store.structural_revision { return Err(cache_error()); }
+                Ok(self.state.iter_manual(&store.world).map(|(id, $($value),+)| (id.0, $(&$value.0),+)))
+            }
+        }
+    }
+}
+queries!(Query2; A a, B b);
+queries!(Query3; A a, B b, C c);

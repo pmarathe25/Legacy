@@ -3,6 +3,7 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 mod advancing;
+mod storage;
 pub use advancing::{GrowthInput, GrowthOutput, PreparedAdvance};
 /// Facts supplied by a local weather provider; no climate runtime is required.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -258,14 +259,12 @@ impl CropRules {
         Ok(())
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct World {
     #[cfg(feature = "content")]
     pub content: Option<game_content::Stamp>,
     pub catalog: Catalog,
-    pub crops: BTreeMap<SiteId, Crop>,
-    pub soils: BTreeMap<SiteId, Soil>,
-    pub fields: BTreeMap<SiteId, Field>,
+    components: game_ecs::Store,
+    growth_query: game_ecs::Query3<Field, Crop, Soil>,
     pub jobs: BTreeMap<PersonId, Cultivation>,
     /// Last consumed environmental day, not an independently advanced clock.
     pub day: u64,
@@ -273,16 +272,8 @@ pub struct World {
 impl World {
     pub fn new(catalog: Catalog, day: u64) -> Result<Self, Error> {
         catalog.validate(None)?;
-        Ok(Self {
-            #[cfg(feature = "content")]
-            content: None,
-            catalog,
-            crops: BTreeMap::new(),
-            soils: BTreeMap::new(),
-            fields: BTreeMap::new(),
-            jobs: BTreeMap::new(),
-            day,
-        })
+        let components = game_ecs::Store::with_schema(storage::schema()?);
+        Ok(Self::with_components(catalog, day, components))
     }
     #[cfg(feature = "content")]
     pub fn from_content(
@@ -295,7 +286,7 @@ impl World {
         Ok(world)
     }
     pub fn rules_for(&self, field: SiteId) -> Result<&CropRules, Error> {
-        let crop = self.crops.get(&field).ok_or(Error::Unavailable)?;
+        let crop = self.crop(field).ok_or(Error::Unavailable)?;
         self.catalog
             .crops
             .get(&crop.definition)
@@ -303,9 +294,9 @@ impl World {
     }
     pub fn field_bundle(&self, field: SiteId) -> Result<(&Field, &Crop, &Soil, &CropRules), Error> {
         Ok((
-            self.fields.get(&field).ok_or(Error::Unavailable)?,
-            self.crops.get(&field).ok_or(Error::Unavailable)?,
-            self.soils.get(&field).ok_or(Error::Unavailable)?,
+            self.field(field).ok_or(Error::Unavailable)?,
+            self.crop(field).ok_or(Error::Unavailable)?,
+            self.soil(field).ok_or(Error::Unavailable)?,
             self.rules_for(field)?,
         ))
     }
@@ -327,25 +318,25 @@ impl World {
             }
         }
         let bad = || Error::InvalidSave("inconsistent cultivation progress".into());
-        for (id, crop) in &self.crops {
+        for (id, crop) in self.crops() {
             let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
             crop.validate(rules)?;
             crop.validate_phase(rules)?;
-            if let Some(soil) = self.soils.get(id) {
+            if let Some(soil) = self.soil(id) {
                 soil.validate()?;
             }
         }
-        for soil in self.soils.values() {
+        for (_, soil) in self.soils() {
             soil.validate()?;
         }
         let mut fields_in_use = BTreeSet::new();
         let mut contributed: BTreeMap<PersonId, u128> = BTreeMap::new();
-        for (id, field) in &self.fields {
-            if *id != field.id {
+        for (id, field) in self.fields() {
+            if id != field.id {
                 return Err(bad());
             }
-            let crop = self.crops.get(id).ok_or_else(bad)?;
-            let soil = self.soils.get(id).ok_or_else(bad)?;
+            let crop = self.crop(id).ok_or_else(bad)?;
+            let soil = self.soil(id).ok_or_else(bad)?;
             let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
             crop.validate(rules)?;
             crop.validate_phase(rules)?;
@@ -364,8 +355,8 @@ impl World {
             return Err(bad());
         }
         for job in self.jobs.values() {
-            self.fields.get(&job.field).ok_or_else(bad)?;
-            let crop = self.crops.get(&job.field).ok_or_else(bad)?;
+            self.field(job.field).ok_or_else(bad)?;
+            let crop = self.crop(job.field).ok_or_else(bad)?;
             let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
             if job.completes <= now || !fields_in_use.insert(job.field) {
                 return Err(bad());

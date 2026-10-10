@@ -15,6 +15,9 @@ flowchart TD
     World --> API
     World --> Sim[game-sim]
     World --> Content[game-content]
+    Domains -->|migrated component stores| ECS[game-ecs]
+    ECS --> Core
+    ECS --> Backend[private ECS backend]
     World --> Domains[Domain crates]
     API -->|public types from a subset| Domains
     Sim --> Core[game-core]
@@ -29,7 +32,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 
 | Consumer | Providers | Shared interface |
 | --- | --- | --- |
-| `game-agriculture` | `game-content` (optional) | Typed crop-definition loading |
+| `game-agriculture` | `game-ecs`; `game-content` (optional) | Typed component stores and joins; crop-definition loading |
 | `game-armies` | `game-missions` | Objectives for autonomous leaders |
 | `game-characters` | `game-logistics`; `game-genetics` (optional) | Material goals; opaque inheritable temperament loci |
 | `game-conflict` | `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
@@ -46,6 +49,8 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 `game-agreements`, `game-cargo`, `game-ecology`, `game-genetics`, `game-health`, `game-invocation`, `game-logistics`, `game-property`, `game-skills`, and `game-transport` have no other production dependencies. Existing optional integrations remain available; making every feature optional is no longer an architecture requirement.
 
 ## Components and systems
+
+**Storage boundary:** `game-ecs` hides the chosen ECS engine. Feature data uses ordinary Rust types, stable game IDs, registered save schemas, and typed joins. Native entity handles, engine derives, and query internals remain in its private adapter. `game-sim` retains logical scheduling and per-simulation bounded execution.
 
 **Ownership:** A feature owns its component stores, validation, rules, and prepared changes. IDs join components across stores. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
 

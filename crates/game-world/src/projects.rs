@@ -596,7 +596,7 @@ impl Simulation {
                                 .state
                                 .agriculture
                                 .as_ref()
-                                .is_none_or(|w| w.fields.contains_key(plot))
+                                .is_none_or(|w| w.field(*plot).is_some())
                             {
                                 return Err(Error::Unavailable);
                             }
@@ -742,9 +742,11 @@ impl Simulation {
                         } => {
                             let source = land.remove(&plot).unwrap();
                             self.state.ecology.as_mut().unwrap().plots.remove(&plot);
-                            self.state.agriculture.as_mut().unwrap().fields.insert(
-                                site,
-                                agriculture::Field {
+                            self.state
+                                .agriculture
+                                .as_mut()
+                                .unwrap()
+                                .insert_field(agriculture::Field {
                                     id: site,
                                     area,
                                     access: source.access,
@@ -753,21 +755,25 @@ impl Simulation {
                                     tool,
                                     water,
                                     food,
-                                },
-                            );
+                                })
+                                .expect("validated component insertion");
                             let world = self.state.agriculture.as_mut().unwrap();
-                            world.crops.insert(
-                                site,
-                                agriculture::Crop::new(world.catalog.default_crop.clone()),
-                            );
-                            world.soils.insert(
-                                site,
-                                agriculture::Soil {
-                                    fertility: source.fertility,
-                                    water: source.soil_water,
-                                    capacity: source.water_capacity,
-                                },
-                            );
+                            world
+                                .insert_crop(
+                                    site,
+                                    agriculture::Crop::new(world.catalog.default_crop.clone()),
+                                )
+                                .expect("validated component insertion");
+                            world
+                                .insert_soil(
+                                    site,
+                                    agriculture::Soil {
+                                        fertility: source.fertility,
+                                        water: source.soil_water,
+                                        capacity: source.water_capacity,
+                                    },
+                                )
+                                .expect("validated component insertion");
                         }
                     }
                     self.state
@@ -1119,7 +1125,7 @@ impl Simulation {
         let enterprise_facts=world.enterprises.values().map(|asset| {
             let (active,crop_failed,output_room,required_input,required_output)=match asset.kind {
                 ProjectKind::Farm {..}=>{
-                    (self.state.agriculture.as_ref().unwrap().jobs.values().any(|j|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crops[&asset.site].phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
+                    (self.state.agriculture.as_ref().unwrap().jobs.values().any(|j|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crop(asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
                 }
                 ProjectKind::Workshop=>{
                     let site=&self.state.physical.as_ref().unwrap().sites[&asset.site];
@@ -1130,7 +1136,7 @@ impl Simulation {
             };
             let workers=asset.workers.iter().map(|actor| {
                 let (land_accessible,tool_available,materials_available)=match asset.kind {
-                    ProjectKind::Farm {..}=>(self.state.agriculture.as_ref().unwrap().fields[&asset.site].access.contains(actor),false,Quantity(0)),
+                    ProjectKind::Farm {..}=>(self.state.agriculture.as_ref().unwrap().field(asset.site).expect("component exists").access.contains(actor),false,Quantity(0)),
                     ProjectKind::Workshop=>{
                         let site=&self.state.physical.as_ref().unwrap().sites[&asset.site];
                         (true,self.project_usable(*actor,site.tool,Good::Tool,1_000),if self.project_usable(*actor,site.input,Good::Timber,0) {Quantity(self.unreserved_stock(site.input,*actor))} else {Quantity(0)})
@@ -2053,7 +2059,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             let field = state
                 .agriculture
                 .as_ref()
-                .and_then(|w| w.fields.get(&plot))
+                .and_then(|w| w.field(plot))
                 .ok_or_else(fail)?;
             if enterprise.site != plot
                 || field.seed != plan.input
@@ -2395,8 +2401,8 @@ mod farm_tests {
                 .agriculture
                 .as_ref()
                 .unwrap()
-                .fields
-                .contains_key(&field)
+                .field(field)
+                .is_some()
         );
         assert!(
             !sim.state
@@ -2407,7 +2413,13 @@ mod farm_tests {
                 .contains_key(&field)
         );
         assert_eq!(
-            sim.state.agriculture.as_ref().unwrap().fields[&field].custodian,
+            sim.state
+                .agriculture
+                .as_ref()
+                .unwrap()
+                .field(field)
+                .expect("component exists")
+                .custodian,
             Some(farmer)
         );
         let contract = &sim.state.agreements.as_ref().unwrap().agreements

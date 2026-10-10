@@ -11,7 +11,7 @@ fn site_exists(state: &CanonicalState, site: SiteId) -> bool {
         || state
             .agriculture
             .as_ref()
-            .is_some_and(|w| w.fields.contains_key(&site))
+            .is_some_and(|w| w.field(site).is_some())
         || state
             .ecology
             .as_ref()
@@ -21,7 +21,7 @@ fn site_custodian(state: &CanonicalState, site: SiteId) -> Option<PersonId> {
     state
         .agriculture
         .as_ref()
-        .and_then(|w| w.fields.get(&site))
+        .and_then(|w| w.field(site))
         .and_then(|f| f.custodian)
         .or_else(|| {
             state
@@ -35,7 +35,7 @@ fn output_source(state: &CanonicalState, site: SiteId, good: Good) -> Option<Inv
     state
         .agriculture
         .as_ref()
-        .and_then(|w| w.fields.get(&site))
+        .and_then(|w| w.field(site))
         .and_then(|f| match good {
             Good::Food => Some(f.food),
             Good::Seed => Some(f.seed),
@@ -1769,7 +1769,7 @@ impl Simulation {
                 .state
                 .agriculture
                 .as_mut()
-                .and_then(|w| w.fields.get_mut(&site))
+                .and_then(|w| w.field_mut(site))
                 .map(|f| &mut f.access)
                 .or_else(|| {
                     self.state
@@ -2293,7 +2293,7 @@ impl Simulation {
                         .and_then(|w| w.known_enterprises.get(&actor))
                         .is_some_and(|k| k.values().any(|e| e.site == site))
                         || self.state.agriculture.as_ref().is_some_and(|w| {
-                            w.fields.get(&site).is_some_and(|f| {
+                            w.field(site).is_some_and(|f| {
                                 self.state.people[self.person_index[&actor]].location
                                     == Location::AtArea(f.area)
                             })
@@ -2592,7 +2592,7 @@ impl Simulation {
                         .state
                         .agriculture
                         .as_ref()
-                        .is_some_and(|w| w.fields.contains_key(&site))
+                        .is_some_and(|w| w.field(site).is_some())
                     {
                         self.available_cultivation(debtor)
                             .into_iter()

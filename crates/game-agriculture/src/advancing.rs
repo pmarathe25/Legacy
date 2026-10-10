@@ -31,10 +31,10 @@ struct Change<T> {
 pub struct PreparedAdvance {
     opening_day: u64,
     next_day: u64,
-    crops: BTreeMap<SiteId, Change<Crop>>,
-    soils: BTreeMap<SiteId, Change<Soil>>,
-    jobs: BTreeMap<PersonId, Change<Cultivation>>,
-    fields: BTreeMap<SiteId, (SiteId, AreaId)>,
+    crops: Vec<(SiteId, Change<Crop>)>,
+    soils: Vec<(SiteId, Change<Soil>)>,
+    jobs: Vec<(PersonId, Change<Cultivation>)>,
+    fields: Vec<(SiteId, (SiteId, AreaId))>,
     rules: BTreeMap<CropId, CropRules>,
 }
 impl PreparedAdvance {
@@ -56,6 +56,32 @@ impl PreparedAdvance {
     pub fn growth_rows(&self) -> usize {
         self.soils.len()
     }
+}
+fn remember_rules(rules: &mut BTreeMap<CropId, CropRules>, id: &CropId, definition: &CropRules) {
+    if !rules.contains_key(id) {
+        rules.insert(id.clone(), definition.clone());
+    }
+}
+fn merge_site_rows<T>(left: Vec<(SiteId, T)>, right: Vec<(SiteId, T)>) -> Vec<(SiteId, T)> {
+    if right.is_empty() {
+        return left;
+    }
+    if left.is_empty() {
+        return right;
+    }
+    let mut merged = Vec::with_capacity(left.len() + right.len());
+    let mut left = left.into_iter().peekable();
+    let mut right = right.into_iter().peekable();
+    while let (Some((left_id, _)), Some((right_id, _))) = (left.peek(), right.peek()) {
+        if left_id < right_id {
+            merged.push(left.next().expect("peeked row exists"));
+        } else {
+            merged.push(right.next().expect("peeked row exists"));
+        }
+    }
+    merged.extend(left);
+    merged.extend(right);
+    merged
 }
 impl World {
     pub fn next_boundary(&self, now: SimTime, limit: SimTime) -> SimTime {
@@ -79,25 +105,28 @@ impl World {
         let mut prepared = PreparedAdvance {
             opening_day: self.day,
             next_day: self.day,
-            crops: BTreeMap::new(),
-            soils: BTreeMap::new(),
-            jobs: BTreeMap::new(),
-            fields: BTreeMap::new(),
+            crops: Vec::new(),
+            soils: Vec::new(),
+            jobs: Vec::new(),
+            fields: Vec::new(),
             rules: BTreeMap::new(),
         };
         let bad = || Error::InvalidSave("inconsistent cultivation batch".into());
         let mut occupied = BTreeSet::new();
+        // Only active cultivation needs keyed preview lookup. Daily growth
+        // stages dense rows directly into ordered buffers.
+        let mut labor_preview: BTreeMap<SiteId, (Change<Crop>, (SiteId, AreaId))> = BTreeMap::new();
         for (actor, job) in &self.jobs {
             if !occupied.insert(job.field) || next > job.completes {
                 return Err(bad());
             }
-            let crop = self.crops.get(&job.field).ok_or_else(bad)?;
+            let crop = self.crop(job.field).ok_or_else(bad)?;
             let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
             crop.validate(rules)?;
             if elapsed == 0 {
                 continue;
             }
-            let field = self.fields.get(&job.field).ok_or_else(bad)?;
+            let field = self.field(job.field).ok_or_else(bad)?;
             let mut next_crop = crop.clone();
             let mut next_job = job.clone();
             next_job.labor_ms = next_job
@@ -116,43 +145,45 @@ impl World {
                 *progress = progress.checked_add(elapsed).ok_or(Error::Overflow)?;
             }
             next_crop.validate(rules)?;
-            prepared.fields.insert(job.field, (field.id, field.area));
-            prepared
-                .rules
-                .entry(crop.definition.clone())
-                .or_insert_with(|| rules.clone());
-            prepared.crops.insert(
+            remember_rules(&mut prepared.rules, &crop.definition, rules);
+            labor_preview.insert(
                 job.field,
-                Change {
-                    before: crop.clone(),
-                    after: next_crop,
-                },
+                (
+                    Change {
+                        before: crop.clone(),
+                        after: next_crop,
+                    },
+                    (field.id, field.area),
+                ),
             );
-            prepared.jobs.insert(
+            prepared.jobs.push((
                 *actor,
                 Change {
                     before: job.clone(),
                     after: next_job,
                 },
-            );
+            ));
         }
         if let Some(day) = day {
             if day.day != self.day.checked_add(1).ok_or(Error::Overflow)? {
                 return Err(bad());
             }
-            let mut inputs = Vec::new();
-            for (id, field) in &self.fields {
-                let Some(opening_crop) = self.crops.get(id) else {
+            let mut joined = Vec::new();
+            for (stable_id, field, opening_crop, soil) in
+                self.growth_query.iter(&self.components)?
+            {
+                let Some(weather) = day.cells.get(&field.area) else {
                     continue;
                 };
-                let (Some(soil), Some(weather)) = (self.soils.get(id), day.cells.get(&field.area))
-                else {
-                    continue;
-                };
-                let crop = prepared
-                    .crops
+                joined.push((SiteId(stable_id.0), field, opening_crop, soil, weather));
+            }
+            // Native storage order cannot determine authoritative publication.
+            joined.sort_unstable_by_key(|(id, ..)| *id);
+            let mut inputs = Vec::with_capacity(joined.len());
+            for (id, _, opening_crop, soil, weather) in &joined {
+                let crop = labor_preview
                     .get(id)
-                    .map_or(opening_crop, |change| &change.after);
+                    .map_or(*opening_crop, |(change, _)| &change.after);
                 let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
                 inputs.push((
                     *id,
@@ -192,45 +223,61 @@ impl World {
                 }
             }
             drop(inputs);
-            for (id, output) in outputs {
-                let opening_crop = &self.crops[&id];
+            prepared.crops.reserve(outputs.len());
+            prepared.soils.reserve(outputs.len());
+            prepared.fields.reserve(outputs.len());
+            // Capture opening rows from the actual native join, without repeat
+            // stable-ID index lookups or a tree allocation for each guard.
+            for ((id, field, opening_crop, soil, _), (_, output)) in joined.into_iter().zip(outputs)
+            {
+                prepared.fields.push((id, (field.id, field.area)));
                 let rules = &self.catalog.crops[&opening_crop.definition];
-                prepared.fields.entry(id).or_insert_with(|| {
-                    let field = &self.fields[&id];
-                    (field.id, field.area)
-                });
-                prepared
-                    .rules
-                    .entry(opening_crop.definition.clone())
-                    .or_insert_with(|| rules.clone());
-                match prepared.crops.entry(id) {
-                    std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().after = output.crop
-                    }
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        entry.insert(Change {
-                            before: opening_crop.clone(),
-                            after: output.crop,
-                        });
-                    }
-                }
-                prepared.soils.insert(
+                remember_rules(&mut prepared.rules, &opening_crop.definition, rules);
+                prepared.crops.push((
                     id,
                     Change {
-                        before: self.soils[&id].clone(),
+                        before: labor_preview
+                            .remove(&id)
+                            .map_or_else(|| opening_crop.clone(), |(change, _)| change.before),
+                        after: output.crop,
+                    },
+                ));
+                prepared.soils.push((
+                    id,
+                    Change {
+                        before: soil.clone(),
                         after: output.soil,
                     },
-                );
+                ));
             }
             prepared.next_day = day.day;
         }
+        let mut labor_crops = Vec::new();
+        let mut labor_fields = Vec::new();
+        for (id, (change, location)) in labor_preview {
+            labor_crops.push((id, change));
+            labor_fields.push((id, location));
+        }
+        prepared.crops = merge_site_rows(prepared.crops, labor_crops);
+        prepared.fields = merge_site_rows(prepared.fields, labor_fields);
         // A zero-duration growth boundary still reads an existing job's claim.
         for (actor, job) in &self.jobs {
-            if prepared.crops.contains_key(&job.field) {
-                prepared.jobs.entry(*actor).or_insert_with(|| Change {
-                    before: job.clone(),
-                    after: job.clone(),
-                });
+            if prepared
+                .crops
+                .binary_search_by_key(&job.field, |(key, _)| *key)
+                .is_ok()
+                && let Err(index) = prepared.jobs.binary_search_by_key(actor, |(key, _)| *key)
+            {
+                prepared.jobs.insert(
+                    index,
+                    (
+                        *actor,
+                        Change {
+                            before: job.clone(),
+                            after: job.clone(),
+                        },
+                    ),
+                );
             }
         }
         Ok(prepared)
@@ -256,24 +303,31 @@ impl World {
             || prepared
                 .crops
                 .iter()
-                .any(|(id, change)| self.crops.get(id) != Some(&change.before))
+                .any(|(id, change)| self.crop(*id) != Some(&change.before))
             || prepared
                 .soils
                 .iter()
-                .any(|(id, change)| self.soils.get(id) != Some(&change.before))
+                .any(|(id, change)| self.soil(*id) != Some(&change.before))
             || prepared
                 .jobs
                 .iter()
                 .any(|(id, change)| self.jobs.get(id) != Some(&change.before))
             || prepared.fields.iter().any(|(id, expected)| {
-                self.fields.get(id).map(|field| (field.id, field.area)) != Some(*expected)
+                self.field(*id).map(|field| (field.id, field.area)) != Some(*expected)
             })
             || prepared
                 .rules
                 .iter()
                 .any(|(id, rules)| self.catalog.crops.get(id) != Some(rules))
             || self.jobs.iter().any(|(actor, job)| {
-                prepared.crops.contains_key(&job.field) && !prepared.jobs.contains_key(actor)
+                prepared
+                    .crops
+                    .binary_search_by_key(&job.field, |(key, _)| *key)
+                    .is_ok()
+                    && prepared
+                        .jobs
+                        .binary_search_by_key(actor, |(key, _)| *key)
+                        .is_err()
             })
         {
             return Err(Error::InvalidSave(
@@ -287,10 +341,10 @@ impl World {
     pub fn commit_advance(&mut self, prepared: PreparedAdvance) -> Result<(), Error> {
         self.validate_advance(&prepared)?;
         for (id, change) in prepared.crops {
-            self.crops.insert(id, change.after);
+            *self.crop_mut(id).expect("preflighted crop exists") = change.after;
         }
         for (id, change) in prepared.soils {
-            self.soils.insert(id, change.after);
+            *self.soil_mut(id).expect("preflighted soil exists") = change.after;
         }
         for (id, change) in prepared.jobs {
             self.jobs.insert(id, change.after);

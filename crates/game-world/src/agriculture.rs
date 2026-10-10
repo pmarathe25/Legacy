@@ -178,9 +178,8 @@ impl Simulation {
             sim.state.environment.as_ref().unwrap().weather_day,
         )?;
         let crop_id = agriculture.catalog.default_crop.clone();
-        agriculture.fields.insert(
-            id,
-            Field {
+        agriculture
+            .insert_field(Field {
                 custodian: None,
                 id,
                 area: farm,
@@ -189,17 +188,21 @@ impl Simulation {
                 tool,
                 water,
                 food,
-            },
-        );
-        agriculture.crops.insert(id, Crop::new(crop_id));
-        agriculture.soils.insert(
-            id,
-            Soil {
-                fertility: 900,
-                water: 75,
-                capacity: 120,
-            },
-        );
+            })
+            .expect("validated component insertion");
+        agriculture
+            .insert_crop(id, Crop::new(crop_id))
+            .expect("validated component insertion");
+        agriculture
+            .insert_soil(
+                id,
+                Soil {
+                    fertility: 900,
+                    water: 75,
+                    capacity: 120,
+                },
+            )
+            .expect("validated component insertion");
         sim.state.agriculture = Some(agriculture);
         let private_tool = sim.debug_add_inventory(
             Good::Tool,
@@ -209,7 +212,14 @@ impl Simulation {
             BTreeSet::from([sim.state.ruler]),
         )?;
         let private_field_id = SiteId(allocate(&mut sim.state)?);
-        let mut private_field = sim.state.agriculture.as_ref().unwrap().fields[&id].clone();
+        let mut private_field = sim
+            .state
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .field(id)
+            .expect("component exists")
+            .clone();
         private_field.id = private_field_id;
         private_field.tool = private_tool;
         private_field.access = BTreeSet::from([sim.state.ruler]);
@@ -218,15 +228,21 @@ impl Simulation {
             .agriculture
             .as_mut()
             .unwrap()
-            .fields
-            .insert(private_field_id, private_field);
+            .insert_field(private_field)
+            .expect("validated component insertion");
         let world = sim.state.agriculture.as_mut().unwrap();
         world
-            .crops
-            .insert(private_field_id, world.crops[&id].clone());
+            .insert_crop(
+                private_field_id,
+                world.crop(id).expect("component exists").clone(),
+            )
+            .expect("validated component insertion");
         world
-            .soils
-            .insert(private_field_id, world.soils[&id].clone());
+            .insert_soil(
+                private_field_id,
+                world.soil(id).expect("component exists").clone(),
+            )
+            .expect("validated component insertion");
         let crop = world.rules_for(id)?;
         let food_capacity = 10_000_000.max(3_000_000 + crop.food_yield.0);
         let seed_capacity = 1_000_000.max(10_000 + crop.seed_yield.0);
@@ -299,7 +315,7 @@ impl Simulation {
         resources: Option<&equipment::RankingResources>,
     ) -> Result<game_agriculture::BeginFacts, Error> {
         let world = self.state.agriculture.as_ref().ok_or(Error::Unavailable)?;
-        let land = world.fields.get(&field).ok_or(Error::Unavailable)?;
+        let land = world.field(field).ok_or(Error::Unavailable)?;
         let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let body = physical.actors.get(&actor).ok_or(Error::Unavailable)?;
         let environment = self.state.environment.as_ref();
@@ -413,7 +429,9 @@ impl Simulation {
         }
         let completes = plan.job.completes;
         let world = self.state.agriculture.as_mut().unwrap();
-        world.crops.insert(field, plan.crop);
+        world
+            .insert_crop(field, plan.crop)
+            .expect("validated component insertion");
         world.jobs.insert(actor, plan.job);
         self.state
             .physical
@@ -466,15 +484,15 @@ impl Simulation {
             .cultivation_facts(actor, job.field, None)
             .expect("validated cultivation actor");
         let world = self.state.agriculture.as_ref().unwrap();
-        let field = &world.fields[&job.field];
+        let field = &world.field(job.field).expect("component exists");
         let room = |id: InventoryId| {
             let stock = &self.state.inventories[&id];
             Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))
         };
         let plan = game_agriculture::prepare_completion(
             field,
-            &world.crops[&job.field],
-            &world.soils[&job.field],
+            world.crop(job.field).expect("component exists"),
+            world.soil(job.field).expect("component exists"),
             &job,
             world
                 .rules_for(job.field)
@@ -508,8 +526,12 @@ impl Simulation {
             (output.food, output.seed)
         });
         let world = self.state.agriculture.as_mut().unwrap();
-        world.crops.insert(job.field, plan.crop);
-        world.soils.insert(job.field, plan.soil);
+        world
+            .insert_crop(job.field, plan.crop)
+            .expect("validated component insertion");
+        world
+            .insert_soil(job.field, plan.soil)
+            .expect("validated component insertion");
         self.state
             .physical
             .as_mut()
@@ -545,12 +567,12 @@ impl Simulation {
         };
         Some(AgricultureView {
             fields: world
-                .fields
-                .values()
+                .fields()
+                .map(|(_, value)| value)
                 .filter(|field| field.area == area)
                 .filter_map(|field| {
-                    let crop = world.crops.get(&field.id)?;
-                    let soil = world.soils.get(&field.id)?;
+                    let crop = world.crop(field.id)?;
+                    let soil = world.soil(field.id)?;
                     Some(FieldView {
                         id: field.id,
                         crop: crop.definition.clone(),
@@ -572,8 +594,8 @@ impl Simulation {
             return Vec::new();
         };
         world
-            .fields
-            .keys()
+            .fields()
+            .map(|(id, _)| id)
             .flat_map(|field| {
                 [
                     FarmOperation::Prepare,
@@ -584,12 +606,9 @@ impl Simulation {
                     FarmOperation::Fallow,
                 ]
                 .into_iter()
-                .filter_map(|operation| {
-                    self.cultivation_possible(actor, *field, operation)
-                        .then_some(Command::Cultivate {
-                            field: *field,
-                            operation,
-                        })
+                .filter_map(move |operation| {
+                    self.cultivation_possible(actor, field, operation)
+                        .then_some(Command::Cultivate { field, operation })
                 })
             })
             .collect()
@@ -604,9 +623,9 @@ impl Simulation {
     ) -> Option<Command> {
         let world = self.state.agriculture.as_ref()?;
         world
-            .fields
-            .keys()
-            .find_map(|field| self.autonomous_field_cultivation(actor, *field, resources))
+            .fields()
+            .map(|(id, _)| id)
+            .find_map(|field| self.autonomous_field_cultivation(actor, field, resources))
     }
     pub(crate) fn autonomous_field_cultivation(
         &self,
@@ -634,14 +653,14 @@ impl Simulation {
         if environment.is_some_and(|w| world.day != w.weather_day) {
             return Err(invalid());
         }
-        for (id, field) in &world.fields {
-            if *id != field.id
+        for (id, field) in world.fields() {
+            if id != field.id
                 || id.0 >= self.state.next_id
                 || self
                     .state
                     .physical
                     .as_ref()
-                    .is_none_or(|w| w.sites.contains_key(id))
+                    .is_none_or(|w| w.sites.contains_key(&id))
                 || !self.state.areas.iter().any(|a| a.id == field.area)
                 || field
                     .custodian
@@ -649,7 +668,13 @@ impl Simulation {
                 || field
                     .access
                     .iter()
-                    .chain(world.crops[id].contributions.keys())
+                    .chain(
+                        world
+                            .crop(id)
+                            .expect("component exists")
+                            .contributions
+                            .keys(),
+                    )
                     .any(|person| !self.person_index.contains_key(person))
             {
                 return Err(invalid());
@@ -672,7 +697,7 @@ impl Simulation {
             }
         }
         for (actor, job) in &world.jobs {
-            let Some(field) = world.fields.get(&job.field) else {
+            let Some(field) = world.field(job.field) else {
                 return Err(invalid());
             };
             if !self.person_index.contains_key(actor)
