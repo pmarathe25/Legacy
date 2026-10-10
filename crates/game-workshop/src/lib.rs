@@ -1,0 +1,318 @@
+//! Workshop admission, paused work, exact progress and physical production.
+//! Permissions, equipment allocation and bodily agency are supplied facts.
+use game_cargo::{Inventory, InventoryLocation};
+use game_core::*;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Job {
+    pub site: SiteId,
+    pub remaining: u64,
+    pub rate: SkillRate,
+    pub body_rate: SkillRate,
+    pub work_remainder: u64,
+    pub tool: Option<InventoryId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Site {
+    pub id: SiteId,
+    pub area: AreaId,
+    pub input: InventoryId,
+    pub input_quantity: Quantity,
+    pub tool: InventoryId,
+    pub output: InventoryId,
+    pub output_quantity: Quantity,
+    pub duration: SimDuration,
+    pub access: BTreeSet<PersonId>,
+    pub last_granted: Option<PersonId>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StartFacts {
+    pub actor: PersonId,
+    pub area: AreaId,
+    pub capable: bool,
+    pub adult: bool,
+    pub fatigue_allows: bool,
+    pub site_access: bool,
+    pub occupied_by_other: bool,
+    pub input_usable: bool,
+    pub input_unreserved: Quantity,
+    pub tool_usable: bool,
+    pub rate: SkillRate,
+    pub body_rate: SkillRate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Consumption {
+    pub source: InventoryId,
+    pub quantity: Quantity,
+    expected_input: Inventory,
+    admitted_quantity: Quantity,
+}
+
+impl Consumption {
+    /// Apply the admitted recipe input without creating a second stock ledger.
+    /// The host validates permission/finance effects before this mutation.
+    pub fn commit(&self, input: &mut Inventory) -> Result<(), Error> {
+        if self.source != self.expected_input.id
+            || self.quantity != self.admitted_quantity
+            || input != &self.expected_input
+            || input.room().is_err()
+        {
+            return Err(Error::Unavailable);
+        }
+        let remaining = input
+            .quantity
+            .0
+            .checked_sub(self.quantity.0)
+            .ok_or(Error::Unavailable)?;
+        input.quantity = Quantity(remaining);
+        Ok(())
+    }
+}
+
+/// Admission leaves stocks and the old job unchanged. The host preflights its
+/// finance and event effects before applying this job and consumption together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Start {
+    pub job: Job,
+    pub consumption: Option<Consumption>,
+}
+
+impl Site {
+    pub fn prepare_start(
+        &self,
+        previous: Option<&Job>,
+        input: &Inventory,
+        tool: &Inventory,
+        output: &Inventory,
+        facts: StartFacts,
+    ) -> Result<Start, Error> {
+        if !facts.capable
+            || !facts.adult
+            || !facts.fatigue_allows
+            || !facts.site_access
+            || facts.occupied_by_other
+            || facts.actor.0 == 0
+            || facts.area != self.area
+            || input.id != self.input
+            || output.id != self.output
+            || input.location != InventoryLocation::Area(self.area)
+            || output.location != InventoryLocation::Area(self.area)
+            || !facts.tool_usable
+            || tool.good != Good::Tool
+            || tool.quantity.0 < 1_000
+            || tool.room().is_err()
+            || input.room().is_err()
+            || output.room()? < self.output_quantity
+            || self.duration.0 == 0
+            || self.input_quantity.0 == 0
+            || self.output_quantity.0 == 0
+        {
+            return Err(Error::Unavailable);
+        }
+        if let Some(previous) = previous.filter(|job| job.site == self.id) {
+            game_skills::advance_work(0, previous.rate, previous.work_remainder)?;
+            game_skills::advance_work(0, previous.body_rate, 0)?;
+            if previous.remaining > self.duration.0 {
+                return Err(Error::Unavailable);
+            }
+            let mut job = previous.clone();
+            job.tool = Some(tool.id);
+            return Ok(Start {
+                job,
+                consumption: None,
+            });
+        }
+        if !facts.input_usable
+            || facts.input_unreserved < self.input_quantity
+            || input.quantity < self.input_quantity
+        {
+            return Err(Error::Unavailable);
+        }
+        // Validate frozen rates before any stock can be consumed.
+        game_skills::advance_work(0, facts.rate, 0)?;
+        game_skills::advance_work(0, facts.body_rate, 0)?;
+        Ok(Start {
+            job: Job {
+                site: self.id,
+                remaining: self.duration.0,
+                rate: facts.rate,
+                body_rate: facts.body_rate,
+                work_remainder: 0,
+                tool: Some(tool.id),
+            },
+            consumption: Some(Consumption {
+                source: self.input,
+                quantity: self.input_quantity,
+                expected_input: input.clone(),
+                admitted_quantity: self.input_quantity,
+            }),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Progress {
+    pub remaining: u64,
+    pub remainder: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CompletionFacts {
+    pub actor: PersonId,
+    pub active: bool,
+    /// A worker alive at the opening boundary may finish in the interval that
+    /// kills them. Death and output are then both committed by the host.
+    pub alive_at_start: bool,
+    pub equipped: bool,
+}
+
+impl Job {
+    pub fn practice(
+        &self,
+        actor: PersonId,
+        elapsed: u64,
+        active: bool,
+        equipped: bool,
+    ) -> Option<game_skills::PracticeDelta> {
+        (elapsed > 0 && active && equipped).then_some(game_skills::PracticeDelta {
+            actor,
+            skill: Skill::Craft,
+            milliseconds: elapsed,
+            mastery_cap: None,
+        })
+    }
+
+    /// Effective rate includes live skill/body/invocation facts from their
+    /// owners. Interruption preserves the frozen job and fractional work.
+    pub fn evaluate(
+        &self,
+        elapsed: u64,
+        effective_rate: SkillRate,
+        active: bool,
+        equipped: bool,
+    ) -> Result<Progress, Error> {
+        if !active || !equipped {
+            return Ok(Progress {
+                remaining: self.remaining,
+                remainder: self.work_remainder,
+            });
+        }
+        let (work, remainder) =
+            game_skills::advance_work(elapsed, effective_rate, self.work_remainder)?;
+        Ok(Progress {
+            remaining: self.remaining.saturating_sub(work),
+            remainder,
+        })
+    }
+
+    pub fn completion_after(&self, effective_rate: SkillRate) -> Result<u64, Error> {
+        game_skills::work_duration(self.remaining, effective_rate, self.work_remainder)
+    }
+
+    pub fn apply_progress(&mut self, progress: Progress) {
+        self.remaining = progress.remaining;
+        self.work_remainder = progress.remainder;
+    }
+
+    pub fn output_forecast(
+        &self,
+        progress: Progress,
+        site: &Site,
+        output_good: Good,
+    ) -> Option<(SiteId, Good, Quantity)> {
+        (self.site == site.id && progress.remaining == 0).then_some((
+            site.id,
+            output_good,
+            site.output_quantity,
+        ))
+    }
+
+    pub fn prepare_completion(
+        &self,
+        site: &Site,
+        output: &Inventory,
+        facts: CompletionFacts,
+    ) -> Result<Option<Production>, Error> {
+        if self.site != site.id || output.id != site.output || facts.actor.0 == 0 {
+            return Err(Error::Unavailable);
+        }
+        if self.remaining != 0
+            || !facts.active
+            || !facts.alive_at_start
+            || !facts.equipped
+            || output.room()? < site.output_quantity
+        {
+            return Ok(None);
+        }
+        Ok(Some(Production {
+            actor: facts.actor,
+            site: site.id,
+            output: output.id,
+            quantity: site.output_quantity,
+            expected_job: self.clone(),
+            expected_output: output.clone(),
+            expected_site: site.clone(),
+            admitted_actor: facts.actor,
+        }))
+    }
+}
+
+/// Cancellation discards already-spent input; ordinary pauses retain the job.
+pub fn cancel(job: &mut Option<Job>) {
+    *job = None;
+}
+
+pub fn interrupted(fatigue_allows: bool, equipped: bool) -> bool {
+    !fatigue_allows || !equipped
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Production {
+    pub actor: PersonId,
+    pub site: SiteId,
+    pub output: InventoryId,
+    pub quantity: Quantity,
+    expected_job: Job,
+    expected_output: Inventory,
+    expected_site: Site,
+    admitted_actor: PersonId,
+}
+
+impl Production {
+    /// All guards run before the output, job or fairness cursor is changed.
+    /// The host publishes the corresponding Produced receipt after success.
+    pub fn commit(
+        self,
+        job: &mut Option<Job>,
+        site: &mut Site,
+        output: &mut Inventory,
+    ) -> Result<(), Error> {
+        if self.actor != self.admitted_actor
+            || self.site != self.expected_site.id
+            || self.output != self.expected_output.id
+            || self.quantity != self.expected_site.output_quantity
+            || job.as_ref() != Some(&self.expected_job)
+            || site != &self.expected_site
+            || output != &self.expected_output
+            || output.room()? < self.quantity
+        {
+            return Err(Error::Unavailable);
+        }
+        output.quantity.0 = output
+            .quantity
+            .0
+            .checked_add(self.quantity.0)
+            .ok_or(Error::Overflow)?;
+        *job = None;
+        site.last_granted = Some(self.actor);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -2,6 +2,8 @@
 use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod confinement;
+pub use confinement::*;
 mod navigation;
 pub use navigation::*;
 
@@ -91,6 +93,12 @@ pub struct TargetBody {
     pub health: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Strike {
+    pub damage: u64,
+    pub practice: game_skills::PracticeDelta,
+}
+
 impl Rules {
     pub fn capacity_valid(&self) -> bool {
         (2..=4096).contains(&self.encounter_limit)
@@ -100,6 +108,26 @@ impl Rules {
     }
     pub fn strike_damage(&self, attack: u64, defending: bool) -> u64 {
         attack.saturating_sub(if defending { self.defence } else { 0 })
+    }
+
+    /// A resolved strike earns experience even when defence absorbs its damage.
+    /// The caller applies both effects once after the actual initiative action.
+    pub fn strike(
+        &self,
+        actor: PersonId,
+        attack: u64,
+        defending: bool,
+        practice_ms: u64,
+    ) -> Strike {
+        Strike {
+            damage: self.strike_damage(attack, defending),
+            practice: game_skills::PracticeDelta {
+                actor,
+                skill: Skill::Combat,
+                milliseconds: practice_ms,
+                mastery_cap: None,
+            },
+        }
     }
 }
 
@@ -292,6 +320,25 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_actual_defended_strike_supplies_damage_and_independent_combat_practice() {
+        let rules = Rules {
+            encounter_limit: 128,
+            round: SimDuration(6_000),
+            movement: 5_000,
+            reach: 2_000,
+            damage: 50,
+            defence: 30,
+            incapacitation: 20,
+        };
+        let strike = rules.strike(PersonId(1), rules.defence, true, 6_000);
+        assert_eq!(strike.damage, 0);
+        assert_eq!(strike.practice.skill, Skill::Combat);
+        let mut skills = game_skills::World::default();
+        skills.apply_practice(strike.practice);
+        assert_eq!(skills.practice(PersonId(1), Skill::Combat), 6_000);
+        assert_eq!(skills.practice(PersonId(2), Skill::Combat), 0);
+    }
     #[test]
     fn large_deployments_remain_inside_clear_geometry_and_blocked_maps_have_no_spawn() {
         let mut scene = Map {

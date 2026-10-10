@@ -1646,7 +1646,7 @@ impl Simulation {
             }
         }
         let phase_started = Instant::now();
-        self.commit_physical(physical_output, &closing_equipment);
+        self.commit_physical(physical_output, &closing_equipment)?;
         self.profile
             .record_phase("commit.commit_physical", phase_started);
         self.reconcile_transport();

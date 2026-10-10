@@ -1,0 +1,14 @@
+[package]
+name = "game-workshop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-core.workspace = true
+game-cargo.workspace = true
+game-skills.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

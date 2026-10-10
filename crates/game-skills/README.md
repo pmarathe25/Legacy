@@ -1,5 +1,5 @@
 # game-skills
 
-`game-skills` tracks each person’s practice and level for each skill. Practice accumulates in milliseconds, produces fractional progress between levels, and stops at the configured maximum. A teacher can limit how much new practice a learner receives to the teacher’s own mastery, while the learner keeps any progress already earned.
+`game-skills` tracks each person's practice and level. Feature owners describe earned learning as `PracticeDelta` effects; applying a delta updates practice, fractional level progress, and any teacher mastery cap while preserving existing learning. Progress stops at the configured maximum.
 
-Skill levels increase work output and damage through configurable rates. Work arithmetic carries fractional remainders, so splitting an interval into smaller steps preserves the same total. The crate supplies these mechanics; it does not assign skills to particular activities.
+Social action credit is bounded to one award per actor, skill, and simulation minute, so duplicate reports do not multiply learning. Physical actions such as strikes keep individual credit. Skill levels tune work and damage rates, and carried remainders make work totals consistent across different time slices.

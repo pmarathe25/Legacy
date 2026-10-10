@@ -15,15 +15,7 @@ pub struct Rules {
     pub carrying_capacity: Quantity,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Job {
-    pub site: SiteId,
-    pub remaining: u64,
-    pub rate: SkillRate,
-    pub body_rate: SkillRate,
-    pub work_remainder: u64,
-    pub tool: Option<InventoryId>,
-}
+pub use game_workshop::{Job, Site};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
@@ -32,20 +24,6 @@ pub struct Actor {
     pub vitals: Vitals,
     pub activity: Activity,
     pub job: Option<Job>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Site {
-    pub id: SiteId,
-    pub area: AreaId,
-    pub input: InventoryId,
-    pub input_quantity: Quantity,
-    pub tool: InventoryId,
-    pub output: InventoryId,
-    pub output_quantity: Quantity,
-    pub duration: SimDuration,
-    pub access: BTreeSet<PersonId>,
-    pub last_granted: Option<PersonId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -602,54 +580,46 @@ impl Simulation {
                 (Self::cargo_load_activity(&job), None, None)
             }
             Command::Work { site } => {
-                if self.state.development.as_ref().is_some_and(|w| {
-                    !matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)
-                }) {
-                    return Err(Error::Unavailable);
-                }
                 let site_record = world.sites.get(&site).ok_or(Error::Unavailable)?;
-                let input = &self.state.inventories[&site_record.input];
                 let tool_id = self
                     .select_work_tool(actor, site)
                     .ok_or(Error::Unavailable)?;
-                let tool = &self.state.inventories[&tool_id];
-                let output = &self.state.inventories[&site_record.output];
-                if site_record.area != area || !site_record.access.contains(&actor) || !self.can_use(actor, tool) || tool.quantity.0 < 1_000
-                    || a.vitals.fatigue >= rules.fatigue_limit
-                    || world.actors.iter().any(|(id, other)| *id != actor && matches!(other.activity, Activity::Work { site: other_site } if other_site == site))
-                    || output.capacity.0 - output.quantity.0 < site_record.output_quantity.0 { return Err(Error::Unavailable); }
-                if a.job.as_ref().is_some_and(|job| job.site == site) {
-                    (Activity::Work { site }, None, None)
-                } else {
-                    if !self.can_use(actor, input)
-                        || self.unreserved_stock(site_record.input, actor)
-                            < site_record.input_quantity.0
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                    (
-                        Activity::Work { site },
-                        Some(Job {
-                            site,
-                            remaining: site_record.duration.0,
-                            rate: self.effective_work_rate(actor, Skill::Craft),
-                            body_rate: SkillRate {
-                                numerator: u64::from(self.genetic_strength_milli(actor)),
-                                denominator: 1_000,
-                            },
-                            work_remainder: 0,
-                            tool: Some(tool_id),
+                let input = &self.state.inventories[&site_record.input];
+                let start = site_record.prepare_start(
+                    a.job.as_ref(),
+                    input,
+                    &self.state.inventories[&tool_id],
+                    &self.state.inventories[&site_record.output],
+                    game_workshop::StartFacts {
+                        actor,
+                        area,
+                        capable: a.vitals.alive && a.vitals.health > 0,
+                        adult: self.state.development.as_ref().is_none_or(|world| {
+                            matches!(world.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)
                         }),
-                        Some((site_record.input, site_record.input_quantity)),
-                    )
-                }
+                        fatigue_allows: a.vitals.fatigue < rules.fatigue_limit,
+                        site_access: site_record.access.contains(&actor),
+                        occupied_by_other: world.actors.iter().any(|(id, other)| {
+                            *id != actor && matches!(other.activity, Activity::Work { site: working } if working == site)
+                        }),
+                        input_usable: self.can_use(actor, input),
+                        input_unreserved: Quantity(self.unreserved_stock(site_record.input, actor)),
+                        tool_usable: self.can_use(actor, &self.state.inventories[&tool_id]),
+                        rate: self.effective_work_rate(actor, Skill::Craft),
+                        body_rate: SkillRate {
+                            numerator: u64::from(self.genetic_strength_milli(actor)),
+                            denominator: 1_000,
+                        },
+                    },
+                )?;
+                (Activity::Work { site }, Some(start.job), start.consumption)
             }
             _ => return Err(Error::Unavailable),
         };
         let project_input = if let Command::Work { site } = command
-            && let Some((_, quantity)) = &consume
+            && let Some(consumption) = &consume
         {
-            self.prepare_enterprise_input(site, *quantity)?
+            self.prepare_enterprise_input(site, consumption.quantity)?
         } else {
             None
         };
@@ -666,25 +636,20 @@ impl Simulation {
         command: Command,
         activity: Activity,
         new_job: Option<Job>,
-        consume: Option<(InventoryId, Quantity)>,
+        consume: Option<game_workshop::Consumption>,
     ) -> Result<(), Error> {
         let phase_started = Instant::now();
         self.interrupt_actor_activity(actor);
         self.profile
             .record_phase("physical.interrupt_actor_activity", phase_started);
-        if let Some((source, quantity)) = consume {
-            self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
+        if let Some(consumption) = consume {
+            consumption.commit(self.state.inventories.get_mut(&consumption.source).unwrap())?;
             self.emit(EventKind::Consumed {
                 actor,
-                source,
-                quantity,
+                source: consumption.source,
+                quantity: consumption.quantity,
             });
         }
-        let resumed_tool = if let Command::Work { site } = command {
-            self.select_work_tool(actor, site)
-        } else {
-            None
-        };
         let a = self
             .state
             .physical
@@ -711,13 +676,8 @@ impl Simulation {
         if let Some(job) = new_job {
             a.job = Some(job);
         }
-        if let Some(tool) = resumed_tool
-            && let Some(job) = &mut a.job
-        {
-            job.tool = Some(tool);
-        }
         if matches!(command, Command::Cancel) {
-            a.job = None;
+            game_workshop::cancel(&mut a.job);
         }
         let deadline = match activity {
             Activity::Eat { completes, .. }
@@ -962,12 +922,8 @@ impl Simulation {
                 && let Some(job) = &a.job
             {
                 dt = dt.min(
-                    skills::work_duration(
-                        job.remaining,
-                        self.invocation_work_rate(*id, job.rate, job.body_rate),
-                        job.work_remainder,
-                    )
-                    .expect("validated frozen skill rate"),
+                    job.completion_after(self.invocation_work_rate(*id, job.rate, job.body_rate))
+                        .expect("validated frozen skill rate"),
                 );
             }
         }
@@ -1118,18 +1074,13 @@ impl Simulation {
             let (vitals, fatigue_remainder, health_remainder) =
                 self.integrated_vitals(*id, elapsed)?;
             let (remaining, work_remainder) = if let Some(job) = &a.job {
-                if matches!(a.activity, Activity::Work { .. })
-                    && equipment.get(id).copied().unwrap_or(false)
-                {
-                    let (work, remainder) = skills::advance_work(
-                        elapsed,
-                        self.invocation_work_rate(*id, job.rate, job.body_rate),
-                        job.work_remainder,
-                    )?;
-                    (Some(job.remaining.saturating_sub(work)), Some(remainder))
-                } else {
-                    (Some(job.remaining), Some(job.work_remainder))
-                }
+                let progress = job.evaluate(
+                    elapsed,
+                    self.invocation_work_rate(*id, job.rate, job.body_rate),
+                    matches!(a.activity, Activity::Work { .. }),
+                    equipment.get(id).copied().unwrap_or(false),
+                )?;
+                (Some(progress.remaining), Some(progress.remainder))
             } else {
                 (None, None)
             };
@@ -1149,6 +1100,34 @@ impl Simulation {
                 world.actors.par_iter().map(work).collect()
             }
         })
+    }
+
+    pub(crate) fn workshop_practice_deltas(
+        &self,
+        elapsed: u64,
+        equipment: &BTreeMap<PersonId, bool>,
+    ) -> Vec<game_skills::PracticeDelta> {
+        let Some(world) = &self.state.physical else {
+            return Vec::new();
+        };
+        equipment
+            .iter()
+            .filter_map(|(actor, equipped)| {
+                let body = &world.actors[actor];
+                body.job.as_ref()?.practice(
+                    *actor,
+                    elapsed,
+                    body.vitals.alive
+                        && body.vitals.health > 0
+                        && matches!(body.activity, Activity::Work { .. })
+                        && matches!(
+                            self.state.people[self.person_index[actor]].location,
+                            Location::AtArea(_)
+                        ),
+                    *equipped,
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn complete_physical(&mut self, actor: PersonId) -> Result<(), Error> {
@@ -1462,7 +1441,7 @@ impl Simulation {
         &mut self,
         outcomes: Vec<Outcome>,
         equipment: &BTreeMap<PersonId, bool>,
-    ) {
+    ) -> Result<(), Error> {
         for out in outcomes {
             let actor = out.id;
             let world = self.state.physical.as_ref().unwrap();
@@ -1494,12 +1473,14 @@ impl Simulation {
                 || (self.health_selected_tool(actor).is_some()
                     && !equipment.get(&actor).copied().unwrap_or(false))
                 || (matches!(previous.activity, Activity::Work { .. })
-                    && !equipment.get(&actor).copied().unwrap_or(false))
+                    && game_workshop::interrupted(
+                        vitals.fatigue < rules.fatigue_limit,
+                        equipment.get(&actor).copied().unwrap_or(false),
+                    ))
                 || vitals.fatigue >= rules.fatigue_limit
                     && matches!(
                         previous.activity,
-                        Activity::Work { .. }
-                            | Activity::Gather { .. }
+                        Activity::Gather { .. }
                             | Activity::Load { .. }
                             | Activity::Take { .. }
                             | Activity::Construct { .. }
@@ -1518,39 +1499,46 @@ impl Simulation {
             a.fatigue_remainder = out.fatigue_remainder;
             a.health_remainder = out.health_remainder;
             if let (Some(job), Some(remaining)) = (&mut a.job, out.remaining) {
-                job.remaining = remaining;
-                job.work_remainder = out.work_remainder.unwrap();
+                job.apply_progress(game_workshop::Progress {
+                    remaining,
+                    remainder: out.work_remainder.unwrap(),
+                });
             }
             if job_done && equipment.get(&actor).copied().unwrap_or(false) {
                 let site_id = a.job.as_ref().unwrap().site;
-                let site = self.state.physical.as_ref().unwrap().sites[&site_id].clone();
-                let output = self.state.inventories.get_mut(&site.output).unwrap();
-                if output.capacity.0 - output.quantity.0 >= site.output_quantity.0 {
-                    output.quantity.0 += site.output_quantity.0;
-                    let a = self
-                        .state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap();
-                    a.job = None;
-                    a.activity = Activity::Idle;
-                    self.emit(EventKind::Produced {
-                        actor,
-                        site: site_id,
-                        output: site.output,
-                        quantity: site.output_quantity,
-                    });
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .sites
-                        .get_mut(&site_id)
-                        .unwrap()
-                        .last_granted = Some(actor);
+                let world = self.state.physical.as_ref().unwrap();
+                let site = &world.sites[&site_id];
+                let production = world.actors[&actor]
+                    .job
+                    .as_ref()
+                    .unwrap()
+                    .prepare_completion(
+                        site,
+                        &self.state.inventories[&site.output],
+                        game_workshop::CompletionFacts {
+                            actor,
+                            active: true,
+                            alive_at_start: previously_alive,
+                            equipped: equipment.get(&actor).copied().unwrap_or(false),
+                        },
+                    )?;
+                let output_id = site.output;
+                if let Some(production) = production {
+                    let receipt = EventKind::Produced {
+                        actor: production.actor,
+                        site: production.site,
+                        output: production.output,
+                        quantity: production.quantity,
+                    };
+                    let world = self.state.physical.as_mut().unwrap();
+                    let body = world.actors.get_mut(&actor).unwrap();
+                    production.commit(
+                        &mut body.job,
+                        world.sites.get_mut(&site_id).unwrap(),
+                        self.state.inventories.get_mut(&output_id).unwrap(),
+                    )?;
+                    body.activity = Activity::Idle;
+                    self.emit(receipt);
                 } else {
                     self.interrupt_actor_activity(actor);
                     self.emit(EventKind::Interrupted { actor });
@@ -1583,6 +1571,7 @@ impl Simulation {
                 self.emit(EventKind::Recovered { actor });
             }
         }
+        Ok(())
     }
 
     pub(crate) fn possible_work_outputs(
@@ -1596,15 +1585,19 @@ impl Simulation {
             .iter()
             .filter_map(|out| {
                 let actor = &world.actors[&out.id];
-                if out.remaining != Some(0) || !matches!(actor.activity, Activity::Work { .. }) {
+                if !matches!(actor.activity, Activity::Work { .. }) {
                     return None;
                 }
-                let site = &world.sites[&actor.job.as_ref()?.site];
-                Some((
-                    site.id,
+                let job = actor.job.as_ref()?;
+                let site = &world.sites[&job.site];
+                job.output_forecast(
+                    game_workshop::Progress {
+                        remaining: out.remaining?,
+                        remainder: out.work_remainder?,
+                    },
+                    site,
                     self.state.inventories[&site.output].good,
-                    site.output_quantity,
-                ))
+                )
             })
             .collect()
     }

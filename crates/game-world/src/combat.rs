@@ -11,6 +11,21 @@ struct EncounterOpening {
     ends: SimTime,
 }
 
+pub(crate) enum PreparedCombatMap {
+    Existing(Map),
+    New(Map),
+}
+impl PreparedCombatMap {
+    pub(crate) fn map(&self) -> &Map {
+        match self {
+            Self::Existing(map) | Self::New(map) => map,
+        }
+    }
+    pub(crate) fn is_new(&self) -> bool {
+        matches!(self, Self::New(_))
+    }
+}
+
 impl Simulation {
     pub fn combat_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::life_fixture(seed, execution)?;
@@ -354,61 +369,6 @@ impl Simulation {
         self.revision += 1;
         Ok(receipt)
     }
-    pub(crate) fn ensure_combat_map(&mut self, area: AreaId) -> Result<CombatMapId, Error> {
-        let combat = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
-        if let Some(map) = combat.maps.get(&area) {
-            return Ok(map.id);
-        }
-        if !self.state.areas.iter().any(|node| node.id == area) {
-            return Err(Error::UnknownArea);
-        }
-        self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-        let id = CombatMapId(allocate(&mut self.state)?);
-        let offset = ((self.state.seed ^ area.0).wrapping_mul(0x9e3779b97f4a7c15) % 2_000) as i64;
-        let exits = self
-            .state
-            .areas
-            .iter()
-            .find(|a| a.id == area)
-            .unwrap()
-            .links
-            .iter()
-            .enumerate()
-            .map(|(i, l)| {
-                (
-                    l.destination,
-                    Point {
-                        x: if i.is_multiple_of(2) { 0 } else { 24_000 },
-                        y: 8_000,
-                    },
-                )
-            })
-            .collect();
-        let map = Map {
-            id,
-            version: 1,
-            area,
-            location: Location::AtArea(area),
-            width: 24_000,
-            height: 16_000,
-            obstacles: vec![ObstacleView {
-                index: 0,
-                minimum: Point {
-                    x: 12_000 + offset,
-                    y: 4_000,
-                },
-                maximum: Point {
-                    x: 14_000 + offset,
-                    y: 10_000,
-                },
-                integrity: 180_000,
-            }],
-            exits,
-        };
-        self.state.combat.as_mut().unwrap().maps.insert(area, map);
-        Ok(id)
-    }
-
     pub(crate) fn preflight_start_encounter(
         &self,
         participants: &[(PersonId, u32)],
@@ -589,65 +549,141 @@ impl Simulation {
         self.revision += 1;
         Ok(id)
     }
-    pub(crate) fn ensure_combat_location_map(
-        &mut self,
+    pub(crate) fn prepare_combat_location_map(
+        &self,
         location: &Location,
-    ) -> Result<CombatMapId, Error> {
+    ) -> Result<PreparedCombatMap, Error> {
+        let combat = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
         if let Location::AtArea(area) = *location {
-            return self.ensure_combat_map(area);
-        }
-        let key = transport::location_position(location, self.state.time)?.key();
-        let world = self.state.combat.as_ref().unwrap();
-        if let Some(map) = world
-            .road_maps
-            .values()
-            .find(|map| {
-                transport::location_position(&map.location, self.state.time)
-                    .is_ok_and(|p| p.key() == key)
-            })
-            .map(|map| map.id)
-        {
-            return Ok(map);
-        }
-        let Location::StoppedOnRoad { from, to, .. } = *location else {
-            return Err(Error::Unavailable);
-        };
-        let area = from.min(to);
-        let id = CombatMapId(allocate(&mut self.state)?);
-        self.state.combat.as_mut().unwrap().road_maps.insert(
-            id,
-            Map {
+            if let Some(map) = combat.maps.get(&area) {
+                return Ok(PreparedCombatMap::Existing(map.clone()));
+            }
+            if !self.state.areas.iter().any(|node| node.id == area) {
+                return Err(Error::UnknownArea);
+            }
+            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+            let id = CombatMapId(self.state.next_id);
+            let offset =
+                ((self.state.seed ^ area.0).wrapping_mul(0x9e3779b97f4a7c15) % 2_000) as i64;
+            let exits = self
+                .state
+                .areas
+                .iter()
+                .find(|a| a.id == area)
+                .unwrap()
+                .links
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    (
+                        l.destination,
+                        Point {
+                            x: if i.is_multiple_of(2) { 0 } else { 24_000 },
+                            y: 8_000,
+                        },
+                    )
+                })
+                .collect();
+            let map = Map {
                 id,
                 version: 1,
                 area,
-                location: location.clone(),
+                location: Location::AtArea(area),
                 width: 24_000,
                 height: 16_000,
                 obstacles: vec![ObstacleView {
                     index: 0,
                     minimum: Point {
-                        x: 12_000,
+                        x: 12_000 + offset,
                         y: 4_000,
                     },
                     maximum: Point {
-                        x: 14_000,
+                        x: 14_000 + offset,
                         y: 10_000,
                     },
                     integrity: 180_000,
                 }],
-                exits: vec![
-                    (from.min(to), Point { x: 0, y: 8_000 }),
-                    (
-                        from.max(to),
-                        Point {
-                            x: 24_000,
-                            y: 8_000,
-                        },
-                    ),
-                ],
-            },
-        );
-        Ok(id)
+                exits,
+            };
+            return Ok(PreparedCombatMap::New(map));
+        }
+        let key = transport::location_position(location, self.state.time)?.key();
+        if let Some(map) = combat.road_maps.values().find(|map| {
+            transport::location_position(&map.location, self.state.time)
+                .is_ok_and(|point| point.key() == key)
+        }) {
+            return Ok(PreparedCombatMap::Existing(map.clone()));
+        }
+        let Location::StoppedOnRoad { from, to, .. } = *location else {
+            return Err(Error::Unavailable);
+        };
+        if !self.state.areas.iter().any(|area| area.id == from)
+            || !self.state.areas.iter().any(|area| area.id == to)
+        {
+            return Err(Error::UnknownArea);
+        }
+        self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+        let id = CombatMapId(self.state.next_id);
+        let area = from.min(to);
+        Ok(PreparedCombatMap::New(Map {
+            id,
+            version: 1,
+            area,
+            location: location.clone(),
+            width: 24_000,
+            height: 16_000,
+            obstacles: vec![ObstacleView {
+                index: 0,
+                minimum: Point {
+                    x: 12_000,
+                    y: 4_000,
+                },
+                maximum: Point {
+                    x: 14_000,
+                    y: 10_000,
+                },
+                integrity: 180_000,
+            }],
+            exits: vec![
+                (from.min(to), Point { x: 0, y: 8_000 }),
+                (
+                    from.max(to),
+                    Point {
+                        x: 24_000,
+                        y: 8_000,
+                    },
+                ),
+            ],
+        }))
+    }
+    /// Install only a preflighted map at its reserved global ID. Geometry and
+    /// location construction do not run after a confinement begins mutation.
+    pub(crate) fn install_combat_location_map(&mut self, plan: PreparedCombatMap) -> CombatMapId {
+        match plan {
+            PreparedCombatMap::Existing(map) => map.id,
+            PreparedCombatMap::New(map) => {
+                let id = CombatMapId(allocate(&mut self.state).expect("reserved scene ID"));
+                debug_assert_eq!(id, map.id);
+                let combat = self.state.combat.as_mut().unwrap();
+                match map.location {
+                    Location::AtArea(area) => {
+                        combat.maps.insert(area, map);
+                    }
+                    Location::StoppedOnRoad { .. } => {
+                        combat.road_maps.insert(id, map);
+                    }
+                    _ => unreachable!("prepared stationary scene"),
+                }
+                id
+            }
+        }
+    }
+    pub(crate) fn ensure_combat_location_map(
+        &mut self,
+        location: &Location,
+    ) -> Result<CombatMapId, Error> {
+        let plan = self.prepare_combat_location_map(location)?;
+        Ok(self.install_combat_location_map(plan))
     }
     fn synchronize_carried_fighters(&mut self, id: EncounterId) {
         let positions: Vec<_> = self.state.combat.as_ref().unwrap().encounters[&id]
@@ -921,8 +957,46 @@ impl Simulation {
         if matches!(action, CombatAction::Capture { .. }) {
             self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
         }
+        let confinement = if let CombatAction::Capture { target } = action {
+            let source = self.binding_stock(actor).ok_or(Error::Unavailable)?;
+            let facts = self.confinement_facts(
+                actor,
+                target,
+                e.fighters[&target].surrendered,
+                reachable(target),
+                None,
+            )?;
+            let mut anchor = target;
+            while let Location::Carried { carrier } =
+                self.state.people[self.person_index[&anchor]].location
+            {
+                anchor = carrier;
+            }
+            let target_position = if anchor == actor {
+                position
+            } else {
+                e.fighters[&anchor].position
+            };
+            let context = game_conflict::ConfinementContext {
+                map: e.map,
+                area: e.area,
+                location: e.location.clone(),
+                target_position,
+            };
+            let plan = game_conflict::prepare_confinement(
+                &w.rules,
+                facts.clone(),
+                &self.state.inventories[&source],
+                InventoryId(self.state.next_id),
+                context,
+                game_conflict::ConfinementMode::Tactical { encounter: id },
+                self.state.time,
+            )?;
+            Some(plan.begin(&self.state.inventories, &w.captivity, &facts)?)
+        } else {
+            None
+        };
         let old = f.position;
-        let area = e.area;
         let encounter_map = e.map;
         self.state
             .combat
@@ -954,14 +1028,23 @@ impl Simulation {
                     actor,
                     self.effective_combat_damage(actor, w.rules.damage)?,
                 )?;
-                let damage = w.rules.strike_damage(damage, defending);
-                self.damage_from_combat(target, damage);
+                let strike = w.rules.strike(
+                    actor,
+                    damage,
+                    defending,
+                    self.state
+                        .skills
+                        .as_ref()
+                        .map_or(0, |world| world.rules.action_practice_ms),
+                );
+                self.damage_from_combat(target, strike.damage);
                 self.emit(EventKind::Struck {
                     encounter: id,
                     actor,
                     target,
-                    damage,
+                    damage: strike.damage,
                 });
+                self.commit_skills(vec![strike.practice]);
             }
             CombatAction::Defend => {
                 self.state
@@ -994,45 +1077,9 @@ impl Simulation {
                 });
                 self.force_note_surrender(id, actor);
             }
-            CombatAction::Capture { target } => {
-                let source = self.binding_stock(actor).unwrap();
-                self.state.inventories.get_mut(&source).unwrap().quantity.0 -= 1_000;
-                let binding = self
-                    .add_inventory(
-                        Good::Binding,
-                        InventoryLocation::Carried(target),
-                        Quantity(0),
-                        Quantity(1_000),
-                        BTreeSet::from([actor]),
-                    )
-                    .expect("preflight binding inventory");
-                self.state.inventories.get_mut(&binding).unwrap().quantity = Quantity(1_000);
-                let target_position =
-                    self.state.combat.as_ref().unwrap().encounters[&id].fighters[&target].position;
-                let captured_map = self.state.combat.as_ref().unwrap().encounters[&id].map;
-                self.state.combat.as_mut().unwrap().captivity.insert(
-                    target,
-                    Captivity {
-                        actor: target,
-                        captor: actor,
-                        area,
-                        position: target_position,
-                        map: captured_map,
-                        binding,
-                    },
-                );
-                self.emit(EventKind::Transferred {
-                    actor,
-                    source,
-                    destination: binding,
-                    quantity: Quantity(1_000),
-                });
-                self.emit(EventKind::Captured {
-                    encounter: id,
-                    actor,
-                    target,
-                    binding,
-                });
+            CombatAction::Capture { .. } => {
+                let plan = confinement.expect("capture was prepared before movement");
+                self.apply_confinement(plan, None)?;
             }
             CombatAction::Release { target } => {
                 self.release_captive(actor, target);
@@ -1788,5 +1835,170 @@ mod reinforcement_tests {
                 .order
                 .contains(&reinforcement)
         );
+    }
+}
+
+#[cfg(test)]
+mod confinement_tests {
+    use super::*;
+    fn fixture() -> Simulation {
+        let mut sim = Simulation::force_fixture(88, Execution::default()).unwrap();
+        for person in sim.state.people.clone() {
+            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+            sim.debug_set_personality(
+                person.id,
+                decisions::Personality::restful(),
+                decisions::Aspiration::Comfort,
+            )
+            .unwrap();
+        }
+        sim.state.combat.as_mut().unwrap().maps.clear();
+        sim
+    }
+    fn full_target(sim: &mut Simulation, target: PersonId) {
+        let quantity = sim.delivery_carrying_room(target);
+        sim.debug_add_inventory(
+            Good::Timber,
+            InventoryLocation::Carried(target),
+            quantity,
+            quantity,
+            BTreeSet::from([target]),
+        )
+        .unwrap();
+    }
+    fn surrendered_encounter(
+        sim: &mut Simulation,
+        actor: PersonId,
+        target: PersonId,
+    ) -> (EncounterId, Option<Point>, Point) {
+        // Author a clear local battlefield before either participant arrives;
+        // this proof exercises binding and initiative, rather than navigation.
+        sim.ensure_combat_location_map(&Location::AtArea(AreaId(1)))
+            .unwrap();
+        sim.state
+            .combat
+            .as_mut()
+            .unwrap()
+            .maps
+            .get_mut(&AreaId(1))
+            .unwrap()
+            .obstacles
+            .clear();
+        let mut cautious = decisions::Personality::restful();
+        cautious.risk_tolerance = 0;
+        sim.debug_set_personality(target, cautious, decisions::Aspiration::Comfort)
+            .unwrap();
+        let maximum = sim.state.physical.as_ref().unwrap().rules.max_health;
+        sim.debug_injure(target, maximum * 3 / 5).unwrap();
+        let world = sim.state.combat.as_mut().unwrap();
+        world.profiles.get_mut(&target).unwrap().initiative = 1_000_000;
+        world.profiles.get_mut(&actor).unwrap().initiative = 900_000;
+        // Starting the encounter really gives the faster NPC its own turn. It
+        // moves and chooses surrender from its actual injury and personality.
+        let encounter = sim
+            .debug_start_encounter(vec![(actor, 0), (target, 1)])
+            .unwrap();
+        let world = sim.state.combat.as_ref().unwrap();
+        let battle = &world.encounters[&encounter];
+        assert_eq!(battle.order.get(battle.cursor), Some(&actor));
+        assert!(battle.fighters[&target].surrendered);
+        assert!(sim.state.events.iter().any(|event| matches!(event.kind,
+            EventKind::Surrendered { encounter: id, actor: who } if id == encounter && who == target)));
+        let position = battle.fighters[&target].position;
+        let movement = world.map(battle.map).unwrap().navigation_step(
+            battle.fighters[&actor].position,
+            position,
+            world.rules.movement,
+            world.rules.reach,
+        );
+        assert!(world.reachable(
+            encounter,
+            movement.unwrap_or(battle.fighters[&actor].position),
+            target
+        ));
+        (encounter, movement, position)
+    }
+    #[test]
+    fn actual_initiative_capture_and_timed_restraint_share_conserved_forced_overload() {
+        let mut outcomes = Vec::new();
+        for tactical in [false, true] {
+            let mut sim = fixture();
+            let actor = sim.state.ruler;
+            let target = sim.state.people[3].id;
+            full_target(&mut sim, target);
+            let source = sim.binding_stock(actor).unwrap();
+            let opening = sim.state.inventories[&source].quantity;
+            let expected_position = if tactical {
+                let (encounter, movement, position) =
+                    surrendered_encounter(&mut sim, actor, target);
+                sim.execute_turn(encounter, actor, movement, CombatAction::Capture { target })
+                    .unwrap();
+                position
+            } else {
+                sim.force_yield(target, actor).unwrap();
+                sim.start_restraint(actor, target).unwrap();
+                sim.advance(SimDuration(6000)).unwrap();
+                Point { x: 6000, y: 8000 }
+            };
+            let captive = sim.state.combat.as_ref().unwrap().captivity[&target].clone();
+            let stock = &sim.state.inventories[&captive.binding];
+            assert_eq!(
+                sim.state.inventories[&source].quantity,
+                Quantity(opening.0 - 1000)
+            );
+            assert_eq!(stock.good, Good::Binding);
+            assert_eq!(stock.quantity, Quantity(1000));
+            assert_eq!(stock.location, InventoryLocation::Carried(target));
+            assert_eq!(stock.access, BTreeSet::from([actor]));
+            let held: u128 = sim.inventory_index[&InventoryLocation::Carried(target)]
+                .iter()
+                .map(|id| u128::from(sim.state.inventories[id].quantity.0))
+                .sum();
+            assert_eq!(
+                held,
+                u128::from(sim.body_rules(target).carrying_capacity.0) + 1000
+            );
+            assert_eq!(captive.position, expected_position);
+            assert!(
+                sim.state
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .map(captive.map)
+                    .is_some()
+            );
+            Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+            outcomes.push((
+                captive.actor,
+                captive.captor,
+                captive.area,
+                stock.good,
+                stock.quantity,
+                stock.access.clone(),
+            ));
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
+    }
+    #[test]
+    fn confinement_id_preflight_preserves_tactical_movement_and_timed_map_and_rope() {
+        let mut sim = fixture();
+        let actor = sim.state.ruler;
+        let target = sim.state.people[3].id;
+        sim.force_yield(target, actor).unwrap();
+        sim.state.next_id = u64::MAX - 1;
+        let before = sim.state.clone();
+        assert_eq!(sim.start_restraint(actor, target), Err(Error::Overflow));
+        assert_eq!(sim.state, before);
+        let mut sim = fixture();
+        let actor = sim.state.ruler;
+        let target = sim.state.people[3].id;
+        let (encounter, movement, _) = surrendered_encounter(&mut sim, actor, target);
+        sim.state.next_id = u64::MAX;
+        let before = sim.state.clone();
+        assert_eq!(
+            sim.execute_turn(encounter, actor, movement, CombatAction::Capture { target }),
+            Err(Error::Overflow)
+        );
+        assert_eq!(sim.state, before);
     }
 }

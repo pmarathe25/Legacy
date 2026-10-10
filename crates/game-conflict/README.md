@@ -1,5 +1,5 @@
 # game-conflict
 
-`game-conflict` defines encounter and map state for tactical conflicts. It ranks eligible fighters by initiative and fatigue, checks a fighter's turn movement against map bounds and obstacles, and provides reach, strike, and capture rules. Maps also place fighters, track obstacle integrity and exits, and support deterministic routes, movement steps, and bounded search through observed geometry.
+`game-conflict` owns tactical encounters, map geometry, initiative, movement, reach, and strike rules. A resolved strike returns damage and a combat `PracticeDelta`, including when defense absorbs the damage.
 
-`game-sim` applies these rules to combat actions, actor health, and encounter timing. This crate supplies the tactical rules and geometry used by that simulation.
+Shared confinement admission handles both tactical capture and completed timed restraint. It consumes real carried binding stock and creates an equal conserved binding for the captive, guarded with custody. Binding is forced placement: it needs no recipient acceptance and may exceed voluntary carrying limits. Tactical captives remain passive encounter bodies; timed restraints interrupt ordinary activity.

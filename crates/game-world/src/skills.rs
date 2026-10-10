@@ -4,18 +4,11 @@
 //! grants no mastery, and borrowing another life never changes these records.
 use crate::*;
 
+pub(crate) use game_skills::PracticeDelta;
 use game_skills::progress;
 pub use game_skills::{
     Progress, Rules, World, advance_work, damage_for_level, rate_for_level, work_duration,
 };
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PracticeDelta {
-    pub actor: PersonId,
-    pub skill: Skill,
-    pub milliseconds: u64,
-    pub mastery_cap: Option<u64>,
-}
 
 impl Simulation {
     pub fn skills_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -60,9 +53,6 @@ impl Simulation {
                 continue;
             }
             let (skill, cap) = match body.activity {
-                Activity::Work { .. } if equipment.get(actor).copied().unwrap_or(false) => {
-                    (Skill::Craft, None)
-                }
                 Activity::Gather { .. } | Activity::Cultivate { .. }
                     if equipment.get(actor).copied().unwrap_or(false) =>
                 {
@@ -104,6 +94,7 @@ impl Simulation {
                 mastery_cap: cap,
             });
         }
+        pending.extend(self.workshop_practice_deltas(elapsed, &equipment));
         pending.extend(self.social_practice_deltas(next));
         Ok(pending)
     }
@@ -113,12 +104,7 @@ impl Simulation {
             return;
         };
         for delta in pending {
-            world.credit(
-                delta.actor,
-                delta.skill,
-                delta.milliseconds,
-                delta.mastery_cap,
-            );
+            world.apply_practice(delta);
         }
     }
 
@@ -151,15 +137,7 @@ impl Simulation {
         if self.person_index.contains_key(&actor)
             && let Some(world) = &mut self.state.skills
         {
-            if matches!(skill, Skill::Negotiation | Skill::Leadership) {
-                let tick = self.state.time.0 / MINUTE.0;
-                let last = world.semantic_ticks.entry(actor).or_default();
-                if last.get(&skill) == Some(&tick) {
-                    return;
-                }
-                last.insert(skill, tick);
-            }
-            world.credit(actor, skill, milliseconds, None);
+            world.credit_action(actor, skill, milliseconds, self.state.time);
         }
     }
 
@@ -175,7 +153,6 @@ impl Simulation {
         };
         let credit = world.rules.action_practice_ms;
         let actors: Vec<_> = match kind {
-            EventKind::Struck { actor, .. } => vec![(*actor, Skill::Combat)],
             EventKind::AgreementActivated { agreement } => self
                 .state
                 .agreements

@@ -1000,29 +1000,23 @@ impl Simulation {
             .filter(|i| i.members.contains(&actor))
             .map(|i| i.id)
             .collect::<BTreeSet<_>>();
-        let utility = |term: &AgreementTerm| -> i64 {
+        use game_characters::proposals::{Context, Effect, Evidence};
+        let mut effects = Vec::new();
+        let resource = |affiliation, gained, term: &AgreementTerm| {
             if let AgreementTerm::Delivery {
                 source, quantity, ..
             } = term
             {
-                let good = mind.knowledge.get(source).map(|k| k.good);
-                let weight = if good == Some(Good::Food)
-                    && self.state.physical.as_ref().unwrap().actors[&actor]
-                        .vitals
-                        .hunger
-                        >= self.body_rules(actor).meal_relief
-                {
-                    4
-                } else {
-                    1
-                };
-                quantity.0.min(100_000) as i64 * weight
+                Some(Effect::Resource {
+                    affiliation,
+                    gained,
+                    good: mind.knowledge.get(source).map(|known| known.good),
+                    quantity: *quantity,
+                })
             } else {
-                0
+                None
             }
         };
-        let mut score =
-            i64::from(mind.personality.empathy) / 3 + i64::from(mind.personality.honesty) / 3;
         for term in &proposal.terms {
             match term {
                 Term::Delivery {
@@ -1030,40 +1024,63 @@ impl Simulation {
                     beneficiary,
                     term,
                 } => {
-                    if affiliations.contains(provider) {
-                        score -= utility(term) / 2
-                    }
-                    if affiliations.contains(beneficiary) {
-                        score += utility(term)
-                    }
+                    effects.extend(resource(*provider, false, term));
+                    effects.extend(resource(*beneficiary, true, term));
                 }
                 Term::Passage { beneficiary, .. } => {
-                    if affiliations.contains(beneficiary) {
-                        score += 300
-                    }
+                    effects.push(Effect::Passage {
+                        beneficiary: *beneficiary,
+                    });
                 }
                 Term::Protection {
                     provider,
                     beneficiary,
                     patrol,
                 } => {
-                    if affiliations.contains(beneficiary) {
-                        score += 400
-                    }
-                    if affiliations.contains(provider) {
-                        score -= patrol
-                            .compensation
-                            .values()
-                            .flatten()
-                            .map(&utility)
-                            .sum::<i64>()
-                            / 2;
-                        score -= i64::from(1_000 - mind.personality.risk_tolerance) / 2
+                    effects.push(Effect::Protection {
+                        beneficiary: *beneficiary,
+                    });
+                    effects.push(Effect::Danger {
+                        provider: *provider,
+                    });
+                    for term in patrol.compensation.values().flatten() {
+                        effects.extend(resource(*provider, false, term));
                     }
                 }
             }
         }
-        if support { score } else { -score }
+        let rules = self.body_rules(actor);
+        let context = Context {
+            affiliations: &affiliations,
+            hunger: self.state.physical.as_ref().unwrap().actors[&actor]
+                .vitals
+                .hunger,
+            hunger_exempt: self.state.people[self.person_index[&actor]].hunger_exempt,
+            meal_relief: rules.meal_relief,
+            meal_size: rules.meal_size,
+            hydration_urgency: self.observed_hydration_urgency(actor),
+            drink_quantity: self
+                .state
+                .health
+                .as_ref()
+                .map_or(Quantity(u64::MAX), |health| health.rules.drink_quantity),
+            concepts: &self.state.decisions.as_ref().unwrap().concepts,
+        };
+        let score = game_characters::proposals::assess(
+            &mind.personality,
+            &mind.values,
+            &context,
+            &Evidence {
+                proposal: (id, revision),
+                effects,
+            },
+        )
+        .total;
+        if support {
+            score
+        } else {
+            score.saturating_neg()
+        }
     }
     pub(crate) fn observe_realm(&mut self) -> Result<(), Error> {
         let Some(world) = &self.state.realm else {

@@ -510,6 +510,126 @@ impl Simulation {
             (*target != actor && attempt.actor != actor) || attempt.contested
         });
     }
+    pub(crate) fn confinement_facts(
+        &self,
+        captor: PersonId,
+        target: PersonId,
+        surrendered_to_captor: bool,
+        contact: bool,
+        admitted: Option<&Location>,
+    ) -> Result<game_conflict::ConfinementFacts, Error> {
+        let combat = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
+        let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        let actor = physical.actors.get(&captor).ok_or(Error::Unavailable)?;
+        let victim = physical.actors.get(&target).ok_or(Error::Unavailable)?;
+        Ok(game_conflict::ConfinementFacts {
+            captor,
+            target,
+            captor_alive: actor.vitals.alive,
+            captor_health: actor.vitals.health,
+            independent: self.independent(captor),
+            captor_confined: combat.captivity.contains_key(&captor),
+            target_alive: victim.vitals.alive,
+            target_health: victim.vitals.health,
+            target_confined: combat.captivity.contains_key(&target),
+            surrendered_to_captor,
+            contact,
+            admitted_site_contact: admitted.is_none_or(|location| {
+                let key = transport::location_position(location, self.state.time)
+                    .map(|point| point.key());
+                key.is_ok_and(|key| {
+                    self.transport_position(captor)
+                        .is_some_and(|point| point.key() == key)
+                        && self
+                            .transport_position(target)
+                            .is_some_and(|point| point.key() == key)
+                })
+            }),
+            captor_location: self.resolved_location(captor),
+            target_location: self.resolved_location(target),
+        })
+    }
+    fn restraint_context(
+        &self,
+        location: &Location,
+        target_position: Point,
+    ) -> Result<(game_conflict::ConfinementContext, combat::PreparedCombatMap), Error> {
+        let plan = self.prepare_combat_location_map(location)?;
+        let map = plan.map();
+        if !map.contains(target_position) {
+            return Err(Error::Unavailable);
+        }
+        let context = game_conflict::ConfinementContext {
+            map: map.id,
+            area: map.area,
+            location: location.clone(),
+            target_position,
+        };
+        Ok((context, plan))
+    }
+    pub(crate) fn apply_confinement(
+        &mut self,
+        plan: game_conflict::ValidatedConfinement,
+        new_map: Option<combat::PreparedCombatMap>,
+    ) -> Result<(), Error> {
+        let receipt = plan.receipt().clone();
+        let allocation_count = 1 + u64::from(new_map.is_some());
+        self.state
+            .next_id
+            .checked_add(allocation_count)
+            .ok_or(Error::Overflow)?;
+        let expected_binding = self
+            .state
+            .next_id
+            .checked_add(u64::from(new_map.is_some()))
+            .ok_or(Error::Overflow)?;
+        if receipt.binding != InventoryId(expected_binding) {
+            return Err(Error::Unavailable);
+        }
+        self.ensure_event_capacity(3)?;
+        let validated = plan;
+        if let Some(scene) = new_map {
+            self.install_combat_location_map(scene);
+        }
+        let binding = InventoryId(allocate(&mut self.state).expect("preflight confinement ID"));
+        debug_assert_eq!(binding, receipt.binding);
+        let receipt = validated.apply(
+            &mut self.state.inventories,
+            &mut self.state.combat.as_mut().unwrap().captivity,
+        );
+        self.inventory_index
+            .entry(InventoryLocation::Carried(receipt.target))
+            .or_default()
+            .push(receipt.binding);
+        if receipt.interrupt_target {
+            self.interrupt_actor_activity(receipt.target);
+        }
+        self.emit(EventKind::Transferred {
+            actor: receipt.captor,
+            source: receipt.source,
+            destination: receipt.binding,
+            quantity: receipt.quantity,
+        });
+        match receipt.mode {
+            game_conflict::ConfinementMode::Tactical { encounter } => {
+                self.emit(EventKind::Captured {
+                    encounter,
+                    actor: receipt.captor,
+                    target: receipt.target,
+                    binding: receipt.binding,
+                })
+            }
+            game_conflict::ConfinementMode::Timed { .. } => {
+                self.reconcile_transport();
+                self.emit(EventKind::Restrained {
+                    actor: receipt.captor,
+                    target: receipt.target,
+                    binding: receipt.binding,
+                });
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn complete_force(&mut self, actor: PersonId) {
         let activity = self.state.physical.as_ref().unwrap().actors[&actor]
             .activity
@@ -543,66 +663,57 @@ impl Simulation {
                 else {
                     return;
                 };
-                if self.force_body_ready(actor)
-                    && self.force_restrainable(actor, target)
-                    && self.resolved_location(actor) == attempt.location
-                    && self.resolved_location(target) == attempt.location
-                    && self.transport_same_place(actor, target)
-                    && self.state.inventories.get(&binding).is_some_and(|stock| {
-                        stock.location == InventoryLocation::Carried(actor)
-                            && stock.good == Good::Binding
-                            && stock.quantity.0 >= 1_000
-                    })
-                {
-                    let captured_map = self
-                        .ensure_combat_location_map(&attempt.location)
-                        .expect("preflight restraint map");
-                    let captured_area = self
-                        .state
-                        .combat
-                        .as_ref()
-                        .unwrap()
-                        .map(captured_map)
-                        .unwrap()
-                        .area;
-                    self.state.inventories.get_mut(&binding).unwrap().quantity.0 -= 1_000;
-                    let restraint = self
-                        .add_inventory(
-                            Good::Binding,
-                            InventoryLocation::Carried(target),
-                            Quantity(0),
-                            Quantity(1_000),
-                            BTreeSet::from([actor]),
-                        )
-                        .expect("preflight restraint inventory");
-                    // This is the existing rope applied to the body, even when
-                    // it makes the person too burdened to walk.
-                    self.state.inventories.get_mut(&restraint).unwrap().quantity = Quantity(1_000);
-                    self.interrupt_actor_activity(target);
-                    self.state.combat.as_mut().unwrap().captivity.insert(
-                        target,
-                        combat::Captivity {
-                            actor: target,
-                            captor: actor,
-                            area: captured_area,
-                            position: attempt.position,
-                            map: captured_map,
-                            binding: restraint,
-                        },
+                let result = (|| -> Result<(), Error> {
+                    let (context, scene) =
+                        self.restraint_context(&attempt.location, attempt.position)?;
+                    let new_map = scene.is_new();
+                    let applied = InventoryId(
+                        self.state
+                            .next_id
+                            .checked_add(u64::from(new_map))
+                            .ok_or(Error::Overflow)?,
                     );
-                    self.emit(EventKind::Transferred {
-                        actor,
-                        source: binding,
-                        destination: restraint,
-                        quantity: Quantity(1_000),
-                    });
-                    self.reconcile_transport();
-                    self.emit(EventKind::Restrained {
+                    let surrendered = self
+                        .state
+                        .force
+                        .as_ref()
+                        .and_then(|world| world.yielded.get(&target))
+                        .is_some_and(|yielded| {
+                            yielded.captors.contains(&actor)
+                                && Some(yielded.area) == self.force_area(target)
+                        });
+                    let facts = self.confinement_facts(
                         actor,
                         target,
-                        binding: restraint,
-                    });
-                } else {
+                        surrendered,
+                        self.transport_same_place(actor, target),
+                        Some(&attempt.location),
+                    )?;
+                    let source = self
+                        .state
+                        .inventories
+                        .get(&binding)
+                        .ok_or(Error::Unavailable)?;
+                    let plan = game_conflict::prepare_confinement(
+                        &self.state.combat.as_ref().unwrap().rules,
+                        facts.clone(),
+                        source,
+                        applied,
+                        context,
+                        game_conflict::ConfinementMode::Timed {
+                            completes: attempt.completes,
+                            admitted_location: attempt.location.clone(),
+                        },
+                        self.state.time,
+                    )?;
+                    let validated = plan.begin(
+                        &self.state.inventories,
+                        &self.state.combat.as_ref().unwrap().captivity,
+                        &facts,
+                    )?;
+                    self.apply_confinement(validated, new_map.then_some(scene))
+                })();
+                if result.is_err() {
                     self.emit(EventKind::Interrupted { actor });
                 }
             }

@@ -119,7 +119,9 @@ dependencies = [
 name = "game-conflict"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
  "game-core",
+ "game-skills",
  "serde",
  "serde_json",
 ]
@@ -298,6 +300,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-workshop"
+version = "0.1.0"
+dependencies = [
+ "game-cargo",
+ "game-core",
+ "game-skills",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-world"
 version = "0.1.0"
 dependencies = [
@@ -327,6 +340,7 @@ dependencies = [
  "game-skills",
  "game-society",
  "game-transport",
+ "game-workshop",
  "rayon",
  "serde",
  "serde_json",

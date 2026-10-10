@@ -39,6 +39,19 @@ pub enum NeedRef {
     Company,
     Freedom,
 }
+
+pub(crate) fn resource_need_pressure(
+    good: Good,
+    hunger: u64,
+    meal_relief: u64,
+    hydration_urgency: i64,
+) -> i64 {
+    match good {
+        Good::Food if hunger >= meal_relief => 10_000 + (hunger / 100).min(10_000) as i64,
+        Good::Water if hydration_urgency > 0 => 10_000 + hydration_urgency,
+        _ => 0,
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Capability {
     Skill(Skill),
@@ -816,20 +829,18 @@ impl<A: Clone> Mind<A> {
     ) -> Option<i64> {
         if beneficiary == facts.actor {
             return Some(match need {
-                NeedRef::Hunger => {
-                    if facts.vitals.hunger >= facts.limits.meal_relief {
-                        10_000 + (facts.vitals.hunger / 100).min(10_000) as i64
-                    } else {
-                        0
-                    }
-                }
-                NeedRef::Hydration => {
-                    if facts.hydration_urgency > 0 {
-                        10_000 + facts.hydration_urgency
-                    } else {
-                        0
-                    }
-                }
+                NeedRef::Hunger => resource_need_pressure(
+                    Good::Food,
+                    facts.vitals.hunger,
+                    facts.limits.meal_relief,
+                    facts.hydration_urgency,
+                ),
+                NeedRef::Hydration => resource_need_pressure(
+                    Good::Water,
+                    facts.vitals.hunger,
+                    facts.limits.meal_relief,
+                    facts.hydration_urgency,
+                ),
                 NeedRef::Exposure => facts.exposure_urgency,
                 NeedRef::Recovery => (facts.vitals.fatigue / 500
                     + facts.limits.max_health.saturating_sub(facts.vitals.health) / 100)

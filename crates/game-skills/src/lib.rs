@@ -38,7 +38,47 @@ pub struct World {
     pub semantic_ticks: BTreeMap<PersonId, BTreeMap<Skill, u64>>,
 }
 
+/// Learning earned by an actual interval of activity, supplied by its owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PracticeDelta {
+    pub actor: PersonId,
+    pub skill: Skill,
+    pub milliseconds: u64,
+    pub mastery_cap: Option<u64>,
+}
+
 impl World {
+    pub fn apply_practice(&mut self, practice: PracticeDelta) {
+        self.credit(
+            practice.actor,
+            practice.skill,
+            practice.milliseconds,
+            practice.mastery_cap,
+        );
+    }
+
+    /// Social actions have a bounded learning rate even when several people
+    /// publish the same achievement. Physical strikes retain individual credit.
+    pub fn credit_action(
+        &mut self,
+        actor: PersonId,
+        skill: Skill,
+        milliseconds: u64,
+        now: SimTime,
+    ) {
+        if milliseconds == 0 {
+            return;
+        }
+        if matches!(skill, Skill::Negotiation | Skill::Leadership) {
+            let tick = now.0 / MINUTE.0;
+            let last = self.semantic_ticks.entry(actor).or_default();
+            if last.get(&skill).is_some_and(|previous| *previous >= tick) {
+                return;
+            }
+            last.insert(skill, tick);
+        }
+        self.credit(actor, skill, milliseconds, None);
+    }
     /// Time to a live mastery change during continuous practice. Guides cannot
     /// teach across a level their own accumulated mastery has not reached.
     pub fn until_next_level(
@@ -163,6 +203,49 @@ pub fn damage_for_level(base: u64, level: u16, rules: &Rules) -> Result<u64, Err
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn semantic_learning_limits_duplicates_without_discarding_distinct_physical_actions() {
+        let mut world = World::default();
+        let actor = PersonId(1);
+        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(59_999));
+        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(59_999));
+        world.credit_action(actor, Skill::Leadership, 1_000, SimTime(59_999));
+        world.credit_action(PersonId(2), Skill::Negotiation, 1_000, SimTime(59_999));
+        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(60_000));
+        let after = world.clone();
+        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(59_999));
+        assert_eq!(world, after);
+        assert_eq!(world.practice(actor, Skill::Negotiation), 2_000);
+        assert_eq!(world.practice(actor, Skill::Leadership), 1_000);
+        assert_eq!(world.practice(PersonId(2), Skill::Negotiation), 1_000);
+        for _ in 0..2 {
+            world.credit_action(actor, Skill::Combat, 1_000, SimTime(60_000));
+        }
+        assert_eq!(world.practice(actor, Skill::Combat), 2_000);
+        assert!(!world.semantic_ticks[&actor].contains_key(&Skill::Combat));
+    }
+
+    #[test]
+    fn independent_practice_effects_preserve_elapsed_learning_and_a_guides_limit() {
+        let mut world = World::default();
+        for elapsed in [20_000, 30_000, 40_000] {
+            world.apply_practice(PracticeDelta {
+                actor: PersonId(1),
+                skill: Skill::Craft,
+                milliseconds: elapsed,
+                mastery_cap: Some(70_000),
+            });
+        }
+        assert_eq!(world.practice(PersonId(1), Skill::Craft), 70_000);
+        assert_eq!(world.level(PersonId(1), Skill::Craft), 1);
+        world.apply_practice(PracticeDelta {
+            actor: PersonId(1),
+            skill: Skill::Craft,
+            milliseconds: 20_000,
+            mastery_cap: None,
+        });
+        assert_eq!(world.practice(PersonId(1), Skill::Craft), 90_000);
+    }
     #[test]
     fn partial_training_is_fractional_bounded_and_slice_invariant() {
         let mut whole = World::default();
