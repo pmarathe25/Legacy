@@ -4,11 +4,16 @@ use game_api::{
     StockPosition, StopReason, Submission,
 };
 use game_world::{Execution, Simulation, population::Plan, scenarios::Config};
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 // A benchmark actor uses the same observations and public commands as a client.
 // This policy never supplies goods, accepts invocation costs, or directs NPCs.
-fn player_input(view: &PlayerView, config: &Config) -> Option<Command> {
+fn player_input(
+    view: &PlayerView,
+    config: &Config,
+    inspected: &BTreeMap<game_api::AreaId, game_api::SimTime>,
+) -> Option<Command> {
     let body = view.physical.as_ref()?;
     if !body.vitals.alive {
         return None;
@@ -28,6 +33,10 @@ fn player_input(view: &PlayerView, config: &Config) -> Option<Command> {
     if !matches!(body.activity, Activity::Idle | Activity::Rest) {
         return None;
     }
+    if !matches!(view.location, game_api::Location::AtArea(_)) {
+        return None;
+    }
+    let mut unmet_water = false;
     if let Some(health) = &view.health {
         if (health.symptoms.fever || health.symptoms.wounded || health.symptoms.shivering)
             && let Some(command) = offered.iter().find(|c| {
@@ -51,6 +60,7 @@ fn player_input(view: &PlayerView, config: &Config) -> Option<Command> {
             return Some(command.clone());
         }
         if health.thirst >= config.health.drink_relief / 2 {
+            unmet_water = true;
             if let Some(command) = offered.iter().find(|command| {
                 matches!(
                     command,
@@ -124,7 +134,12 @@ fn player_input(view: &PlayerView, config: &Config) -> Option<Command> {
             {
                 return Some(command.clone());
             }
-            if let Some(command) = offered.iter().find(|command| matches!(command,
+            let local_supply = view.ecology.resources.iter().any(|source|
+                source.kind == ResourceKind::Spring && source.accessible
+                    && source.available >= config.health.drink_quantity
+                    && matches!(view.location, game_api::Location::AtArea(area) if area == source.area));
+            if !local_supply {
+                if let Some(command) = offered.iter().find(|command| matches!(command,
                 Command::Move { destination } if view.known_stocks.iter().any(|stock|
                     stock.good == Good::Water && stock.accessible && stock.quantity >= config.health.drink_quantity
                         && stock.area == *destination)
@@ -132,6 +147,24 @@ fn player_input(view: &PlayerView, config: &Config) -> Option<Command> {
                         && source.accessible && source.contamination == 0 && source.available >= config.health.drink_quantity
                         && source.area == *destination))) {
                 return Some(command.clone());
+            }
+                if let Some(command) = offered
+                    .iter()
+                    .filter_map(|command| match command {
+                        Command::Move { destination }
+                            if inspected.get(destination).is_none_or(|at| {
+                                view.time.0.saturating_sub(at.0) >= config.ecology.search_retry.0
+                            }) =>
+                        {
+                            Some((inspected.get(destination).copied(), *destination, command))
+                        }
+                        _ => None,
+                    })
+                    .min_by_key(|(seen, area, _)| (*seen, *area))
+                    .map(|(_, _, command)| command)
+                {
+                    return Some(command.clone());
+                }
             }
         }
         if health.sheltered.is_none()
@@ -176,6 +209,17 @@ fn player_input(view: &PlayerView, config: &Config) -> Option<Command> {
     if body.vitals.fatigue >= 8 * 3_600_000 || body.vitals.health == 0 {
         return offered.iter().find(|c| matches!(c, Command::Rest)).cloned();
     }
+    // An unmet supply goal should not prevent another immediate bodily action.
+    // After eating, wait for observed sources rather than starting a lesson.
+    if unmet_water {
+        if body.activity == Activity::Rest {
+            return None;
+        }
+        return offered
+            .iter()
+            .find(|command| matches!(command, Command::Rest))
+            .cloned();
+    }
     offered
         .iter()
         .find(|c| {
@@ -201,6 +245,7 @@ fn main() {
         .nth(3)
         .map_or(120, |s| s.parse::<u64>().expect("simulated minutes"));
     let policy = std::env::args().nth(4).as_deref() == Some("policy") || minutes > 120;
+    let trace_player = std::env::args().nth(5).as_deref() == Some("trace-player");
     let config = Config::default();
     let start = Instant::now();
     let mut sim = Simulation::populated_world(
@@ -233,10 +278,86 @@ fn main() {
     let mut successions = 0;
     let mut input_stop = None;
     let mut reported_day = 0;
+    let mut traced_day = None;
+    let mut inspected = BTreeMap::new();
     while sim.canonical_state().time.0 < target {
+        let mut poll_interval = if policy { 3_600_000 } else { u64::MAX };
         if policy {
             let view = sim.observe();
-            if let Some(command) = player_input(&view, &config) {
+            if view
+                .health
+                .as_ref()
+                .is_some_and(|health| health.thirst >= config.health.drink_relief / 2)
+                || view
+                    .physical
+                    .as_ref()
+                    .is_some_and(|body| body.vitals.hunger >= 86_400_000)
+            {
+                poll_interval = 60_000;
+            }
+            if let game_api::Location::AtArea(area) = view.location {
+                inspected.insert(area, view.time);
+            }
+            let selected = player_input(&view, &config, &inspected);
+            let day = view.time.0 / config.environment.calendar.day.0;
+            if trace_player
+                && traced_day != Some(day)
+                && view
+                    .health
+                    .as_ref()
+                    .is_some_and(|health| health.thirst >= config.health.thirst_harm / 2)
+            {
+                traced_day = Some(day);
+                let supplies = view.physical.as_ref().map(|body| {
+                    body.local_stocks
+                        .iter()
+                        .filter(|stock| {
+                            matches!(stock.good, Good::Water | Good::Timber | Good::Tool)
+                        })
+                        .collect::<Vec<_>>()
+                });
+                let actions = view
+                    .available_commands
+                    .iter()
+                    .filter(|command| {
+                        matches!(
+                            command,
+                            Command::Health { .. }
+                                | Command::Ecology { .. }
+                                | Command::Load { .. }
+                                | Command::Move { .. }
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "player_policy day={day} location={:?} selected={selected:?} activity={:?} hunger={:?} thirst={:?} supplies={supplies:?} ecology={:?} offered={actions:?}",
+                    view.location,
+                    view.physical.as_ref().map(|body| &body.activity),
+                    view.physical.as_ref().map(|body| body.vitals.hunger),
+                    view.health.as_ref().map(|health| health.thirst),
+                    view.ecology.resources
+                );
+                // Diagnostic state is never supplied to the client policy.
+                let state = sim.canonical_state();
+                let carried = state
+                    .inventories
+                    .values()
+                    .filter(|stock| {
+                        stock.location == game_world::InventoryLocation::Carried(view.ruler)
+                    })
+                    .map(|stock| u128::from(stock.quantity.0))
+                    .sum::<u128>();
+                let resource_jobs = state.ecology.as_ref().map(|ecology| view.ecology.resources.iter()
+                    .filter(|source| matches!(view.location, game_api::Location::AtArea(area) if source.area == area))
+                    .map(|source| (source.id, ecology.resources[&source.id].workers,
+                        ecology.jobs.iter().filter(|(_, job)| job.resource == source.id)
+                            .map(|(actor, job)| (*actor, job.quantity, job.completes)).collect::<Vec<_>>()))
+                    .collect::<Vec<_>>());
+                eprintln!(
+                    "player_diagnostic day={day} carried={carried} resource_jobs={resource_jobs:?}"
+                );
+            }
+            if let Some(command) = selected {
                 sim.submit(Submission {
                     caller_sequence: sim.next_caller_sequence().unwrap(),
                     command,
@@ -245,8 +366,7 @@ fn main() {
                 commands += 1;
             }
         }
-        let elapsed =
-            (target - sim.canonical_state().time.0).min(if policy { 3_600_000 } else { u64::MAX });
+        let elapsed = (target - sim.canonical_state().time.0).min(poll_interval);
         let result = sim.advance(SimDuration(elapsed)).unwrap();
         match result.reason {
             StopReason::TargetReached => {}
@@ -303,8 +423,15 @@ fn main() {
         advance.as_secs_f64() * 1e3
     );
     let start = Instant::now();
-    let _ = std::hint::black_box(sim.observe());
+    let final_player = std::hint::black_box(sim.observe());
     let view = start.elapsed();
+    eprintln!(
+        "player_end ruler={} location={:?} vitals={:?} thirst={:?}",
+        final_player.ruler.0,
+        final_player.location,
+        final_player.physical.as_ref().map(|body| &body.vitals),
+        final_player.health.as_ref().map(|health| health.thirst)
+    );
     let start = Instant::now();
     let save = sim.save().unwrap();
     let save_time = start.elapsed();
