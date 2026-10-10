@@ -37,7 +37,8 @@ pub enum LessonTopic {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GuardianRequest {
-    SupplyFood {
+    Supply {
+        good: Good,
         source: InventoryId,
         quantity: Quantity,
     },

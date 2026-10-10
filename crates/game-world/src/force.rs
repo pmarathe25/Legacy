@@ -34,15 +34,6 @@ pub struct Restraint {
     pub completes: SimTime,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FoodSupply {
-    pub requester: PersonId,
-    pub source: InventoryId,
-    pub quantity: Quantity,
-    pub delivered: u64,
-    pub accepted_at: SimTime,
-    pub cargo: BTreeMap<InventoryId, u64>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Yielded {
     pub captors: BTreeSet<PersonId>,
     pub area: AreaId,
@@ -55,7 +46,6 @@ pub struct World {
     pub rules: Rules,
     pub escapes: BTreeMap<PersonId, Escape>,
     pub restraints: BTreeMap<PersonId, Restraint>,
-    pub food: BTreeMap<PersonId, FoodSupply>,
     pub last_event: u64,
 }
 
@@ -72,7 +62,6 @@ impl Simulation {
             rules: Rules::default(),
             escapes: BTreeMap::new(),
             restraints: BTreeMap::new(),
-            food: BTreeMap::new(),
             last_event: sim.state.next_event - 1,
         });
         Ok(sim)
@@ -84,7 +73,6 @@ impl Simulation {
                 rules: Rules::default(),
                 escapes: BTreeMap::new(),
                 restraints: BTreeMap::new(),
-                food: BTreeMap::new(),
                 last_event: self.state.next_event - 1,
             });
         }
@@ -812,83 +800,6 @@ impl Simulation {
                     }
                     yielded.retain(|_, declaration| !declaration.captors.is_empty());
                 }
-                EventKind::Transferred {
-                    actor,
-                    source,
-                    destination,
-                    quantity,
-                } => {
-                    if self.state.inventories[&source].good != Good::Food {
-                        continue;
-                    }
-                    for (guardian, supply) in &mut self.state.force.as_mut().unwrap().food {
-                        let staged = supply.cargo.remove(&source).unwrap_or(0);
-                        let moved = staged.min(quantity.0);
-                        if staged > moved {
-                            supply.cargo.insert(source, staged - moved);
-                        }
-                        if *guardian != actor {
-                            continue;
-                        }
-                        if self.state.inventories[&destination].location
-                            == InventoryLocation::Carried(supply.requester)
-                        {
-                            supply.delivered = supply
-                                .delivered
-                                .saturating_add(moved)
-                                .min(supply.quantity.0);
-                        } else if self.state.inventories[&destination].location
-                            == InventoryLocation::Carried(actor)
-                        {
-                            let recorded = supply.cargo.values().sum::<u64>();
-                            let newly_loaded = if source == supply.source {
-                                quantity.0.min(
-                                    supply
-                                        .quantity
-                                        .0
-                                        .saturating_sub(supply.delivered)
-                                        .saturating_sub(recorded),
-                                )
-                            } else {
-                                moved
-                            };
-                            if newly_loaded > 0 {
-                                *supply.cargo.entry(destination).or_default() += newly_loaded;
-                            }
-                        }
-                    }
-                }
-                EventKind::Consumed {
-                    source, quantity, ..
-                }
-                | EventKind::Ate {
-                    source, quantity, ..
-                }
-                | EventKind::Cared {
-                    source, quantity, ..
-                } => {
-                    for supply in self.state.force.as_mut().unwrap().food.values_mut() {
-                        if let Some(staged) = supply.cargo.get_mut(&source) {
-                            *staged = staged.saturating_sub(quantity.0);
-                            if *staged == 0 {
-                                supply.cargo.remove(&source);
-                            }
-                        }
-                    }
-                }
-                EventKind::Spoiled {
-                    inventory,
-                    quantity,
-                } => {
-                    for supply in self.state.force.as_mut().unwrap().food.values_mut() {
-                        if let Some(staged) = supply.cargo.get_mut(&inventory) {
-                            *staged = staged.saturating_sub(quantity.0);
-                            if *staged == 0 {
-                                supply.cargo.remove(&inventory);
-                            }
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -940,305 +851,6 @@ impl Simulation {
             None
         }
     }
-    pub(crate) fn request_guardian_food(
-        &mut self,
-        guardian: PersonId,
-        requester: PersonId,
-        source: InventoryId,
-        quantity: Quantity,
-    ) -> Result<(), Error> {
-        let lineage = self.state.lineage.as_ref().ok_or(Error::Unavailable)?;
-        if lineage.current() != Some(requester)
-            || !lineage.guardians.contains_key(&guardian)
-            || !self.independent(requester)
-            || self.in_combat(requester)
-            || self.force_area(requester).is_none()
-            || self.force_area(requester) != self.force_area(guardian)
-            || quantity.0 == 0
-            || !self
-                .state
-                .physical
-                .as_ref()
-                .unwrap()
-                .actors
-                .get(&requester)
-                .is_some_and(|body| {
-                    body.vitals.health > 0
-                        && matches!(body.activity, Activity::Idle | Activity::Rest)
-                })
-        {
-            return Err(Error::Unavailable);
-        }
-        self.ensure_event_capacity(8)?;
-        let reason = self.guardian_food_refusal(guardian, requester, source, quantity);
-        if let Some(reason) = reason {
-            self.refuse_guardian_food(guardian, requester, reason);
-            return Ok(());
-        }
-        self.state
-            .time
-            .0
-            .checked_add(self.state.physical.as_ref().unwrap().rules.loading_time.0)
-            .ok_or(Error::Overflow)?;
-        self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-        let had_force = self.state.force.is_some();
-        self.ensure_force_world();
-        let already_carried =
-            self.state.inventories[&source].location == InventoryLocation::Carried(guardian);
-        let previous = self.state.force.as_mut().unwrap().food.insert(
-            guardian,
-            FoodSupply {
-                requester,
-                source,
-                quantity,
-                delivered: 0,
-                accepted_at: self.state.time,
-                cargo: if already_carried {
-                    BTreeMap::from([(source, quantity.0)])
-                } else {
-                    BTreeMap::new()
-                },
-            },
-        );
-        let Some(command) = self.guardian_food_command(guardian) else {
-            if let Some(previous) = previous {
-                self.state
-                    .force
-                    .as_mut()
-                    .unwrap()
-                    .food
-                    .insert(guardian, previous);
-            } else {
-                self.state.force.as_mut().unwrap().food.remove(&guardian);
-            }
-            if !had_force {
-                self.state.force = None;
-            }
-            self.refuse_guardian_food(
-                guardian,
-                requester,
-                "I cannot begin a safe delivery with the current carrying space",
-            );
-            return Ok(());
-        };
-        let accepted = match command {
-            Command::Move { destination } => self.start_movement(guardian, destination),
-            Command::Carry { source, quantity } => self.carry_good(guardian, source, quantity),
-            command => self.debug_actor_command(guardian, command),
-        };
-        if let Err(error) = accepted {
-            if let Some(previous) = previous {
-                self.state
-                    .force
-                    .as_mut()
-                    .unwrap()
-                    .food
-                    .insert(guardian, previous);
-            } else {
-                self.state.force.as_mut().unwrap().food.remove(&guardian);
-            }
-            if !had_force {
-                self.state.force = None;
-            }
-            if error == Error::Overflow {
-                return Err(error);
-            }
-            self.refuse_guardian_food(
-                guardian,
-                requester,
-                "The actual stock, permission or carrying space prevents this delivery",
-            );
-            return Ok(());
-        }
-        let guard = self
-            .state
-            .lineage
-            .as_mut()
-            .unwrap()
-            .guardians
-            .get_mut(&guardian)
-            .unwrap();
-        guard.assignment = Some(lineage::Assignment {
-            request: GuardianRequest::SupplyFood { source, quantity },
-            accepted_at: self.state.time,
-        });
-        guard.explanation="I will bring provisions using my own access and actual carrying, without requiring an adult command relationship".into();
-        self.emit(EventKind::GuardianAccepted {
-            guardian,
-            requester,
-        });
-        self.revision += 1;
-        Ok(())
-    }
-    fn refuse_guardian_food(&mut self, guardian: PersonId, requester: PersonId, reason: &str) {
-        self.state
-            .lineage
-            .as_mut()
-            .unwrap()
-            .guardians
-            .get_mut(&guardian)
-            .unwrap()
-            .explanation = reason.into();
-        self.emit(EventKind::GuardianRefused {
-            guardian,
-            requester,
-            reason: reason.into(),
-        });
-        self.revision += 1;
-    }
-    fn guardian_food_refusal(
-        &self,
-        guardian: PersonId,
-        requester: PersonId,
-        source: InventoryId,
-        quantity: Quantity,
-    ) -> Option<&'static str> {
-        if !self.force_body_ready(guardian) || self.combat_restricts(guardian) {
-            return Some("My body or confinement prevents this assistance");
-        }
-        if !matches!(
-            self.state.physical.as_ref().unwrap().actors[&guardian].activity,
-            Activity::Idle | Activity::Rest
-        ) {
-            return Some("I must finish my current physical assistance first");
-        }
-        let mind = &self.state.decisions.as_ref()?.minds[&guardian];
-        let Some(food) = mind.knowledge.get(&source) else {
-            return Some("I do not know that food source");
-        };
-        if food.good != Good::Food || !food.accessible || food.quantity < quantity {
-            return Some("I do not know enough usable food at that source");
-        }
-        if decisions::known_path(&mind.routes, self.force_area(guardian)?, food.area).is_err() {
-            return Some("I do not know a traversable route to that source");
-        }
-        if food.area != self.force_area(requester)?
-            && mind
-                .child_signals
-                .get(&requester)
-                .is_some_and(|signal| signal.urgency > 0 && signal.observed_at == self.state.time)
-        {
-            return Some("I will not leave while you visibly need immediate care");
-        }
-        let held = self
-            .state
-            .inventories
-            .values()
-            .filter(|stock| stock.location == InventoryLocation::Carried(guardian))
-            .map(|stock| u128::from(stock.quantity.0))
-            .sum::<u128>();
-        let already_carried = self
-            .state
-            .inventories
-            .get(&source)
-            .is_some_and(|stock| stock.location == InventoryLocation::Carried(guardian));
-        if (!already_carried
-            && held + u128::from(quantity.0)
-                > u128::from(
-                    self.state
-                        .physical
-                        .as_ref()
-                        .unwrap()
-                        .rules
-                        .carrying_capacity
-                        .0,
-                ))
-            || quantity
-                > self
-                    .state
-                    .physical
-                    .as_ref()
-                    .unwrap()
-                    .rules
-                    .carrying_capacity
-        {
-            return Some("That amount exceeds my available carrying capacity");
-        }
-        None
-    }
-    pub(crate) fn force_cancel_food(&mut self, guardian: PersonId) {
-        if let Some(world) = &mut self.state.force {
-            world.food.remove(&guardian);
-        }
-    }
-    pub(crate) fn guardian_food_command(&self, guardian: PersonId) -> Option<Command> {
-        let supply = self.state.force.as_ref()?.food.get(&guardian)?;
-        if supply.delivered >= supply.quantity.0
-            || !self.force_body_ready(guardian)
-            || self.combat_restricts(guardian)
-            || self.force_area(supply.requester).is_none()
-        {
-            return None;
-        }
-        let area = self.force_area(guardian)?;
-        let mind = &self.state.decisions.as_ref()?.minds[&guardian];
-        if let Some((cargo, quantity)) = supply.cargo.iter().find(|(_, quantity)| **quantity > 0) {
-            let destination =
-                self.state.people[*self.person_index.get(&supply.requester)?].inventory;
-            let target = self.force_area(supply.requester)?;
-            if area != target {
-                return decisions::known_path(&mind.routes, area, target)
-                    .ok()
-                    .map(|_| Command::Move {
-                        destination: target,
-                    });
-            }
-            let offered = (*quantity).min(supply.quantity.0 - supply.delivered);
-            if !self.transfer_capacity(destination, offered) {
-                return None;
-            }
-            return Some(Command::Load {
-                source: *cargo,
-                destination,
-                quantity: Quantity(offered),
-            });
-        }
-        let food = mind.knowledge.get(&supply.source)?;
-        if food.area != area {
-            return decisions::known_path(&mind.routes, area, food.area)
-                .ok()
-                .map(|_| Command::Move {
-                    destination: food.area,
-                });
-        }
-        (food.accessible && food.quantity.0 >= supply.quantity.0 - supply.delivered).then_some(
-            Command::Carry {
-                source: supply.source,
-                quantity: Quantity(supply.quantity.0 - supply.delivered),
-            },
-        )
-    }
-    pub(crate) fn force_accepts_food_delivery(
-        &self,
-        actor: PersonId,
-        source: InventoryId,
-        destination: InventoryId,
-        quantity: Quantity,
-    ) -> bool {
-        self.state
-            .force
-            .as_ref()
-            .and_then(|world| world.food.get(&actor))
-            .is_some_and(|supply| {
-                quantity.0 > 0
-                    && quantity.0 <= supply.quantity.0 - supply.delivered
-                    && supply
-                        .cargo
-                        .get(&source)
-                        .is_some_and(|staged| *staged >= quantity.0)
-                    && self
-                        .state
-                        .inventories
-                        .get(&destination)
-                        .is_some_and(|stock| {
-                            stock.good == Good::Food
-                                && stock.location == InventoryLocation::Carried(supply.requester)
-                        })
-                    && self.force_area(actor).is_some()
-                    && self.force_area(actor) == self.force_area(supply.requester)
-            })
-    }
-
     fn force_visible(&self, observer: PersonId, target: PersonId) -> bool {
         let Some(combat) = &self.state.combat else {
             return false;
@@ -1396,39 +1008,6 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 return Err(fail());
             }
             _ => {}
-        }
-    }
-    for (guardian, supply) in &world.food {
-        if !people.contains_key(guardian)
-            || !people.contains_key(&supply.requester)
-            || guardian == &supply.requester
-            || people[guardian].role != Role::Guardian
-            || supply.quantity.0 == 0
-            || supply.delivered > supply.quantity.0
-            || supply.accepted_at > state.time
-            || state
-                .inventories
-                .get(&supply.source)
-                .is_none_or(|stock| stock.good != Good::Food)
-        {
-            return Err(fail());
-        }
-        let total = supply
-            .cargo
-            .values()
-            .map(|quantity| u128::from(*quantity))
-            .sum::<u128>();
-        if total > u128::from(supply.quantity.0 - supply.delivered)
-            || supply.cargo.iter().any(|(inventory, quantity)| {
-                *quantity == 0
-                    || state.inventories.get(inventory).is_none_or(|stock| {
-                        stock.good != Good::Food
-                            || stock.location != InventoryLocation::Carried(*guardian)
-                            || stock.quantity.0 < *quantity
-                    })
-            })
-        {
-            return Err(fail());
         }
     }
     Ok(())
@@ -1670,72 +1249,6 @@ mod tests {
         .unwrap();
         b.advance(SimDuration(4_267)).unwrap();
         assert_eq!(a.state, b.state);
-    }
-    #[test]
-    fn guardian_supply_uses_actual_cargo_without_granting_new_incarnation_estate_access() {
-        let mut sim = Simulation::force_fixture(91, Execution::default()).unwrap();
-        let predecessor = sim.state.ruler;
-        let guardian = sim.state.people[1].id;
-        let maximum = sim.state.physical.as_ref().unwrap().rules.max_health;
-        sim.debug_injure(predecessor, maximum).unwrap();
-        let born = sim.advance(SimDuration(900_000)).unwrap();
-        assert!(matches!(born.reason, StopReason::SuccessorBorn { .. }));
-        let adulthood = sim.state.development.as_ref().unwrap().rules.adulthood;
-        sim.advance(adulthood).unwrap();
-        let requester = sim.state.ruler;
-        assert_ne!(requester, predecessor);
-        assert_eq!(
-            sim.state.development.as_ref().unwrap().lives[&requester].stage,
-            LifeStage::Adult
-        );
-        sim.debug_actor_command(guardian, Command::Cancel).unwrap();
-        let source = sim
-            .state
-            .inventories
-            .values()
-            .find(|stock| {
-                stock.good == Good::Food && stock.location == InventoryLocation::Area(AreaId(1))
-            })
-            .unwrap()
-            .id;
-        let destination = sim.state.people[sim.person_index[&requester]].inventory;
-        assert!(!sim.has_stock_access(requester, &sim.state.inventories[&source]));
-        let opening = sim.state.inventories[&destination].quantity.0;
-        sim.request_guardian_food(guardian, requester, source, Quantity(1_000))
-            .unwrap();
-        assert!(sim.state.events.iter().any(|event|matches!(event.kind,EventKind::GuardianAccepted {guardian:id,requester:person} if id==guardian&&person==requester)));
-        assert_eq!(sim.state.inventories[&destination].quantity.0, opening);
-        sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.state.inventories[&destination].quantity.0, opening);
-        sim.advance(MINUTE).unwrap();
-        assert_eq!(
-            sim.state.inventories[&destination].quantity.0,
-            opening + 1_000
-        );
-        assert_eq!(
-            sim.state.force.as_ref().unwrap().food[&guardian].delivered,
-            1_000
-        );
-        assert!(!sim.has_stock_access(requester, &sim.state.inventories[&source]));
-        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
-    }
-    #[test]
-    fn unknown_or_unsafe_food_requests_are_explicitly_refused_without_stock_changes() {
-        let mut sim = fixture();
-        let requester = sim.state.ruler;
-        let guardian = sim.state.people[1].id;
-        let opening = sim.state.inventories.clone();
-        sim.request_guardian_food(guardian, requester, InventoryId(999_999), Quantity(1_000))
-            .unwrap();
-        assert_eq!(sim.state.inventories, opening);
-        assert!(sim.state.events.iter().any(
-            |event| matches!(event.kind,EventKind::GuardianRefused {guardian:id,..} if id==guardian)
-        ));
-        assert!(
-            sim.state.lineage.as_ref().unwrap().guardians[&guardian]
-                .assignment
-                .is_none()
-        );
     }
     #[test]
     fn closing_health_can_prevent_binding_or_an_escape_at_its_deadline() {

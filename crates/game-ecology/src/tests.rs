@@ -39,6 +39,7 @@ fn world(kind: ResourceKind, remaining: u64) -> World {
         jobs: BTreeMap::new(),
         known: BTreeMap::new(),
         known_plots: BTreeMap::new(),
+        observed_areas: BTreeMap::new(),
         day: 0,
         next_request: BTreeMap::new(),
     }
@@ -97,6 +98,7 @@ fn land_recovery_configuration_is_independent_of_crop_rules() {
     world.rules = EcologyRules {
         base_temperature: 30,
         soil_recovery: 7,
+        ..EcologyRules::default()
     };
     let cool = world.advance(&day(1, 20)).unwrap();
     assert_eq!(cool.plots[&SiteId(9)].fertility, 900);
@@ -337,4 +339,259 @@ fn malformed_or_overflowing_inputs_fail_without_partial_renewal_or_reservation()
         Err(Error::Overflow)
     );
     assert!(world.jobs.is_empty());
+}
+
+#[test]
+fn exploration_requires_actual_inspection_and_retries_a_stale_negative_observation() {
+    let mut world = world(ResourceKind::Spring, 1_000);
+    let areas = [AreaId(2), AreaId(3)];
+    assert!(
+        world
+            .exploration_areas(PersonId(3), AreaId(2), SimTime(0), &areas)
+            .is_empty()
+    );
+    // A dated received resource view does not constitute physical inspection.
+    world.known.insert(
+        PersonId(3),
+        BTreeMap::from([(
+            ResourceId(1),
+            ResourceView {
+                id: ResourceId(1),
+                area: AreaId(2),
+                kind: ResourceKind::Spring,
+                available: Quantity(1_000),
+                accessible: true,
+                custodian: None,
+                contamination: 0,
+                observed_at: SimTime(0),
+            },
+        )]),
+    );
+    assert!(
+        world
+            .exploration_areas(PersonId(3), AreaId(2), SimTime(0), &areas)
+            .is_empty()
+    );
+    world.observe_area(PersonId(3), AreaId(2), SimTime(0));
+    assert_eq!(
+        world.exploration_areas(PersonId(3), AreaId(2), SimTime(0), &areas),
+        vec![(AreaId(3), SimTime(0))]
+    );
+    world.observe_area(PersonId(3), AreaId(3), SimTime(10));
+    assert!(
+        world
+            .exploration_areas(PersonId(3), AreaId(2), SimTime(11), &areas)
+            .is_empty()
+    );
+    assert_eq!(
+        world.exploration_areas(
+            PersonId(3),
+            AreaId(2),
+            SimTime(10 + world.rules.search_retry.0),
+            &areas
+        ),
+        vec![(AreaId(3), SimTime(0))]
+    );
+    for id in 4..25 {
+        world.observe_area(PersonId(3), AreaId(id), SimTime(id));
+    }
+    assert_eq!(world.observed_areas[&PersonId(3)].len(), 16);
+}
+#[test]
+fn acquisition_prospects_use_only_personal_views_and_local_admission_for_every_resource_good() {
+    for kind in [
+        ResourceKind::Coppice,
+        ResourceKind::Berries,
+        ResourceKind::Herbs,
+        ResourceKind::Spring,
+    ] {
+        let mut world = world(kind, 1_000);
+        let need = AcquisitionNeed {
+            actor: PersonId(3),
+            area: AreaId(2),
+            now: SimTime(0),
+            good: kind.good(),
+            quantity: Quantity(500),
+            room: Quantity(1_000),
+            honesty: 900,
+            risk_tolerance: 0,
+        };
+        assert!(world.acquisition_prospects(need, &[]).is_empty());
+        world.known.insert(
+            PersonId(3),
+            BTreeMap::from([(
+                ResourceId(1),
+                ResourceView {
+                    id: ResourceId(1),
+                    area: AreaId(2),
+                    kind,
+                    available: Quantity(1_000),
+                    accessible: true,
+                    custodian: Some(PersonId(4)),
+                    contamination: 0,
+                    observed_at: SimTime(0),
+                },
+            )]),
+        );
+        assert!(world.acquisition_prospects(need, &[]).is_empty());
+        let local = [LocalAcquisition {
+            resource: ResourceId(1),
+            can_prepare: true,
+            can_request: false,
+        }];
+        let offers = world.acquisition_prospects(need, &local);
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0].quantity, Quantity(500));
+        assert_eq!(offers[0].needs_tool, kind == ResourceKind::Coppice);
+        world
+            .known
+            .get_mut(&PersonId(3))
+            .unwrap()
+            .get_mut(&ResourceId(1))
+            .unwrap()
+            .area = AreaId(3);
+        assert_eq!(world.acquisition_prospects(need, &[]).len(), 1);
+        assert!(
+            world
+                .acquisition_prospects(
+                    AcquisitionNeed {
+                        actor: PersonId(5),
+                        ..need
+                    },
+                    &[]
+                )
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn conditional_operator_retains_missing_carried_equipment_but_actual_gather_revalidates_it() {
+    let world = world(ResourceKind::Coppice, 2_000);
+    let no_tool = GatherFacts {
+        tool: None,
+        ..facts()
+    };
+    let conditions = world
+        .gathering_conditions(PersonId(3), ResourceId(1), Quantity(1_000), false, no_tool)
+        .unwrap();
+    assert!(conditions.tool_required);
+    assert!(!conditions.ready);
+    assert_eq!(
+        world.prepare_gather(PersonId(3), ResourceId(1), Quantity(1_000), false, no_tool),
+        Err(Error::Unavailable)
+    );
+    assert!(
+        world
+            .gathering_conditions(
+                PersonId(3),
+                ResourceId(1),
+                Quantity(1_000),
+                false,
+                GatherFacts {
+                    capable: false,
+                    ..no_tool
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        world
+            .gathering_conditions(
+                PersonId(3),
+                ResourceId(1),
+                Quantity(1_000),
+                false,
+                GatherFacts {
+                    adult: false,
+                    ..no_tool
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        world
+            .gathering_conditions(
+                PersonId(3),
+                ResourceId(1),
+                Quantity(1_000),
+                false,
+                GatherFacts {
+                    carrying_room: Quantity(999),
+                    ..no_tool
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        world
+            .gathering_conditions(PersonId(9), ResourceId(1), Quantity(1_000), false, no_tool)
+            .is_err()
+    );
+}
+
+#[test]
+fn requesting_known_resource_access_needs_no_material_carrying_room() {
+    let mut world = world(ResourceKind::Spring, 1_000);
+    world.known.insert(
+        PersonId(3),
+        BTreeMap::from([(
+            ResourceId(1),
+            ResourceView {
+                id: ResourceId(1),
+                area: AreaId(2),
+                kind: ResourceKind::Spring,
+                available: Quantity(1_000),
+                accessible: false,
+                custodian: Some(PersonId(4)),
+                contamination: 0,
+                observed_at: SimTime(0),
+            },
+        )]),
+    );
+    let need = AcquisitionNeed {
+        actor: PersonId(3),
+        area: AreaId(2),
+        now: SimTime(0),
+        good: Good::Water,
+        quantity: Quantity(0),
+        room: Quantity(0),
+        honesty: 900,
+        risk_tolerance: 0,
+    };
+    let prospects = world.acquisition_prospects(
+        need,
+        &[LocalAcquisition {
+            resource: ResourceId(1),
+            can_prepare: false,
+            can_request: true,
+        }],
+    );
+    assert_eq!(prospects.len(), 1);
+    assert_eq!(prospects[0].quantity, Quantity(0));
+    assert_eq!(
+        prospects[0].action,
+        EcologyAction::RequestAccess {
+            resource: ResourceId(1)
+        }
+    );
+    world
+        .known
+        .get_mut(&PersonId(3))
+        .unwrap()
+        .get_mut(&ResourceId(1))
+        .unwrap()
+        .accessible = true;
+    assert!(
+        world
+            .acquisition_prospects(
+                need,
+                &[LocalAcquisition {
+                    resource: ResourceId(1),
+                    can_prepare: true,
+                    can_request: false
+                }]
+            )
+            .is_empty()
+    );
 }

@@ -6,6 +6,7 @@ use crate::*;
 enum ActivityOwner {
     Projects,
     Health,
+    Property,
 }
 
 impl Simulation {
@@ -24,11 +25,12 @@ impl Simulation {
                 .any(|t| t.speaker == actor || t.listener == actor)
         }) && self.state.realm.as_ref().is_none_or(|w| {
             !w.talks.contains_key(&actor) && !w.talks.values().any(|t| t.recipient == actor)
-        }) && self
-            .state
-            .social
-            .as_ref()
-            .is_none_or(|w| !w.participants.contains_key(&actor))
+        }) && !self.property_actor_talking(actor)
+            && self
+                .state
+                .social
+                .as_ref()
+                .is_none_or(|w| !w.participants.contains_key(&actor))
     }
 
     pub(crate) fn submit_actor_action(
@@ -117,7 +119,7 @@ impl Simulation {
         }
         if let Command::Invocation { ref action } = command {
             self.invocation_command(actor, action)?;
-            self.update_property_events();
+            self.update_property_events()?;
             self.reconcile_agreements()?;
             self.observe_agreement_events();
             self.revision += 1;
@@ -137,7 +139,7 @@ impl Simulation {
         }
         if let Command::Property { action } = command {
             self.debug_property_action(actor, action)?;
-            self.update_property_events();
+            self.update_property_events()?;
             self.reconcile_agreements()?;
             self.observe_agreement_events();
             return Ok(());
@@ -168,6 +170,10 @@ impl Simulation {
         self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Health));
     }
 
+    pub(crate) fn interrupt_actor_activity_except_property(&mut self, actor: PersonId) {
+        self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Property));
+    }
+
     fn interrupt_actor_activity_preserving(
         &mut self,
         actor: PersonId,
@@ -189,7 +195,9 @@ impl Simulation {
             self.interrupt_construction(actor);
         }
         self.interrupt_lesson(actor);
-        self.interrupt_property_action(actor);
+        if owner != Some(ActivityOwner::Property) {
+            self.interrupt_property_action(actor);
+        }
         self.interrupt_cultivation(actor);
         self.invalidate_pregnancies(actor, false);
         if let Some(world) = &mut self.state.physical {

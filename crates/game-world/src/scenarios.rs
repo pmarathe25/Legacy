@@ -131,7 +131,7 @@ impl Simulation {
             sim.author_child_opening()?;
         }
         sim.seed_playable_shelters(&config.health, id != "settlement-founder")?;
-        sim.update_property_events();
+        sim.update_property_events()?;
         sim.observe_agreement_events();
         sim.update_projects()?;
         sim.reconcile_institutions()?;
@@ -301,7 +301,8 @@ impl Simulation {
                             .into(),
                         assessments: BTreeMap::new(),
                         assignment: None,
-                        water_provision: None,
+                        provision: None,
+                        requested_delivery: None,
                         knows_invocation: true,
                     },
                 )
@@ -395,6 +396,7 @@ impl Simulation {
             custodians,
         });
         self.state.property = Some(property::World {
+            reports: BTreeMap::new(),
             claims: BTreeMap::new(),
             incidents: BTreeMap::new(),
             known_claims: BTreeMap::new(),
@@ -463,13 +465,8 @@ impl Simulation {
             last_event: self.state.next_event - 1,
         });
         self.state.invocation = Some(invocation::World {
-            rules: config.invocation.clone(),
+            control: game_invocation::ControlState::new(config.invocation.clone())?,
             history: BTreeMap::new(),
-            people: BTreeMap::new(),
-            active: None,
-            activation: None,
-            warning: None,
-            warnings: BTreeMap::new(),
             records: BTreeMap::new(),
             actions: BTreeMap::new(),
         });
@@ -478,7 +475,6 @@ impl Simulation {
             rules: force::Rules::default(),
             escapes: BTreeMap::new(),
             restraints: BTreeMap::new(),
-            food: BTreeMap::new(),
             last_event: self.state.next_event - 1,
         });
         self.state.missions = Some(missions::World {
@@ -736,7 +732,7 @@ impl Simulation {
                 });
             }
         }
-        self.update_property_events();
+        self.update_property_events()?;
         Ok(())
     }
 
@@ -744,6 +740,7 @@ impl Simulation {
         let residents: BTreeSet<_> = self.state.people.iter().map(|person| person.id).collect();
         let day = self.state.environment.as_ref().unwrap().calendar.day.0;
         self.state.ecology = Some(ecology::World {
+            observed_areas: BTreeMap::new(),
             rules: game_ecology::EcologyRules::default(),
             resources: BTreeMap::new(),
             plots: BTreeMap::new(),
@@ -870,7 +867,7 @@ impl Simulation {
         mind.personality.empathy = 900;
         mind.personality.patience = 900;
         mind.dream = decisions::Aspiration::SupportOthers;
-        self.update_property_events();
+        self.update_property_events()?;
         Ok(())
     }
 
@@ -934,7 +931,7 @@ impl Simulation {
             .unwrap()
             .custodians
             .insert(fund, steward);
-        self.update_property_events();
+        self.update_property_events()?;
         let founders = BTreeSet::from([
             ruler,
             steward,
@@ -1374,7 +1371,7 @@ impl Simulation {
                 self.set_initial_shelter_occupancy(actor, shelter)?;
             }
         }
-        self.update_property_events();
+        self.update_property_events()?;
         Ok(())
     }
 }

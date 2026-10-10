@@ -772,7 +772,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 lifespan_loss: state
                     .invocation
                     .as_ref()
-                    .and_then(|world| world.people.get(&person.id))
+                    .and_then(|world| world.control.people.get(&person.id))
                     .map_or(0, |burden| burden.lifespan_loss),
             },
         );

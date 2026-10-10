@@ -75,9 +75,19 @@ pub struct Assignment {
 
 /// A remembered care intention, rather than knowledge of a distant body's needs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WaterProvision {
-    pub child: PersonId,
+pub struct CareProvision {
+    pub delivery: game_logistics::Delivery,
     pub observed_at: SimTime,
+}
+
+/// A personally accepted, source-constrained request. The cargo map contains
+/// provenance tags clipped by actual stock; it is never a spendable inventory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestedDelivery {
+    pub delivery: game_logistics::Delivery,
+    pub accepted_at: SimTime,
+    pub cargo: BTreeMap<InventoryId, u64>,
+    pub last_event: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,7 +101,8 @@ pub struct Guardian {
     pub explanation: String,
     pub assessments: BTreeMap<PersonId, Assessment>,
     pub assignment: Option<Assignment>,
-    pub water_provision: Option<WaterProvision>,
+    pub requested_delivery: Option<RequestedDelivery>,
+    pub provision: Option<CareProvision>,
     pub knows_invocation: bool,
 }
 

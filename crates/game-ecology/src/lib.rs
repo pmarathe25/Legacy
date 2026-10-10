@@ -150,6 +150,7 @@ pub struct World {
     pub jobs: BTreeMap<PersonId, Gathering>,
     pub known: BTreeMap<PersonId, BTreeMap<ResourceId, ResourceView>>,
     pub known_plots: BTreeMap<PersonId, BTreeMap<SiteId, PlotView>>,
+    pub observed_areas: BTreeMap<PersonId, BTreeMap<AreaId, SimTime>>,
     pub day: u64,
     #[serde(default)]
     pub next_request: BTreeMap<PersonId, BTreeMap<ResourceId, SimTime>>,
@@ -158,18 +159,50 @@ pub struct World {
 pub struct EcologyRules {
     pub base_temperature: i32,
     pub soil_recovery: u16,
+    pub search_retry: SimDuration,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LocalAcquisition {
+    pub resource: ResourceId,
+    pub can_prepare: bool,
+    pub can_request: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcquisitionProspect {
+    pub resource: ResourceId,
+    pub area: AreaId,
+    pub observed_at: SimTime,
+    pub quantity: Quantity,
+    pub needs_tool: bool,
+    pub action: EcologyAction,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct AcquisitionNeed {
+    pub actor: PersonId,
+    pub area: AreaId,
+    pub now: SimTime,
+    pub good: Good,
+    pub quantity: Quantity,
+    pub room: Quantity,
+    pub honesty: u16,
+    pub risk_tolerance: u16,
 }
 impl Default for EcologyRules {
     fn default() -> Self {
         Self {
             base_temperature: 5,
             soil_recovery: 1,
+            search_retry: SimDuration(21_600_000),
         }
     }
 }
 impl EcologyRules {
     pub fn validate(&self) -> Result<(), Error> {
-        if !(-100..=100).contains(&self.base_temperature) || self.soil_recovery > 1_000 {
+        if !(-100..=100).contains(&self.base_temperature)
+            || self.soil_recovery > 1_000
+            || self.search_retry.0 == 0
+        {
             return Err(Error::InvalidConfiguration(
                 "invalid ecological land recovery".into(),
             ));
@@ -178,6 +211,113 @@ impl EcologyRules {
     }
 }
 impl World {
+    /// Remote prospects consume the person's dated resource views only. Local
+    /// preparation facts come from the physical collection owner at this point.
+    pub fn acquisition_prospects(
+        &self,
+        need: AcquisitionNeed,
+        local: &[LocalAcquisition],
+    ) -> Vec<AcquisitionProspect> {
+        let may_take = need.honesty < 250 && need.risk_tolerance >= 700;
+        self.known
+            .get(&need.actor)
+            .into_iter()
+            .flat_map(|known| known.values())
+            .filter_map(|known| {
+                if known.kind.good() != need.good
+                    || known.observed_at > need.now
+                    || known.available.0 == 0
+                {
+                    return None;
+                }
+                let quantity = Quantity(need.quantity.0.min(need.room.0).min(known.available.0));
+                let gather = known.accessible || may_take;
+                if gather && quantity.0 == 0 {
+                    return None;
+                }
+                let local = local.iter().find(|facts| facts.resource == known.id);
+                if known.area == need.area
+                    && (if gather {
+                        local.is_none_or(|facts| !facts.can_prepare)
+                    } else {
+                        local.is_none_or(|facts| !facts.can_request)
+                    })
+                {
+                    return None;
+                }
+                if !gather
+                    && (known.custodian.is_none()
+                        || self
+                            .next_request
+                            .get(&need.actor)
+                            .and_then(|requests| requests.get(&known.id))
+                            .is_some_and(|at| *at > need.now))
+                {
+                    return None;
+                }
+                Some(AcquisitionProspect {
+                    resource: known.id,
+                    area: known.area,
+                    observed_at: known.observed_at,
+                    quantity: if gather { quantity } else { Quantity(0) },
+                    needs_tool: gather && known.kind == ResourceKind::Coppice,
+                    action: if gather {
+                        EcologyAction::Gather {
+                            resource: known.id,
+                            quantity,
+                            unauthorized: !known.accessible,
+                        }
+                    } else {
+                        EcologyAction::RequestAccess { resource: known.id }
+                    },
+                })
+            })
+            .collect()
+    }
+    /// Supplied only after physically inspecting this place. Receiving a report
+    /// updates source knowledge separately and cannot fabricate this observation.
+    pub fn observe_area(&mut self, actor: PersonId, area: AreaId, now: SimTime) {
+        let observed = self.observed_areas.entry(actor).or_default();
+        if observed.get(&area).is_some_and(|at| *at > now) {
+            return;
+        }
+        if observed.len() == 16
+            && !observed.contains_key(&area)
+            && let Some(oldest) = observed
+                .iter()
+                .min_by_key(|(id, at)| (**at, **id))
+                .map(|(id, _)| *id)
+        {
+            observed.remove(&oldest);
+        }
+        observed.insert(area, now);
+    }
+    pub fn exploration_areas(
+        &self,
+        actor: PersonId,
+        area: AreaId,
+        now: SimTime,
+        known_areas: &[AreaId],
+    ) -> Vec<(AreaId, SimTime)> {
+        let Some(observed) = self.observed_areas.get(&actor) else {
+            return Vec::new();
+        };
+        let Some(inspected) = observed.get(&area).copied().filter(|at| *at <= now) else {
+            return Vec::new();
+        };
+        known_areas
+            .iter()
+            .take(16)
+            .copied()
+            .filter(|target| *target != area)
+            .filter(|target| {
+                observed
+                    .get(target)
+                    .is_none_or(|at| now.0.saturating_sub(at.0) >= self.rules.search_retry.0)
+            })
+            .map(|target| (target, inspected))
+            .collect()
+    }
     pub fn advance(&self, input: &DayFacts) -> Result<Self, Error> {
         self.rules.validate()?;
         input.weather.validate()?;
@@ -254,14 +394,14 @@ impl World {
         Ok(world)
     }
 
-    pub fn prepare_gather(
+    pub fn gathering_conditions(
         &self,
         actor: PersonId,
         resource: ResourceId,
         quantity: Quantity,
         unauthorized: bool,
         facts: GatherFacts,
-    ) -> Result<GatheringPlan, Error> {
+    ) -> Result<GatheringConditions, Error> {
         let source = self.resources.get(&resource).ok_or(Error::Unavailable)?;
         source.validate()?;
         let mut reserved = 0u128;
@@ -285,7 +425,6 @@ impl World {
                 > u128::from(source.remaining.0)
             || quantity > facts.carrying_room
             || (!facts.adult && (source.kind == ResourceKind::Coppice || quantity.0 > 1_000))
-            || (source.kind == ResourceKind::Coppice && facts.tool.is_none())
         {
             return Err(Error::Unavailable);
         }
@@ -300,21 +439,48 @@ impl World {
                 .checked_add(duration.max(1))
                 .ok_or(Error::Overflow)?,
         );
+        let tool_required = source.kind == ResourceKind::Coppice;
+        Ok(GatheringConditions {
+            completes,
+            tool_required,
+            ready: !tool_required || facts.tool.is_some(),
+        })
+    }
+    pub fn prepare_gather(
+        &self,
+        actor: PersonId,
+        resource: ResourceId,
+        quantity: Quantity,
+        unauthorized: bool,
+        facts: GatherFacts,
+    ) -> Result<GatheringPlan, Error> {
+        let conditions =
+            self.gathering_conditions(actor, resource, quantity, unauthorized, facts)?;
+        if !conditions.ready {
+            return Err(Error::Unavailable);
+        }
+        let source = &self.resources[&resource];
         Ok(GatheringPlan {
             resource,
             quantity,
             good: source.kind.good(),
-            tool: if source.kind == ResourceKind::Coppice {
+            tool: if conditions.tool_required {
                 facts.tool
             } else {
                 None
             },
-            completes,
+            completes: conditions.completes,
             unauthorized,
         })
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatheringConditions {
+    pub completes: SimTime,
+    pub tool_required: bool,
+    pub ready: bool,
+}
 #[derive(Clone, Copy, Debug)]
 pub struct GatherFacts {
     pub now: SimTime,

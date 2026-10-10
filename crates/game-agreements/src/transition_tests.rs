@@ -6,6 +6,91 @@ const C: PersonId = PersonId(103);
 const AGREEMENT: AgreementId = AgreementId(1);
 const SITE: SiteId = SiteId(201);
 
+fn institutional_duty() -> InstitutionDuty {
+    InstitutionDuty {
+        institution: InstitutionId(9),
+        agreement: AgreementId(10),
+        obligation: ObligationId(11),
+        term: AgreementTerm::Access {
+            grantor: A,
+            grantee: B,
+            inventory: InventoryId(301),
+            allowed: true,
+        },
+    }
+}
+
+#[test]
+fn institution_declared_duties_record_debt_without_performing_or_granting_it() {
+    let duty = institutional_duty();
+    let mut state = State::default();
+    let plan = state
+        .prepare_institutional_duties(std::slice::from_ref(&duty), SimTime(20))
+        .unwrap();
+    assert!(plan.permissions.is_empty());
+    assert!(state.agreements.is_empty());
+    assert_eq!(
+        plan.events,
+        vec![TransitionEvent::Activated {
+            agreement: duty.agreement
+        }]
+    );
+    plan.commit(&mut state).unwrap();
+    assert_eq!(state.agreements[&duty.agreement].proposed_at, SimTime(20));
+    assert_eq!(state.obligations[&duty.obligation].performed, 0);
+    assert!(state.obligations[&duty.obligation].cargo.is_empty());
+}
+
+#[test]
+fn invalid_declared_duty_batch_cannot_partially_install_other_duties() {
+    let duty = institutional_duty();
+    let state = State::default();
+    let duplicate = InstitutionDuty {
+        obligation: ObligationId(12),
+        ..duty.clone()
+    };
+    assert!(
+        state
+            .prepare_institutional_duties(&[duty.clone(), duplicate], SimTime(20))
+            .is_err()
+    );
+    assert_eq!(state, State::default());
+    for invalid in [
+        InstitutionDuty {
+            institution: InstitutionId(0),
+            ..duty.clone()
+        },
+        InstitutionDuty {
+            obligation: ObligationId(9),
+            ..duty.clone()
+        },
+        InstitutionDuty {
+            agreement: AgreementId(0),
+            ..duty
+        },
+    ] {
+        assert!(
+            state
+                .prepare_institutional_duties(&[invalid], SimTime(20))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn a_stale_declared_duty_installation_preserves_the_current_ledger() {
+    let duty = institutional_duty();
+    let mut state = State::default();
+    let first = state
+        .prepare_institutional_duties(std::slice::from_ref(&duty), SimTime(20))
+        .unwrap();
+    let stale = first.clone();
+    first.commit(&mut state).unwrap();
+    let before = state.clone();
+    assert!(stale.commit(&mut state).is_err());
+    assert_eq!(before, state);
+}
+
 fn facts() -> TransitionFacts {
     TransitionFacts {
         actor_available: true,

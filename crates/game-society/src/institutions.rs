@@ -5,6 +5,11 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod commands;
+mod validation;
+pub use commands::*;
+pub use validation::*;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subjects {
     pub members: bool,
@@ -511,6 +516,7 @@ pub struct PreparedResolution {
     institution_after: Option<Institution>,
     proposals: Vec<(RuleProposal, RuleProposal)>,
     concept: Option<(ConceptId, InstitutionalRule)>,
+    competing_proposals: Option<BTreeSet<RuleProposalId>>,
     pub outcome: RuleProposalStatus,
     pub external_change: Option<InstitutionChange>,
 }
@@ -521,6 +527,13 @@ impl World {
         facts: &AuthorityFacts,
     ) -> Result<RuleProposalStatus, Error> {
         let proposal = self.proposals.get(&id).ok_or(Error::Unavailable)?;
+        self.proposal_outcome_for(proposal, facts)
+    }
+    fn proposal_outcome_for(
+        &self,
+        proposal: &RuleProposal,
+        facts: &AuthorityFacts,
+    ) -> Result<RuleProposalStatus, Error> {
         let institution = self
             .institutions
             .get(&proposal.institution)
@@ -560,23 +573,40 @@ impl World {
         facts: &AuthorityFacts,
         concept: Option<ConceptId>,
     ) -> Result<PreparedResolution, Error> {
-        let outcome = self.proposal_outcome(id, facts)?;
-        let proposal = self.proposals.get(&id).unwrap();
-        let institution = self.institutions.get(&proposal.institution).unwrap();
+        let proposal = self.proposals.get(&id).ok_or(Error::Unavailable)?;
+        self.prepare_resolution_for(proposal, facts, concept)
+    }
+    fn prepare_resolution_for(
+        &self,
+        proposal: &RuleProposal,
+        facts: &AuthorityFacts,
+        concept: Option<ConceptId>,
+    ) -> Result<PreparedResolution, Error> {
+        let id = proposal.id;
+        let outcome = self.proposal_outcome_for(proposal, facts)?;
+        let institution = self
+            .institutions
+            .get(&proposal.institution)
+            .ok_or(Error::Unavailable)?;
         let mut plan = PreparedResolution {
             institution_before: None,
             institution_after: None,
             proposals: Vec::new(),
             concept: None,
+            competing_proposals: None,
             outcome,
             external_change: None,
         };
         if outcome == RuleProposalStatus::Proposed {
+            if self.proposals.get(&id) != Some(proposal) {
+                plan.proposals
+                    .push((self.proposals[&id].clone(), proposal.clone()));
+            }
             return Ok(plan);
         }
         let mut changed = proposal.clone();
         changed.status = outcome;
-        plan.proposals.push((proposal.clone(), changed));
+        plan.proposals.push((self.proposals[&id].clone(), changed));
         if outcome == RuleProposalStatus::Rejected {
             return Ok(plan);
         }
@@ -638,6 +668,35 @@ impl World {
                 after.status = InstitutionStatus::Dissolved;
                 after.grants.clear();
             }
+            InstitutionChange::Adjudicate {
+                remedy:
+                    EnforcementRemedy::Depose {
+                        office,
+                        replacement,
+                    },
+                ..
+            } => {
+                if !after.members.contains(replacement) {
+                    return Err(Error::Unavailable);
+                }
+                after
+                    .charter
+                    .offices
+                    .iter_mut()
+                    .find(|mandate| mandate.slot == *office)
+                    .ok_or(Error::Unavailable)?
+                    .holder = *replacement;
+                after.office_support.insert(
+                    *office,
+                    proposal
+                        .votes
+                        .iter()
+                        .filter(|(actor, support)| **support && after.members.contains(actor))
+                        .map(|(actor, _)| *actor)
+                        .collect(),
+                );
+                plan.external_change = Some(proposal.change.clone());
+            }
             InstitutionChange::RatifyRegional { .. }
             | InstitutionChange::AuthorizeRegionalPassage { .. }
             | InstitutionChange::EnforcementPolicy { .. }
@@ -646,6 +705,16 @@ impl World {
             }
         }
         after.revision = after.revision.checked_add(1).ok_or(Error::Overflow)?;
+        plan.competing_proposals = Some(
+            self.proposals
+                .values()
+                .filter(|proposal| {
+                    proposal.institution == institution.id
+                        && proposal.status == RuleProposalStatus::Proposed
+                })
+                .map(|proposal| proposal.id)
+                .collect(),
+        );
         for other in self.proposals.values().filter(|p| {
             p.institution == institution.id
                 && p.status == RuleProposalStatus::Proposed
@@ -661,7 +730,7 @@ impl World {
     }
 }
 impl PreparedResolution {
-    pub fn commit(self, state: &mut World) -> Result<(), Error> {
+    pub fn verify(&self, state: &World) -> Result<(), Error> {
         if self
             .institution_before
             .as_ref()
@@ -674,9 +743,28 @@ impl PreparedResolution {
                 .concept
                 .as_ref()
                 .is_some_and(|(id, _)| state.concepts.contains_key(id))
+            || self.competing_proposals.as_ref().is_some_and(|expected| {
+                let Some(institution) = &self.institution_before else {
+                    return true;
+                };
+                state
+                    .proposals
+                    .values()
+                    .filter(|proposal| {
+                        proposal.institution == institution.id
+                            && proposal.status == RuleProposalStatus::Proposed
+                    })
+                    .map(|proposal| proposal.id)
+                    .collect::<BTreeSet<_>>()
+                    != *expected
+            })
         {
             return Err(Error::Unavailable);
         }
+        Ok(())
+    }
+    pub fn commit(self, state: &mut World) -> Result<(), Error> {
+        self.verify(state)?;
         if let Some((id, rule)) = self.concept {
             state.concepts.insert(id, rule);
         }
@@ -1220,3 +1308,7 @@ mod tests {
         assert_eq!(world, serde_json::from_slice::<World>(&saved).unwrap());
     }
 }
+
+#[cfg(test)]
+#[path = "institutions/command_tests.rs"]
+mod command_tests;

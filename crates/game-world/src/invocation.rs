@@ -2,7 +2,7 @@
 //! Fractional burden and physiology use opening-state integer arithmetic.
 use crate::*;
 
-pub use game_invocation::{Burden, Consent, Episode, Rules, severity};
+pub use game_invocation::{Activation, Active, Burden, Consent, Episode, Rules, Warning, severity};
 
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let Some(w) = &s.invocation else {
@@ -21,7 +21,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         .map(|life| life.person)
         .collect();
     let areas: BTreeSet<_> = s.areas.iter().map(|a| a.id).collect();
-    let r = &w.rules;
+    let r = &w.control.rules;
     game_invocation::validate_rules(r).map_err(|_| fail())?;
     let valid_lives = |selected: &BTreeSet<PersonId>| {
         !selected.is_empty()
@@ -79,7 +79,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
-    for (actor, b) in &w.people {
+    for (actor, b) in &w.control.people {
         if !lives.contains(actor)
             || b.burden_remainder >= 1_000
             || b.exposure_remainder >= 1_000
@@ -107,10 +107,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || matches!(kind, InvocationCost::Identity | InvocationCost::Lifespan))
         })
     };
-    if let Some(a) = &w.active {
+    if let Some(a) = &w.control.active {
         if lineage.current() != Some(a.actor)
             || !valid_lives(&a.lives)
-            || !w.people.contains_key(&a.actor)
+            || !w.control.people.contains_key(&a.actor)
             || a.started > s.time
             || a.next_loss_burden == 0
             || !consent_valid(&a.accepted)
@@ -126,23 +126,23 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 || e.ends.0 - e.starts.0 != r.loss_duration.0
                 || a.next_controller < s.time
                 || a.next_controller > e.ends
-                || w.warning.is_some()
-                || w.activation.is_some())
+                || w.control.warning.is_some()
+                || w.control.activation.is_some())
         {
             return Err(fail());
         }
     }
-    if let Some(plan) = &w.activation
+    if let Some(plan) = &w.control.activation
         && (lineage.current() != Some(plan.actor)
             || !valid_lives(&plan.lives)
             || !consent_valid(&plan.accepted)
-            || !w.warning.as_ref().is_some_and(|warning| {
+            || !w.control.warning.as_ref().is_some_and(|warning| {
                 warning.activation.as_ref() == Some(&plan.lives) && warning.view.actor == plan.actor
             }))
     {
         return Err(fail());
     }
-    for (id, warning) in &w.warnings {
+    for (id, warning) in &w.control.warnings {
         if id.0 == 0
             || id.0 >= s.next_id
             || *id != warning.id
@@ -156,8 +156,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
-    if let Some(p) = &w.warning
-        && (w.warnings.get(&p.view.id) != Some(&p.view)
+    if let Some(p) = &w.control.warning
+        && (w.control.warnings.get(&p.view.id) != Some(&p.view)
             || lineage.current() != Some(p.view.actor)
             || p.activation
                 .as_ref()
@@ -271,28 +271,6 @@ pub struct PastLife {
     pub cases: Vec<SocialCaseView>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Active {
-    pub actor: PersonId,
-    pub lives: BTreeSet<PersonId>,
-    pub started: SimTime,
-    pub accepted: BTreeMap<InvocationCost, Consent>,
-    pub episode: Option<Episode>,
-    pub next_loss_burden: u64,
-    pub next_controller: SimTime,
-    pub dominant: Option<PersonId>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Warning {
-    pub view: InvocationWarning,
-    pub activation: Option<BTreeSet<PersonId>>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Activation {
-    pub actor: PersonId,
-    pub lives: BTreeSet<PersonId>,
-    pub accepted: BTreeMap<InvocationCost, Consent>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub id: RecordId,
     pub inventory: InventoryId,
@@ -330,13 +308,8 @@ pub struct MemoryAction {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct World {
-    pub rules: Rules,
+    pub control: game_invocation::ControlState,
     pub history: BTreeMap<PersonId, PastLife>,
-    pub people: BTreeMap<PersonId, Burden>,
-    pub active: Option<Active>,
-    pub activation: Option<Activation>,
-    pub warning: Option<Warning>,
-    pub warnings: BTreeMap<WarningId, InvocationWarning>,
     pub records: BTreeMap<RecordId, Record>,
     pub actions: BTreeMap<PersonId, MemoryAction>,
 }
@@ -345,7 +318,6 @@ pub(crate) struct PendingInvocation {
     at: SimTime,
     updates: Vec<(PersonId, Burden)>,
     reached_cost: bool,
-    end_episode: Option<PersonId>,
 }
 
 impl Simulation {
@@ -357,13 +329,8 @@ impl Simulation {
             debug_fixture: true,
         };
         sim.state.invocation = Some(World {
-            rules: Rules::fixture(),
+            control: game_invocation::ControlState::new(Rules::fixture())?,
             history: BTreeMap::new(),
-            people: BTreeMap::new(),
-            active: None,
-            activation: None,
-            warning: None,
-            warnings: BTreeMap::new(),
             records: BTreeMap::new(),
             actions: BTreeMap::new(),
         });
@@ -449,69 +416,87 @@ impl Simulation {
                 .history
                 .insert(person, snapshot);
         }
-        if self
-            .state
-            .invocation
-            .as_ref()
-            .unwrap()
-            .warning
-            .as_ref()
-            .is_some_and(|pending| {
-                !self.state.physical.as_ref().unwrap().actors[&pending.view.actor]
-                    .vitals
-                    .alive
-            })
-        {
-            let w = self.state.invocation.as_mut().unwrap();
-            w.warning = None;
-            w.activation = None;
-        }
         let dead = self
             .state
             .invocation
             .as_ref()
             .unwrap()
-            .active
+            .control
+            .people
+            .keys()
+            .copied()
+            .chain(self.invocation_control_actor())
+            .filter(|p| !self.state.physical.as_ref().unwrap().actors[p].vitals.alive)
+            .collect();
+        let prepared = self
+            .state
+            .invocation
             .as_ref()
-            .map(|a| a.actor)
-            .filter(|actor| {
-                !self.state.physical.as_ref().unwrap().actors[actor]
-                    .vitals
-                    .alive
-            });
-        if let Some(actor) = dead {
-            self.cancel_invocation_action(actor);
-            let w = self.state.invocation.as_mut().unwrap();
-            w.active = None;
-            w.warning = None;
-            if let Some(b) = w.people.get_mut(&actor) {
-                b.uninterrupted = 0;
-            }
-        }
+            .unwrap()
+            .control
+            .prepare_deaths(&dead, self.state.time);
+        self.apply_invocation_control(prepared)?;
         Ok(())
     }
+    fn invocation_control_actor(&self) -> Option<PersonId> {
+        let w = &self.state.invocation.as_ref()?.control;
+        w.active
+            .as_ref()
+            .map(|a| a.actor)
+            .or_else(|| w.warning.as_ref().map(|p| p.view.actor))
+            .or_else(|| w.activation.as_ref().map(|p| p.actor))
+    }
+    fn invocation_admission(&self, actor: PersonId) -> game_invocation::AdmissionFacts {
+        let lineage = self.state.lineage.as_ref().unwrap();
+        let body = &self.state.physical.as_ref().unwrap().actors[&actor];
+        game_invocation::AdmissionFacts {
+            actor,
+            now: self.state.time,
+            current: lineage.current(),
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            independent: self.independent(actor),
+            learning: lineage
+                .invocation_learning
+                .get(&actor)
+                .copied()
+                .unwrap_or(0),
+            required_learning: lineage.rules.invocation_access_threshold,
+            fatigue: body.vitals.fatigue,
+            fatigue_limit: self.state.physical.as_ref().unwrap().rules.fatigue_limit,
+            archived: self
+                .state
+                .invocation
+                .as_ref()
+                .unwrap()
+                .history
+                .keys()
+                .copied()
+                .collect(),
+        }
+    }
     fn invocation_ready(&self, actor: PersonId) -> bool {
-        self.state.lineage.as_ref().is_some_and(|lineage| {
-            lineage.current() == Some(actor)
-                && lineage
-                    .invocation_learning
-                    .get(&actor)
-                    .copied()
-                    .unwrap_or(0)
-                    >= lineage.rules.invocation_access_threshold
-        }) && self.independent(actor)
+        self.state
+            .lineage
+            .as_ref()
+            .is_some_and(|lineage| lineage.current() == Some(actor))
             && self
                 .state
                 .physical
                 .as_ref()
-                .is_some_and(|w| w.actors[&actor].vitals.alive)
+                .is_some_and(|w| w.actors.contains_key(&actor))
+            && self
+                .state
+                .invocation
+                .as_ref()
+                .is_some_and(|w| w.control.ready(actor, &self.invocation_admission(actor)))
     }
     pub(crate) fn past_life_controls_actor(&self, actor: PersonId) -> bool {
         let episode = self
             .state
             .invocation
             .as_ref()
-            .and_then(|w| w.active.as_ref())
+            .and_then(|w| w.control.active.as_ref())
             .and_then(|a| a.episode.as_ref());
         let alive = self
             .state
@@ -524,452 +509,255 @@ impl Simulation {
         self.state
             .invocation
             .as_ref()?
+            .control
             .warning
             .as_ref()
             .map(|w| w.view.id)
     }
-    fn required_bands(
-        &self,
-        lives: &BTreeSet<PersonId>,
-        burden: &Burden,
-        next_loss: u64,
-    ) -> Result<Vec<(InvocationCost, u8, bool)>, Error> {
-        Ok(game_invocation::required_bands(
-            &self.state.invocation.as_ref().unwrap().rules,
-            lives.len(),
-            burden,
-            next_loss,
-        )
-        .into_iter()
-        .map(|band| (band.cost, band.severity, band.permanent))
-        .collect())
-    }
-    fn warning_spec(
-        &self,
-        actor: PersonId,
-        lives: &BTreeSet<PersonId>,
-        cost: InvocationCost,
-        band: u8,
-        permanent: bool,
-    ) -> Result<InvocationWarning, Error> {
-        let r = &self.state.invocation.as_ref().unwrap().rules;
-        let effect = game_invocation::cost_effect(
-            r,
-            lives.len(),
-            game_invocation::CostRequirement {
-                cost,
-                severity: band,
-                permanent,
-            },
-        )?;
-        let fatigue = effect.fatigue_per_mille;
-        let harm = effect.health_harm_per_mille;
-        let identity = effect.identity_skill_penalty;
-        let lifespan = effect.lifespan_loss.0;
-        Ok(InvocationWarning {id:WarningId(0),actor,lives:lives.clone(),cost,severity:band,activation_burden:0,instant_fatigue:0,fatigue_per_mille:fatigue,health_harm_per_mille:harm,identity_skill_penalty:identity,emotion_disruption:if cost==InvocationCost::Emotional {u16::from(band)*100}else{0},lifespan_loss:SimDuration(lifespan),control_loss_duration:if cost==InvocationCost::LossOfControl {r.loss_duration}else{SimDuration(0)},permanent,description:match cost {InvocationCost::Strain=>"Invocation adds the shown fatigue and injury rates while these lives remain active; ordinary rest can recover strain.".into(),InvocationCost::Emotional=>"Emotional interference changes judgment and impulsiveness; it recovers as burden falls.".into(),InvocationCost::Identity if !permanent=>"Temporary identity interference reduces effective mastery until burden recovers.".into(),InvocationCost::Identity=>"Very protracted exposure permanently impairs this person's identity and effective capabilities. A successor does not inherit this direct penalty.".into(),InvocationCost::Lifespan=>"Very protracted exposure permanently reduces this person's remaining lifespan; already advanced age can make the reduction fatal.".into(),InvocationCost::LossOfControl=>"Past lives direct this body for the exact shown duration. Actions and dismissal are unavailable; all ensuing costs, irreversible harm, and death are authorized during it. Pause, observation, and saving remain available.".into()}})
-    }
-    fn activation_charge(
-        &self,
-        actor: PersonId,
-        lives: &BTreeSet<PersonId>,
-    ) -> Result<(u64, u64), Error> {
-        let w = self.state.invocation.as_ref().unwrap();
-        let before = w.people.get(&actor).cloned().unwrap_or_default();
-        let charge = game_invocation::activation_charge(&w.rules, &before, lives.len())?;
-        let burden = charge.burden;
-        let fatigue = charge.fatigue;
-        if self.state.physical.as_ref().unwrap().actors[&actor]
-            .vitals
-            .fatigue
-            .checked_add(fatigue)
-            .is_none_or(|v| v > self.state.physical.as_ref().unwrap().rules.fatigue_limit)
-        {
-            return Err(Error::Unavailable);
-        }
-        Ok((burden, fatigue))
-    }
-    fn prepare_invocation_warning(
-        &mut self,
-        activation: Option<BTreeSet<PersonId>>,
-    ) -> Result<(), Error> {
-        if self.state.invocation.as_ref().unwrap().warning.is_some() {
+    fn reconcile_invocation_control(&mut self) -> Result<(), Error> {
+        let Some(actor) = self.invocation_control_actor() else {
             return Ok(());
-        }
-        if let Some(lives) = activation {
-            self.state
-                .invocation
-                .as_mut()
-                .unwrap()
-                .activation
-                .get_or_insert(Activation {
-                    actor: self.state.ruler,
-                    lives,
-                    accepted: BTreeMap::new(),
-                });
-        }
-        let w = self.state.invocation.as_ref().unwrap();
-        let planned = w.activation.clone();
-        let (actor, lives, accepted, next_loss) = if let Some(plan) = &planned {
-            (
-                plan.actor,
-                plan.lives.clone(),
-                plan.accepted.clone(),
-                w.rules.loss_threshold,
-            )
-        } else {
-            let Some(a) = &w.active else {
-                return Ok(());
-            };
-            if a.episode.as_ref().is_some_and(|e| self.state.time < e.ends) {
-                return Ok(());
-            }
-            (
-                a.actor,
-                a.lives.clone(),
-                a.accepted.clone(),
-                a.next_loss_burden,
-            )
         };
-        let mut b = w.people.get(&actor).cloned().unwrap_or_default();
-        if planned.is_some() {
-            b.burden = b
-                .burden
-                .checked_add(self.activation_charge(actor, &lives)?.0)
-                .ok_or(Error::Overflow)?;
-        }
-        let upfront = planned.is_some() && !accepted.contains_key(&InvocationCost::Strain);
-        let next = game_invocation::next_warning(
-            &w.rules,
-            lives.len(),
-            &b,
-            next_loss,
-            &accepted,
-            planned.is_some(),
-            false,
-        )
-        .map(|requirement| {
-            (
-                requirement.cost,
-                requirement.severity,
-                requirement.permanent,
-            )
-        });
-        if let Some((cost, band, permanent)) = next {
-            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-            self.ensure_event_capacity(1)?;
-            let mut view = self.warning_spec(actor, &lives, cost, band, permanent)?;
-            if upfront {
-                let (burden, fatigue) = self.activation_charge(actor, &lives)?;
-                view.activation_burden = burden;
-                view.instant_fatigue = fatigue;
-                view.description="Activation pays the shown fatigue and adds persistent burden before any borrowed benefit begins. Full payment is required; dismissal does not refund it.".into();
-            }
-            view.id = WarningId(allocate(&mut self.state)?);
-            let w = self.state.invocation.as_mut().unwrap();
-            w.warnings.insert(view.id, view.clone());
-            w.warning = Some(Warning {
-                view: view.clone(),
-                activation: planned.map(|p| p.lives),
-            });
-            self.emit(EventKind::InvocationWarningRaised {
-                warning: view.id,
-                actor,
-            });
-        } else if let Some(plan) = planned {
-            self.finalize_invocation_activation(plan)?;
-        }
-        Ok(())
+        let facts = self.invocation_admission(actor);
+        let prepared = self
+            .state
+            .invocation
+            .as_ref()
+            .unwrap()
+            .control
+            .prepare_review(&facts, Some(WarningId(self.state.next_id)))?;
+        self.apply_invocation_control(prepared)
     }
     pub(crate) fn invocation_command(
         &mut self,
         actor: PersonId,
         action: &InvocationAction,
     ) -> Result<(), Error> {
-        let w = self.state.invocation.as_ref().ok_or(Error::Unavailable)?;
-        if self.past_life_controls_actor(actor)
-            || !self
+        use game_invocation::ControlAction;
+        let control = match action {
+            InvocationAction::Activate { lives } => Some(ControlAction::Activate {
+                lives: lives.clone(),
+            }),
+            InvocationAction::Dismiss => Some(ControlAction::Dismiss),
+            InvocationAction::AcceptWarning { warning } => {
+                Some(ControlAction::AcceptWarning { warning: *warning })
+            }
+            _ => None,
+        };
+        if let Some(action) = control {
+            let w = self.state.invocation.as_ref().ok_or(Error::Unavailable)?;
+            if !self
                 .state
                 .physical
                 .as_ref()
                 .unwrap()
                 .actors
-                .get(&actor)
-                .is_some_and(|a| a.vitals.alive && a.vitals.health > 0)
+                .contains_key(&actor)
+            {
+                return Err(Error::Unavailable);
+            }
+            let facts = self.invocation_admission(actor);
+            let prepared = w.control.prepare_action(
+                actor,
+                &action,
+                &facts,
+                Some(WarningId(self.state.next_id)),
+            )?;
+            self.apply_invocation_control(prepared)
+        } else {
+            if self.past_life_controls_actor(actor)
+                || !self
+                    .state
+                    .physical
+                    .as_ref()
+                    .unwrap()
+                    .actors
+                    .get(&actor)
+                    .is_some_and(|b| b.vitals.alive && b.vitals.health > 0)
+            {
+                return Err(Error::Unavailable);
+            }
+            self.ensure_event_capacity(8)?;
+            self.state.next_id.checked_add(4).ok_or(Error::Overflow)?;
+            self.start_memory_action(actor, action)
+        }
+    }
+    /// Checks both owner plans before committing cost/control records. Physical
+    /// charges, action cleanup, age/death and events remain owner effects here.
+    fn apply_invocation_control(
+        &mut self,
+        prepared: game_invocation::PreparedControl,
+    ) -> Result<(), Error> {
+        use game_invocation::ControlEffect;
+        if prepared.at() != self.state.time
+            || prepared
+                .admission()
+                .is_some_and(|facts| self.invocation_admission(facts.actor) != *facts)
         {
             return Err(Error::Unavailable);
         }
-        self.ensure_event_capacity(8)?;
-        self.state.next_id.checked_add(4).ok_or(Error::Overflow)?;
-        match action {
-            InvocationAction::Activate { lives } => {
-                if !self.invocation_ready(actor)
-                    || actor != self.state.ruler
-                    || lives.is_empty()
-                    || lives.len() > 8
-                    || lives.iter().any(|id| !w.history.contains_key(id))
-                    || w.warning.is_some()
-                    || w.active.as_ref().is_some_and(|a| a.lives == *lives)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.activation_charge(actor, lives)?;
-                self.prepare_invocation_warning(Some(lives.clone()))?;
+        prepared.check(
+            &self
+                .state
+                .invocation
+                .as_ref()
+                .ok_or(Error::Unavailable)?
+                .control,
+        )?;
+        let warning = prepared.warning_id();
+        if let Some(id) = warning {
+            if id.0 != self.state.next_id {
+                return Err(Error::Unavailable);
             }
-            InvocationAction::Dismiss => {
-                if !w.active.as_ref().is_some_and(|a| a.actor == actor)
-                    && !w.warning.as_ref().is_some_and(|a| a.view.actor == actor)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.cancel_recollection_actions(actor);
-                self.dismiss_recalled_route(actor);
-                let w = self.state.invocation.as_mut().unwrap();
-                w.active = None;
-                w.activation = None;
-                w.warning = None;
-                if let Some(b) = w.people.get_mut(&actor) {
-                    b.uninterrupted = 0;
-                }
-                self.emit(EventKind::InvocationDismissed { actor });
+            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+        }
+        if prepared
+            .effects
+            .iter()
+            .any(|e| matches!(e, ControlEffect::LifespanChanged { .. }))
+        {
+            self.state.next_id.checked_add(4).ok_or(Error::Overflow)?;
+        }
+        self.ensure_event_capacity(
+            prepared.effects.len()
+                + if prepared.effects.iter().any(|e| {
+                    matches!(
+                        e,
+                        ControlEffect::LifespanChanged { .. }
+                            | ControlEffect::ControlChanged {
+                                controlled: false,
+                                ..
+                            }
+                    )
+                }) {
+                    8
+                } else {
+                    0
+                },
+        )?;
+        for effect in &prepared.effects {
+            if let ControlEffect::DeathCleanup { actor } = effect
+                && self.state.physical.as_ref().unwrap().actors[actor]
+                    .vitals
+                    .alive
+            {
+                return Err(Error::Unavailable);
             }
-            InvocationAction::AcceptWarning { warning } => {
-                let pending = w
-                    .warning
+        }
+        for effect in &prepared.effects {
+            if let ControlEffect::FatigueCharge { actor, quantity } = effect {
+                let body = self
+                    .state
+                    .physical
                     .as_ref()
-                    .filter(|p| p.view.id == *warning && p.view.actor == actor)
-                    .cloned()
+                    .unwrap()
+                    .actors
+                    .get(actor)
                     .ok_or(Error::Unavailable)?;
-                if pending.view.cost == InvocationCost::LossOfControl {
-                    self.state
-                        .time
-                        .0
-                        .checked_add(w.rules.loss_duration.0)
-                        .ok_or(Error::Overflow)?;
-                    w.people
-                        .get(&actor)
-                        .cloned()
-                        .unwrap_or_default()
-                        .burden
-                        .checked_add(w.rules.loss_gap)
-                        .ok_or(Error::Overflow)?;
+                if body
+                    .vitals
+                    .fatigue
+                    .checked_add(*quantity)
+                    .is_none_or(|n| n > self.state.physical.as_ref().unwrap().rules.fatigue_limit)
+                {
+                    return Err(Error::Unavailable);
                 }
-                if pending.activation.is_some() {
-                    let plan = self
+            }
+        }
+        let effects = prepared.effects.clone();
+        prepared.commit(&mut self.state.invocation.as_mut().unwrap().control)?;
+        if warning.is_some() {
+            self.state.next_id += 1;
+        }
+        let mut lost_control = false;
+        for effect in effects {
+            match effect {
+                ControlEffect::WarningRaised { warning, actor } => {
+                    self.emit(EventKind::InvocationWarningRaised { warning, actor })
+                }
+                ControlEffect::WarningAccepted { warning, actor } => {
+                    self.emit(EventKind::InvocationCostAccepted { warning, actor })
+                }
+                ControlEffect::FatigueCharge { actor, quantity } => {
+                    self.state
+                        .physical
+                        .as_mut()
+                        .unwrap()
+                        .actors
+                        .get_mut(&actor)
+                        .unwrap()
+                        .vitals
+                        .fatigue += quantity
+                }
+                ControlEffect::Started { actor, lives } => {
+                    if self
                         .state
                         .invocation
                         .as_ref()
                         .unwrap()
-                        .activation
-                        .as_ref()
-                        .ok_or(Error::Unavailable)?
-                        .clone();
-                    self.activation_charge(actor, &plan.lives)?;
-                    let requirement = game_invocation::CostRequirement {
-                        cost: pending.view.cost,
-                        severity: pending.view.severity,
-                        permanent: pending.view.permanent,
-                    };
-                    let accepted = game_invocation::accept_requirement(&plan.accepted, requirement);
-                    self.state
-                        .invocation
-                        .as_mut()
-                        .unwrap()
-                        .activation
-                        .as_mut()
-                        .unwrap()
-                        .accepted = accepted;
-                    self.state.invocation.as_mut().unwrap().warning = None;
-                    self.emit(EventKind::InvocationCostAccepted {
-                        warning: *warning,
-                        actor,
-                    });
-                    self.prepare_invocation_warning(None)?;
-                    return Ok(());
-                }
-                self.state.invocation.as_mut().unwrap().warning = None;
-                let active = self
-                    .state
-                    .invocation
-                    .as_ref()
-                    .unwrap()
-                    .active
-                    .as_ref()
-                    .unwrap();
-                let accepted = game_invocation::accept_requirement(
-                    &active.accepted,
-                    game_invocation::CostRequirement {
-                        cost: pending.view.cost,
-                        severity: pending.view.severity,
-                        permanent: pending.view.permanent,
-                    },
-                );
-                self.state
-                    .invocation
-                    .as_mut()
-                    .unwrap()
-                    .active
-                    .as_mut()
-                    .unwrap()
-                    .accepted = accepted;
-                self.refresh_temporary_invocation_costs();
-                self.emit(EventKind::InvocationCostAccepted {
-                    warning: *warning,
-                    actor,
-                });
-                if pending.view.cost == InvocationCost::LossOfControl {
-                    self.begin_control_episode(actor)?;
-                } else {
-                    if pending.view.permanent {
-                        self.apply_accepted_permanent_cost(
-                            actor,
-                            pending.view.cost,
-                            pending.view.severity,
-                        )?;
+                        .actions
+                        .get(&actor)
+                        .is_some_and(|a| match &a.work {
+                            MemoryWork::Write { content, .. }
+                            | MemoryWork::Teach { content, .. } => {
+                                !lives.contains(&Self::memory_life(content))
+                            }
+                            _ => false,
+                        })
+                    {
+                        self.cancel_recollection_actions(actor);
                     }
-                    self.prepare_invocation_warning(None)?;
+                    self.emit(EventKind::InvocationStarted { actor, lives });
                 }
-            }
-            _ => self.start_memory_action(actor, action)?,
-        }
-        Ok(())
-    }
-    fn finalize_invocation_activation(&mut self, plan: Activation) -> Result<(), Error> {
-        let actor = plan.actor;
-        let (charge, fatigue) = self.activation_charge(actor, &plan.lives)?;
-        if self
-            .state
-            .invocation
-            .as_ref()
-            .unwrap()
-            .actions
-            .get(&actor)
-            .is_some_and(|action| match &action.work {
-                MemoryWork::Write { content, .. } | MemoryWork::Teach { content, .. } => {
-                    !plan.lives.contains(&Self::memory_life(content))
+                ControlEffect::Dismissed { actor } => {
+                    self.cancel_recollection_actions(actor);
+                    self.dismiss_recalled_route(actor);
+                    self.emit(EventKind::InvocationDismissed { actor });
                 }
-                _ => false,
-            })
-        {
-            self.cancel_recollection_actions(actor);
-        }
-        let next_loss = self.state.invocation.as_ref().unwrap().rules.loss_threshold;
-        let w = self.state.invocation.as_mut().unwrap();
-        w.people.entry(actor).or_default().burden += charge;
-        w.activation = None;
-        w.active = Some(Active {
-            actor,
-            lives: plan.lives.clone(),
-            started: self.state.time,
-            accepted: plan.accepted.clone(),
-            episode: None,
-            next_loss_burden: next_loss,
-            next_controller: self.state.time,
-            dominant: None,
-        });
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .vitals
-            .fatigue += fatigue;
-        self.emit(EventKind::InvocationStarted {
-            actor,
-            lives: plan.lives,
-        });
-        self.emit(EventKind::InvocationCostApplied {
-            actor,
-            cost: InvocationCost::Strain,
-            severity: 0,
-            permanent: false,
-        });
-        self.refresh_temporary_invocation_costs();
-        for (cost, consent) in &plan.accepted {
-            if consent.permanent > 0 {
-                self.apply_accepted_permanent_cost(actor, *cost, consent.permanent)?;
+                ControlEffect::CostApplied {
+                    actor,
+                    cost,
+                    severity,
+                    permanent,
+                } => self.emit(EventKind::InvocationCostApplied {
+                    actor,
+                    cost,
+                    severity,
+                    permanent,
+                }),
+                ControlEffect::ControlChanged {
+                    actor,
+                    controlled,
+                    until,
+                } => {
+                    // The lifespan owner may already have ended this body.
+                    // Death preempts a controller handoff, without undoing costs.
+                    if self.state.physical.as_ref().unwrap().actors[&actor]
+                        .vitals
+                        .alive
+                    {
+                        self.emit(EventKind::InvocationControlChanged {
+                            actor,
+                            controlled,
+                            until,
+                        });
+                        lost_control |= !controlled;
+                    }
+                }
+                ControlEffect::LifespanChanged { actor } => self.reschedule_invocation_age(actor),
+                ControlEffect::DeathCleanup { actor } => self.cancel_invocation_action(actor),
+                ControlEffect::ControllerSelected { .. } => {}
             }
         }
-        if plan
-            .accepted
-            .get(&InvocationCost::LossOfControl)
-            .is_some_and(|c| c.temporary > 0)
-            && self.state.physical.as_ref().unwrap().actors[&actor]
+        if lost_control {
+            self.review_invocation()?;
+        }
+        if self.invocation_control_actor().is_some_and(|actor| {
+            !self.state.physical.as_ref().unwrap().actors[&actor]
                 .vitals
                 .alive
-        {
-            self.begin_control_episode(actor)?;
-        }
-        Ok(())
-    }
-    fn begin_control_episode(&mut self, actor: PersonId) -> Result<(), Error> {
-        let w = self.state.invocation.as_ref().unwrap();
-        let before = w.people.get(&actor).cloned().unwrap_or_default();
-        let consent = w
-            .active
-            .as_ref()
-            .unwrap()
-            .accepted
-            .get(&InvocationCost::LossOfControl)
-            .cloned()
-            .unwrap_or_default();
-        let started =
-            game_invocation::begin_episode(&w.rules, &before, actor, self.state.time, &consent)?;
-        let ends = started.episode.ends;
-        let active = self
-            .state
-            .invocation
-            .as_mut()
-            .unwrap()
-            .active
-            .as_mut()
-            .unwrap();
-        active.next_loss_burden = started.next_loss_burden;
-        active.episode = Some(started.episode);
-        active.next_controller = started.next_controller;
-        self.emit(EventKind::InvocationControlChanged {
-            actor,
-            controlled: false,
-            until: Some(ends),
-        });
-        self.review_invocation()?;
-        Ok(())
-    }
-    fn apply_accepted_permanent_cost(
-        &mut self,
-        actor: PersonId,
-        cost: InvocationCost,
-        band: u8,
-    ) -> Result<(), Error> {
-        let w = self.state.invocation.as_ref().unwrap();
-        let before = w.people.get(&actor).cloned().unwrap_or_default();
-        let effect = game_invocation::apply_permanent(
-            &w.rules,
-            &before,
-            game_invocation::CostRequirement {
-                cost,
-                severity: band,
-                permanent: true,
-            },
-        )?;
-        let changed = effect.changed;
-        self.state
-            .invocation
-            .as_mut()
-            .unwrap()
-            .people
-            .insert(actor, effect.burden);
-        if changed {
-            self.emit(EventKind::InvocationCostApplied {
-                actor,
-                cost,
-                severity: band,
-                permanent: true,
-            });
-            if cost == InvocationCost::Lifespan {
-                self.reschedule_invocation_age(actor);
-            }
+        }) {
+            self.observe_invocation_deaths()?;
         }
         Ok(())
     }
@@ -998,7 +786,7 @@ impl Simulation {
         self.state
             .invocation
             .as_ref()
-            .and_then(|w| w.people.get(&actor))
+            .and_then(|w| w.control.people.get(&actor))
             .map_or(0, |b| b.lifespan_loss)
     }
 
@@ -1014,8 +802,9 @@ impl Simulation {
         let Some(w) = &self.state.invocation else {
             return (0, 0);
         };
-        let before = w.people.get(&actor).cloned().unwrap_or_default();
+        let before = w.control.people.get(&actor).cloned().unwrap_or_default();
         let active = w
+            .control
             .active
             .as_ref()
             .filter(|a| a.actor == actor)
@@ -1023,9 +812,15 @@ impl Simulation {
         let alive = self.state.physical.as_ref().unwrap().actors[&actor]
             .vitals
             .alive;
-        let rates =
-            game_invocation::body_rates(&w.rules, &before, active, actor, self.state.time, alive)
-                .expect("validated invocation rates");
+        let rates = game_invocation::body_rates(
+            &w.control.rules,
+            &before,
+            active,
+            actor,
+            self.state.time,
+            alive,
+        )
+        .expect("validated invocation rates");
         (rates.fatigue_per_mille, rates.health_harm_per_mille)
     }
     pub(crate) fn evaluate_invocation(&self, next: SimTime) -> Result<PendingInvocation, Error> {
@@ -1037,11 +832,10 @@ impl Simulation {
                 at: next,
                 updates: Vec::new(),
                 reached_cost: false,
-                end_episode: None,
             });
         };
         let mut updates = Vec::new();
-        for (actor, before) in &w.people {
+        for (actor, before) in &w.control.people {
             if !self.state.physical.as_ref().unwrap().actors[actor]
                 .vitals
                 .alive
@@ -1049,12 +843,13 @@ impl Simulation {
                 continue;
             }
             let active = w
+                .control
                 .active
                 .as_ref()
                 .filter(|active| active.actor == *actor)
                 .map(Self::cost_input);
             let advanced = game_invocation::advance_burden(game_invocation::AdvanceInput {
-                rules: &w.rules,
+                rules: &w.control.rules,
                 before,
                 actor: *actor,
                 now: self.state.time,
@@ -1065,12 +860,6 @@ impl Simulation {
             let b = advanced.burden;
             updates.push((*actor, b));
         }
-        let end_episode = w
-            .active
-            .as_ref()
-            .and_then(|a| a.episode.as_ref())
-            .filter(|e| next >= e.ends)
-            .map(|e| e.actor);
         self.state
             .next_id
             .checked_add(self.invocation_allocation_bound(next))
@@ -1080,7 +869,6 @@ impl Simulation {
             at: next,
             updates,
             reached_cost: true,
-            end_episode,
         })
     }
     pub(crate) fn invocation_allocation_bound(&self, next: SimTime) -> u64 {
@@ -1097,8 +885,9 @@ impl Simulation {
                 _ => 0,
             })
             .sum::<u64>();
-        let warning = u64::from(w.active.is_some() || w.activation.is_some());
+        let warning = u64::from(w.control.active.is_some() || w.control.activation.is_some());
         let controller = if w
+            .control
             .active
             .as_ref()
             .is_some_and(|a| a.episode.is_some() && a.next_controller <= next)
@@ -1119,103 +908,40 @@ impl Simulation {
                 .invocation
                 .as_mut()
                 .unwrap()
+                .control
                 .people
                 .insert(actor, b);
         }
-        self.refresh_temporary_invocation_costs();
-        let active = self.state.invocation.as_ref().unwrap().active.clone();
-        if let Some(a) = active
-            && self.past_life_controls_actor(a.actor)
-        {
-            let b = self.state.invocation.as_ref().unwrap().people[&a.actor].clone();
-            for (cost, band, permanent) in self.required_bands(&a.lives, &b, a.next_loss_burden)? {
-                if permanent {
-                    self.apply_accepted_permanent_cost(a.actor, cost, band)?;
-                }
-            }
-        }
-        if let Some(actor) = pending.end_episode {
-            if let Some(a) = self
-                .state
-                .invocation
-                .as_mut()
-                .unwrap()
-                .active
-                .as_mut()
-                .filter(|a| a.actor == actor)
-            {
-                a.episode = None;
-                a.dominant = None;
-            }
-            self.emit(EventKind::InvocationControlChanged {
-                actor,
-                controlled: true,
-                until: None,
-            });
+        if pending.reached_cost {
+            self.reconcile_invocation_control()?;
         }
         self.finish_memory_actions()?;
         self.observe_invocation_deaths()?;
-        if pending.reached_cost {
-            self.prepare_invocation_warning(None)?;
-        }
         Ok(())
-    }
-    fn refresh_temporary_invocation_costs(&mut self) {
-        let Some(w) = &self.state.invocation else {
-            return;
-        };
-        let Some(active) = w.active.clone() else {
-            return;
-        };
-        let before = w.people.get(&active.actor).cloned().unwrap_or_default();
-        let burden = game_invocation::refresh_temporary(
-            &w.rules,
-            &before,
-            &active.accepted,
-            self.past_life_controls_actor(active.actor),
-        );
-        self.state
-            .invocation
-            .as_mut()
-            .unwrap()
-            .people
-            .insert(active.actor, burden);
     }
     fn next_cost_after(&self, actor: PersonId, lives: &BTreeSet<PersonId>) -> Option<SimDuration> {
         let w = self.state.invocation.as_ref()?;
-        let before = w.people.get(&actor).cloned().unwrap_or_default();
+        let before = w.control.people.get(&actor).cloned().unwrap_or_default();
         let next_loss = w
+            .control
             .active
             .as_ref()
             .filter(|a| a.actor == actor)
-            .map_or(w.rules.loss_threshold, |a| a.next_loss_burden);
-        game_invocation::next_cost_after(&w.rules, &before, lives.len(), next_loss)
+            .map_or(w.control.rules.loss_threshold, |a| a.next_loss_burden);
+        game_invocation::next_cost_after(&w.control.rules, &before, lives.len(), next_loss)
     }
     pub(crate) fn invocation_boundary(&self, limit: SimTime) -> SimTime {
         let Some(w) = &self.state.invocation else {
             return limit;
         };
-        let mut next = limit;
-        for (actor, before) in &w.people {
-            if !w.active.as_ref().is_some_and(|a| a.actor == *actor)
-                && self.state.physical.as_ref().unwrap().actors[actor]
-                    .vitals
-                    .alive
-            {
-                next = game_invocation::recovery_boundary(&w.rules, before, self.state.time, next);
-            }
-        }
-        if let Some(active) = &w.active {
-            let before = w.people.get(&active.actor).cloned().unwrap_or_default();
-            next = game_invocation::active_boundary(
-                &w.rules,
-                &before,
-                Self::cost_input(active),
-                self.state.time,
-                active.next_controller,
-                next,
-            );
-        }
+        let alive = w
+            .control
+            .people
+            .keys()
+            .copied()
+            .filter(|p| self.state.physical.as_ref().unwrap().actors[p].vitals.alive)
+            .collect();
+        let mut next = w.control.boundary(self.state.time, limit, &alive);
         for action in w.actions.values() {
             if action.completes > self.state.time {
                 next = next.min(action.completes);
@@ -1228,7 +954,7 @@ impl Simulation {
         let Some(w) = &self.state.invocation else {
             return 0;
         };
-        let Some(a) = w.active.as_ref().filter(|a| a.actor == actor) else {
+        let Some(a) = w.control.active.as_ref().filter(|a| a.actor == actor) else {
             return 0;
         };
         let levels: Vec<_> = a
@@ -1265,13 +991,14 @@ impl Simulation {
         let Some(w) = &self.state.invocation else {
             return own;
         };
-        let state = w.people.get(&actor).cloned().unwrap_or_default();
+        let state = w.control.people.get(&actor).cloned().unwrap_or_default();
         let bonus = self
             .state
             .skills
             .as_ref()
             .map_or(10, |s| s.rules.work_bonus_per_level);
         let borrowing = w
+            .control
             .active
             .as_ref()
             .is_some_and(|active| active.actor == actor);
@@ -1292,7 +1019,7 @@ impl Simulation {
         let Some(w) = &self.state.invocation else {
             return Ok(base);
         };
-        let state = w.people.get(&actor).cloned().unwrap_or_default();
+        let state = w.control.people.get(&actor).cloned().unwrap_or_default();
         let own = self.own_skill_level(actor, Skill::Combat);
         let borrowed = self.borrowed_skill_level(actor, Skill::Combat);
         let bonus = self
@@ -1313,7 +1040,7 @@ impl Simulation {
         actor: PersonId,
     ) -> Option<BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>> {
         let w = self.state.invocation.as_ref()?;
-        let a = w.active.as_ref().filter(|a| a.actor == actor)?;
+        let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
         let mut routes = self
             .state
             .decisions
@@ -1352,10 +1079,10 @@ impl Simulation {
     }
     pub(crate) fn invocation_personality(&self, actor: PersonId) -> Option<decisions::Personality> {
         let w = self.state.invocation.as_ref()?;
-        let a = w.active.as_ref().filter(|a| a.actor == actor)?;
+        let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
         let life = a.dominant.or_else(|| a.lives.iter().next().copied())?;
         let mut p = w.history[&life].mind.personality.clone();
-        let b = w.people.get(&actor).cloned().unwrap_or_default();
+        let b = w.control.people.get(&actor).cloned().unwrap_or_default();
         p.discipline = p.discipline.saturating_sub(
             b.temporary_identity
                 .saturating_add(b.permanent_identity)
@@ -1372,7 +1099,7 @@ impl Simulation {
         self.state
             .invocation
             .as_ref()
-            .and_then(|w| w.people.get(&actor))
+            .and_then(|w| w.control.people.get(&actor))
             .map_or(0, |b| {
                 i64::from(b.emotional_disruption)
                     + i64::from(b.temporary_identity)
@@ -1380,44 +1107,50 @@ impl Simulation {
             })
     }
     pub(crate) fn review_invocation(&mut self) -> Result<(), Error> {
-        let Some(a) = self
+        use game_invocation::ControlEffect;
+        let Some(actor) = self
             .state
             .invocation
             .as_ref()
-            .and_then(|w| w.active.as_ref())
-            .cloned()
+            .and_then(|w| w.control.active.as_ref())
+            .map(|a| a.actor)
         else {
             return Ok(());
         };
-        if !self.past_life_controls_actor(a.actor) || a.next_controller > self.state.time {
-            return Ok(());
-        }
-        let w = self.state.invocation.as_ref().unwrap();
-        let episode = a.episode.as_ref().unwrap();
-        let epoch = (self.state.time.0 - episode.starts.0) / w.rules.controller_quantum.0;
-        let index = epoch as usize % a.lives.len();
-        let life = *a.lives.iter().nth(index).unwrap();
-        let mind = w.history[&life].mind.clone();
-        let quantum = w.rules.controller_quantum.0;
-        let next = SimTime(
-            self.state
-                .time
-                .0
-                .checked_add(quantum)
-                .ok_or(Error::Overflow)?
-                .min(episode.ends.0),
-        );
-        let changed = a.dominant.is_some_and(|old| old != life);
-        let active = self
+        let alive = self.state.physical.as_ref().unwrap().actors[&actor]
+            .vitals
+            .alive;
+        let Some(prepared) = self
             .state
             .invocation
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .active
-            .as_mut()
+            .control
+            .prepare_controller(self.state.time, alive)?
+        else {
+            return Ok(());
+        };
+        let (life, changed) = prepared
+            .effects
+            .iter()
+            .find_map(|e| match e {
+                ControlEffect::ControllerSelected { life, changed, .. } => Some((*life, *changed)),
+                _ => None,
+            })
             .unwrap();
-        active.dominant = Some(life);
-        active.next_controller = next;
+        prepared.commit(&mut self.state.invocation.as_mut().unwrap().control)?;
+        let a = self
+            .state
+            .invocation
+            .as_ref()
+            .unwrap()
+            .control
+            .active
+            .clone()
+            .unwrap();
+        let mind = self.state.invocation.as_ref().unwrap().history[&life]
+            .mind
+            .clone();
         if self.in_combat(a.actor) {
             return Ok(());
         }
@@ -1621,11 +1354,13 @@ impl Simulation {
         Ok(InvocationPreview {
             burden_rate: (lives.len() as u64).pow(2),
             activation_burden: w
+                .control
                 .rules
                 .activation_burden
                 .checked_mul((lives.len() as u64).pow(2))
                 .ok_or(Error::Overflow)?,
             activation_fatigue: w
+                .control
                 .rules
                 .activation_fatigue
                 .checked_mul((lives.len() as u64).pow(2))
@@ -1638,8 +1373,8 @@ impl Simulation {
     pub(crate) fn invocation_view(&self) -> Option<InvocationView> {
         let w = self.state.invocation.as_ref()?;
         let actor = self.state.ruler;
-        let b = w.people.get(&actor).cloned().unwrap_or_default();
-        let active = w.active.as_ref().filter(|a| a.actor == actor);
+        let b = w.control.people.get(&actor).cloned().unwrap_or_default();
+        let active = w.control.active.as_ref().filter(|a| a.actor == actor);
         let lives = active.map_or_else(BTreeSet::new, |a| a.lives.clone());
         let memories = lives
             .iter()
@@ -1666,6 +1401,7 @@ impl Simulation {
             .collect();
         let records=w.records.values().filter_map(|record|{let inventory=self.state.inventories.get(&record.inventory)?;let local=&self.state.people[self.person_index[&actor]].location;let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
         let preview_lives = w
+            .control
             .activation
             .as_ref()
             .map_or_else(|| lives.clone(), |plan| plan.lives.clone());
@@ -1697,7 +1433,7 @@ impl Simulation {
                     .vitals
                     .alive,
             loss_ends: active.and_then(|a| a.episode.as_ref()).map(|e| e.ends),
-            warning: w.warning.as_ref().map(|p| p.view.clone()),
+            warning: w.control.warning.as_ref().map(|p| p.view.clone()),
             preview,
             memories,
             records,
@@ -1711,22 +1447,25 @@ impl Simulation {
             return Vec::new();
         }
         let mut actions = Vec::new();
-        if let Some(warning) = &w.warning
+        if let Some(warning) = &w.control.warning
             && warning.view.actor == actor
         {
             actions.push(InvocationAction::AcceptWarning {
                 warning: warning.view.id,
             });
         }
-        if w.active.as_ref().is_some_and(|a| a.actor == actor)
-            || w.warning.as_ref().is_some_and(|a| a.view.actor == actor)
+        if w.control.active.as_ref().is_some_and(|a| a.actor == actor)
+            || w.control
+                .warning
+                .as_ref()
+                .is_some_and(|a| a.view.actor == actor)
         {
             actions.push(InvocationAction::Dismiss);
         }
-        if self.invocation_ready(actor) && w.warning.is_none() {
+        if self.invocation_ready(actor) && w.control.warning.is_none() {
             for life in w.history.keys().rev().take(32) {
                 let lives = BTreeSet::from([*life]);
-                if w.active.as_ref().is_none_or(|a| a.lives != lives) {
+                if w.control.active.as_ref().is_none_or(|a| a.lives != lives) {
                     actions.push(InvocationAction::Activate { lives });
                 }
             }
@@ -1784,6 +1523,7 @@ impl Simulation {
     ) -> Result<RecordedMemory, Error> {
         let w = self.state.invocation.as_ref().ok_or(Error::Unavailable)?;
         if !w
+            .control
             .active
             .as_ref()
             .is_some_and(|a| a.actor == actor && a.lives.contains(&life))
@@ -1829,7 +1569,14 @@ impl Simulation {
         action: &InvocationAction,
     ) -> Result<(), Error> {
         let area = self.memory_area(actor)?;
-        let r = self.state.invocation.as_ref().unwrap().rules.clone();
+        let r = self
+            .state
+            .invocation
+            .as_ref()
+            .unwrap()
+            .control
+            .rules
+            .clone();
         let (work, duration) = match action {
             InvocationAction::RecordMemory {
                 life,
@@ -1861,6 +1608,7 @@ impl Simulation {
             } => {
                 let w = self.state.invocation.as_ref().unwrap();
                 if !w
+                    .control
                     .active
                     .as_ref()
                     .is_some_and(|a| a.actor == actor && a.lives.contains(life))
@@ -2194,6 +1942,7 @@ impl Simulation {
                         .invocation
                         .as_ref()
                         .unwrap()
+                        .control
                         .active
                         .as_ref()
                         .is_some_and(|a| a.actor == actor && a.lives.contains(&life))
@@ -2270,6 +2019,7 @@ impl Simulation {
                         .invocation
                         .as_ref()
                         .unwrap()
+                        .control
                         .active
                         .as_ref()
                         .is_some_and(|a| a.actor == actor && a.lives.contains(&life))
@@ -2539,6 +2289,7 @@ mod tests {
                 .invocation
                 .as_ref()
                 .unwrap()
+                .control
                 .warning
                 .as_ref()
                 .unwrap()
@@ -2557,6 +2308,7 @@ mod tests {
                 .invocation
                 .as_ref()
                 .unwrap()
+                .control
                 .warning
                 .as_ref()
                 .expect("new cost must stop time")
@@ -2603,13 +2355,22 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(sim.state.invocation.as_ref().unwrap().active.is_none());
+        assert!(
+            sim.state
+                .invocation
+                .as_ref()
+                .unwrap()
+                .control
+                .active
+                .is_none()
+        );
         assert_eq!(sim.borrowed_skill_level(actor, Skill::Craft), 0);
         let warning = sim
             .state
             .invocation
             .as_ref()
             .unwrap()
+            .control
             .warning
             .as_ref()
             .unwrap()
@@ -2624,7 +2385,7 @@ mod tests {
         )
         .unwrap();
         assert!(sim.borrowed_skill_level(actor, Skill::Craft) > 0);
-        let burden = sim.state.invocation.as_ref().unwrap().people[&actor].burden;
+        let burden = sim.state.invocation.as_ref().unwrap().control.people[&actor].burden;
         assert_eq!(
             sim.state.physical.as_ref().unwrap().actors[&actor]
                 .vitals
@@ -2633,7 +2394,7 @@ mod tests {
         );
         act(&mut sim, InvocationAction::Dismiss).unwrap();
         assert_eq!(
-            sim.state.invocation.as_ref().unwrap().people[&actor].burden,
+            sim.state.invocation.as_ref().unwrap().control.people[&actor].burden,
             burden
         );
     }
@@ -2730,6 +2491,7 @@ mod tests {
             .invocation
             .as_ref()
             .unwrap()
+            .control
             .warning
             .as_ref()
             .unwrap()
@@ -2737,7 +2499,7 @@ mod tests {
             .clone();
         assert_eq!(warning.cost, InvocationCost::Strain);
         assert_eq!(
-            whole.state.invocation.as_ref().unwrap().people[&actor].emotional_disruption,
+            whole.state.invocation.as_ref().unwrap().control.people[&actor].emotional_disruption,
             0
         );
         for sim in [&mut whole, &mut sliced] {
@@ -2847,6 +2609,7 @@ mod tests {
             .invocation
             .as_ref()
             .unwrap()
+            .control
             .active
             .as_ref()
             .unwrap()
@@ -2877,8 +2640,10 @@ mod tests {
         }
         assert_eq!(sim.state, restored.state);
         assert!(!sim.past_life_controls_actor(actor));
-        assert!(sim.state.invocation.as_ref().unwrap().people[&actor].permanent_identity > 0);
-        assert!(sim.state.invocation.as_ref().unwrap().people[&actor].lifespan_loss > 0);
+        assert!(
+            sim.state.invocation.as_ref().unwrap().control.people[&actor].permanent_identity > 0
+        );
+        assert!(sim.state.invocation.as_ref().unwrap().control.people[&actor].lifespan_loss > 0);
     }
     #[test]
     fn death_during_loss_is_not_undone_and_direct_penalties_do_not_bind_a_successor() {
@@ -2891,7 +2656,15 @@ mod tests {
         let damage = sim.state.physical.as_ref().unwrap().rules.max_health;
         sim.debug_injure(actor, damage).unwrap();
         sim.observe_invocation_deaths().unwrap();
-        assert!(sim.state.invocation.as_ref().unwrap().active.is_none());
+        assert!(
+            sim.state
+                .invocation
+                .as_ref()
+                .unwrap()
+                .control
+                .active
+                .is_none()
+        );
         assert!(
             !sim.state.physical.as_ref().unwrap().actors[&actor]
                 .vitals
@@ -2912,6 +2685,7 @@ mod tests {
                     .invocation
                     .as_ref()
                     .unwrap()
+                    .control
                     .people
                     .get(&sim.state.ruler)
                     .map_or(0, |b| b.permanent_identity),

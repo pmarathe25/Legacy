@@ -81,6 +81,7 @@ impl Simulation {
         sim.initialize_realm(realm::Rules::default())?;
         sim.initialize_armies(armies::Rules::default())?;
         sim.state.ecology = Some(ecology::World {
+            observed_areas: BTreeMap::new(),
             rules: config.ecology.clone(),
             resources: BTreeMap::new(),
             plots: BTreeMap::new(),
@@ -186,7 +187,7 @@ impl Simulation {
                 .unwrap();
             sim.debug_agreement_action(creditor, AgreementAction::Accept { agreement })?;
         }
-        sim.update_property_events();
+        sim.update_property_events()?;
         sim.observe_agreement_events();
         sim.observe_ecology();
         sim.observe_health();

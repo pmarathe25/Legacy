@@ -1782,15 +1782,6 @@ impl Simulation {
             },
         }
     }
-    pub(crate) fn health_spring_candidate(
-        &self,
-        actor: PersonId,
-        local_only: bool,
-    ) -> Option<Command> {
-        let facts = self.water_planning_data(actor)?;
-        game_health::plan_spring(&facts.input(self.state.time), local_only)
-            .map(Self::health_intent_command)
-    }
     pub(crate) fn health_candidate(&self, actor: PersonId) -> Option<Command> {
         let world = self.state.health.as_ref()?;
         let facts = self.water_planning_data(actor)?;
@@ -1807,22 +1798,6 @@ impl Simulation {
         world
             .plan_need(need, &facts.input(self.state.time))
             .map(Self::health_intent_command)
-    }
-    pub(crate) fn health_water_procurement(&self, actor: PersonId) -> Option<Command> {
-        let facts = self.water_planning_data(actor)?;
-        game_health::plan_water_procurement(
-            &self.state.health.as_ref()?.rules,
-            &facts.input(self.state.time),
-        )
-        .map(Self::health_intent_command)
-    }
-    pub(crate) fn plan_water_for_delivery(&self, actor: PersonId) -> Option<Command> {
-        let facts = self.water_planning_data(actor)?;
-        game_health::plan_water_delivery(
-            &self.state.health.as_ref()?.rules,
-            &facts.input(self.state.time),
-        )
-        .map(Self::health_intent_command)
     }
     pub(crate) fn health_actor_busy(&self, actor: PersonId) -> bool {
         self.state
@@ -2292,7 +2267,7 @@ impl Simulation {
     fn health_mind(&self, actor: PersonId) -> Option<&decisions::Mind> {
         if self.past_life_controls_actor(actor) {
             let w = self.state.invocation.as_ref()?;
-            let active = w.active.as_ref()?;
+            let active = w.control.active.as_ref()?;
             let life = active.dominant?;
             return Some(&w.history.get(&life)?.mind);
         }

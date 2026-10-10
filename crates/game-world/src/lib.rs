@@ -16,11 +16,13 @@ pub mod environment;
 mod equipment;
 pub mod force;
 pub mod genetics;
+mod guardian_delivery;
 pub mod health;
 mod host;
 pub mod institutions;
 pub mod invocation;
 pub mod lineage;
+mod logistics;
 pub mod missions;
 mod persistence;
 pub mod physical;
@@ -1620,7 +1622,7 @@ impl Simulation {
                     }) {
                         force_completions.push(actor);
                     } else {
-                        self.complete_physical(actor);
+                        self.complete_physical(actor)?;
                     }
                 }
                 Due::Spoil(inventory) => {
@@ -1673,7 +1675,7 @@ impl Simulation {
         let closing_equipment = self.equipment_availability();
         for actor in production_completions {
             if closing_equipment.get(&actor).copied().unwrap_or(false) {
-                self.complete_physical(actor);
+                self.complete_physical(actor)?;
             } else {
                 self.interrupt_actor_activity(actor);
                 self.emit(EventKind::Interrupted { actor });
@@ -1694,7 +1696,7 @@ impl Simulation {
                         | Activity::RealmTalk { .. }
                 )
             }) {
-                self.complete_physical(actor);
+                self.complete_physical(actor)?;
             }
         }
         self.commit_skills(skill_output);
@@ -1746,6 +1748,7 @@ impl Simulation {
         }
         self.observe_invocation_deaths()?;
         self.update_force();
+        self.reconcile_guardian_deliveries()?;
         self.reconcile_missions()?;
         self.reconcile_armies()?;
         let phase_started = Instant::now();
@@ -1753,7 +1756,7 @@ impl Simulation {
         self.profile
             .record_phase("commit.update_projects", phase_started);
         let phase_started = Instant::now();
-        self.update_property_events();
+        self.update_property_events()?;
         self.profile
             .record_phase("commit.update_property_events", phase_started);
         let phase_started = Instant::now();
@@ -1877,12 +1880,6 @@ impl Simulation {
             .map(|i| {
                 let source = &self.state.inventories[&i.source];
                 let destination = &self.state.inventories[&i.destination];
-                let actor = &self.state.people[self.person_index[&i.actor]];
-                let area = if let Location::AtArea(a) = actor.location {
-                    Some(a)
-                } else {
-                    None
-                };
                 transactions::Request {
                     actor: i.actor,
                     source: i.source,
@@ -1893,18 +1890,16 @@ impl Simulation {
                         && self.state.physical.as_ref().is_none_or(|w| {
                             w.actors[&i.actor].vitals.alive && w.actors[&i.actor].vitals.health > 0
                         })
-                        && self.has_stock_access(i.actor, source)
+                        && self.can_use(i.actor, source)
                         && (self.has_stock_access(i.actor, destination)
                             || self.agreement_accepts_delivery(i.actor, i.destination, i.quantity)
-                            || self.force_accepts_food_delivery(
+                            || self.guardian_accepts_delivery(
                                 i.actor,
                                 i.source,
                                 i.destination,
                                 i.quantity,
                             ))
-                        && area.is_some()
-                        && area == self.inventory_area(source)
-                        && area == self.inventory_area(destination),
+                        && self.stock_here(i.actor, destination),
                 }
             })
             .collect();
@@ -2026,6 +2021,7 @@ impl Simulation {
             self.relocate_record_transfer(*source, *destination, *quantity);
         }
         let id = EventId(self.state.next_event);
+        self.on_delivery_event(&kind, id);
         self.state.next_event += 1;
         self.state.events.push(Event {
             id,

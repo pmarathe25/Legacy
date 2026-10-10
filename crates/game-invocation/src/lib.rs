@@ -7,3 +7,9 @@ pub use rules::*;
 pub use state::*;
 #[cfg(test)]
 mod tests;
+
+mod control;
+pub use control::*;
+
+#[cfg(test)]
+mod control_tests;

@@ -195,7 +195,8 @@ pub fn observe_death(
     });
     for (id, guardian) in &mut lineage.guardians {
         guardian.assignment = None;
-        guardian.water_provision = None;
+        guardian.provision = None;
+        guardian.requested_delivery = None;
         guardian.target = None;
         guardian.sensed_location = None;
         guardian.sensed_at = now;
@@ -270,47 +271,88 @@ pub struct NeedObservation {
     pub preference: Option<ChildhoodInterest>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProvisionAction {
-    AcquireWater,
-    ReturnToChild,
-    Care { source: InventoryId },
-    Continue,
-}
-
-/// Only fresh contact can start or resolve this intention. Absence preserves
-/// the remembered reason for a trip without revealing the child's current need.
-pub fn review_water_provision(
-    before: Option<&WaterProvision>,
+/// Guardians may preserve a chosen observed need while absent. This describes
+/// only a requirement; logistics and physical consumers own every execution step.
+pub fn review_care_provision(
+    before: Option<&CareProvision>,
     target: PersonId,
     now: SimTime,
     together: bool,
     fresh_need: Option<&NeedObservation>,
-    carried_water: Option<InventoryId>,
-    can_reconsider: bool,
-) -> (Option<WaterProvision>, Option<ProvisionAction>) {
-    let mut next = before.filter(|plan| plan.child == target).cloned();
-    if together && let Some(need) = fresh_need.filter(|need| need.observed_at == now) {
-        next = (need.hydration_urgency > 0).then_some(WaterProvision {
-            child: target,
-            observed_at: now,
-        });
-    }
-    if next.is_none() {
-        return (None, None);
-    }
-    let action = if !can_reconsider {
-        ProvisionAction::Continue
-    } else if let Some(source) = carried_water {
-        if together {
-            ProvisionAction::Care { source }
-        } else {
-            ProvisionAction::ReturnToChild
-        }
-    } else {
-        ProvisionAction::AcquireWater
+    quantity: Quantity,
+) -> Option<CareProvision> {
+    let continuing = before
+        .filter(|provision| {
+            provision.delivery.destination == game_logistics::Destination::Contact(target)
+                && provision.delivery.remaining.0 > 0
+        })
+        .cloned();
+    let Some(need) = fresh_need.filter(|need| together && need.observed_at == now) else {
+        return continuing;
     };
-    (next, Some(action))
+    let good = if need.hydration_urgency > 0 && need.hydration_urgency >= need.urgency {
+        Good::Water
+    } else if need.urgency > 0 {
+        Good::Food
+    } else {
+        return None;
+    };
+    let delivery = continuing
+        .filter(|provision| provision.delivery.requirement.good == good)
+        .map(|provision| provision.delivery)
+        .or_else(|| {
+            game_logistics::Delivery::new(
+                game_logistics::Requirement {
+                    good,
+                    quantity,
+                    source: None,
+                },
+                game_logistics::Destination::Contact(target),
+            )
+            .ok()
+        })?;
+    Some(CareProvision {
+        delivery,
+        observed_at: now,
+    })
+}
+impl World {
+    /// Called only with freshly observed local operator inapplicability.
+    /// Accepted supply requests have their own consumer and are unaffected.
+    pub fn observe_care_unavailable(&mut self, guardian: PersonId) {
+        if let Some(guardian) = self.guardians.get_mut(&guardian) {
+            guardian.provision = None;
+        }
+    }
+    pub fn record_care_receipt(
+        &mut self,
+        guardian: PersonId,
+        target: PersonId,
+        good: Good,
+        quantity: Quantity,
+        sequence: u64,
+    ) -> Result<bool, Error> {
+        let Some(provision) = self
+            .guardians
+            .get_mut(&guardian)
+            .and_then(|guardian| guardian.provision.as_mut())
+        else {
+            return Ok(false);
+        };
+        if provision.delivery.destination != game_logistics::Destination::Contact(target)
+            || provision.delivery.requirement.good != good
+        {
+            return Ok(false);
+        }
+        provision
+            .delivery
+            .delivered(&game_logistics::DeliveryReceipt {
+                destination: provision.delivery.destination,
+                good,
+                quantity,
+                sequence,
+            })
+    }
 }
 #[derive(Clone, Debug)]
 pub struct GuardianInput<'a> {
@@ -322,8 +364,6 @@ pub struct GuardianInput<'a> {
     pub should_rest: bool,
     pub ready: bool,
     pub need: Option<NeedObservation>,
-    pub known_stocks: &'a [StockKnowledge],
-    pub meal_size: Quantity,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuardianAction {
@@ -335,10 +375,6 @@ pub enum GuardianAction {
     },
     Move {
         destination: AreaId,
-    },
-    Care {
-        child: PersonId,
-        source: InventoryId,
     },
     Comfort {
         child: PersonId,
@@ -419,43 +455,10 @@ pub fn guardian_intention(input: GuardianInput<'_>) -> GuardianIntent {
         .need
         .filter(|need| need.location == Location::AtArea(*area) && need.observed_at == input.now)
     {
-        if need.hydration_urgency > 0
-            && need.hydration_urgency >= need.urgency
-            && let Some(water) = input.known_stocks.iter().find(|stock| {
-                stock.good == Good::Water
-                    && stock.area == *area
-                    && stock.accessible
-                    && stock.quantity >= input.meal_size
-            })
-        {
+        if need.hydration_urgency > 0 || need.urgency > 0 {
             return intent(
                 GuardianGoal::Mentoring,
-                "Responding to locally observed thirst with accessible water",
-                Some(GuardianAction::Care {
-                    child: input.target,
-                    source: water.inventory,
-                }),
-            );
-        }
-        if need.urgency > 0 {
-            if let Some(food) = input.known_stocks.iter().find(|stock| {
-                stock.good == Good::Food
-                    && stock.area == *area
-                    && stock.accessible
-                    && stock.quantity >= input.meal_size
-            }) {
-                return intent(
-                    GuardianGoal::Mentoring,
-                    "Observed distress motivates care using food the guardian knows and can access",
-                    Some(GuardianAction::Care {
-                        child: input.target,
-                        source: food.inventory,
-                    }),
-                );
-            }
-            return intent(
-                GuardianGoal::Mentoring,
-                "The child needs food, but no usable known supply is available here",
+                "Observed need motivates provision; actual acquisition and handoff opportunities are required",
                 None,
             );
         }

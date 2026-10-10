@@ -306,6 +306,123 @@ fn reports_take_time_and_transfer_remembered_incidents_without_live_global_updat
 }
 
 #[test]
+fn reporting_listener_occupancy_and_actual_departure_cancel_the_frozen_conversation() {
+    let mut sim = fixture(1);
+    let witness = actor(&sim, 5);
+    let recipient = actor(&sim, 6);
+    let other = actor(&sim, 4);
+    sim.debug_move_actor(recipient, AreaId(3)).unwrap();
+    take(&mut sim, 1_000);
+    let incident = sim.property_view(witness).incidents[0].id;
+    sim.debug_move_actor(witness, AreaId(3)).unwrap();
+    sim.debug_move_actor(other, AreaId(3)).unwrap();
+    sim.advance(SimDuration(180_000)).unwrap();
+    sim.debug_property_action(
+        witness,
+        PropertyAction::ReportIncident {
+            recipient,
+            incident,
+        },
+    )
+    .unwrap();
+    let before = sim.canonical_state().clone();
+    assert_eq!(
+        sim.debug_property_action(
+            other,
+            PropertyAction::ReportIncident {
+                recipient,
+                incident
+            },
+        ),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(sim.canonical_state(), &before);
+    let mut restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    for world in [&mut sim, &mut restored] {
+        world.debug_move_actor(recipient, AreaId(1)).unwrap();
+        assert!(
+            world
+                .canonical_state()
+                .property
+                .as_ref()
+                .unwrap()
+                .reports
+                .is_empty()
+        );
+        assert_eq!(
+            world.canonical_state().physical.as_ref().unwrap().actors[&witness].activity,
+            Activity::Idle
+        );
+        world.advance(MINUTE).unwrap();
+        assert!(world.property_view(recipient).incidents.is_empty());
+        assert!(!world.canonical_state().events.iter().any(|event| {
+            matches!(event.kind, EventKind::IncidentReported { sender, .. } if sender == witness)
+        }));
+        Simulation::load(&world.save().unwrap(), Execution::default()).unwrap();
+    }
+    assert_eq!(sim.canonical_state(), restored.canonical_state());
+}
+
+#[test]
+fn completed_report_preserves_dated_snapshot_across_workers_save_and_minute_review() {
+    let mut sim = fixture(1);
+    let witness = actor(&sim, 5);
+    let recipient = actor(&sim, 6);
+    sim.debug_move_actor(recipient, AreaId(3)).unwrap();
+    take(&mut sim, 1_000);
+    let incident = sim.property_view(witness).incidents[0].id;
+    sim.debug_move_actor(witness, AreaId(3)).unwrap();
+    sim.advance(SimDuration(180_000)).unwrap();
+    sim.debug_property_action(
+        witness,
+        PropertyAction::ReportIncident {
+            recipient,
+            incident,
+        },
+    )
+    .unwrap();
+    let first_event = sim.canonical_state().events.len();
+    let mut restored = Simulation::load(
+        &sim.save().unwrap(),
+        Execution {
+            workers: 4,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    sim.advance(MINUTE).unwrap();
+    restored.advance(SimDuration(31_117)).unwrap();
+    restored = Simulation::load(
+        &restored.save().unwrap(),
+        Execution {
+            workers: 2,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    restored.advance(SimDuration(MINUTE.0 - 31_117)).unwrap();
+    assert_eq!(sim.canonical_state(), restored.canonical_state());
+    let report = &sim.property_view(recipient).incidents[0];
+    assert_eq!(report.outcome, IncidentOutcome::Attempt);
+    assert_eq!(report.changed_at, SimTime(0));
+    assert!(
+        sim.canonical_state()
+            .property
+            .as_ref()
+            .unwrap()
+            .reports
+            .is_empty()
+    );
+    assert!(
+        !sim.canonical_state().events[first_event..]
+            .iter()
+            .any(|event| {
+                matches!(event.kind, EventKind::Interrupted { actor } if actor == witness)
+            })
+    );
+}
+
+#[test]
 fn willing_local_custodian_uses_real_combat_and_interrupts_loading_before_transfer() {
     let mut sim = fixture(2);
     let owner = actor(&sim, 3);

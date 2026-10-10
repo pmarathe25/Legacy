@@ -1,7 +1,10 @@
 //! Institutions are supported arrangements of people and scoped authority.
 //! Their rules create permissions and recognized duties, never physical payment.
-use crate::agreements::{Agreement, Obligation};
 use crate::*;
+use game_society::institutions::{
+    CommandEffect, CommandFacts, CommandIds, ExternalChangePermit, ReferenceFacts,
+    ReferenceRequest, StockReference,
+};
 pub use game_society::institutions::{Institution, RuleProposal, SocialMemory, World};
 
 impl Simulation {
@@ -134,291 +137,13 @@ impl Simulation {
         let area = self.social_area(actor)?;
         let w = self.state.institutions.as_ref().ok_or(Error::Unavailable)?;
         self.preflight_institutions()?;
+        if !matches!(
+            action,
+            InstitutionAction::HearCase { .. } | InstitutionAction::TellCase { .. }
+        ) {
+            return self.execute_institution_transition(actor, area, action);
+        }
         match action {
-            InstitutionAction::Found { charter, origin } => {
-                self.validate_charter(charter, actor, area)?;
-                if let Some(origin) = origin {
-                    let prior = w.institutions.get(origin).ok_or(Error::Unavailable)?;
-                    if !charter.founders.is_subset(&prior.members) {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                self.reserve_social_ids(1 + charter.rules.len() as u64)?;
-                let id = InstitutionId(allocate(&mut self.state)?);
-                let mut concepts = Vec::new();
-                for rule in &charter.rules {
-                    let concept = ConceptId(allocate(&mut self.state)?);
-                    self.state
-                        .institutions
-                        .as_mut()
-                        .unwrap()
-                        .concepts
-                        .insert(concept, rule.clone());
-                    concepts.push(concept);
-                }
-                self.state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .institutions
-                    .insert(
-                        id,
-                        Institution {
-                            id,
-                            origin: *origin,
-                            charter: charter.clone(),
-                            members: BTreeSet::from([actor]),
-                            declined: BTreeSet::new(),
-                            invited: charter.founders.clone(),
-                            status: InstitutionStatus::Proposed,
-                            concepts,
-                            office_support: BTreeMap::new(),
-                            grants: BTreeMap::new(),
-                            applied: BTreeMap::new(),
-                            funding: Vec::new(),
-                            revision: 0,
-                        },
-                    );
-                for recipient in &charter.founders {
-                    self.state
-                        .institutions
-                        .as_mut()
-                        .unwrap()
-                        .memories
-                        .get_mut(recipient)
-                        .unwrap()
-                        .cases
-                        .extend(charter.evidence.iter().copied());
-                }
-                self.emit(EventKind::InstitutionProposed {
-                    institution: id,
-                    proposer: actor,
-                });
-                self.publish_institution(id);
-            }
-            InstitutionAction::Join { institution } => {
-                let i = w.institutions.get(institution).ok_or(Error::Unavailable)?;
-                if i.charter.jurisdiction != area
-                    || i.members.contains(&actor)
-                    || i.members.len() >= 64
-                    || !matches!(
-                        i.status,
-                        InstitutionStatus::Proposed | InstitutionStatus::Active
-                    )
-                    || (i.status == InstitutionStatus::Proposed
-                        && !i.charter.founders.contains(&actor))
-                    || (i.status == InstitutionStatus::Active
-                        && !i.charter.open_membership
-                        && !i.invited.contains(&actor))
-                {
-                    return Err(Error::Unavailable);
-                }
-                let founding = i.status == InstitutionStatus::Proposed
-                    && i.members.len() + 1 == i.charter.founders.len();
-                if founding {
-                    if i.charter
-                        .founders
-                        .iter()
-                        .any(|id| *id != actor && self.social_area(*id).ok() != Some(area))
-                        || i.charter
-                            .contributions
-                            .iter()
-                            .any(|t| t.deadline().is_some_and(|d| d <= self.state.time))
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                    self.reserve_social_ids(2 * i.charter.contributions.len() as u64)?;
-                }
-                let i = self
-                    .state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .institutions
-                    .get_mut(institution)
-                    .unwrap();
-                i.members.insert(actor);
-                i.declined.remove(&actor);
-                for office in &i.charter.offices {
-                    i.office_support
-                        .entry(office.slot)
-                        .or_default()
-                        .insert(actor);
-                }
-                if founding {
-                    self.found_institution(*institution)?;
-                }
-                self.publish_institution(*institution);
-            }
-            InstitutionAction::Decline { institution } => {
-                let i = w.institutions.get(institution).ok_or(Error::Unavailable)?;
-                if i.status != InstitutionStatus::Proposed
-                    || !i.charter.founders.contains(&actor)
-                    || i.members.contains(&actor)
-                    || i.charter.jurisdiction != area
-                {
-                    return Err(Error::Unavailable);
-                }
-                let i = self
-                    .state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .institutions
-                    .get_mut(institution)
-                    .unwrap();
-                i.declined.insert(actor);
-                i.status = InstitutionStatus::Rejected;
-                self.publish_institution(*institution);
-            }
-            InstitutionAction::Leave { institution } => {
-                let i = w.institutions.get(institution).ok_or(Error::Unavailable)?;
-                if !i.members.contains(&actor)
-                    || i.charter.jurisdiction != area
-                    || i.status != InstitutionStatus::Active
-                {
-                    return Err(Error::Unavailable);
-                }
-                let i = self
-                    .state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .institutions
-                    .get_mut(institution)
-                    .unwrap();
-                i.members.remove(&actor);
-                for supporters in i.office_support.values_mut() {
-                    supporters.remove(&actor);
-                }
-                for grantees in i.grants.values_mut() {
-                    grantees.remove(&actor);
-                }
-                self.emit(EventKind::InstitutionLeft {
-                    institution: *institution,
-                    actor,
-                });
-                self.publish_institution(*institution);
-            }
-            InstitutionAction::Propose {
-                institution,
-                change,
-            } => {
-                let i = w.institutions.get(institution).ok_or(Error::Unavailable)?;
-                if i.status != InstitutionStatus::Active
-                    || i.charter.jurisdiction != area
-                    || !i.members.contains(&actor)
-                    || !self
-                        .subjects(i, &i.charter.procedure.proposers)
-                        .contains(&actor)
-                {
-                    return Err(Error::Unavailable);
-                }
-                if !self.enforcement_change_actor_allowed(actor, i, change, true)
-                    || !self.realm_change_actor_allowed(actor, i, change, true)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.validate_change(i, change)?;
-                self.reserve_social_ids(1)?;
-                let base_revision = i.revision;
-                let id = RuleProposalId(allocate(&mut self.state)?);
-                self.state.institutions.as_mut().unwrap().proposals.insert(
-                    id,
-                    RuleProposal {
-                        id,
-                        institution: *institution,
-                        proposer: actor,
-                        change: change.clone(),
-                        votes: BTreeMap::new(),
-                        base_revision,
-                        status: RuleProposalStatus::Proposed,
-                    },
-                );
-                self.publish_institution(*institution);
-                self.observe_realm()?;
-            }
-            InstitutionAction::Vote { proposal, support } => {
-                let p = w.proposals.get(proposal).ok_or(Error::Unavailable)?;
-                let i = &w.institutions[&p.institution];
-                if p.status != RuleProposalStatus::Proposed
-                    || p.base_revision != i.revision
-                    || i.status != InstitutionStatus::Active
-                    || i.charter.jurisdiction != area
-                    || !i.members.contains(&actor)
-                    || !self
-                        .subjects(i, &i.charter.procedure.voters)
-                        .contains(&actor)
-                    || p.votes.contains_key(&actor)
-                {
-                    return Err(Error::Unavailable);
-                }
-                if !self.enforcement_change_actor_allowed(actor, i, &p.change, false)
-                    || !self.realm_change_actor_allowed(actor, i, &p.change, false)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.validate_change(i, &p.change)?;
-                i.revision.checked_add(1).ok_or(Error::Overflow)?;
-                self.reserve_social_ids(Self::enforcement_change_ids(&p.change))?;
-                if matches!(
-                    p.change,
-                    InstitutionChange::AddRule(_) | InstitutionChange::ReplaceRule { .. }
-                ) {
-                    self.reserve_social_ids(1)?;
-                }
-                let institution = p.institution;
-                self.state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .proposals
-                    .get_mut(proposal)
-                    .unwrap()
-                    .votes
-                    .insert(actor, *support);
-                self.resolve_rule_proposal(*proposal)?;
-                self.publish_institution(institution);
-            }
-            InstitutionAction::SupportOffice {
-                institution,
-                office,
-                support,
-            } => {
-                let i = w.institutions.get(institution).ok_or(Error::Unavailable)?;
-                if i.status != InstitutionStatus::Active
-                    || i.charter.jurisdiction != area
-                    || !i.members.contains(&actor)
-                    || !i.charter.offices.iter().any(|o| o.slot == *office)
-                {
-                    return Err(Error::Unavailable);
-                }
-                let supporters = self
-                    .state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .institutions
-                    .get_mut(institution)
-                    .unwrap()
-                    .office_support
-                    .entry(*office)
-                    .or_default();
-                if *support {
-                    if !supporters.insert(actor) {
-                        return Err(Error::Unavailable);
-                    }
-                } else if !supporters.remove(&actor) {
-                    return Err(Error::Unavailable);
-                }
-                self.emit(EventKind::OfficeSupportChanged {
-                    institution: *institution,
-                    office: *office,
-                    actor,
-                    support: *support,
-                });
-                self.publish_institution(*institution);
-            }
             InstitutionAction::HearCase {
                 institution,
                 office,
@@ -509,6 +234,7 @@ impl Simulation {
                     .cases
                     .insert(*case);
             }
+            _ => unreachable!("core institution command already dispatched"),
         }
         Ok(())
     }
@@ -679,418 +405,317 @@ impl Simulation {
         }
     }
 
-    pub(crate) fn validate_subjects(&self, subjects: &Subjects, offices: &[OfficeMandate]) -> bool {
-        (subjects.members || !subjects.named.is_empty() || !subjects.offices.is_empty())
-            && subjects.named.len() <= 64
-            && subjects
-                .named
+    fn institution_reference_facts(&self, request: &ReferenceRequest) -> ReferenceFacts {
+        ReferenceFacts {
+            people: request
+                .people
                 .iter()
-                .all(|id| self.person_index.contains_key(id))
-            && subjects.offices.len() <= 8
-            && subjects
-                .offices
+                .filter(|id| self.person_index.contains_key(id))
+                .copied()
+                .collect(),
+            eligible_locations: request
+                .people
                 .iter()
-                .all(|slot| offices.iter().any(|o| o.slot == *slot))
+                .filter_map(|id| self.social_area(*id).ok().map(|area| (*id, area)))
+                .collect(),
+            stocks: request
+                .stocks
+                .iter()
+                .filter_map(|id| {
+                    self.state.inventories.get(id).map(|stock| {
+                        (
+                            *id,
+                            StockReference {
+                                area: self.inventory_area(stock),
+                                custodian: self
+                                    .state
+                                    .agreements
+                                    .as_ref()
+                                    .and_then(|world| world.custodians.get(id))
+                                    .copied(),
+                                good: stock.good,
+                                capacity: stock.capacity,
+                            },
+                        )
+                    })
+                })
+                .collect(),
+            sites: request
+                .sites
+                .iter()
+                .filter_map(|id| {
+                    self.state
+                        .physical
+                        .as_ref()
+                        .and_then(|world| world.sites.get(id))
+                        .map(|site| (*id, site.area))
+                })
+                .collect(),
+        }
     }
-    fn validate_expression(
-        &self,
-        expression: &RuleExpression,
-        area: AreaId,
-        depth: usize,
-        nodes: &mut usize,
-    ) -> bool {
-        *nodes += 1;
-        if depth > 4 || *nodes > 24 {
-            return false;
-        }
-        match expression {
-            RuleExpression::All(items) | RuleExpression::Any(items) => {
-                !items.is_empty()
-                    && items.len() <= 8
-                    && items
-                        .iter()
-                        .all(|e| self.validate_expression(e, area, depth + 1, nodes))
-            }
-            RuleExpression::Not(e) => self.validate_expression(e, area, depth + 1, nodes),
-            RuleExpression::Fact(SocialCondition::KnownStockAtLeast {
-                inventory,
-                quantity,
-            }) => {
-                quantity.0 > 0
-                    && self
-                        .state
-                        .inventories
-                        .get(inventory)
-                        .is_some_and(|i| self.inventory_area(i) == Some(area))
-            }
-            RuleExpression::Fact(SocialCondition::Excluded { inventory }) => self
-                .state
-                .inventories
-                .get(inventory)
-                .is_some_and(|i| self.inventory_area(i) == Some(area)),
-            RuleExpression::Fact(
-                SocialCondition::KnownCooperationAtLeast(n)
-                | SocialCondition::KnownDefaultsAtLeast(n),
-            ) => (1..=64).contains(n),
-            RuleExpression::Fact(SocialCondition::HungerAtLeast(n)) => *n > 0,
-            RuleExpression::Fact(_) => true,
-        }
+    pub(crate) fn validate_subjects(&self, subjects: &Subjects, offices: &[OfficeMandate]) -> bool {
+        let request = ReferenceRequest {
+            people: subjects.named.clone(),
+            ..Default::default()
+        };
+        self.institution_reference_facts(&request)
+            .validate_subjects(subjects, offices)
     }
     fn validate_rule(
         &self,
         charter: &InstitutionCharter,
         rule: &InstitutionalRule,
     ) -> Result<(), Error> {
-        let office = charter
-            .offices
+        let mut request = ReferenceRequest::default();
+        request.charter(charter);
+        request.rule(rule);
+        self.institution_reference_facts(&request)
+            .validate_rule(charter, rule)
+    }
+
+    fn execute_institution_transition(
+        &mut self,
+        actor: PersonId,
+        area: AreaId,
+        action: &InstitutionAction,
+    ) -> Result<(), Error> {
+        let world = self.state.institutions.as_ref().ok_or(Error::Unavailable)?;
+        let request = world.command_references(actor, action)?;
+        let references = self.institution_reference_facts(&request);
+        let authority = game_society::institutions::AuthorityFacts {
+            alive: request
+                .people
+                .iter()
+                .filter(|id| {
+                    self.state
+                        .physical
+                        .as_ref()
+                        .and_then(|world| world.actors.get(id))
+                        .is_some_and(|body| body.vitals.alive)
+                })
+                .copied()
+                .collect(),
+        };
+        let external_context = match action {
+            InstitutionAction::Propose {
+                institution,
+                change,
+            } => Some((&world.institutions[institution], change, true)),
+            InstitutionAction::Vote { proposal, .. } => {
+                let proposal = &world.proposals[proposal];
+                Some((
+                    &world.institutions[&proposal.institution],
+                    &proposal.change,
+                    false,
+                ))
+            }
+            _ => None,
+        };
+        let permit = if let Some((institution, change, proposing)) = external_context {
+            if matches!(
+                change,
+                InstitutionChange::RatifyRegional { .. }
+                    | InstitutionChange::AuthorizeRegionalPassage { .. }
+                    | InstitutionChange::EnforcementPolicy { .. }
+                    | InstitutionChange::Adjudicate { .. }
+            ) {
+                if !self.enforcement_change_actor_allowed(actor, institution, change, proposing)
+                    || !self.realm_change_actor_allowed(actor, institution, change, proposing)
+                {
+                    return Err(Error::Unavailable);
+                }
+                match change {
+                    InstitutionChange::RatifyRegional { .. }
+                    | InstitutionChange::AuthorizeRegionalPassage { .. } => {
+                        self.validate_realm_change(institution, change)?
+                    }
+                    _ => self.validate_enforcement_change(institution, change)?,
+                }
+                Some(ExternalChangePermit {
+                    actor,
+                    institution: institution.id,
+                    institution_revision: institution.revision,
+                    change: change.clone(),
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let plan = world.prepare_command(
+            action,
+            &CommandFacts {
+                actor,
+                area,
+                now: self.state.time,
+                references: &references,
+                authority: &authority,
+                external_permit: permit.as_ref(),
+            },
+            CommandIds {
+                first: self.state.next_id,
+            },
+        )?;
+        let external_ids = plan
+            .effects
             .iter()
-            .find(|o| o.slot == rule.authority)
-            .ok_or(Error::Unavailable)?;
-        if !self.validate_subjects(&rule.subjects, &charter.offices)
-            || !self.validate_expression(&rule.when, charter.jurisdiction, 0, &mut 0)
-        {
-            return Err(Error::Unavailable);
+            .filter_map(|effect| match effect {
+                CommandEffect::ExternalOutcome { change, .. } => {
+                    Some(Self::enforcement_change_ids(change))
+                }
+                _ => None,
+            })
+            .try_fold(0_u64, |total, count| {
+                total.checked_add(count).ok_or(Error::Overflow)
+            })?;
+        self.reserve_social_ids(
+            plan.next_id
+                .checked_sub(self.state.next_id)
+                .and_then(|count| count.checked_add(external_ids))
+                .ok_or(Error::Overflow)?,
+        )?;
+        let duties: Vec<_> = plan
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                CommandEffect::Funding {
+                    institution,
+                    agreement,
+                    obligation,
+                    term,
+                } => Some(game_agreements::InstitutionDuty {
+                    institution: *institution,
+                    agreement: *agreement,
+                    obligation: *obligation,
+                    term: term.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+        let funding = if duties.is_empty() {
+            None
+        } else {
+            Some(
+                self.state
+                    .agreements
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?
+                    .ledger
+                    .prepare_institutional_duties(&duties, self.state.time)?,
+            )
+        };
+        for effect in &plan.effects {
+            if let CommandEffect::ExternalOutcome {
+                institution,
+                proposal,
+                outcome,
+                change,
+            } = effect
+            {
+                match change {
+                    InstitutionChange::RatifyRegional { .. }
+                    | InstitutionChange::AuthorizeRegionalPassage { .. } => {
+                        self.preflight_realm_outcome(*institution, *proposal, *outcome)?
+                    }
+                    _ => self.preflight_enforcement_adoption(*institution, *proposal)?,
+                }
+            }
         }
-        let beneficiary = |who: &Beneficiary| match who {
-            Beneficiary::Person(id) => charter.founders.contains(id),
-            Beneficiary::Office(slot) => charter.offices.iter().any(|o| o.slot == *slot),
-        };
-        let valid = match &rule.effect {
-            SocialEffect::Access { inventory, .. } => {
-                office.powers.contains(&OfficePower::Access)
-                    && office.inventories.contains(inventory)
+        plan.verify(self.state.institutions.as_ref().unwrap())?;
+        let effects = plan.effects.clone();
+        let next_id = plan.next_id;
+        if let Some(funding) = &funding {
+            funding.check(&self.state.agreements.as_ref().unwrap().ledger)?;
+        }
+        plan.commit(self.state.institutions.as_mut().unwrap())?;
+        if let Some(funding) = funding {
+            funding.commit(&mut self.state.agreements.as_mut().unwrap().ledger)?;
+        }
+        self.state.next_id = next_id;
+        for effect in effects {
+            match effect {
+                CommandEffect::Funding { agreement, .. } => {
+                    self.emit(EventKind::AgreementActivated { agreement })
+                }
+                CommandEffect::Proposed {
+                    institution,
+                    proposer,
+                } => self.emit(EventKind::InstitutionProposed {
+                    institution,
+                    proposer,
+                }),
+                CommandEffect::Founded { institution } => {
+                    self.emit(EventKind::InstitutionFounded { institution })
+                }
+                CommandEffect::Left { institution, actor } => {
+                    self.emit(EventKind::InstitutionLeft { institution, actor })
+                }
+                CommandEffect::OfficeSupportChanged {
+                    institution,
+                    office,
+                    actor,
+                    support,
+                } => self.emit(EventKind::OfficeSupportChanged {
+                    institution,
+                    office,
+                    actor,
+                    support,
+                }),
+                CommandEffect::Changed {
+                    institution,
+                    proposal,
+                } => self.emit(EventKind::InstitutionChanged {
+                    institution,
+                    proposal,
+                }),
+                CommandEffect::ExternalOutcome {
+                    institution,
+                    proposal,
+                    outcome,
+                    change,
+                } => match change {
+                    InstitutionChange::RatifyRegional { .. }
+                    | InstitutionChange::AuthorizeRegionalPassage { .. } => {
+                        self.apply_realm_outcome(institution, proposal, outcome)?
+                    }
+                    _ => self.adopt_enforcement_change(institution, proposal)?,
+                },
+                CommandEffect::Publish { institution } => self.publish_institution(institution),
+                CommandEffect::ObserveRegional => self.observe_realm()?,
             }
-            SocialEffect::Labor {
-                site,
-                millis,
-                beneficiary: who,
-                due_after,
-            } => {
-                office.powers.contains(&OfficePower::Labor)
-                    && office.sites.contains(site)
-                    && *millis > 0
-                    && due_after.0 >= *millis
-                    && beneficiary(who)
-            }
-            SocialEffect::Delivery {
-                source,
-                destination,
-                quantity,
-                beneficiary: who,
-                due_after,
-            } => {
-                office.powers.contains(&OfficePower::Delivery)
-                    && office.inventories.contains(source)
-                    && office.inventories.contains(destination)
-                    && *source != *destination
-                    && quantity.0 > 0
-                    && due_after.0 >= 120_000
-                    && beneficiary(who)
-                    && self
-                        .state
-                        .inventories
-                        .get(source)
-                        .zip(self.state.inventories.get(destination))
-                        .is_some_and(|(a, b)| a.good == b.good && quantity.0 <= b.capacity.0)
-            }
-        };
-        if !valid {
-            return Err(Error::Unavailable);
         }
         Ok(())
     }
-    fn validate_procedure(
-        &self,
-        procedure: &DecisionProcedure,
-        charter: &InstitutionCharter,
-    ) -> bool {
-        self.validate_subjects(&procedure.proposers, &charter.offices)
-            && self.validate_subjects(&procedure.voters, &charter.offices)
-            && procedure.minimum_support > 0
-            && procedure.minimum_support <= 64
-    }
-    fn validate_charter(
-        &self,
-        charter: &InstitutionCharter,
-        actor: PersonId,
-        area: AreaId,
-    ) -> Result<(), Error> {
-        if charter.jurisdiction != area
-            || charter.purpose.is_empty()
-            || charter.purpose.len() > 160
-            || !(2..=8).contains(&charter.founders.len())
-            || !charter.founders.contains(&actor)
-            || charter
-                .founders
-                .iter()
-                .any(|id| self.social_area(*id).ok() != Some(area))
-            || charter.offices.is_empty()
-            || charter.offices.len() > 8
-            || charter.rules.len() > 16
-            || charter.contributions.len() > 16
-            || charter.evidence.len() > 8
-            || !charter
-                .evidence
-                .is_subset(&self.state.institutions.as_ref().unwrap().memories[&actor].cases)
-            || !self.validate_procedure(&charter.procedure, charter)
-        {
-            return Err(Error::Unavailable);
-        }
-        let custody = &self
+
+    fn institutional_agreement(
+        &mut self,
+        institution: InstitutionId,
+        term: AgreementTerm,
+    ) -> Result<AgreementId, Error> {
+        self.reserve_social_ids(2)?;
+        let agreement = AgreementId(self.state.next_id);
+        let obligation = ObligationId(self.state.next_id.checked_add(1).ok_or(Error::Overflow)?);
+        let next_id = self.state.next_id.checked_add(2).ok_or(Error::Overflow)?;
+        let plan = self
             .state
             .agreements
             .as_ref()
             .ok_or(Error::Unavailable)?
-            .custodians;
-        let mut slots = BTreeSet::new();
-        for office in &charter.offices {
-            if !slots.insert(office.slot)
-                || !charter.founders.contains(&office.holder)
-                || office.minimum_support == 0
-                || usize::from(office.minimum_support) > charter.founders.len()
-                || office.inventories.len() > 16
-                || office.sites.len() > 16
-                || office.powers.is_empty()
-                || office.inventories.iter().any(|id| {
-                    self.state.inventories.get(id).is_none_or(|i| {
-                        self.inventory_area(i) != Some(area)
-                            || !custody
-                                .get(id)
-                                .is_some_and(|owner| charter.founders.contains(owner))
-                    })
-                })
-                || office.sites.iter().any(|id| {
-                    self.state
-                        .physical
-                        .as_ref()
-                        .unwrap()
-                        .sites
-                        .get(id)
-                        .is_none_or(|site| site.area != area)
-                })
-            {
-                return Err(Error::Unavailable);
-            }
-        }
-        for rule in &charter.rules {
-            self.validate_rule(charter, rule)?;
-        }
-        for term in &charter.contributions {
-            if term.amount() == 0
-                || term.parties()[0] == term.parties()[1]
-                || term
-                    .parties()
-                    .iter()
-                    .any(|id| !charter.founders.contains(id))
-                || term.deadline().is_some_and(|d| d <= self.state.time)
-            {
-                return Err(Error::Unavailable);
-            }
-            match term {
-                AgreementTerm::Delivery {
-                    source,
-                    destination,
-                    quantity,
-                    ..
-                } => {
-                    if !self
-                        .state
-                        .inventories
-                        .get(source)
-                        .zip(self.state.inventories.get(destination))
-                        .is_some_and(|(a, b)| {
-                            a.good == b.good && a.id != b.id && quantity.0 <= b.capacity.0
-                        })
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                AgreementTerm::Labor { site, .. } => {
-                    if !self
-                        .state
-                        .physical
-                        .as_ref()
-                        .unwrap()
-                        .sites
-                        .contains_key(site)
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                _ => return Err(Error::Unavailable),
-            }
-        }
-        Ok(())
-    }
-    fn validate_change(&self, i: &Institution, change: &InstitutionChange) -> Result<(), Error> {
-        match change {
-            InstitutionChange::RatifyRegional { .. }
-            | InstitutionChange::AuthorizeRegionalPassage { .. } => {
-                self.validate_realm_change(i, change)
-            }
-            InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. } => {
-                self.validate_enforcement_change(i, change)
-            }
-            InstitutionChange::AddRule(rule) => {
-                if i.charter.rules.len() >= 16 {
-                    return Err(Error::Unavailable);
-                }
-                self.validate_rule(&i.charter, rule)
-            }
-            InstitutionChange::ReplaceRule { index, rule } => {
-                if *index as usize >= i.charter.rules.len() {
-                    return Err(Error::Unavailable);
-                }
-                self.validate_rule(&i.charter, rule)
-            }
-            InstitutionChange::RemoveRule { index } => {
-                if (*index as usize) < i.charter.rules.len() {
-                    Ok(())
-                } else {
-                    Err(Error::Unavailable)
-                }
-            }
-            InstitutionChange::Procedure(p) => {
-                if self.validate_procedure(p, &i.charter) {
-                    Ok(())
-                } else {
-                    Err(Error::Unavailable)
-                }
-            }
-            InstitutionChange::Appoint { office, holder } => {
-                if i.charter.offices.iter().any(|o| o.slot == *office) && i.members.contains(holder)
-                {
-                    Ok(())
-                } else {
-                    Err(Error::Unavailable)
-                }
-            }
-            InstitutionChange::Invite(actor) => {
-                if self.person_index.contains_key(actor) {
-                    Ok(())
-                } else {
-                    Err(Error::Unavailable)
-                }
-            }
-            InstitutionChange::Dissolve => Ok(()),
-        }
-    }
-
-    fn institutional_agreement(&mut self, term: AgreementTerm) -> Result<AgreementId, Error> {
-        self.reserve_social_ids(2)?;
-        let id = AgreementId(allocate(&mut self.state)?);
-        let obligation = ObligationId(allocate(&mut self.state)?);
-        let parties = BTreeSet::from(term.parties());
-        let proposer = term.parties()[0];
-        let w = self.state.agreements.as_mut().unwrap();
-        w.agreements.insert(
-            id,
-            Agreement {
-                id,
-                proposer,
-                parties: parties.clone(),
-                accepted: parties,
-                terms: vec![term.clone()],
-                procedure: None,
-                obligations: vec![obligation],
-                status: AgreementStatus::Active,
-                proposed_at: self.state.time,
-                revision: 0,
-            },
-        );
-        w.obligations.insert(
-            obligation,
-            Obligation {
-                id: obligation,
-                agreement: id,
-                term,
-                performed: 0,
-                accrued: 0,
-                share_remainder: 0,
-                share_scale: 0,
-                defaulted: false,
-                cargo: BTreeMap::new(),
-            },
-        );
-        self.emit(EventKind::AgreementActivated { agreement: id });
-        Ok(id)
-    }
-    fn found_institution(&mut self, id: InstitutionId) -> Result<(), Error> {
-        let contributions = self.state.institutions.as_ref().unwrap().institutions[&id]
-            .charter
-            .contributions
-            .clone();
-        let mut funding = Vec::new();
-        for term in contributions {
-            funding.push(self.institutional_agreement(term)?);
-        }
-        let i = self
-            .state
-            .institutions
-            .as_mut()
-            .unwrap()
-            .institutions
-            .get_mut(&id)
-            .unwrap();
-        i.status = InstitutionStatus::Active;
-        i.funding = funding;
-        for office in &i.charter.offices {
-            i.office_support
-                .entry(office.slot)
-                .or_default()
-                .extend(i.members.iter().copied());
-        }
-        self.emit(EventKind::InstitutionFounded { institution: id });
-        Ok(())
-    }
-    fn resolve_rule_proposal(&mut self, id: RuleProposalId) -> Result<(), Error> {
-        let world = self.state.institutions.as_ref().unwrap();
-        let proposal = &world.proposals[&id];
-        let institution = &world.institutions[&proposal.institution];
-        let authority = self.institution_authority_facts(institution);
-        let outcome = world.proposal_outcome(id, &authority)?;
-        let concept = if outcome == RuleProposalStatus::Adopted
-            && matches!(
-                proposal.change,
-                InstitutionChange::AddRule(_) | InstitutionChange::ReplaceRule { .. }
-            ) {
-            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-            Some(ConceptId(self.state.next_id))
-        } else {
-            None
-        };
-        let institution = proposal.institution;
-        let external_enforcement = matches!(
-            proposal.change,
-            InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. }
-        );
-        let plan = world.prepare_resolution(id, &authority, concept)?;
-        if outcome == RuleProposalStatus::Adopted && external_enforcement {
-            self.preflight_enforcement_adoption(institution, id)?;
-        }
-        let external_realm = matches!(
-            proposal.change,
-            InstitutionChange::RatifyRegional { .. }
-                | InstitutionChange::AuthorizeRegionalPassage { .. }
-        );
-        if external_realm && outcome != RuleProposalStatus::Proposed {
-            self.preflight_realm_outcome(institution, id, outcome)?;
-        }
-        plan.commit(self.state.institutions.as_mut().unwrap())?;
-        if concept.is_some() {
-            self.state.next_id += 1;
-        }
-        if external_realm && outcome != RuleProposalStatus::Proposed {
-            self.apply_realm_outcome(institution, id, outcome)?;
-        }
-        if outcome == RuleProposalStatus::Adopted {
-            self.emit(EventKind::InstitutionChanged {
-                institution,
-                proposal: id,
-            });
-            self.adopt_enforcement_change(institution, id)?;
-        }
-        Ok(())
+            .ledger
+            .prepare_institutional_duties(
+                &[game_agreements::InstitutionDuty {
+                    institution,
+                    agreement,
+                    obligation,
+                    term,
+                }],
+                self.state.time,
+            )?;
+        plan.commit(&mut self.state.agreements.as_mut().unwrap().ledger)?;
+        self.state.next_id = next_id;
+        self.emit(EventKind::AgreementActivated { agreement });
+        Ok(agreement)
     }
 
     fn known_case_count(
@@ -1172,7 +797,7 @@ impl Simulation {
                             }
                         }
                         game_society::institutions::RuleIntent::Duty { term, .. } => {
-                            let agreement = self.institutional_agreement(term.clone())?;
+                            let agreement = self.institutional_agreement(id, term.clone())?;
                             self.state
                                 .institutions
                                 .as_mut()

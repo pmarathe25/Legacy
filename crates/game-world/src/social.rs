@@ -81,6 +81,7 @@ impl Simulation {
                         && matches!(body.activity, Activity::Idle | Activity::Rest)
                 })
             && !self.care_index.contains_key(&actor)
+            && self.conversation_actor_available(actor)
     }
     fn social_local_pair(&self, first: PersonId, second: PersonId) -> bool {
         first != second

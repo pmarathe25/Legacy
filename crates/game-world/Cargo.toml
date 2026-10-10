@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-logistics.workspace = true
+game-property.workspace = true
 game-sim.workspace = true
 game-environment.workspace = true
 game-ecology.workspace = true

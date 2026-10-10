@@ -421,15 +421,48 @@ impl Simulation {
             .and_then(|a| a.links.iter().find(|l| l.destination == destination))
             .map(|l| l.duration)
             .ok_or(Error::NoRoute)?;
-        let leg = game_transport::retreat(position, destination, reverse, self.state.time)?;
-        // Tactical retreat has already resolved its turn and escape boundary.
-        // Physical capability and burden still gate the remaining journey.
+        // At an exact endpoint, finishing the location transition needs no
+        // zero-length travel leg. Capacity still protects carried dependents.
         if !self.transport_can_depart(actor) {
             return Err(Error::Unavailable);
         }
         self.ensure_event_capacity(self.state.people.len() + 1)?;
+        let at_endpoint = destination == position.from && position.progress.0 == 0
+            || destination == position.to && position.progress == position.duration;
+        let leg = if at_endpoint {
+            None
+        } else {
+            Some(game_transport::retreat(
+                position,
+                destination,
+                reverse,
+                self.state.time,
+            )?)
+        };
         self.stop_transport_component(actor);
         self.interrupt_actor_activity(actor);
+        let Some(leg) = leg else {
+            let members = self.state.transport.as_ref().unwrap().component(actor);
+            for member in members {
+                self.clear_transport_arrival(member);
+                let world = self.state.transport.as_mut().unwrap();
+                world.resume_targets.remove(&member);
+                world.paused_approaches.remove(&member);
+                world.approaches.remove(&member);
+                if !matches!(
+                    self.state.people[self.person_index[&member]].location,
+                    Location::Carried { .. }
+                ) {
+                    self.state.people[self.person_index[&member]].location =
+                        Location::AtArea(destination);
+                    self.emit(EventKind::Arrived {
+                        actor: member,
+                        area: destination,
+                    });
+                }
+            }
+            return Ok(());
+        };
         self.state.people[self.person_index[&actor]].location = Location::InTransit {
             from: leg.from,
             to: leg.to,
@@ -1178,6 +1211,15 @@ impl Simulation {
                 });
                 self.transport_departed(actor);
             }
+            Action::ReturnToArea { destination } => {
+                if !matches!(
+                    self.resolved_location(actor),
+                    Location::StoppedOnRoad { .. }
+                ) {
+                    return Err(Error::Unavailable);
+                }
+                self.transport_retreat(actor, *destination)?;
+            }
             Action::ApproachRoad {
                 from,
                 to,
@@ -1473,6 +1515,10 @@ impl Simulation {
             ) && self.transport_can_depart(actor)
             {
                 actions.push(Action::Resume);
+                if let Location::StoppedOnRoad { from, to, .. } = self.resolved_location(actor) {
+                    actions.push(Action::ReturnToArea { destination: from });
+                    actions.push(Action::ReturnToArea { destination: to });
+                }
             }
             if let Ok(bodies) = self.transport_bodies() {
                 if bodies.get(&actor).is_some_and(|b| b.can_bear) {
@@ -1663,6 +1709,86 @@ pub(crate) fn resolved_locations_for(
 #[cfg(test)]
 mod connected_tests {
     use super::*;
+
+    #[test]
+    fn returning_from_an_exact_road_endpoint_creates_no_zero_length_journey() {
+        let mut sim = Simulation::transport_fixture(1, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        sim.debug_actor_command(actor, Command::Cancel).unwrap();
+        sim.state.people[sim.person_index[&actor]].location = Location::StoppedOnRoad {
+            from: AreaId(1),
+            to: AreaId(3),
+            progress: SimDuration(0),
+            duration: SimDuration(180_000),
+        };
+        let now = sim.state.time;
+        sim.debug_actor_command(
+            actor,
+            Command::Transport {
+                action: Action::ReturnToArea {
+                    destination: AreaId(1),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(sim.state.time, now);
+        assert_eq!(sim.resolved_location(actor), Location::AtArea(AreaId(1)));
+        assert!(
+            !sim.state
+                .due
+                .values()
+                .flatten()
+                .any(|due| matches!(due, Due::Arrive(id) if *id == actor))
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+
+    #[test]
+    fn carrying_reachable_roadside_goods_uses_the_same_conserved_loading_primitive() {
+        let mut sim = Simulation::transport_fixture(1, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        let holder = sim.state.people[3].id;
+        for person in [actor, holder] {
+            sim.debug_actor_command(person, Command::Cancel).unwrap();
+            sim.state.people[sim.person_index[&person]].location = Location::StoppedOnRoad {
+                from: AreaId(1),
+                to: AreaId(3),
+                progress: SimDuration(90_000),
+                duration: SimDuration(180_000),
+            };
+        }
+        let source = sim
+            .debug_add_inventory(
+                Good::Tool,
+                InventoryLocation::Carried(holder),
+                Quantity(1_000),
+                Quantity(1_000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        sim.debug_actor_command(
+            actor,
+            Command::Carry {
+                source,
+                quantity: Quantity(1_000),
+            },
+        )
+        .unwrap();
+        assert_eq!(sim.state.inventories[&source].quantity, Quantity(1_000));
+        sim.advance(sim.body_rules(actor).loading_time).unwrap();
+        assert_eq!(sim.state.inventories[&source].quantity, Quantity(0));
+        assert!(sim.state.events.iter().any(|event| matches!(event.kind,
+            EventKind::Transferred { source: actual, quantity: Quantity(1_000), .. }
+                if actual == source)));
+        assert!(matches!(
+            sim.resolved_location(actor),
+            Location::StoppedOnRoad {
+                progress: SimDuration(90_000),
+                ..
+            }
+        ));
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
     fn quiet(sim: &mut Simulation) {
         let citizens: Vec<_> = sim
             .state

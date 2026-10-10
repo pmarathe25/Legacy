@@ -33,7 +33,8 @@ impl Simulation {
                         Guardian {
                             assessments: BTreeMap::new(),
                             assignment: None,
-                            water_provision: None,
+                            provision: None,
+                            requested_delivery: None,
                             knows_invocation: true,
                             target: Some(ruler),
                             sensed_location: Some(location.clone()),
@@ -436,7 +437,8 @@ impl Simulation {
             }) {
                 commands.push(Command::RequestGuardian {
                     guardian: *teacher,
-                    request: GuardianRequest::SupplyFood {
+                    request: GuardianRequest::Supply {
+                        good: Good::Food,
                         source: food.inventory,
                         quantity: Quantity(1_000),
                     },
@@ -614,8 +616,13 @@ impl Simulation {
         guardian: PersonId,
         request: GuardianRequest,
     ) -> Result<(), Error> {
-        if let GuardianRequest::SupplyFood { source, quantity } = request {
-            return self.request_guardian_food(guardian, requester, source, quantity);
+        if let GuardianRequest::Supply {
+            good,
+            source,
+            quantity,
+        } = request
+        {
+            return self.request_guardian_supply(guardian, requester, good, source, quantity);
         }
         let world = self.state.lineage.as_ref().ok_or(Error::Unavailable)?;
         if world.current() != Some(requester)
@@ -646,7 +653,7 @@ impl Simulation {
         let command = match request {
             GuardianRequest::Move { destination } => Command::Move { destination },
             GuardianRequest::Rest => Command::Rest,
-            GuardianRequest::SupplyFood { .. } => unreachable!("handled above"),
+            GuardianRequest::Supply { .. } => unreachable!("handled above"),
             GuardianRequest::Work { site } => Command::Work { site },
         };
         let reason = game_lineage::judge_request(
@@ -689,7 +696,7 @@ impl Simulation {
         };
         match accepted {
             Ok(()) => {
-                self.force_cancel_food(guardian);
+                self.cancel_guardian_delivery(guardian);
                 self.emit(EventKind::GuardianAccepted {
                     guardian,
                     requester,
@@ -766,6 +773,10 @@ impl Simulation {
                     );
                 }
             }
+            let force_command = self.force_candidate(id);
+            if force_command.is_none() && self.drive_guardian_delivery(id)? {
+                continue;
+            }
             let sensed = current.map(|person| self.resolved_location(person));
             let body = &self.state.physical.as_ref().unwrap().actors[&id];
             let own_location = self.resolved_location(id);
@@ -781,18 +792,12 @@ impl Simulation {
                         matches!(body.activity, Activity::Work { site: active } if active == site)
                     }
                     GuardianRequest::Rest => self.state.time <= assignment.accepted_at,
-                    GuardianRequest::SupplyFood { .. } => false,
+                    GuardianRequest::Supply { .. } => false,
                 });
-            let (goal, explanation, command) = if let Some(command) = self.force_candidate(id) {
+            let (goal, explanation, command) = if let Some(command) = force_command {
                 (
                     GuardianGoal::Confined,
                     "Attempting to release the physical bindings with a carried tool".into(),
-                    Some(command),
-                )
-            } else if let Some(command) = self.guardian_food_command(id) {
-                (
-                    GuardianGoal::Mentoring,
-                    "Carrying out an accepted food delivery using known stores and routes".into(),
                     Some(command),
                 )
             } else if self
@@ -896,8 +901,7 @@ impl Simulation {
             );
         }
         let mind = &self.state.decisions.as_ref().unwrap().minds[&guardian];
-        let stocks: Vec<_> = mind.knowledge.values().cloned().collect();
-        let need = mind
+        let mut need = mind
             .child_signals
             .get(&target)
             .map(|signal| NeedObservation {
@@ -912,27 +916,33 @@ impl Simulation {
             Activity::Idle | Activity::Rest | Activity::Work { .. }
         );
         let should_rest = matches!(body.activity, Activity::Idle | Activity::Work { .. });
-        let meal_size = self.state.physical.as_ref().unwrap().rules.meal_size;
-        let carried_water = self
-            .inventory_index
-            .get(&InventoryLocation::Carried(guardian))
-            .into_iter()
-            .flatten()
-            .copied()
-            .find(|id| {
-                let stock = &self.state.inventories[id];
-                stock.good == Good::Water && stock.quantity >= meal_size
-            });
-        let (plan, provision) = game_lineage::review_water_provision(
+        let meal_size = self.body_rules(guardian).meal_size;
+        let together = self.transport_same_place(guardian, target);
+        let applicable = together.then(|| {
+            self.state.development.as_ref().is_some_and(|world| {
+                world
+                    .lives
+                    .get(&target)
+                    .is_some_and(|life| matches!(life.stage, LifeStage::Infant | LifeStage::Child))
+            })
+        });
+        if applicable == Some(false) {
+            need = None;
+            self.state
+                .lineage
+                .as_mut()
+                .unwrap()
+                .observe_care_unavailable(guardian);
+        }
+        let provision = game_lineage::review_care_provision(
             self.state.lineage.as_ref().unwrap().guardians[&guardian]
-                .water_provision
+                .provision
                 .as_ref(),
             target,
             self.state.time,
-            own_location == target_location,
-            need.as_ref().filter(|need| &need.location == own_location),
-            carried_water,
-            can_reconsider,
+            together,
+            need.as_ref().filter(|_| applicable != Some(false)),
+            meal_size,
         );
         self.state
             .lineage
@@ -941,34 +951,28 @@ impl Simulation {
             .guardians
             .get_mut(&guardian)
             .unwrap()
-            .water_provision = plan;
-        match provision {
-            Some(ProvisionAction::AcquireWater) => {
-                return (
-                    GuardianGoal::Mentoring,
-                    "Seeking real water for thirst observed during contact with the incarnation"
-                        .into(),
-                    self.plan_water_for_delivery(guardian),
-                );
-            }
-            Some(ProvisionAction::Care { source }) => {
-                return (
-                    GuardianGoal::Mentoring,
-                    "Providing carried water for observed thirst".into(),
-                    Some(Command::Care {
-                        child: target,
-                        source,
-                    }),
-                );
-            }
-            Some(ProvisionAction::Continue) => {
-                return (
-                    GuardianGoal::Mentoring,
-                    "Continuing physical water procurement for the incarnation".into(),
-                    None,
-                );
-            }
-            Some(ProvisionAction::ReturnToChild) | None => {}
+            .provision = provision.clone();
+        if let Some(provision) = provision {
+            // This location fact is the guardian's explicit innate connection;
+            // it conveys no remote need, inventory balance or permissions.
+            let location = self.delivery_observed_location(target);
+            let destination = game_logistics::KnownDestination {
+                destination: provision.delivery.destination,
+                location,
+                observed_at: self.state.time,
+                accessible: true,
+                room: None,
+                direct_transfer: true,
+            };
+            let step = self.plan_delivery(guardian, &provision.delivery, &destination, meal_size);
+            let command = match step {
+                game_logistics::Step::Arrived { source, .. } => Some(Command::Care {
+                    child: target,
+                    source,
+                }),
+                step => self.delivery_command(guardian, step),
+            };
+            return (GuardianGoal::Mentoring,"Pursuing the observed care requirement through actual acquisition, carrying and handoff".into(),command);
         }
         let intent = game_lineage::guardian_intention(GuardianInput {
             target,
@@ -982,8 +986,6 @@ impl Simulation {
                 .get(&target)
                 .is_some_and(|a| a.ready),
             need,
-            known_stocks: &stocks,
-            meal_size,
         });
         let command = intent.action.map(|action| match action {
             GuardianAction::ApproachRoad {
@@ -1000,7 +1002,6 @@ impl Simulation {
                 },
             },
             GuardianAction::Move { destination } => Command::Move { destination },
-            GuardianAction::Care { child, source } => Command::Care { child, source },
             GuardianAction::Comfort { child } => Command::Comfort { child },
             GuardianAction::Rest => Command::Rest,
         });
@@ -1155,17 +1156,54 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     if world.guardians.keys().copied().collect::<BTreeSet<_>>() != expected_guardians {
         return Err(fail());
     }
-    for guardian in world.guardians.values() {
+    for (guardian_id, guardian) in &world.guardians {
         if guardian.target != world.current()
             || guardian.sensed_at > state.time
             || guardian.target.is_some() != guardian.sensed_location.is_some()
         {
             return Err(fail());
         }
-        if guardian.water_provision.as_ref().is_some_and(|plan| {
-            Some(plan.child) != world.current() || plan.observed_at > state.time
+        if guardian.provision.as_ref().is_some_and(|plan| {
+            !plan.delivery.valid()
+                || world.current().is_none_or(|target| {
+                    plan.delivery.destination != game_logistics::Destination::Contact(target)
+                })
+                || plan.delivery.last_receipt >= state.next_event
+                || plan
+                    .delivery
+                    .requirement
+                    .source
+                    .is_some_and(|source| !state.inventories.contains_key(&source))
+                || plan.observed_at > state.time
         }) {
             return Err(fail());
+        }
+        if let Some(requested) = &guardian.requested_delivery {
+            let delivery = &requested.delivery;
+            if !delivery.valid()
+                || requested.accepted_at > state.time
+                || requested.last_event >= state.next_event
+                || delivery.last_receipt >= state.next_event
+                || delivery.requirement.source.is_none_or(|source| {
+                    !state
+                        .inventories
+                        .get(&source)
+                        .is_some_and(|stock| stock.good == delivery.requirement.good)
+                })
+                || world.current().is_none_or(|target| {
+                    delivery.destination != game_logistics::Destination::Contact(target)
+                })
+                || requested.cargo.iter().any(|(inventory, quantity)| {
+                    *quantity == 0
+                        || !state.inventories.get(inventory).is_some_and(|stock| {
+                            stock.good == delivery.requirement.good
+                                && stock.location == InventoryLocation::Carried(*guardian_id)
+                                && *quantity <= stock.quantity.0
+                        })
+                })
+            {
+                return Err(fail());
+            }
         }
         for (person, assessment) in &guardian.assessments {
             if !seen.contains(person)
@@ -1196,9 +1234,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     }
                     GuardianRequest::Work { site } => !physical.sites.contains_key(&site),
                     GuardianRequest::Rest => false,
-                    GuardianRequest::SupplyFood { source, quantity } => {
-                        !state.inventories.contains_key(&source) || quantity.0 == 0
-                    }
+                    GuardianRequest::Supply {
+                        source, quantity, ..
+                    } => !state.inventories.contains_key(&source) || quantity.0 == 0,
                 })
         {
             return Err(fail());

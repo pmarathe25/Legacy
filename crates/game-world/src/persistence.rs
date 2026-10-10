@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 23;
+const SAVE_VERSION: u32 = 24;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -284,6 +284,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     if let Some(world) = &s.invocation {
         for id in world
+            .control
             .warnings
             .keys()
             .map(|id| id.0)
@@ -1304,7 +1305,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .invocation
                         .as_ref()
-                        .is_some_and(|w| w.warnings.contains_key(&warning))
+                        .is_some_and(|w| w.control.warnings.contains_key(&warning))
                 {
                     return Err(fail());
                 }
@@ -1734,6 +1735,35 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 .any(|v| *v > 1_000)
             {
                 return Err(fail());
+            }
+            if let Some(plan) = &mind.plan
+                && let Some(delivery) = &plan.delivery
+            {
+                let target_exists = match delivery.destination {
+                    game_logistics::Destination::Inventory(target) => {
+                        s.inventories.contains_key(&target)
+                    }
+                    game_logistics::Destination::Contact(target) => people.contains_key(&target),
+                };
+                let matches_motive = match plan.purpose {
+                    game_characters::decisions::Purpose::CareSupply { child, good } => {
+                        delivery.destination == game_logistics::Destination::Contact(child)
+                            && delivery.requirement.good == good
+                    }
+                    _ => true,
+                };
+                if !delivery.valid()
+                    || !target_exists
+                    || !matches_motive
+                    || delivery.last_receipt >= s.next_event
+                    || delivery.requirement.source.is_some_and(|source| {
+                        !s.inventories
+                            .get(&source)
+                            .is_some_and(|stock| stock.good == delivery.requirement.good)
+                    })
+                {
+                    return Err(fail());
+                }
             }
             for (from, links) in &mind.routes {
                 if !areas.contains(from)

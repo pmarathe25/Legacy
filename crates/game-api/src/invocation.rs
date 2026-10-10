@@ -2,7 +2,7 @@
 use crate::*;
 use std::collections::BTreeSet;
 
-pub use game_invocation::InvocationCost;
+pub use game_invocation::{InvocationCost, InvocationWarning};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InvocationAction {
@@ -38,25 +38,6 @@ pub enum InvocationAction {
         inventory: InventoryId,
         recipient: PersonId,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InvocationWarning {
-    pub id: WarningId,
-    pub actor: PersonId,
-    pub lives: BTreeSet<PersonId>,
-    pub cost: InvocationCost,
-    pub severity: u8,
-    pub activation_burden: u64,
-    pub instant_fatigue: u64,
-    pub fatigue_per_mille: u64,
-    pub health_harm_per_mille: u64,
-    pub identity_skill_penalty: u16,
-    pub emotion_disruption: u16,
-    pub lifespan_loss: SimDuration,
-    pub control_loss_duration: SimDuration,
-    pub permanent: bool,
-    pub description: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

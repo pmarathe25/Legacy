@@ -32,6 +32,77 @@ pub struct TransitionIds {
     pub amendment: Option<AmendmentId>,
     pub obligations: Vec<ObligationId>,
 }
+
+/// A duty declared through an institution's own chosen procedure. Its owner
+/// validates that authority and referenced assets before supplying this receipt.
+/// Recording it neither performs the duty nor applies a physical permission.
+#[derive(Clone, Debug)]
+pub struct InstitutionDuty {
+    pub institution: InstitutionId,
+    pub agreement: AgreementId,
+    pub obligation: ObligationId,
+    pub term: AgreementTerm,
+}
+
+impl State {
+    pub fn prepare_institutional_duties(
+        &self,
+        duties: &[InstitutionDuty],
+        now: SimTime,
+    ) -> Result<PreparedTransition, Error> {
+        let issuers: BTreeSet<_> = duties.iter().map(|duty| duty.institution.0).collect();
+        let mut ids = BTreeSet::new();
+        let mut plan = PreparedTransition::default();
+        for duty in duties {
+            let [debtor, creditor] = duty.term.parties();
+            if duty.institution.0 == 0 || debtor.0 == 0 || creditor.0 == 0 || debtor == creditor {
+                return Err(Error::Unavailable);
+            }
+            for id in [duty.agreement.0, duty.obligation.0] {
+                if id == 0 || issuers.contains(&id) || !ids.insert(id) || id_exists(self, id) {
+                    return Err(Error::Unavailable);
+                }
+            }
+            let parties = BTreeSet::from([debtor, creditor]);
+            plan.agreements.push(Patch {
+                id: duty.agreement,
+                before: None,
+                after: Agreement {
+                    id: duty.agreement,
+                    proposer: debtor,
+                    accepted: parties.clone(),
+                    parties,
+                    terms: vec![duty.term.clone()],
+                    procedure: None,
+                    obligations: vec![duty.obligation],
+                    status: AgreementStatus::Active,
+                    proposed_at: now,
+                    revision: 0,
+                },
+            });
+            plan.obligations.push(Patch {
+                id: duty.obligation,
+                before: None,
+                after: Obligation {
+                    id: duty.obligation,
+                    agreement: duty.agreement,
+                    term: duty.term.clone(),
+                    performed: 0,
+                    accrued: 0,
+                    share_remainder: 0,
+                    share_scale: 0,
+                    defaulted: false,
+                    cargo: BTreeMap::new(),
+                },
+            });
+            plan.events.push(TransitionEvent::Activated {
+                agreement: duty.agreement,
+            });
+        }
+        plan.check(self)?;
+        Ok(plan)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransitionEvent {
     Proposed {

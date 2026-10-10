@@ -7,3 +7,9 @@ pub use evaluation::*;
 pub use state::*;
 #[cfg(test)]
 mod tests;
+
+mod delivery;
+pub use delivery::*;
+
+#[cfg(test)]
+mod delivery_tests;

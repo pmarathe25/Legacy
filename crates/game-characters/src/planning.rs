@@ -49,7 +49,10 @@ pub enum Purpose {
     Work(SiteId),
     Stop,
     Resume,
-    CareSupply(PersonId),
+    CareSupply {
+        child: PersonId,
+        good: Good,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionShape {
@@ -66,12 +69,14 @@ pub struct Plan<A> {
     pub action: A,
     pub purpose: Purpose,
     pub shape: ActionShape,
+    pub delivery: Option<game_logistics::Delivery>,
 }
 #[derive(Clone, Debug)]
 pub struct Candidate<A> {
     pub action: A,
     pub purpose: Purpose,
     pub shape: ActionShape,
+    pub delivery: Option<game_logistics::Delivery>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Activity {
@@ -125,7 +130,109 @@ pub struct Decision<A> {
     pub plan: Option<Plan<A>>,
     pub explanation: Explanation,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CareDelivery {
+    pub delivery: game_logistics::Delivery,
+    pub location: Location,
+    pub observed_at: SimTime,
+}
+fn care_urgency(signal: &ChildSignal, good: Good) -> i64 {
+    match good {
+        Good::Food => signal.urgency,
+        Good::Water => signal.hydration_urgency,
+        _ => 0,
+    }
+}
 impl<A: Clone> Mind<A> {
+    /// Motivation describes requirements only. Acquisition, carrying and travel
+    /// are composed by logistics; absence supplies no new information.
+    pub fn care_deliveries(&self, facts: &PersonalFacts) -> Vec<CareDelivery> {
+        let mut goals = Vec::new();
+        for (child, signal) in &self.child_signals {
+            if *child == facts.actor
+                || signal.observed_at > facts.now
+                || self.care_motivation(*child) < 300
+            {
+                continue;
+            }
+            let fresh = signal.observed_at == facts.now && facts.observed_contacts.contains(child);
+            for good in [Good::Food, Good::Water] {
+                let continuing = self
+                    .plan
+                    .as_ref()
+                    .filter(|plan| {
+                        plan.purpose
+                            == Purpose::CareSupply {
+                                child: *child,
+                                good,
+                            }
+                    })
+                    .and_then(|plan| plan.delivery.as_ref())
+                    .filter(|delivery| delivery.remaining.0 > 0);
+                if care_urgency(signal, good) == 0 || !fresh && continuing.is_none() {
+                    continue;
+                }
+                let delivery = continuing.cloned().or_else(|| {
+                    game_logistics::Delivery::new(
+                        game_logistics::Requirement {
+                            good,
+                            quantity: facts.limits.meal_size,
+                            source: None,
+                        },
+                        game_logistics::Destination::Contact(*child),
+                    )
+                    .ok()
+                });
+                if let Some(delivery) = delivery {
+                    goals.push(CareDelivery {
+                        delivery,
+                        location: signal.location.clone(),
+                        observed_at: signal.observed_at,
+                    });
+                }
+            }
+        }
+        goals
+    }
+    /// Fresh local observation can remove the only applicable care signal.
+    /// Missing information while away is retained by the observer, so this
+    /// does not inspect another person's current body or require continued care.
+    pub fn reconcile_care_observation(&mut self) {
+        if let Some(plan) = &self.plan
+            && let Purpose::CareSupply { child, good } = plan.purpose
+            && self
+                .child_signals
+                .get(&child)
+                .is_none_or(|signal| care_urgency(signal, good) == 0)
+        {
+            self.plan = None;
+            self.goal = Goal::Rest;
+            self.explanation = explanation(Goal::Rest, 0, 0, 0);
+        }
+    }
+    pub fn record_care_receipt(
+        &mut self,
+        child: PersonId,
+        good: Good,
+        quantity: Quantity,
+        sequence: u64,
+    ) -> Result<bool, Error> {
+        let Some(delivery) = self.plan.as_mut().and_then(|plan| plan.delivery.as_mut()) else {
+            return Ok(false);
+        };
+        if delivery.destination != game_logistics::Destination::Contact(child)
+            || delivery.requirement.good != good
+        {
+            return Ok(false);
+        }
+        delivery.delivered(&game_logistics::DeliveryReceipt {
+            destination: delivery.destination,
+            good,
+            quantity,
+            sequence,
+        })
+    }
     pub fn decide(
         &self,
         facts: &PersonalFacts,
@@ -168,6 +275,7 @@ impl<A: Clone> Mind<A> {
                     action: candidate.action.clone(),
                     purpose: candidate.purpose,
                     shape: candidate.shape,
+                    delivery: candidate.delivery.clone(),
                 }),
                 explanation: explanation(Goal::Practice, 2_000, 0, 0),
             };
@@ -209,6 +317,7 @@ impl<A: Clone> Mind<A> {
                                 action: candidate.action.clone(),
                                 purpose: candidate.purpose,
                                 shape: candidate.shape,
+                                delivery: candidate.delivery.clone(),
                             }),
                             explanation,
                         })
@@ -254,6 +363,7 @@ impl<A: Clone> Mind<A> {
                 action: candidate.action.clone(),
                 purpose: candidate.purpose,
                 shape: candidate.shape,
+                delivery: candidate.delivery.clone(),
             }),
             explanation: score,
         }
@@ -355,7 +465,7 @@ impl<A: Clone> Mind<A> {
                 }
                 let need = match fact.good {
                     Good::Food if fact.quantity >= facts.limits.meal_size => signal.urgency,
-                    Good::Water if fact.quantity >= facts.limits.drink_quantity => {
+                    Good::Water if fact.quantity >= facts.limits.meal_size => {
                         signal.hydration_urgency
                     }
                     _ => return None,
@@ -386,11 +496,20 @@ impl<A: Clone> Mind<A> {
                 let motive = self.care_motivation(child);
                 (motive >= 300).then(|| explanation(Goal::Care, 500, motive, 0))
             }
-            Purpose::CareSupply(child) => {
+            Purpose::CareSupply { child, good } => {
                 let signal = self.child_signals.get(&child)?;
                 let motive = self.care_motivation(child);
-                (contacted(&child, signal) && signal.hydration_urgency > 0 && motive >= 300)
-                    .then(|| explanation(Goal::Care, signal.hydration_urgency, motive, 0))
+                let continuing = self.plan.as_ref().is_some_and(|plan| {
+                    plan.purpose == Purpose::CareSupply { child, good }
+                        && plan
+                            .delivery
+                            .as_ref()
+                            .is_some_and(|delivery| delivery.remaining.0 > 0)
+                }) && signal.observed_at <= facts.now;
+                ((contacted(&child, signal) || continuing)
+                    && care_urgency(signal, good) > 0
+                    && motive >= 300)
+                    .then(|| explanation(Goal::Care, care_urgency(signal, good), motive, 0))
             }
             Purpose::Rest if facts.place != Place::Moving => Some(explanation(
                 Goal::Recovery,
@@ -649,6 +768,106 @@ mod tests {
             retry_after: SimTime(0),
         }
     }
+
+    #[test]
+    fn chosen_care_declares_resource_requirements_without_acquire_or_return_workflows() {
+        for (good, food, water) in [(Good::Food, 3_000, 0), (Good::Water, 0, 3_000)] {
+            let child = PersonId(9);
+            let mut m = mind();
+            let mut f = facts();
+            f.observed_contacts.insert(child);
+            m.relationships.insert(
+                child,
+                Relationship {
+                    affection: 700,
+                    trust: 700,
+                },
+            );
+            m.child_signals.insert(
+                child,
+                ChildSignal {
+                    location: Location::AtArea(AreaId(1)),
+                    observed_at: f.now,
+                    urgency: food,
+                    hydration_urgency: water,
+                    preference: None,
+                },
+            );
+            let goal = m.care_deliveries(&f).pop().unwrap();
+            assert_eq!(goal.delivery.requirement.good, good);
+            assert_eq!(goal.delivery.requirement.quantity, f.limits.meal_size);
+            let supply = Candidate {
+                action: 1,
+                purpose: Purpose::CareSupply { child, good },
+                shape: ActionShape::Move(AreaId(2)),
+                delivery: Some(goal.delivery),
+            };
+            let d = m.decide(&f, std::slice::from_ref(&supply), ConceptId(1), 0);
+            m.record_attempt(f.now, d.plan.unwrap(), d.explanation, true)
+                .unwrap();
+            f.now = SimTime(200);
+            f.place = Place::Area(AreaId(2));
+            f.observed_contacts.clear();
+            let remembered = m.care_deliveries(&f).pop().unwrap();
+            assert_eq!(remembered.location, Location::AtArea(AreaId(1)));
+            assert_eq!(remembered.observed_at, SimTime(100));
+            assert!(
+                m.decide(&f, std::slice::from_ref(&supply), ConceptId(1), 0)
+                    .plan
+                    .is_some()
+            );
+            assert!(
+                m.record_care_receipt(child, good, f.limits.meal_size, 1)
+                    .unwrap()
+            );
+            assert!(m.care_deliveries(&f).is_empty());
+        }
+    }
+    #[test]
+    fn fresh_observation_removing_an_applicable_care_signal_abandons_only_that_goal() {
+        let child = PersonId(9);
+        let mut m = mind();
+        let mut f = facts();
+        f.observed_contacts.insert(child);
+        m.relationships.insert(
+            child,
+            Relationship {
+                affection: 700,
+                trust: 700,
+            },
+        );
+        m.child_signals.insert(
+            child,
+            ChildSignal {
+                location: Location::AtArea(AreaId(1)),
+                observed_at: f.now,
+                urgency: 3_000,
+                hydration_urgency: 0,
+                preference: None,
+            },
+        );
+        let goal = m.care_deliveries(&f).pop().unwrap();
+        let supply = Candidate {
+            action: 1,
+            purpose: Purpose::CareSupply {
+                child,
+                good: Good::Food,
+            },
+            shape: ActionShape::Move(AreaId(2)),
+            delivery: Some(goal.delivery),
+        };
+        let decision = m.decide(&f, &[supply], ConceptId(1), 0);
+        m.record_attempt(f.now, decision.plan.unwrap(), decision.explanation, true)
+            .unwrap();
+        // While absent, the last contact remains a dated reason to continue.
+        m.reconcile_care_observation();
+        assert!(m.plan.is_some());
+        // The observer later removes the signal after local inapplicability.
+        m.child_signals.remove(&child);
+        m.reconcile_care_observation();
+        assert!(m.plan.is_none());
+        assert_eq!(m.goal, Goal::Rest);
+    }
     pub(super) fn facts() -> PersonalFacts {
         PersonalFacts {
             actor: PersonId(1),
@@ -698,6 +917,7 @@ mod tests {
             action,
             purpose,
             shape,
+            delivery: None,
         }
     }
     fn work(m: &mut Mind<u8>) -> Candidate<u8> {

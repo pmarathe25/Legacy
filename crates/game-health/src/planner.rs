@@ -188,26 +188,6 @@ pub fn plan_water_procurement(rules: &Rules, input: &WaterPlanning<'_>) -> Optio
         .min_by_key(|(cost, area)| (*cost, *area))
         .map(|(_, destination)| HealthIntent::Move { destination })
 }
-pub fn plan_water_delivery(rules: &Rules, input: &WaterPlanning<'_>) -> Option<HealthIntent> {
-    if let Some(stock) = input
-        .stocks
-        .iter()
-        .filter(|s| {
-            s.fact.good == Good::Water
-                && s.fact.accessible
-                && s.here
-                && !s.held
-                && s.fact.quantity >= rules.drink_quantity
-        })
-        .min_by_key(|s| s.fact.inventory)
-    {
-        return Some(HealthIntent::Carry {
-            source: stock.fact.inventory,
-            quantity: rules.drink_quantity,
-        });
-    }
-    plan_water_procurement(rules, input)
-}
 pub struct NeedFacts {
     pub actor: PersonId,
     pub drink_relief: u64,

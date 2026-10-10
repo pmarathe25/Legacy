@@ -5,6 +5,12 @@ use crate::*;
 use game_conflict::distance;
 pub use game_conflict::{Captivity, Encounter, Fighter, Map, Profile, Rules, World};
 
+struct EncounterOpening {
+    location: Location,
+    area: AreaId,
+    ends: SimTime,
+}
+
 impl Simulation {
     pub fn combat_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::life_fixture(seed, execution)?;
@@ -332,7 +338,7 @@ impl Simulation {
             }
             _ => return Err(Error::Unavailable),
         }
-        self.update_property_events();
+        self.update_property_events()?;
         self.reconcile_agreements()?;
         self.observe_enforcement();
         let receipt = CommandReceipt {
@@ -403,10 +409,17 @@ impl Simulation {
         Ok(id)
     }
 
-    pub fn debug_start_encounter(
-        &mut self,
-        participants: Vec<(PersonId, u32)>,
-    ) -> Result<EncounterId, Error> {
+    pub(crate) fn preflight_start_encounter(
+        &self,
+        participants: &[(PersonId, u32)],
+    ) -> Result<(), Error> {
+        self.prepare_encounter_opening(participants).map(|_| ())
+    }
+
+    fn prepare_encounter_opening(
+        &self,
+        participants: &[(PersonId, u32)],
+    ) -> Result<EncounterOpening, Error> {
         let w = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
         if !w.rules.capacity_valid()
             || !(2..=w.rules.encounter_limit).contains(&participants.len())
@@ -424,7 +437,7 @@ impl Simulation {
         let mut ids = BTreeSet::new();
         let mut location = None;
         let mut place = None;
-        for (actor, _) in &participants {
+        for (actor, _) in participants {
             self.person_index.get(actor).ok_or(Error::Unavailable)?;
             let at = self.resolved_location(*actor);
             if !matches!(at, Location::AtArea(_) | Location::StoppedOnRoad { .. }) {
@@ -481,6 +494,22 @@ impl Simulation {
         }) {
             return Err(Error::Unavailable);
         }
+        Ok(EncounterOpening {
+            location,
+            area,
+            ends,
+        })
+    }
+
+    pub fn debug_start_encounter(
+        &mut self,
+        participants: Vec<(PersonId, u32)>,
+    ) -> Result<EncounterId, Error> {
+        let EncounterOpening {
+            location,
+            area,
+            ends,
+        } = self.prepare_encounter_opening(&participants)?;
         let map = self.ensure_combat_location_map(&location)?;
         let positions: Vec<_> = participants
             .iter()

@@ -297,6 +297,7 @@ impl Simulation {
                     },
                 );
             }
+            mind.reconcile_care_observation();
             for site in self
                 .state
                 .physical
@@ -339,7 +340,7 @@ impl Simulation {
         self.profile
             .record_phase("review.observe_projects", phase_started);
         let phase_started = Instant::now();
-        self.observe_property();
+        self.observe_property()?;
         self.profile
             .record_phase("review.observe_property", phase_started);
         let phase_started = Instant::now();
@@ -525,7 +526,9 @@ impl Simulation {
             } else {
                 Control::Autonomous
             },
-            in_dialogue: self.army_actor_talking(id) || self.realm_actor_busy(id),
+            in_dialogue: self.army_actor_talking(id)
+                || self.realm_actor_busy(id)
+                || self.property_actor_talking(id),
             independent: self.independent(id),
             child: self
                 .state
@@ -544,6 +547,7 @@ impl Simulation {
             observed_contacts,
             can_resume: place == Place::Stopped && self.transport_can_depart(id),
         };
+        let care_goals = mind.care_deliveries(&facts);
         let mut candidates = Vec::new();
         let mut add = |action, purpose| {
             let shape = action_shape(&action);
@@ -551,8 +555,57 @@ impl Simulation {
                 action,
                 purpose,
                 shape,
+                delivery: match purpose {
+                    Purpose::CareSupply { child, good } => care_goals
+                        .iter()
+                        .find(|goal| {
+                            goal.delivery.destination == game_logistics::Destination::Contact(child)
+                                && goal.delivery.requirement.good == good
+                        })
+                        .map(|goal| goal.delivery.clone()),
+                    _ => None,
+                },
             });
         };
+        for goal in &care_goals {
+            let game_logistics::Destination::Contact(child) = goal.delivery.destination else {
+                continue;
+            };
+            let location = match transport::location_position(&goal.location, goal.observed_at) {
+                Ok(game_transport::Position::Area(area)) => Location::AtArea(area),
+                Ok(game_transport::Position::Road(point)) => Location::StoppedOnRoad {
+                    from: point.from,
+                    to: point.to,
+                    progress: point.progress,
+                    duration: point.duration,
+                },
+                Err(_) => continue,
+            };
+            let destination = game_logistics::KnownDestination {
+                destination: goal.delivery.destination,
+                location,
+                observed_at: goal.observed_at,
+                accessible: true,
+                room: None,
+                direct_transfer: true,
+            };
+            let step = self.plan_delivery(id, &goal.delivery, &destination, rules.meal_size);
+            let action = match step {
+                game_logistics::Step::Arrived { source, .. } => {
+                    Some(Command::Care { child, source })
+                }
+                step => self.delivery_command(id, step),
+            };
+            if let Some(action) = action {
+                add(
+                    action,
+                    Purpose::CareSupply {
+                        child,
+                        good: goal.delivery.requirement.good,
+                    },
+                );
+            }
+        }
         if let Some(action) = self.force_candidate(id) {
             add(action, Purpose::Force);
         }
@@ -587,29 +640,6 @@ impl Simulation {
         }
         for child in &facts.observed_contacts {
             add(Command::Comfort { child: *child }, Purpose::Comfort(*child));
-            for fact in mind
-                .knowledge
-                .values()
-                .filter(|fact| matches!(fact.good, Good::Food | Good::Water))
-            {
-                add(
-                    Command::Care {
-                        child: *child,
-                        source: fact.inventory,
-                    },
-                    Purpose::Care {
-                        child: *child,
-                        source: fact.inventory,
-                    },
-                );
-            }
-            if matches!(place, Place::Area(area) if !mind.knowledge.values().any(|fact| fact.good == Good::Water && fact.accessible && fact.area == area && fact.quantity >= facts.limits.drink_quantity))
-                && let Some(action) = self
-                    .ecology_water_candidate(id, true)
-                    .or_else(|| self.health_water_procurement(id))
-            {
-                add(action, Purpose::CareSupply(*child));
-            }
         }
         add(Command::Rest, Purpose::Rest);
         if let Place::Area(_) = place {
@@ -651,6 +681,32 @@ impl Simulation {
             ),
         }
     }
+    pub(crate) fn on_delivery_event(&mut self, kind: &EventKind, sequence: EventId) {
+        let EventKind::Cared {
+            caregiver,
+            child,
+            source,
+            quantity,
+        } = kind
+        else {
+            return;
+        };
+        let Some(good) = self.state.inventories.get(source).map(|stock| stock.good) else {
+            return;
+        };
+        if let Some(mind) = self
+            .state
+            .decisions
+            .as_mut()
+            .and_then(|world| world.minds.get_mut(caregiver))
+        {
+            let _ = mind.record_care_receipt(*child, good, *quantity, sequence.0);
+        }
+        if let Some(lineage) = &mut self.state.lineage {
+            let _ = lineage.record_care_receipt(*caregiver, *child, good, *quantity, sequence.0);
+        }
+    }
+
     pub(crate) fn learn_from_work(&mut self) {
         let Some(world) = &mut self.state.decisions else {
             return;

@@ -908,7 +908,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
     let held = sim.canonical_state().inventories[&cargo].quantity.0;
     game_cli::execute(
         &mut sim,
-        &format!("guardian {} food {} 1000", guardian.0, source.0),
+        &format!("guardian {} supply food {} 1000", guardian.0, source.0),
         &execution,
     )
     .unwrap();

@@ -305,7 +305,7 @@ impl Simulation {
         )?;
         sim.review_decisions()?;
         sim.observe_enforcement();
-        sim.update_property_events();
+        sim.update_property_events()?;
         Ok(sim)
     }
     fn enforcement_world(&mut self) {
@@ -630,34 +630,7 @@ impl Simulation {
                 record.explanation =
                     "The institution adopted a remedy; physical compliance remains unresolved"
                         .into();
-                if let EnforcementRemedy::Depose {
-                    office,
-                    replacement,
-                } = remedy
-                {
-                    let i = self
-                        .state
-                        .institutions
-                        .as_mut()
-                        .unwrap()
-                        .institutions
-                        .get_mut(&institution)
-                        .unwrap();
-                    i.charter
-                        .offices
-                        .iter_mut()
-                        .find(|o| o.slot == office)
-                        .unwrap()
-                        .holder = replacement;
-                    i.office_support.insert(
-                        office,
-                        change
-                            .votes
-                            .iter()
-                            .filter(|(actor, yes)| **yes && i.members.contains(actor))
-                            .map(|(actor, _)| *actor)
-                            .collect(),
-                    );
+                if matches!(remedy, EnforcementRemedy::Depose { .. }) {
                     let case = self
                         .state
                         .enforcement

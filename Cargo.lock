@@ -69,6 +69,7 @@ dependencies = [
  "game-lineage",
  "game-missions",
  "game-projects",
+ "game-property",
  "game-realm",
  "game-society",
  "game-transport",
@@ -90,6 +91,7 @@ name = "game-characters"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-logistics",
  "serde",
  "serde_json",
 ]
@@ -180,6 +182,16 @@ name = "game-lineage"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-logistics",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-logistics"
+version = "0.1.0"
+dependencies = [
+ "game-core",
  "serde",
  "serde_json",
 ]
@@ -206,6 +218,15 @@ name = "game-projects"
 version = "0.1.0"
 dependencies = [
  "game-agreements",
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-property"
+version = "0.1.0"
+dependencies = [
  "game-core",
  "serde",
  "serde_json",
@@ -285,9 +306,11 @@ dependencies = [
  "game-invocation",
  "game-lifecycle",
  "game-lineage",
+ "game-logistics",
  "game-missions",
  "game-physiology",
  "game-projects",
+ "game-property",
  "game-realm",
  "game-session",
  "game-sim",

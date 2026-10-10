@@ -54,6 +54,7 @@ impl Simulation {
             jobs: BTreeMap::new(),
             known: BTreeMap::new(),
             known_plots: BTreeMap::new(),
+            observed_areas: BTreeMap::new(),
             day: sim.state.environment.as_ref().unwrap().weather_day,
             next_request: BTreeMap::new(),
         });
@@ -468,7 +469,7 @@ impl Simulation {
                 self.debug_start_encounter(vec![(actor, 0), (custodian, 1)])?;
             }
         }
-        self.update_property_events();
+        self.update_property_events()?;
         Ok(())
     }
     pub(crate) fn interrupt_ecology(&mut self, actor: PersonId) {
@@ -567,6 +568,11 @@ impl Simulation {
             let Some(area) = self.ecology_area(actor) else {
                 continue;
             };
+            self.state
+                .ecology
+                .as_mut()
+                .unwrap()
+                .observe_area(actor, area, self.state.time);
             for source in resources.iter().filter(|source| source.area == area) {
                 self.state
                     .ecology
@@ -691,17 +697,113 @@ impl Simulation {
         }
         commands
     }
-    /// A remembered spring is a lead. The local available action performs the
-    /// real reservation, collection, access check and resistance resolution.
-    pub(crate) fn ecology_water_candidate(
+    pub(crate) fn ecology_acquisition_offers(
         &self,
         actor: PersonId,
-        local_only: bool,
-    ) -> Option<Command> {
-        if !self.ecology_able(actor) || self.state.ecology.as_ref()?.jobs.contains_key(&actor) {
-            return None;
-        }
-        self.health_spring_candidate(actor, local_only)
+        good: Good,
+        quantity: Quantity,
+        room: Quantity,
+    ) -> Vec<game_logistics::AcquisitionOffer<Command>> {
+        use game_logistics::{
+            AcquisitionOffer, OfferYield, Prerequisite, PrerequisitePlacement, Requirement,
+        };
+        let Some(world) = &self.state.ecology else {
+            return Vec::new();
+        };
+        let Some(area) = self.ecology_area(actor) else {
+            return Vec::new();
+        };
+        let Some(mind) = self
+            .state
+            .decisions
+            .as_ref()
+            .and_then(|w| w.minds.get(&actor))
+        else {
+            return Vec::new();
+        };
+        let traits = self
+            .invocation_personality(actor)
+            .unwrap_or_else(|| mind.personality.clone());
+        let available = self.available_ecology_commands(actor);
+        let local = world.known.get(&actor).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
+            let q = Quantity(quantity.0.min(room.0).min(known.available.0));
+            let facts = game_ecology::GatherFacts { now: self.state.time, area,
+                capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|w| w.actors[&actor].vitals.fatigue < self.body_rules(actor).fatigue_limit),
+                adult: self.state.development.as_ref().is_none_or(|w| matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)),
+                carrying_room: room, tool: self.ecology_tool(actor) };
+            game_ecology::LocalAcquisition { resource: known.id,
+                can_prepare: world.gathering_conditions(actor, known.id, q, !known.accessible, facts).is_ok(),
+                can_request: available.iter().any(|command| matches!(command, Command::Ecology {action: EcologyAction::RequestAccess {resource}} if *resource == known.id)) }
+        }).collect::<Vec<_>>();
+        let prospects = world.acquisition_prospects(
+            game_ecology::AcquisitionNeed {
+                actor,
+                area,
+                now: self.state.time,
+                good,
+                quantity,
+                room,
+                honesty: traits.honesty,
+                risk_tolerance: traits.risk_tolerance,
+            },
+            &local,
+        );
+        let mut offers = prospects
+            .into_iter()
+            .map(|prospect| AcquisitionOffer {
+                key: prospect.resource.0,
+                good,
+                source: None,
+                location: Location::AtArea(prospect.area),
+                observed_at: prospect.observed_at,
+                accessible: true,
+                quantity: OfferYield::Known(prospect.quantity),
+                requires_carrying_room: matches!(&prospect.action, EcologyAction::Gather { .. }),
+                requirements: if prospect.needs_tool {
+                    vec![Prerequisite {
+                        requirement: Requirement {
+                            good: Good::Tool,
+                            quantity: Quantity(1_000),
+                            source: None,
+                        },
+                        placement: PrerequisitePlacement::Carried,
+                    }]
+                } else {
+                    Vec::new()
+                },
+                action: Command::Ecology {
+                    action: prospect.action,
+                },
+            })
+            .collect::<Vec<_>>();
+        let areas = mind
+            .routes
+            .keys()
+            .chain(mind.routes.values().flat_map(|links| links.keys()))
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        offers.extend(
+            world
+                .exploration_areas(actor, area, self.state.time, &areas)
+                .into_iter()
+                .map(|(target, inspected)| AcquisitionOffer {
+                    key: target.0,
+                    good,
+                    source: None,
+                    location: Location::AtArea(target),
+                    observed_at: inspected,
+                    accessible: true,
+                    quantity: OfferYield::Unknown,
+                    requires_carrying_room: false,
+                    requirements: Vec::new(),
+                    action: Command::Move {
+                        destination: target,
+                    },
+                }),
+        );
+        offers
     }
     pub(crate) fn ecology_candidate(&self, actor: PersonId) -> Option<Command> {
         let world = self.state.ecology.as_ref()?;
@@ -855,6 +957,15 @@ impl Simulation {
                 || known
                     .keys()
                     .any(|resource| !world.resources.contains_key(resource))
+        }) {
+            return Err(bad());
+        }
+        if world.observed_areas.iter().any(|(actor, observed)| {
+            !people.contains(actor)
+                || observed.len() > 16
+                || observed
+                    .iter()
+                    .any(|(area, at)| !area_exists(*area) || *at > self.state.time)
         }) {
             return Err(bad());
         }

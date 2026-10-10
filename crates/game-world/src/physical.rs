@@ -325,6 +325,7 @@ impl Simulation {
                     Command::Cancel
                         | Command::Rest
                         | Command::Eat { .. }
+                        | Command::Load { .. }
                         | Command::Care { .. }
                         | Command::Comfort { .. }
                         | Command::FreeCaptive { .. }
@@ -586,7 +587,7 @@ impl Simulation {
                     || !self.can_use(actor, source_inventory)
                     || !(self.can_use(actor, destination_inventory)
                         || self.agreement_accepts_delivery(actor, destination, quantity)
-                        || self.force_accepts_food_delivery(actor, source, destination, quantity))
+                        || self.guardian_accepts_delivery(actor, source, destination, quantity))
                     || self.unreserved_stock(source, actor) < quantity.0
                     || destination_inventory.capacity.0 - destination_inventory.quantity.0
                         < quantity.0
@@ -741,7 +742,7 @@ impl Simulation {
             self.force_release_started(actor, target, completes)?;
         }
         let phase_started = Instant::now();
-        self.update_property_events();
+        self.update_property_events()?;
         self.profile
             .record_phase("physical.update_property_events", phase_started);
         let phase_started = Instant::now();
@@ -760,10 +761,11 @@ impl Simulation {
         Ok(())
     }
 
-    fn can_use(&self, actor: PersonId, inventory: &Inventory) -> bool {
-        if !self.has_stock_access(actor, inventory) {
-            return false;
-        }
+    pub(crate) fn can_use(&self, actor: PersonId, inventory: &Inventory) -> bool {
+        self.has_stock_access(actor, inventory) && self.stock_here(actor, inventory)
+    }
+
+    pub(crate) fn stock_here(&self, actor: PersonId, inventory: &Inventory) -> bool {
         match inventory.location {
             InventoryLocation::Area(area) => {
                 self.resolved_location(actor) == Location::AtArea(area)
@@ -1024,17 +1026,17 @@ impl Simulation {
         })
     }
 
-    pub(crate) fn complete_physical(&mut self, actor: PersonId) {
+    pub(crate) fn complete_physical(&mut self, actor: PersonId) -> Result<(), Error> {
         let activity = self.state.physical.as_ref().unwrap().actors[&actor]
             .activity
             .clone();
         if matches!(activity, Activity::RealmTalk { .. }) {
             self.complete_realm_talk(actor);
-            return;
+            return Ok(());
         }
         if matches!(activity, Activity::Lift { .. }) {
             self.complete_transport_lift(actor);
-            return;
+            return Ok(());
         }
         let mut success = false;
         if matches!(
@@ -1042,52 +1044,52 @@ impl Simulation {
             Activity::Social { .. } | Activity::Instruction { .. } | Activity::Practice { .. }
         ) {
             self.complete_social(actor);
-            return;
+            return Ok(());
         }
         if matches!(activity, Activity::EnforcementTalk { .. }) {
             self.complete_enforcement_talk(actor);
-            return;
+            return Ok(());
         }
         if matches!(activity, Activity::Gather { .. }) {
             self.complete_gathering(actor);
-            return;
+            return Ok(());
         }
         if matches!(
             activity,
             Activity::Escape { .. } | Activity::Restrain { .. }
         ) {
             self.complete_force(actor);
-            return;
+            return Ok(());
         }
         if matches!(activity, Activity::ReportAgreement { .. }) {
             self.complete_agreement_report(actor);
-            return;
+            return Ok(());
         }
         if matches!(activity, Activity::Construct { .. }) {
             self.complete_construction(actor);
-            return;
+            return Ok(());
         }
         if matches!(activity, Activity::Lesson { .. }) {
             self.complete_lesson(actor);
-            return;
+            return Ok(());
         }
         if matches!(
             activity,
             Activity::Take { .. } | Activity::ReportIncident { .. }
         ) {
-            self.complete_property_action(actor);
-            return;
+            self.complete_property_action(actor)?;
+            return Ok(());
         }
         if matches!(activity, Activity::Cultivate { .. }) {
             self.complete_cultivation(actor);
-            return;
+            return Ok(());
         }
         if let Activity::Conceive { pregnancy, .. } = activity {
             self.complete_conception(pregnancy);
-            return;
+            return Ok(());
         }
         if activity == Activity::Idle {
-            return;
+            return Ok(());
         }
         match activity {
             Activity::Comfort { child, .. } => {
@@ -1259,7 +1261,7 @@ impl Simulation {
                             .get_mut(&actor)
                             .unwrap()
                             .activity = Activity::Idle;
-                        return;
+                        return Ok(());
                     }
                     let food = self.state.inventories.get_mut(&source).unwrap();
                     food.quantity.0 -= quantity.0;
@@ -1327,6 +1329,7 @@ impl Simulation {
             .activity = Activity::Idle;
         // Physiology commits after physical effects; apply hunger relief to that
         // interval's evaluated output in commit_physical using this event.
+        Ok(())
     }
 
     pub(crate) fn commit_physical(
@@ -1489,7 +1492,7 @@ impl Simulation {
         access: BTreeSet<PersonId>,
     ) -> Result<InventoryId, Error> {
         let id = self.add_inventory(good, location, quantity, capacity, access)?;
-        self.update_property_events();
+        self.update_property_events()?;
         Ok(id)
     }
 

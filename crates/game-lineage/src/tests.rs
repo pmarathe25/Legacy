@@ -1,6 +1,6 @@
 use crate::*;
 use game_core::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 fn initial() -> World {
     World {
         incarnations: vec![Incarnation {
@@ -22,7 +22,8 @@ fn initial() -> World {
                     request: GuardianRequest::Work { site: SiteId(7) },
                     accepted_at: SimTime(0),
                 }),
-                water_provision: None,
+                provision: None,
+                requested_delivery: None,
                 knows_invocation: true,
             },
         )]),
@@ -279,8 +280,6 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
         should_rest: true,
         ready: false,
         need: None,
-        known_stocks: &[],
-        meal_size: Quantity(1_000),
     };
     assert_eq!(
         guardian_intention(base.clone()).action,
@@ -301,156 +300,234 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
         ..base
     };
     assert_eq!(guardian_intention(local.clone()).action, None);
-    let food = StockKnowledge {
-        inventory: InventoryId(10),
-        area: AreaId(1),
-        good: Good::Food,
-        quantity: Quantity(2_000),
-        accessible: true,
-        observed_at: SimTime(40),
-        learned_at: SimTime(40),
-        source: KnowledgeSource::Observed(PersonId(2)),
-    };
-    let stocks = [food];
-    assert_eq!(
-        guardian_intention(GuardianInput {
-            known_stocks: &stocks,
-            ..local.clone()
-        })
-        .action,
-        Some(GuardianAction::Care {
-            child: PersonId(9),
-            source: InventoryId(10)
-        })
-    );
     let stale = GuardianInput {
         need: Some(NeedObservation {
             observed_at: SimTime(39),
             ..local.need.clone().unwrap()
         }),
-        known_stocks: &stocks,
         ..local.clone()
     };
     assert_eq!(guardian_intention(stale).action, Some(GuardianAction::Rest));
-    let water = [StockKnowledge {
-        good: Good::Water,
-        ..stocks[0].clone()
-    }];
-    let thirsty = GuardianInput {
+    let company = GuardianInput {
         need: Some(NeedObservation {
             urgency: 0,
-            hydration_urgency: 3_000,
-            ..local.need.clone().unwrap()
+            preference: Some(ChildhoodInterest::Company),
+            ..local.need.unwrap()
         }),
-        known_stocks: &water,
-        ..local.clone()
+        ..local
     };
     assert_eq!(
-        guardian_intention(thirsty.clone()).action,
-        Some(GuardianAction::Care {
-            child: PersonId(9),
-            source: InventoryId(10)
-        })
-    );
-    assert_eq!(
-        guardian_intention(GuardianInput {
-            need: Some(NeedObservation {
-                observed_at: SimTime(39),
-                ..thirsty.need.unwrap()
-            }),
-            ..thirsty
-        })
-        .action,
-        Some(GuardianAction::Rest)
+        guardian_intention(company).action,
+        Some(GuardianAction::Comfort { child: PersonId(9) })
     );
 }
 
 #[test]
-fn a_water_trip_persists_from_observed_need_until_real_contact_resolves_it() {
-    let child = PersonId(9);
-    let need = NeedObservation {
-        location: Location::AtArea(AreaId(1)),
-        observed_at: SimTime(40),
-        urgency: 0,
-        hydration_urgency: 3_000,
-        preference: None,
-    };
-    // A remote or stale signal cannot start a trip.
-    assert_eq!(
-        review_water_provision(None, child, SimTime(40), false, Some(&need), None, true),
-        (None, None)
-    );
-    assert_eq!(
-        review_water_provision(None, child, SimTime(41), true, Some(&need), None, true),
-        (None, None)
-    );
-    let (plan, action) =
-        review_water_provision(None, child, SimTime(40), true, Some(&need), None, true);
-    assert_eq!(action, Some(ProvisionAction::AcquireWater));
-    let plan = plan.unwrap();
-    assert_eq!(
-        review_water_provision(Some(&plan), child, SimTime(50), false, None, None, false).1,
-        Some(ProvisionAction::Continue)
-    );
-    // Arrival at a source must not cause an empty-handed return to the child.
-    assert_eq!(
-        review_water_provision(Some(&plan), child, SimTime(60), false, None, None, true).1,
-        Some(ProvisionAction::AcquireWater)
-    );
-    let water = InventoryId(20);
-    assert_eq!(
-        review_water_provision(
-            Some(&plan),
-            child,
+fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credit_delivery() {
+    for (good, food, water) in [(Good::Food, 3_000, 0), (Good::Water, 0, 3_000)] {
+        let target = PersonId(9);
+        let need = NeedObservation {
+            location: Location::AtArea(AreaId(1)),
+            observed_at: SimTime(40),
+            urgency: food,
+            hydration_urgency: water,
+            preference: None,
+        };
+        assert!(
+            review_care_provision(
+                None,
+                target,
+                SimTime(40),
+                false,
+                Some(&need),
+                Quantity(1_000)
+            )
+            .is_none()
+        );
+        assert!(
+            review_care_provision(
+                None,
+                target,
+                SimTime(41),
+                true,
+                Some(&need),
+                Quantity(1_000)
+            )
+            .is_none()
+        );
+        let provision = review_care_provision(
+            None,
+            target,
+            SimTime(40),
+            true,
+            Some(&need),
+            Quantity(1_000),
+        )
+        .unwrap();
+        assert_eq!(provision.delivery.requirement.good, good);
+        assert_eq!(provision.delivery.requirement.quantity, Quantity(1_000));
+        let continued = review_care_provision(
+            Some(&provision),
+            target,
             SimTime(70),
             false,
             None,
-            Some(water),
-            true
+            Quantity(1_000),
         )
-        .1,
-        Some(ProvisionAction::ReturnToChild)
-    );
-    assert_eq!(
-        review_water_provision(
-            Some(&plan),
-            child,
-            SimTime(80),
-            true,
+        .unwrap();
+        assert_eq!(continued, provision);
+        let mut world = initial();
+        world.guardians.get_mut(&PersonId(2)).unwrap().provision = Some(provision);
+        assert!(
+            !world
+                .record_care_receipt(PersonId(2), target, Good::Tool, Quantity(1_000), 1)
+                .unwrap()
+        );
+        assert!(
+            world
+                .record_care_receipt(PersonId(2), target, good, Quantity(500), 2)
+                .unwrap()
+        );
+        assert_eq!(
+            world.guardians[&PersonId(2)]
+                .provision
+                .as_ref()
+                .unwrap()
+                .delivery
+                .remaining,
+            Quantity(500)
+        );
+        assert!(
+            world
+                .record_care_receipt(PersonId(2), target, good, Quantity(500), 3)
+                .unwrap()
+        );
+        assert!(
+            review_care_provision(
+                world.guardians[&PersonId(2)].provision.as_ref(),
+                target,
+                SimTime(80),
+                false,
+                None,
+                Quantity(1_000)
+            )
+            .is_none()
+        );
+        assert!(
+            review_care_provision(
+                Some(&continued),
+                PersonId(10),
+                SimTime(80),
+                false,
+                None,
+                Quantity(1_000)
+            )
+            .is_none()
+        );
+    }
+}
+#[test]
+fn care_goal_composes_with_the_same_generic_delivery_for_food_and_water() {
+    use game_logistics::*;
+    for (good, food, water) in [(Good::Food, 3_000, 0), (Good::Water, 0, 3_000)] {
+        let target = PersonId(9);
+        let location = Location::AtArea(AreaId(1));
+        let need = NeedObservation {
+            location: location.clone(),
+            observed_at: SimTime(40),
+            urgency: food,
+            hydration_urgency: water,
+            preference: None,
+        };
+        let provision = review_care_provision(
             None,
-            Some(water),
-            true
+            target,
+            SimTime(40),
+            true,
+            Some(&need),
+            Quantity(1_000),
         )
-        .1,
-        Some(ProvisionAction::Care { source: water })
-    );
-    let satisfied = NeedObservation {
-        observed_at: SimTime(81),
+        .unwrap();
+        let stocks = [KnownStock {
+            inventory: InventoryId(20),
+            good,
+            quantity: Quantity(1_000),
+            accessible: true,
+            location: location.clone(),
+            observed_at: SimTime(40),
+            room: None,
+        }];
+        let destination = KnownDestination {
+            destination: Destination::Contact(target),
+            location: location.clone(),
+            observed_at: SimTime(40),
+            accessible: true,
+            room: None,
+            direct_transfer: true,
+        };
+        let contacts = BTreeSet::from([target]);
+        let routes = BTreeMap::new();
+        let prerequisite_room = BTreeMap::new();
+        let input = Input::<u8> {
+            now: SimTime(40),
+            place: &location,
+            free: true,
+            can_travel: true,
+            room: Quantity(0),
+            prerequisite_room: &prerequisite_room,
+            minimum_handoff: Quantity(1_000),
+            cargo: &[],
+            stocks: &stocks,
+            destination: Some(&destination),
+            contacts: &contacts,
+            routes: &routes,
+            offers: &[],
+        };
+        assert_eq!(
+            provision.delivery.plan(&input),
+            Step::Arrived {
+                source: InventoryId(20),
+                quantity: Quantity(1_000)
+            }
+        );
+        assert_eq!(provision.delivery.remaining, Quantity(1_000));
+    }
+}
+
+#[test]
+fn locally_observed_care_inapplicability_clears_autonomous_care_and_preserves_requested_supply() {
+    let mut world = initial();
+    let target = PersonId(1);
+    let need = NeedObservation {
+        location: Location::AtArea(AreaId(1)),
+        observed_at: SimTime(0),
+        urgency: 3_000,
         hydration_urgency: 0,
-        ..need
+        preference: None,
     };
+    let goal = review_care_provision(None, target, SimTime(0), true, Some(&need), Quantity(1_000))
+        .unwrap();
+    let requested = RequestedDelivery {
+        delivery: game_logistics::Delivery::new(
+            game_logistics::Requirement {
+                good: Good::Timber,
+                quantity: Quantity(1_000),
+                source: None,
+            },
+            game_logistics::Destination::Contact(target),
+        )
+        .unwrap(),
+        accepted_at: SimTime(0),
+        cargo: BTreeMap::new(),
+        last_event: 0,
+    };
+    let guardian = world.guardians.get_mut(&PersonId(2)).unwrap();
+    guardian.provision = Some(goal);
+    guardian.requested_delivery = Some(requested.clone());
+    world.observe_care_unavailable(PersonId(2));
+    assert!(world.guardians[&PersonId(2)].provision.is_none());
     assert_eq!(
-        review_water_provision(
-            Some(&plan),
-            child,
-            SimTime(81),
-            true,
-            Some(&satisfied),
-            Some(water),
-            true
-        ),
-        (None, None)
-    );
-    assert_eq!(
-        review_water_provision(
-            Some(&plan),
-            PersonId(10),
-            SimTime(90),
-            false,
-            None,
-            Some(water),
-            true
-        ),
-        (None, None)
+        world.guardians[&PersonId(2)].requested_delivery,
+        Some(requested)
     );
 }
