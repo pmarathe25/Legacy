@@ -33,8 +33,6 @@ pub mod realm;
 pub mod scenarios;
 pub mod skills;
 pub mod social;
-#[doc(hidden)]
-pub mod transactions;
 pub mod transport;
 
 use game_api::*;
@@ -103,13 +101,7 @@ pub struct Person {
 pub use game_cargo::{Inventory, InventoryLocation};
 
 /// Explicit fixture intentions, not an interface for commanding citizens in play.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct TransferIntent {
-    pub actor: PersonId,
-    pub source: InventoryId,
-    pub destination: InventoryId,
-    pub quantity: Quantity,
-}
+pub use game_cargo::TransferIntent;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Due {
@@ -725,19 +717,19 @@ impl Simulation {
                     }
                     if let Some(development) = &self.state.development {
                         let children = development.lives.iter().filter_map(|(id, life)| {
-                            (life.stage == LifeStage::Infant
-                                && self.transport_same_place(ruler.id, *id))
+                            (self.dependent_signal_visible(ruler.id, *id)
+                                && matches!(life.stage, LifeStage::Infant | LifeStage::Child))
                             .then_some(*id)
                         });
                         for child in children {
                             if child != ruler.id {
                                 available_commands.push(Command::Comfort { child });
                             }
-                            for source in view.local_stocks.iter().filter(|s| {
-                                s.good == Good::Food
-                                    && s.can_access
-                                    && s.quantity >= world.rules.meal_size
-                            }) {
+                            for source in view
+                                .local_stocks
+                                .iter()
+                                .filter(|s| self.prepare_care_source(ruler.id, child, s.id).is_ok())
+                            {
                                 available_commands.push(Command::Care {
                                     child,
                                     source: source.id,
@@ -1622,24 +1614,12 @@ impl Simulation {
             }
         }
         let arbitration_started = Instant::now();
-        let resolved = self.resolve_transfers_from(transfers, Some(&opening_stock));
+        let mut resolved = self
+            .prepare_cargo_transfers(transfers, Some(&opening_stock))?
+            .begin(&self.state.inventories)?;
         self.profile.arbitration_ns += arbitration_started.elapsed().as_nanos();
-        for (intent, granted) in resolved {
+        while let Some((intent, granted)) = resolved.apply_next(&mut self.state.inventories) {
             if granted {
-                self.state
-                    .inventories
-                    .get_mut(&intent.source)
-                    .unwrap()
-                    .quantity
-                    .0 -= intent.quantity.0;
-                let source = self.state.inventories.get_mut(&intent.source).unwrap();
-                source.last_granted = Some(intent.actor);
-                self.state
-                    .inventories
-                    .get_mut(&intent.destination)
-                    .unwrap()
-                    .quantity
-                    .0 += intent.quantity.0;
                 self.emit(EventKind::Transferred {
                     actor: intent.actor,
                     source: intent.source,
@@ -1807,134 +1787,133 @@ impl Simulation {
         }
     }
 
-    fn resolve_transfers(&self, intents: Vec<TransferIntent>) -> Vec<(TransferIntent, bool)> {
-        self.resolve_transfers_from(intents, None)
+    fn cargo_closing_facts(&self, intent: &TransferIntent) -> game_cargo::ClosingFacts {
+        let source = self.state.inventories.get(&intent.source);
+        let destination = self.state.inventories.get(&intent.destination);
+        let body = self
+            .state
+            .physical
+            .as_ref()
+            .and_then(|w| w.actors.get(&intent.actor));
+        game_cargo::ClosingFacts {
+            alive: self.state.physical.is_none() || body.is_some_and(|body| body.vitals.alive),
+            health: if self.state.physical.is_none() {
+                1
+            } else {
+                body.map_or(0, |body| body.vitals.health)
+            },
+            source_contact: source.is_some_and(|stock| self.stock_here(intent.actor, stock)),
+            source_access: source.is_some_and(|stock| self.has_stock_access(intent.actor, stock)),
+            receiver_contact: destination.is_some_and(|stock| self.stock_here(intent.actor, stock)),
+            receiver_access: destination
+                .is_some_and(|stock| self.has_stock_access(intent.actor, stock)),
+            receiver_accepted: self.agreement_accepts_delivery(
+                intent.actor,
+                intent.destination,
+                intent.quantity,
+            ) || self.guardian_accepts_delivery(
+                intent.actor,
+                intent.source,
+                intent.destination,
+                intent.quantity,
+            ),
+            record_permission: self.record_transfer_allowed(intent.source, intent.quantity),
+        }
     }
-
-    fn resolve_transfers_from(
+    fn prepare_cargo_transfers(
         &self,
         intents: Vec<TransferIntent>,
-        opening_stock: Option<&BTreeMap<InventoryId, u64>>,
-    ) -> Vec<(TransferIntent, bool)> {
-        if intents.is_empty() {
-            return Vec::new();
-        }
-        let balances = self
-            .state
-            .inventories
-            .iter()
-            .map(|(id, i)| {
-                (
-                    *id,
-                    transactions::Balance {
-                        stock: opening_stock
-                            .and_then(|s| s.get(id))
-                            .copied()
-                            .unwrap_or(i.quantity.0)
-                            .min(i.quantity.0),
-                        capacity: i.capacity.0,
-                        last_granted: i.last_granted,
-                    },
-                )
-            })
-            .collect();
-        let mut carriers = BTreeMap::new();
-        let mut carried = BTreeMap::<PersonId, u64>::new();
-        if self.state.physical.is_some() {
-            for i in self.state.inventories.values() {
-                if let InventoryLocation::Carried(id) = i.location {
-                    carriers.insert(i.id, id);
-                    *carried.entry(id).or_default() += i.quantity.0;
-                }
-            }
-        }
-        let free_capacity = carried
-            .into_iter()
-            .map(|(id, qty)| {
-                let capacity = if self.state.physical.is_some() {
-                    self.body_rules(id).carrying_capacity.0
-                } else {
-                    0
-                };
-                (id, capacity.saturating_sub(qty))
-            })
-            .collect();
+        opening: Option<&BTreeMap<InventoryId, u64>>,
+    ) -> Result<game_cargo::PreparedTransfers, Error> {
         let requests = intents
             .into_iter()
-            .map(|i| {
-                let source = &self.state.inventories[&i.source];
-                let destination = &self.state.inventories[&i.destination];
-                transactions::Request {
-                    actor: i.actor,
-                    source: i.source,
-                    destination: i.destination,
-                    amount: i.quantity.0,
-                    eligible: self.record_transfer_allowed(i.source, i.quantity)
-                        && source.good == destination.good
-                        && self.state.physical.as_ref().is_none_or(|w| {
-                            w.actors[&i.actor].vitals.alive && w.actors[&i.actor].vitals.health > 0
-                        })
-                        && self.can_use(i.actor, source)
-                        && (self.has_stock_access(i.actor, destination)
-                            || self.agreement_accepts_delivery(i.actor, i.destination, i.quantity)
-                            || self.guardian_accepts_delivery(
-                                i.actor,
-                                i.source,
-                                i.destination,
-                                i.quantity,
-                            ))
-                        && self.stock_here(i.actor, destination),
-                }
+            .map(|intent| {
+                let facts = self.cargo_closing_facts(&intent);
+                game_cargo::TransferRequest { intent, facts }
             })
             .collect();
-        // Incoming loads share the same bearer capacities. Outgoing goods do
-        // not free capacity until this phase has committed.
-        let mut transport_bodies = self.transport_bodies().ok();
-        transactions::arbitrate_with_constraints(
-            &balances,
-            requests,
-            &carriers,
-            &free_capacity,
-            |request| {
-                let Some(world) = &self.state.transport else {
-                    return true;
-                };
-                let Some(actor) = carriers.get(&request.destination) else {
-                    return true;
-                };
-                if carriers.get(&request.source) == Some(actor) {
-                    return true;
-                }
-                let Some(bodies) = &mut transport_bodies else {
-                    return false;
-                };
-                if !game_transport::transfer_capacity(
-                    &world.groups,
-                    bodies,
-                    *actor,
-                    Quantity(request.amount),
-                )
+        self.prepare_cargo_requests(requests, opening)
+    }
+    fn prepare_cargo_requests(
+        &self,
+        requests: Vec<game_cargo::TransferRequest>,
+        opening: Option<&BTreeMap<InventoryId, u64>>,
+    ) -> Result<game_cargo::PreparedTransfers, Error> {
+        if requests.is_empty() {
+            return game_cargo::prepare_transfers(&BTreeMap::new(), None, requests, None, |_| true);
+        }
+        let stocks = requests
+            .iter()
+            .flat_map(|request| [request.intent.source, request.intent.destination])
+            .filter_map(|id| self.state.inventories.get(&id).map(|stock| (id, stock)))
+            .collect();
+        let free = self.state.physical.as_ref().map(|_| {
+            let holders: BTreeSet<_> = requests
+                .iter()
+                .flat_map(|request| [request.intent.source, request.intent.destination])
+                .filter_map(|id| self.state.inventories.get(&id))
+                .filter_map(|stock| match stock.location {
+                    InventoryLocation::Carried(holder) => Some(holder),
+                    InventoryLocation::Area(_) => None,
+                })
+                .collect();
+            holders
+                .into_iter()
+                .map(|holder| {
+                    let held: u128 = self
+                        .inventory_index
+                        .get(&InventoryLocation::Carried(holder))
+                        .into_iter()
+                        .flatten()
+                        .map(|id| u128::from(self.state.inventories[id].quantity.0))
+                        .sum();
+                    (
+                        holder,
+                        u128::from(self.body_rules(holder).carrying_capacity.0).saturating_sub(held)
+                            as u64,
+                    )
+                })
+                .collect()
+        });
+        let mut transport_bodies = if self
+            .state
+            .transport
+            .as_ref()
+            .is_some_and(|world| !world.groups.is_empty())
+        {
+            self.transport_bodies().ok()
+        } else {
+            None
+        };
+        game_cargo::prepare_transfers(&stocks, opening, requests, free.as_ref(), |intent| {
+            let Some(world) = &self.state.transport else {
+                return true;
+            };
+            if world.groups.is_empty() {
+                return true;
+            }
+            let InventoryLocation::Carried(holder) =
+                self.state.inventories[&intent.destination].location
+            else {
+                return true;
+            };
+            let Some(bodies) = &mut transport_bodies else {
+                return false;
+            };
+            if !game_transport::transfer_capacity(&world.groups, bodies, holder, intent.quantity)
                 .unwrap_or(false)
-                {
-                    return false;
-                }
-                bodies.get_mut(actor).unwrap().cargo.0 += request.amount;
-                true
-            },
-        )
-        .into_iter()
-        .map(|(r, granted)| {
-            (
-                TransferIntent {
-                    actor: r.actor,
-                    source: r.source,
-                    destination: r.destination,
-                    quantity: Quantity(r.amount),
-                },
-                granted,
-            )
+            {
+                return false;
+            }
+            let Some(body) = bodies.get_mut(&holder) else {
+                return false;
+            };
+            let Some(quantity) = body.cargo.0.checked_add(intent.quantity.0) else {
+                return false;
+            };
+            body.cargo = Quantity(quantity);
+            true
         })
-        .collect()
     }
 
     pub fn debug_schedule_transfers(

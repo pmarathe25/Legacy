@@ -597,7 +597,12 @@ impl Simulation {
                 room: None,
                 direct_transfer: true,
             };
-            let step = self.plan_delivery(id, &goal.delivery, &destination, rules.meal_size);
+            let step = self.plan_delivery(
+                id,
+                &goal.delivery,
+                &destination,
+                goal.delivery.requirement.quantity,
+            );
             let action = match step {
                 game_logistics::Step::Arrived { source, .. } => {
                     Some(Command::Care { child, source })

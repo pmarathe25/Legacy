@@ -272,7 +272,11 @@ impl<A: Clone> Mind<A> {
                     game_logistics::Delivery::new(
                         game_logistics::Requirement {
                             good,
-                            quantity: facts.limits.meal_size,
+                            quantity: if good == Good::Water {
+                                facts.limits.drink_quantity
+                            } else {
+                                facts.limits.meal_size
+                            },
                             source: None,
                         },
                         game_logistics::Destination::Contact(*child),
@@ -1033,6 +1037,7 @@ mod tests {
             let child = PersonId(9);
             let mut m = mind();
             let mut f = facts();
+            f.limits.drink_quantity = Quantity(250);
             f.observed_contacts.insert(child);
             m.relationships.insert(
                 child,
@@ -1053,7 +1058,12 @@ mod tests {
             );
             let goal = m.care_deliveries(&f).pop().unwrap();
             assert_eq!(goal.delivery.requirement.good, good);
-            assert_eq!(goal.delivery.requirement.quantity, f.limits.meal_size);
+            let dose = if good == Good::Water {
+                f.limits.drink_quantity
+            } else {
+                f.limits.meal_size
+            };
+            assert_eq!(goal.delivery.requirement.quantity, dose);
             let supply = Candidate {
                 action: 1,
                 key: IntentionKey::Provision {
@@ -1088,10 +1098,7 @@ mod tests {
                     .plan
                     .is_some()
             );
-            assert!(
-                m.record_care_receipt(child, good, f.limits.meal_size, 1)
-                    .unwrap()
-            );
+            assert!(m.record_care_receipt(child, good, dose, 1).unwrap());
             assert!(m.care_deliveries(&f).is_empty());
         }
     }

@@ -313,6 +313,86 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
 }
 
 #[test]
+fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
+    for dose in [Quantity(250), Quantity(2_000)] {
+        let mut sim = sim(1);
+        let mut rules = game_world::health::Rules::human();
+        rules.drink_quantity = dose;
+        let relief = rules.drink_relief;
+        sim.initialize_health(rules).unwrap();
+        sim.advance(SimDuration(300_000)).unwrap();
+        let child = first_child(&sim);
+        let caregiver = sim.canonical_state().ruler;
+        let source = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(AreaId(1)),
+                dose,
+                dose,
+                std::collections::BTreeSet::from([caregiver]),
+            )
+            .unwrap();
+        let command = Command::Care { child, source };
+        let view = sim.observe();
+        assert!(view.available_commands.contains(&command));
+        let before_thirst = sim.canonical_state().health.as_ref().unwrap().clinical[&child].thirst;
+        let before_hunger = sim.canonical_state().physical.as_ref().unwrap().actors[&child]
+            .vitals
+            .hunger;
+        let duration = sim
+            .canonical_state()
+            .physical
+            .as_ref()
+            .unwrap()
+            .rules
+            .eating_time;
+        sim.submit(Submission {
+            caller_sequence: 1,
+            command,
+        })
+        .unwrap();
+        sim.advance(SimDuration(duration.0 / 2)).unwrap();
+        assert_eq!(sim.canonical_state().inventories[&source].quantity, dose);
+        let mut loaded = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(duration.0 - duration.0 / 2))
+            .unwrap();
+        loaded
+            .advance(SimDuration(duration.0 - duration.0 / 2))
+            .unwrap();
+        same(&sim, &loaded);
+        assert_eq!(
+            sim.canonical_state().inventories[&source].quantity,
+            Quantity(0)
+        );
+        assert_eq!(
+            sim.canonical_state().health.as_ref().unwrap().clinical[&child].thirst,
+            (before_thirst + duration.0).saturating_sub(relief)
+        );
+        assert_eq!(
+            sim.canonical_state().physical.as_ref().unwrap().actors[&child]
+                .vitals
+                .hunger,
+            before_hunger + duration.0
+        );
+        assert!(
+            sim.canonical_state()
+                .events
+                .iter()
+                .any(|event| matches!(event.kind,
+            EventKind::Cared { caregiver: actual, child: recipient, source: lot, quantity }
+                if actual == caregiver && recipient == child && lot == source && quantity == dose))
+        );
+    }
+}
+
+#[test]
 fn pregnancies_births_aging_and_care_preserve_chunking_and_worker_equivalence() {
     let mut reference = sim(1);
     reference.advance(SimDuration(720_003)).unwrap();

@@ -69,6 +69,62 @@ impl Simulation {
     pub(crate) fn body_rules(&self, actor: PersonId) -> Rules {
         rules_for(&self.state, actor)
     }
+    pub(crate) fn care_dose(&self, good: Good) -> Option<Quantity> {
+        match good {
+            Good::Food => self
+                .state
+                .physical
+                .as_ref()
+                .map(|world| world.rules.meal_size),
+            Good::Water => self
+                .state
+                .health
+                .as_ref()
+                .map(|world| world.rules.drink_quantity),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn prepare_care_source(
+        &self,
+        actor: PersonId,
+        child: PersonId,
+        source: InventoryId,
+    ) -> Result<Quantity, Error> {
+        let life = self
+            .state
+            .development
+            .as_ref()
+            .and_then(|world| world.lives.get(&child))
+            .ok_or(Error::Unavailable)?;
+        let receiver = self
+            .state
+            .physical
+            .as_ref()
+            .and_then(|world| world.actors.get(&child))
+            .ok_or(Error::Unavailable)?;
+        let stock = self
+            .state
+            .inventories
+            .get(&source)
+            .ok_or(Error::Unavailable)?;
+        let quantity = self.care_dose(stock.good).ok_or(Error::Unavailable)?;
+        if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
+            || actor == child
+            || !receiver.vitals.alive
+            || !matches!(receiver.activity, Activity::Idle | Activity::Rest)
+            || self.care_index.get(&child).is_some_and(|id| *id != actor)
+            || !self.transport_same_place(actor, child)
+            || !self.can_use(actor, stock)
+            || self.unreserved_stock(source, actor) < quantity.0
+        {
+            return Err(Error::Unavailable);
+        }
+        if stock.good == Good::Water {
+            self.preflight_water_care(child, source, quantity)?;
+        }
+        Ok(quantity)
+    }
     pub(crate) fn apply_genetic_body_change(
         &mut self,
         actor: PersonId,
@@ -442,33 +498,7 @@ impl Simulation {
                 (Activity::Comfort { child, completes }, None, None)
             }
             Command::Care { child, source } => {
-                let life = self
-                    .state
-                    .development
-                    .as_ref()
-                    .and_then(|w| w.lives.get(&child))
-                    .ok_or(Error::Unavailable)?;
-                let receiver = &self.state.physical.as_ref().unwrap().actors[&child];
-                let food = self
-                    .state
-                    .inventories
-                    .get(&source)
-                    .ok_or(Error::Unavailable)?;
-                if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
-                    || actor == child
-                    || !receiver.vitals.alive
-                    || !matches!(receiver.activity, Activity::Idle | Activity::Rest)
-                    || self.care_index.get(&child).is_some_and(|id| *id != actor)
-                    || !self.transport_same_place(actor, child)
-                    || !matches!(food.good, Good::Food | Good::Water)
-                    || !self.can_use(actor, food)
-                    || self.unreserved_stock(source, actor) < rules.meal_size.0
-                {
-                    return Err(Error::Unavailable);
-                }
-                if food.good == Good::Water {
-                    self.preflight_water_care(child, source, rules.meal_size)?;
-                }
+                self.prepare_care_source(actor, child, source)?;
                 let completes = SimTime(
                     self.state
                         .time
@@ -879,11 +909,12 @@ impl Simulation {
             .filter(|(id, _)| **id != excluding)
             .map(|(_, a)| {
                 u128::from(match a.activity {
-                    Activity::Eat { source: s, .. } | Activity::Care { source: s, .. }
-                        if s == source =>
-                    {
+                    Activity::Eat { source: s, .. } if s == source => {
                         self.state.physical.as_ref().unwrap().rules.meal_size.0
                     }
+                    Activity::Care { source: s, .. } if s == source => self
+                        .care_dose(self.state.inventories[&s].good)
+                        .map_or(0, |quantity| quantity.0),
                     Activity::Load {
                         source: s,
                         quantity,
@@ -1282,28 +1313,27 @@ impl Simulation {
                 source,
                 destination,
                 quantity,
-                ..
+                completes,
             } => {
+                let job = game_cargo::LoadJob {
+                    actor,
+                    source,
+                    destination,
+                    quantity,
+                    completes,
+                };
                 let intent = TransferIntent {
                     actor,
                     source,
                     destination,
                     quantity,
                 };
-                let granted = self.resolve_transfers(vec![intent])[0].1;
-                if granted {
-                    self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
-                    self.state
-                        .inventories
-                        .get_mut(&source)
-                        .unwrap()
-                        .last_granted = Some(actor);
-                    self.state
-                        .inventories
-                        .get_mut(&destination)
-                        .unwrap()
-                        .quantity
-                        .0 += quantity.0;
+                let request =
+                    job.closing_request(self.state.time, self.cargo_closing_facts(&intent))?;
+                let resolved = self
+                    .prepare_cargo_requests(vec![request], None)?
+                    .commit(&mut self.state.inventories)?;
+                if resolved[0].1 {
                     self.emit(EventKind::Transferred {
                         actor,
                         source,
@@ -1337,7 +1367,9 @@ impl Simulation {
             Activity::Care { child, source, .. } => {
                 self.care_index.remove(&child);
                 let recipient = &self.state.physical.as_ref().unwrap().actors[&child];
-                let quantity = self.state.physical.as_ref().unwrap().rules.meal_size;
+                let quantity = self
+                    .care_dose(self.state.inventories[&source].good)
+                    .ok_or(Error::Unavailable)?;
                 if recipient.vitals.alive
                     && self.transport_same_place(child, actor)
                     && self.can_use(actor, &self.state.inventories[&source])

@@ -916,7 +916,10 @@ impl Simulation {
             Activity::Idle | Activity::Rest | Activity::Work { .. }
         );
         let should_rest = matches!(body.activity, Activity::Idle | Activity::Work { .. });
-        let meal_size = self.body_rules(guardian).meal_size;
+        let doses = game_lineage::CareDoses {
+            food: self.body_rules(guardian).meal_size,
+            water: self.care_dose(Good::Water).unwrap_or(Quantity(0)),
+        };
         let together = self.transport_same_place(guardian, target);
         let applicable = self.dependent_signal_visible(guardian, target).then(|| {
             self.state.development.as_ref().is_some_and(|world| {
@@ -942,7 +945,7 @@ impl Simulation {
             self.state.time,
             together,
             need.as_ref().filter(|_| applicable != Some(false)),
-            meal_size,
+            doses,
         );
         self.state
             .lineage
@@ -964,7 +967,12 @@ impl Simulation {
                 room: None,
                 direct_transfer: true,
             };
-            let step = self.plan_delivery(guardian, &provision.delivery, &destination, meal_size);
+            let step = self.plan_delivery(
+                guardian,
+                &provision.delivery,
+                &destination,
+                provision.delivery.requirement.quantity,
+            );
             let command = match step {
                 game_logistics::Step::Arrived { source, .. } => Some(Command::Care {
                     child: target,

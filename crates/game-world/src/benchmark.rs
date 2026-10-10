@@ -1,6 +1,6 @@
 //! Synthetic access patterns shared by the storage experiment and retained kernel
 //! benchmark. These choices and lifecycle operations are not campaign rules.
-use crate::{compute, transactions};
+use crate::compute;
 use game_api::{InventoryId, PersonId};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -101,8 +101,9 @@ impl Ledger {
             .map(|(id, stock)| {
                 (
                     *id,
-                    transactions::Balance {
+                    game_cargo::Balance {
                         stock: *stock,
+                        spendable: *stock,
                         capacity: u64::MAX,
                         last_granted: self.cursors.get(id).copied(),
                     },
@@ -112,7 +113,7 @@ impl Ledger {
         let requests = rows
             .iter()
             .filter(|r| r.score % 4 == 0)
-            .map(|r| transactions::Request {
+            .map(|r| game_cargo::Request {
                 actor: PersonId(r.id),
                 source: InventoryId(if contested { 0 } else { r.area }),
                 destination: InventoryId((r.area + 1) % 16),
@@ -120,7 +121,7 @@ impl Ledger {
                 eligible: true,
             })
             .collect();
-        for (r, granted) in transactions::arbitrate(&balances, requests) {
+        for (r, granted) in game_cargo::arbitrate(&balances, requests) {
             if granted {
                 *self.balances.get_mut(&r.source).unwrap() -= r.amount;
                 *self.balances.get_mut(&r.destination).unwrap() += r.amount;

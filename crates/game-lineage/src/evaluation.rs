@@ -271,6 +271,12 @@ pub struct NeedObservation {
     pub preference: Option<ChildhoodInterest>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CareDoses {
+    pub food: Quantity,
+    pub water: Quantity,
+}
+
 /// Guardians may preserve a chosen observed need while absent. This describes
 /// only a requirement; logistics and physical consumers own every execution step.
 pub fn review_care_provision(
@@ -279,7 +285,7 @@ pub fn review_care_provision(
     now: SimTime,
     together: bool,
     fresh_need: Option<&NeedObservation>,
-    quantity: Quantity,
+    doses: CareDoses,
 ) -> Option<CareProvision> {
     let continuing = before
         .filter(|provision| {
@@ -304,7 +310,11 @@ pub fn review_care_provision(
             game_logistics::Delivery::new(
                 game_logistics::Requirement {
                     good,
-                    quantity,
+                    quantity: if good == Good::Water {
+                        doses.water
+                    } else {
+                        doses.food
+                    },
                     source: None,
                 },
                 game_logistics::Destination::Contact(target),

@@ -288,3 +288,13 @@ pub fn prepare_handoff(
         actor, source, quantity, supply, candidates, proposed, now, duration,
     )
 }
+
+mod arbitration;
+mod transfers;
+pub use arbitration::{
+    Balance, Request, arbitrate, arbitrate_with_capacity, arbitrate_with_constraints,
+};
+pub use transfers::{
+    ClosingFacts, PreparedTransfers, TransferIntent, TransferRequest, ValidatedTransfers,
+    prepare_transfers,
+};

@@ -1,11 +1,13 @@
 //! Pure arbitration over a consistent physical ledger. Each output is committed
 //! once; newly incoming stock cannot be spent again during the same phase.
-use game_api::{InventoryId, PersonId};
+use game_core::{InventoryId, PersonId};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Balance {
     pub stock: u64,
+    /// Opening spend budget, clipped against current stock.
+    pub spendable: u64,
     pub capacity: u64,
     pub last_granted: Option<PersonId>,
 }
@@ -68,7 +70,8 @@ pub fn arbitrate_with_constraints(
                     && r.amount > 0
                     && r.source != r.destination
                     && source
-                        .stock
+                        .spendable
+                        .min(source.stock)
                         .checked_sub(outgoing.get(&r.source).copied().unwrap_or(0))
                         .is_some_and(|v| r.amount <= v)
                     && destination

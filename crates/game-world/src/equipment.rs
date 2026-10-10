@@ -556,7 +556,9 @@ mod tests {
         // Two toolkits initially support both workers. One leaves precisely at
         // completion; finishing cultivation cannot reassign its closing slot to
         // the other worker's elapsed shift.
-        sim.state.inventories.get_mut(&field.tool).unwrap().quantity = Quantity(2_000);
+        let tool = sim.state.inventories.get_mut(&field.tool).unwrap();
+        tool.capacity = Quantity(2_000);
+        tool.quantity = Quantity(2_000);
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         let cargo = sim
@@ -909,5 +911,96 @@ mod tests {
         assert_eq!(sim.state.events.iter().filter(|event| matches!(event.kind,
             EventKind::Transferred { actor: who, source: from, destination: to, .. }
                 if who == actor && (from == source && to == destination || from == destination && to == source))).count(), 2);
+    }
+    #[test]
+    fn ordered_cargo_phase_preserves_actual_mixed_water_metadata_between_receipts() {
+        let mut sim = sim();
+        let actor = sim.state.ruler;
+        let source = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(AreaId(1)),
+                Quantity(2000),
+                Quantity(3000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let mixed = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(AreaId(1)),
+                Quantity(1000),
+                Quantity(3000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let destination = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(AreaId(1)),
+                Quantity(0),
+                Quantity(3000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        sim.collected_water_quality(source, Quantity(2000), 600);
+        // The clean stock intentionally has no water-lot entry yet. Its real
+        // existing volume must be observed by the first receipt's metadata hook.
+        assert!(
+            !sim.state
+                .health
+                .as_ref()
+                .unwrap()
+                .water
+                .contains_key(&mixed)
+        );
+        sim.debug_schedule_transfers(
+            SimTime(MINUTE.0),
+            vec![
+                TransferIntent {
+                    actor,
+                    source,
+                    destination: mixed,
+                    quantity: Quantity(1000),
+                },
+                TransferIntent {
+                    actor,
+                    source: mixed,
+                    destination,
+                    quantity: Quantity(1000),
+                },
+            ],
+        )
+        .unwrap();
+        let mut saved = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(MINUTE).unwrap();
+        saved.advance(SimDuration(17000)).unwrap();
+        saved.advance(SimDuration(43000)).unwrap();
+        assert_eq!(sim.state, saved.state);
+        let health = sim.state.health.as_ref().unwrap();
+        for inventory in [source, mixed, destination] {
+            assert_eq!(sim.state.inventories[&inventory].quantity, Quantity(1000));
+            assert_eq!(health.water[&inventory].quantity(), 1000);
+        }
+        assert_eq!(health.water[&source].load(), 600000);
+        assert_eq!(health.water[&mixed].load(), 300000);
+        assert_eq!(health.water[&destination].load(), 300000);
+        assert_eq!(
+            [source, mixed, destination]
+                .iter()
+                .map(|id| health.water[id].load())
+                .sum::<u128>(),
+            1200000
+        );
+        assert_eq!(sim.state.events.iter().filter(|event| matches!(event.kind,
+            EventKind::Transferred { source: from, destination: to, .. } if from == source && to == mixed || from == mixed && to == destination)).count(), 2);
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
 }

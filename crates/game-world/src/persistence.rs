@@ -2211,10 +2211,9 @@ fn validate_physical(
             Activity::Comfort { child, .. } if !people.contains_key(&child) => return Err(fail()),
             Activity::Care { child, source, .. }
                 if !people.contains_key(&child)
-                    || !s
-                        .inventories
-                        .get(&source)
-                        .is_some_and(|i| i.good == Good::Food) =>
+                    || !s.inventories.get(&source).is_some_and(|i| {
+                        i.good == Good::Food || i.good == Good::Water && s.health.is_some()
+                    }) =>
             {
                 return Err(fail());
             }

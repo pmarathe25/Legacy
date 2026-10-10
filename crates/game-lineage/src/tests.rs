@@ -326,6 +326,11 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
 fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credit_delivery() {
     for (good, food, water) in [(Good::Food, 3_000, 0), (Good::Water, 0, 3_000)] {
         let target = PersonId(9);
+        let dose = if good == Good::Water {
+            Quantity(250)
+        } else {
+            Quantity(1_000)
+        };
         let need = NeedObservation {
             location: Location::AtArea(AreaId(1)),
             observed_at: SimTime(40),
@@ -340,7 +345,10 @@ fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credi
                 SimTime(40),
                 false,
                 Some(&need),
-                Quantity(1_000)
+                CareDoses {
+                    food: Quantity(1_000),
+                    water: Quantity(250)
+                }
             )
             .is_none()
         );
@@ -351,7 +359,10 @@ fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credi
                 SimTime(41),
                 true,
                 Some(&need),
-                Quantity(1_000)
+                CareDoses {
+                    food: Quantity(1_000),
+                    water: Quantity(250)
+                }
             )
             .is_none()
         );
@@ -361,18 +372,24 @@ fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credi
             SimTime(40),
             true,
             Some(&need),
-            Quantity(1_000),
+            CareDoses {
+                food: Quantity(1_000),
+                water: Quantity(250),
+            },
         )
         .unwrap();
         assert_eq!(provision.delivery.requirement.good, good);
-        assert_eq!(provision.delivery.requirement.quantity, Quantity(1_000));
+        assert_eq!(provision.delivery.requirement.quantity, dose);
         let continued = review_care_provision(
             Some(&provision),
             target,
             SimTime(70),
             false,
             None,
-            Quantity(1_000),
+            CareDoses {
+                food: Quantity(1_000),
+                water: Quantity(250),
+            },
         )
         .unwrap();
         assert_eq!(continued, provision);
@@ -385,7 +402,7 @@ fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credi
         );
         assert!(
             world
-                .record_care_receipt(PersonId(2), target, good, Quantity(500), 2)
+                .record_care_receipt(PersonId(2), target, good, Quantity(dose.0 / 2), 2)
                 .unwrap()
         );
         assert_eq!(
@@ -395,11 +412,11 @@ fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credi
                 .unwrap()
                 .delivery
                 .remaining,
-            Quantity(500)
+            Quantity(dose.0 / 2)
         );
         assert!(
             world
-                .record_care_receipt(PersonId(2), target, good, Quantity(500), 3)
+                .record_care_receipt(PersonId(2), target, good, Quantity(dose.0 / 2), 3)
                 .unwrap()
         );
         assert!(
@@ -409,7 +426,10 @@ fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credi
                 SimTime(80),
                 false,
                 None,
-                Quantity(1_000)
+                CareDoses {
+                    food: Quantity(1_000),
+                    water: Quantity(250)
+                }
             )
             .is_none()
         );
@@ -420,7 +440,10 @@ fn observed_care_requirements_persist_for_food_and_water_and_only_receipts_credi
                 SimTime(80),
                 false,
                 None,
-                Quantity(1_000)
+                CareDoses {
+                    food: Quantity(1_000),
+                    water: Quantity(250)
+                }
             )
             .is_none()
         );
@@ -431,6 +454,11 @@ fn care_goal_composes_with_the_same_generic_delivery_for_food_and_water() {
     use game_logistics::*;
     for (good, food, water) in [(Good::Food, 3_000, 0), (Good::Water, 0, 3_000)] {
         let target = PersonId(9);
+        let dose = if good == Good::Water {
+            Quantity(250)
+        } else {
+            Quantity(1_000)
+        };
         let location = Location::AtArea(AreaId(1));
         let need = NeedObservation {
             location: location.clone(),
@@ -445,13 +473,16 @@ fn care_goal_composes_with_the_same_generic_delivery_for_food_and_water() {
             SimTime(40),
             true,
             Some(&need),
-            Quantity(1_000),
+            CareDoses {
+                food: Quantity(1_000),
+                water: Quantity(250),
+            },
         )
         .unwrap();
         let stocks = [KnownStock {
             inventory: InventoryId(20),
             good,
-            quantity: Quantity(1_000),
+            quantity: dose,
             accessible: true,
             location: location.clone(),
             observed_at: SimTime(40),
@@ -475,7 +506,7 @@ fn care_goal_composes_with_the_same_generic_delivery_for_food_and_water() {
             can_travel: true,
             room: Quantity(0),
             prerequisite_room: &prerequisite_room,
-            minimum_handoff: Quantity(1_000),
+            minimum_handoff: dose,
             cargo: &[],
             stocks: &stocks,
             destination: Some(&destination),
@@ -487,10 +518,10 @@ fn care_goal_composes_with_the_same_generic_delivery_for_food_and_water() {
             provision.delivery.plan(&input),
             Step::Arrived {
                 source: InventoryId(20),
-                quantity: Quantity(1_000)
+                quantity: dose
             }
         );
-        assert_eq!(provision.delivery.remaining, Quantity(1_000));
+        assert_eq!(provision.delivery.remaining, dose);
     }
 }
 
@@ -505,8 +536,18 @@ fn locally_observed_care_inapplicability_clears_autonomous_care_and_preserves_re
         hydration_urgency: 0,
         preference: None,
     };
-    let goal = review_care_provision(None, target, SimTime(0), true, Some(&need), Quantity(1_000))
-        .unwrap();
+    let goal = review_care_provision(
+        None,
+        target,
+        SimTime(0),
+        true,
+        Some(&need),
+        CareDoses {
+            food: Quantity(1_000),
+            water: Quantity(250),
+        },
+    )
+    .unwrap();
     let requested = RequestedDelivery {
         delivery: game_logistics::Delivery::new(
             game_logistics::Requirement {
