@@ -1,6 +1,6 @@
 //! Character-owned decisions and social development kernels. Physical execution,
 //! simulation scheduling, and personal perception enter through explicit inputs.
-//! This crate depends on shared value types and serialization only.
+//! Resource intentions use declarative requirements from game-logistics.
 pub mod social;
 
 pub mod decisions;

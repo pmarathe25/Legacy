@@ -225,13 +225,6 @@ pub fn validate_world(world: &World, catalog: ValidationCatalog<'_>) -> Result<(
     }
     for (observer, knowledge) in &world.known {
         catalog.person(*observer)?;
-        if knowledge.water_searched.len() > 16 {
-            return Err(invalid("too many remembered water searches"));
-        }
-        for (area, at) in &knowledge.water_searched {
-            catalog.area(*area)?;
-            catalog.past(*at)?;
-        }
         for (id, symptoms) in &knowledge.people {
             catalog.person(*id)?;
             if *id != symptoms.person {

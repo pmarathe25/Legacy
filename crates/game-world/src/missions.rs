@@ -806,11 +806,7 @@ impl Simulation {
             MissionStatus::Preparing | MissionStatus::Traveling
         ) {
             for supply in m.proposal.supplies.iter().filter(|s| s.carrier == actor) {
-                let Some(known) = mind
-                    .knowledge
-                    .get(&supply.source)
-                    .filter(|known| known.accessible)
-                else {
+                let Some(known) = mind.knowledge.get(&supply.source) else {
                     self.mission_explain(
                         id,
                         actor,
@@ -818,41 +814,99 @@ impl Simulation {
                     );
                     return;
                 };
-                let good = known.good;
-                let held = self
-                    .inventory_index
-                    .get(&InventoryLocation::Carried(actor))
+                let delivery = game_logistics::Delivery {
+                    requirement: game_logistics::Requirement {
+                        good: known.good,
+                        quantity: supply.quantity,
+                        source: Some(supply.source),
+                    },
+                    destination: game_logistics::Destination::Contact(actor),
+                    remaining: supply.quantity,
+                    last_receipt: 0,
+                };
+                let goal = game_logistics::KnownDestination {
+                    destination: delivery.destination,
+                    location: self.delivery_observed_location(actor),
+                    observed_at: self.state.time,
+                    accessible: true,
+                    room: None,
+                    direct_transfer: false,
+                };
+                let tags = member
+                    .supply_cargo
+                    .get(&supply.source)
                     .into_iter()
-                    .flatten()
-                    .filter(|id| self.state.inventories[id].good == good)
-                    .map(|id| self.state.inventories[id].quantity.0)
-                    .sum::<u64>();
-                if held >= supply.quantity.0 {
+                    .flat_map(|tags| tags.iter())
+                    .map(|(id, q)| (*id, Quantity(*q)))
+                    .collect();
+                let step = self.plan_delivery_with_source_cargo(
+                    actor,
+                    &delivery,
+                    &goal,
+                    supply.quantity,
+                    &tags,
+                );
+                if matches!(step, game_logistics::Step::Arrived { .. }) {
                     continue;
                 }
-                if known.area != area {
-                    let destination = known.area;
-                    let _ = self.start_movement(actor, destination);
-                    return;
+                if let Some(command) = self.delivery_command(actor, step) {
+                    let _ = self.debug_actor_command(actor, command);
+                } else {
+                    self.mission_explain(
+                        id,
+                        actor,
+                        "Waiting for personally known qualified provisions and a usable route",
+                    );
                 }
-                let quantity = Quantity((supply.quantity.0 - held).min(known.quantity.0));
-                if quantity.0 == 0 {
-                    self.mission_explain(id, actor, "Expected provisions are absent or depleted");
-                    return;
-                }
-                let _ = self.debug_actor_command(
-                    actor,
-                    Command::Carry {
-                        source: supply.source,
-                        quantity,
-                    },
-                );
                 return;
             }
             if m.status == MissionStatus::Preparing {
                 let _ = self.debug_actor_command(actor, Command::Rest);
                 return;
             }
+        }
+        if m.status != MissionStatus::Returning
+            && let MissionObjective::Deliver {
+                source,
+                destination,
+                quantity,
+            } = member.directive
+        {
+            let Some(known) = mind.knowledge.get(&source) else {
+                self.mission_explain(id, actor, "The delivery source is not personally known");
+                return;
+            };
+            let Some(goal) = self.delivery_known_inventory_destination(actor, destination) else {
+                self.mission_explain(
+                    id,
+                    actor,
+                    "The delivery destination is not personally known",
+                );
+                return;
+            };
+            let delivery = game_logistics::Delivery {
+                requirement: game_logistics::Requirement {
+                    good: known.good,
+                    quantity,
+                    source: Some(source),
+                },
+                destination: game_logistics::Destination::Inventory(destination),
+                remaining: Quantity(quantity.0.saturating_sub(member.delivered)),
+                last_receipt: 0,
+            };
+            let tags = member
+                .cargo
+                .iter()
+                .map(|(id, q)| (*id, Quantity(*q)))
+                .collect();
+            let step =
+                self.plan_delivery_with_source_cargo(actor, &delivery, &goal, Quantity(1), &tags);
+            if let Some(command) = self.delivery_command(actor, step) {
+                let _ = self.debug_actor_command(actor, command);
+            } else {
+                self.mission_explain(id, actor, "Waiting for personally known qualified cargo, receiving room or a usable route");
+            }
+            return;
         }
         let destination = if m.status == MissionStatus::Returning {
             Some(m.proposal.home)
@@ -942,48 +996,6 @@ impl Simulation {
                     {
                         let _ = self
                             .debug_actor_command(actor, Command::FreeCaptive { target: person });
-                    }
-                }
-                MissionObjective::Deliver {
-                    source,
-                    destination,
-                    quantity,
-                } => {
-                    let goal = mind.knowledge.get(&destination).map(|k| k.area);
-                    let cargo = member
-                        .cargo
-                        .iter()
-                        .find(|(_, quantity)| **quantity > 0)
-                        .map(|(id, quantity)| (*id, *quantity));
-                    if goal == Some(area)
-                        && let Some((source, held)) = cargo
-                    {
-                        let _ = self.debug_actor_command(
-                            actor,
-                            Command::Load {
-                                source,
-                                destination,
-                                quantity: Quantity(held.min(quantity.0 - member.delivered)),
-                            },
-                        );
-                    } else if let Some(known) = mind
-                        .knowledge
-                        .get(&source)
-                        .filter(|k| k.area == area && k.accessible)
-                    {
-                        let amount = Quantity(
-                            known
-                                .quantity
-                                .0
-                                .min(quantity.0.saturating_sub(member.delivered)),
-                        );
-                        let _ = self.debug_actor_command(
-                            actor,
-                            Command::Carry {
-                                source,
-                                quantity: amount,
-                            },
-                        );
                     }
                 }
                 _ => {
@@ -2267,6 +2279,42 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             {
                 return Err(fail());
             }
+            let mut attributed = BTreeMap::<InventoryId, u128>::new();
+            for (source, tags) in &member.supply_cargo {
+                let supply = m
+                    .proposal
+                    .supplies
+                    .iter()
+                    .filter(|supply| supply.carrier == *person && supply.source == *source)
+                    .max_by_key(|supply| supply.quantity)
+                    .ok_or_else(fail)?;
+                let good = s.inventories.get(source).ok_or_else(fail)?.good;
+                let mut total = 0u128;
+                if tags.is_empty() {
+                    return Err(fail());
+                }
+                for (inventory, quantity) in tags {
+                    if *quantity == 0
+                        || !s.inventories.get(inventory).is_some_and(|stock| {
+                            stock.good == good
+                                && stock.location == InventoryLocation::Carried(*person)
+                        })
+                    {
+                        return Err(fail());
+                    }
+                    total += u128::from(*quantity);
+                    *attributed.entry(*inventory).or_default() += u128::from(*quantity);
+                }
+                if total > u128::from(supply.quantity.0) {
+                    return Err(fail());
+                }
+            }
+            if attributed
+                .iter()
+                .any(|(inventory, q)| *q > u128::from(s.inventories[inventory].quantity.0))
+            {
+                return Err(fail());
+            }
             for (inventory, quantity) in &member.cargo {
                 if *quantity == 0
                     || !s.inventories.get(inventory).is_some_and(|i| {
@@ -2598,6 +2646,144 @@ mod tests {
             |e| matches!(e.kind,EventKind::Arrived {actor,area}if actor==leader&&area==forest)
         ));
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn promised_provisions_do_not_count_unmarked_same_good_cargo() {
+        let mut sim = fixture();
+        let actor = sim.state.people[5].id;
+        sim.debug_set_personality(
+            actor,
+            decisions::Personality::industrious(),
+            decisions::Aspiration::Independence,
+        )
+        .unwrap();
+        let source = public_food(&sim);
+        let unqualified = sim
+            .debug_add_inventory(
+                Good::Food,
+                InventoryLocation::Carried(actor),
+                Quantity(2000),
+                Quantity(10000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let opening = sim.state.inventories[&source].quantity;
+        let forest = sim.state.areas[2].id;
+        let id = propose(
+            &mut sim,
+            actor,
+            MissionObjective::Visit {
+                destination: forest,
+            },
+            vec![MissionSupply {
+                carrier: actor,
+                source,
+                quantity: Quantity(2000),
+            }],
+        );
+        accept(&mut sim, id, actor);
+        sim.advance(MINUTE).unwrap();
+        assert!(
+            matches!(sim.state.physical.as_ref().unwrap().actors[&actor].activity, Activity::Load { source: from, .. } if from == source)
+        );
+        assert_eq!(sim.state.inventories[&source].quantity, opening);
+        assert!(
+            sim.state.missions.as_ref().unwrap().missions[&id].members[&actor]
+                .supply_cargo
+                .is_empty()
+        );
+        sim.advance(MINUTE).unwrap();
+        assert_eq!(
+            sim.state.inventories[&source].quantity,
+            Quantity(opening.0 - 2000)
+        );
+        assert_eq!(sim.state.inventories[&unqualified].quantity, Quantity(2000));
+        let tags = &sim.state.missions.as_ref().unwrap().missions[&id].members[&actor].supply_cargo
+            [&source];
+        assert_eq!(tags.values().sum::<u64>(), 2000);
+        assert!(matches!(
+            sim.state.people[sim.person_index[&actor]].location,
+            Location::InTransit { .. }
+        ));
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn autonomous_delivery_uses_promised_origin_and_preserves_unqualified_cargo() {
+        let mut sim = fixture();
+        let actor = sim.state.people[5].id;
+        sim.debug_set_personality(
+            actor,
+            decisions::Personality::industrious(),
+            decisions::Aspiration::Independence,
+        )
+        .unwrap();
+        let area = sim.state.areas[0].id;
+        let source = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Area(area),
+                Quantity(1000),
+                Quantity(10000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let carried = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Carried(actor),
+                Quantity(2000),
+                Quantity(10000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let destination = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Area(area),
+                Quantity(0),
+                Quantity(10000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        sim.review_decisions().unwrap();
+        let opening = sim.state.inventories[&source].quantity;
+        let id = propose(
+            &mut sim,
+            actor,
+            MissionObjective::Deliver {
+                source,
+                destination,
+                quantity: Quantity(1000),
+            },
+            vec![],
+        );
+        accept(&mut sim, id, actor);
+        sim.advance(MINUTE).unwrap();
+        assert_eq!(sim.state.inventories[&destination].quantity, Quantity(0));
+        assert_eq!(sim.state.inventories[&source].quantity, opening);
+        let mut sliced = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(180000)).unwrap();
+        for elapsed in [17000, 43000, 111000, 9000] {
+            sliced.advance(SimDuration(elapsed)).unwrap();
+        }
+        assert_eq!(sim.state, sliced.state);
+        assert_eq!(
+            sim.state.inventories[&source].quantity,
+            Quantity(opening.0 - 1000)
+        );
+        assert_eq!(sim.state.inventories[&destination].quantity, Quantity(1000));
+        assert_eq!(sim.state.inventories[&carried].quantity, Quantity(2000));
+        assert_eq!(
+            sim.state.missions.as_ref().unwrap().missions[&id].members[&actor].delivered,
+            1000
+        );
     }
     #[test]
     fn npc_refuses_danger_and_counteroffers_for_a_marginal_job() {

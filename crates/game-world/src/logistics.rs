@@ -32,6 +32,44 @@ impl Simulation {
         minimum_handoff: Quantity,
         source_cargo: &BTreeMap<InventoryId, Quantity>,
     ) -> Step<Command> {
+        self.plan_delivery_with_source_cargo_and_offers(
+            actor,
+            delivery,
+            destination,
+            minimum_handoff,
+            source_cargo,
+            &[],
+        )
+    }
+
+    pub(crate) fn plan_delivery_with_offers(
+        &self,
+        actor: PersonId,
+        delivery: &Delivery,
+        destination: &KnownDestination,
+        minimum_handoff: Quantity,
+        offers: &[AcquisitionOffer<Command>],
+    ) -> Step<Command> {
+        let attributed = self.agreement_delivery_cargo(actor, delivery);
+        self.plan_delivery_with_source_cargo_and_offers(
+            actor,
+            delivery,
+            destination,
+            minimum_handoff,
+            &attributed,
+            offers,
+        )
+    }
+
+    fn plan_delivery_with_source_cargo_and_offers(
+        &self,
+        actor: PersonId,
+        delivery: &Delivery,
+        destination: &KnownDestination,
+        minimum_handoff: Quantity,
+        source_cargo: &BTreeMap<InventoryId, Quantity>,
+        additional_offers: &[AcquisitionOffer<Command>],
+    ) -> Step<Command> {
         let Some(person) = self
             .person_index
             .get(&actor)
@@ -101,8 +139,19 @@ impl Simulation {
             .collect();
         let wanted = Quantity(delivery.remaining.0.max(minimum_handoff.0).min(capacity.0));
         let mut requested = BTreeMap::from([(delivery.requirement.good, wanted)]);
+        for prerequisite in additional_offers
+            .iter()
+            .flat_map(|offer| &offer.requirements)
+        {
+            requested
+                .entry(prerequisite.requirement.good)
+                .and_modify(|quantity| {
+                    quantity.0 = quantity.0.max(prerequisite.requirement.quantity.0)
+                })
+                .or_insert(prerequisite.requirement.quantity);
+        }
         let mut projected = BTreeSet::new();
-        let mut offers = Vec::new();
+        let mut offers = additional_offers.to_vec();
         // The operator owners declare the prerequisites. Project only the
         // personally known providers needed by that bounded dependency closure.
         while let Some((good, quantity)) = requested
@@ -129,6 +178,10 @@ impl Simulation {
             }
             offers.extend(owned);
         }
+        let personality = self
+            .invocation_personality(actor)
+            .unwrap_or_else(|| mind.personality.clone());
+        offers.retain(|offer| personality.accepts_risk(acquisition_risk(&offer.action)));
         let prerequisite_room = requested.keys().map(|good| (*good, capacity)).collect();
         let mut destination = destination.clone();
         destination.direct_transfer = match destination.destination {
@@ -156,6 +209,59 @@ impl Simulation {
             routes: &mind.routes,
             offers: &offers,
         })
+    }
+
+    /// Receiver facts come from this person's dated knowledge or an actual
+    /// local observation. An accepted contract can supply its narrow receiving
+    /// permission separately; this helper cannot grant a general access right.
+    pub(crate) fn delivery_known_inventory_destination(
+        &self,
+        actor: PersonId,
+        inventory: InventoryId,
+    ) -> Option<KnownDestination> {
+        let fact = self
+            .state
+            .decisions
+            .as_ref()?
+            .minds
+            .get(&actor)?
+            .knowledge
+            .get(&inventory);
+        let stock = self.state.inventories.get(&inventory)?;
+        let local = match stock.location {
+            InventoryLocation::Area(area) => {
+                fact.is_some() && self.resolved_location(actor) == Location::AtArea(area)
+            }
+            InventoryLocation::Carried(holder) => {
+                holder == actor || fact.is_some() && self.transport_same_place(actor, holder)
+            }
+        };
+        if local {
+            let location = match stock.location {
+                InventoryLocation::Area(area) => Location::AtArea(area),
+                InventoryLocation::Carried(holder) => self.delivery_observed_location(holder),
+            };
+            Some(KnownDestination {
+                destination: Destination::Inventory(inventory),
+                location,
+                observed_at: self.state.time,
+                accessible: self.has_stock_access(actor, stock),
+                room: Some(Quantity(stock.capacity.0 - stock.quantity.0)),
+                direct_transfer: false,
+            })
+        } else {
+            let fact = fact.filter(|fact| {
+                fact.observed_at <= self.state.time && fact.learned_at <= self.state.time
+            })?;
+            Some(KnownDestination {
+                destination: Destination::Inventory(inventory),
+                location: Location::AtArea(fact.area),
+                observed_at: fact.observed_at,
+                accessible: fact.accessible,
+                room: None,
+                direct_transfer: false,
+            })
+        }
     }
 
     /// Physical burden includes every carried Good and supported bodies. A new
@@ -349,13 +455,7 @@ impl Simulation {
                             PropertyAction::Take {
                                 source, quantity, ..
                             },
-                    } => {
-                        if mind.personality.honesty >= 400 || mind.personality.risk_tolerance < 600
-                        {
-                            return None;
-                        }
-                        (source, quantity)
-                    }
+                    } => (source, quantity),
                     _ => return None,
                 };
                 let known = mind.knowledge.get(&source)?;
@@ -437,7 +537,7 @@ impl Simulation {
                                 source: None,
                             },
                             placement: PrerequisitePlacement::AccessibleAtProvider {
-                                inventory: None,
+                                inventory: Some(site.tool),
                             },
                         },
                     ],
@@ -595,6 +695,21 @@ impl Simulation {
             }
             _ => None,
         }
+    }
+}
+
+/// Semantic evidence for an attempted acquisition, independent of its provider.
+pub(crate) fn acquisition_risk(command: &Command) -> game_characters::decisions::Risk {
+    match command {
+        Command::Property {
+            action: PropertyAction::Take { .. },
+        }
+        | Command::Ecology {
+            action: EcologyAction::Gather {
+                unauthorized: true, ..
+            },
+        } => game_characters::decisions::Risk::UnconsentedTaking,
+        _ => game_characters::decisions::Risk::Safe,
     }
 }
 
@@ -1091,6 +1206,250 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(delivery.remaining, Quantity(1_000));
+    }
+    #[test]
+    fn delivery_intent_never_grants_blanket_consent_to_unconsented_acquisition() {
+        let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        let spring = sim
+            .state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resources
+            .values()
+            .find(|r| r.kind == ResourceKind::Spring && r.area == AreaId(1))
+            .unwrap()
+            .id;
+        let source = sim
+            .state
+            .ecology
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut(&spring)
+            .unwrap();
+        source.access.clear();
+        source.custodian = None;
+        sim.observe_ecology();
+        let mind = sim
+            .state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&actor)
+            .unwrap();
+        mind.knowledge.clear();
+        mind.sites.clear();
+        mind.personality.honesty = 900;
+        mind.personality.risk_tolerance = 900;
+        let delivery = Delivery::new(
+            Requirement {
+                good: Good::Water,
+                quantity: Quantity(1_000),
+                source: None,
+            },
+            Destination::Contact(actor),
+        )
+        .unwrap();
+        // The provider offers the physically possible attempt regardless of traits.
+        assert!(
+            sim.ecology_acquisition_offers(actor, Good::Water, Quantity(1_000), Quantity(1_000))
+                .iter()
+                .any(|offer| acquisition_risk(&offer.action)
+                    == game_characters::decisions::Risk::UnconsentedTaking)
+        );
+        let step = sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000));
+        assert!(!matches!(
+            step,
+            Step::Acquire(Command::Ecology {
+                action: EcologyAction::Gather {
+                    unauthorized: true,
+                    ..
+                }
+            })
+        ));
+        // A different personal judgment can choose that same factual attempt.
+        let mind = sim
+            .state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&actor)
+            .unwrap();
+        mind.personality.honesty = 0;
+        assert_eq!(
+            sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
+            Step::Acquire(Command::Ecology {
+                action: EcologyAction::Gather {
+                    resource: spring,
+                    quantity: Quantity(1_000),
+                    unauthorized: true,
+                }
+            })
+        );
+        assert_eq!(
+            sim.state.ecology.as_ref().unwrap().resources[&spring].remaining,
+            Quantity(50_000)
+        );
+        assert_eq!(delivery.remaining, Quantity(1_000));
+    }
+
+    #[test]
+    fn production_prerequisites_identify_the_executor_actual_tool_slot() {
+        let mut sim = fixture();
+        let actor = sim.state.ruler;
+        sim.review_decisions().unwrap();
+        let site = sim
+            .state
+            .physical
+            .as_ref()
+            .unwrap()
+            .sites
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let good = sim.state.inventories[&site.output].good;
+        let offers = sim.production_acquisition_offers(actor, good);
+        let offer = offers
+            .iter()
+            .find(|offer| matches!(offer.action, Command::Work { site: id } if id == site.id))
+            .unwrap();
+        assert!(offer.requirements.iter().any(|prerequisite| {
+            prerequisite.requirement.good == Good::Tool
+                && prerequisite.placement
+                    == PrerequisitePlacement::AccessibleAtProvider {
+                        inventory: Some(site.tool),
+                    }
+        }));
+    }
+    #[test]
+    fn split_equipment_is_physically_consolidated_before_a_collection_operator() {
+        let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        // Collection is the only timber source; later observations must not
+        // discover an easier stored supply that bypasses the tool requirement.
+        for stock in sim
+            .state
+            .inventories
+            .values_mut()
+            .filter(|stock| stock.good == Good::Timber)
+        {
+            stock.quantity = Quantity(0);
+        }
+        for person in sim.state.people.clone() {
+            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+            sim.debug_set_personality(
+                person.id,
+                decisions::Personality::restful(),
+                decisions::Aspiration::Comfort,
+            )
+            .unwrap();
+        }
+        let resource = sim
+            .debug_add_resource(
+                ResourceKind::Coppice,
+                AreaId(1),
+                Quantity(2_000),
+                Quantity(2_000),
+                Quantity(0),
+                BTreeSet::from([actor]),
+                None,
+                0,
+            )
+            .unwrap();
+        let first = sim
+            .debug_add_inventory(
+                Good::Tool,
+                InventoryLocation::Carried(actor),
+                Quantity(600),
+                Quantity(600),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let second = sim
+            .debug_add_inventory(
+                Good::Tool,
+                InventoryLocation::Carried(actor),
+                Quantity(400),
+                Quantity(400),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let empty = sim
+            .debug_add_inventory(
+                Good::Tool,
+                InventoryLocation::Carried(actor),
+                Quantity(0),
+                Quantity(1_000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        sim.observe_ecology();
+        let mind = sim
+            .state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&actor)
+            .unwrap();
+        mind.knowledge.clear();
+        mind.sites.clear();
+        let delivery = Delivery::new(
+            Requirement {
+                good: Good::Timber,
+                quantity: Quantity(1_000),
+                source: None,
+            },
+            Destination::Contact(actor),
+        )
+        .unwrap();
+        let step = sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000));
+        assert_eq!(
+            step,
+            Step::Transfer {
+                source: first,
+                destination: empty,
+                quantity: Quantity(600)
+            }
+        );
+        sim.debug_actor_command(actor, sim.delivery_command(actor, step).unwrap())
+            .unwrap();
+        sim.advance(MINUTE).unwrap();
+        assert_eq!(sim.state.inventories[&first].quantity, Quantity(0));
+        assert_eq!(sim.state.inventories[&empty].quantity, Quantity(600));
+        let step = sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000));
+        assert_eq!(
+            step,
+            Step::Transfer {
+                source: second,
+                destination: empty,
+                quantity: Quantity(400)
+            },
+            "cargo after first consolidation: {:?}; source: {:?}",
+            sim.delivery_cargo(actor, &delivery, &BTreeMap::new()),
+            sim.state.inventories[&second]
+        );
+        sim.debug_actor_command(actor, sim.delivery_command(actor, step).unwrap())
+            .unwrap();
+        sim.advance(MINUTE).unwrap();
+        assert_eq!(sim.state.inventories[&empty].quantity, Quantity(1_000));
+        assert_eq!(sim.state.inventories[&second].quantity, Quantity(0));
+        assert_eq!(
+            sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
+            Step::Acquire(Command::Ecology {
+                action: EcologyAction::Gather {
+                    resource,
+                    quantity: Quantity(1_000),
+                    unauthorized: false,
+                }
+            })
+        );
         assert_eq!(delivery.remaining, Quantity(1_000));
     }
 }

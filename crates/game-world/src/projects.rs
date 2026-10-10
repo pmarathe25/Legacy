@@ -1509,6 +1509,9 @@ impl Simulation {
         Ok(())
     }
     fn workshop_procurement(&self, actor: PersonId, mind: &decisions::Mind) -> Option<Command> {
+        use game_logistics::{
+            AcquisitionOffer, Delivery, Destination, OfferYield, Requirement, Step,
+        };
         let world = self.state.projects.as_ref()?;
         let plan = world
             .known_projects
@@ -1523,13 +1526,10 @@ impl Simulation {
                         ProjectStatus::Failed | ProjectStatus::Cancelled
                     )
             })?;
-        if !plan.materials_consumed && plan.support.iter().any(|id| {
-            let agreement=&self.state.agreements.as_ref().unwrap().agreements[id];
-            agreement.status==AgreementStatus::Proposed || agreement.obligations.iter().any(|id| {
-                let obligation=&self.state.agreements.as_ref().unwrap().obligations[id];
-                matches!(obligation.term,AgreementTerm::Delivery {destination,..} if destination==plan.materials) && !obligation.defaulted && obligation.performed<obligation.term.amount()
-            })
-        }) {return None;}
+        let agreements = self.agreement_view(actor);
+        if !plan.materials_consumed && plan.support.iter().any(|id|agreements.iter().find(|agreement|agreement.id==*id).is_some_and(|agreement|
+            agreement.status==AgreementStatus::Proposed || agreement.obligations.iter().any(|obligation|
+                matches!(obligation.term,AgreementTerm::Delivery {destination,..} if destination==plan.materials) && !obligation.defaulted && obligation.performed<obligation.term.amount()))) {return None;}
         let target = if plan.materials_consumed {
             plan.input
         } else {
@@ -1541,109 +1541,73 @@ impl Simulation {
             world.rules.construction_timber.0
         };
         let fact = mind.knowledge.get(&target)?;
-        if !fact.accessible {
+        let destination = self.delivery_known_inventory_destination(actor, target)?;
+        let available = if destination.observed_at == self.state.time
+            && destination.location == self.delivery_observed_location(actor)
+        {
+            self.state.inventories[&target].quantity.0
+        } else {
+            fact.quantity.0
+        };
+        let missing = required.saturating_sub(available);
+        if missing == 0 {
             return None;
         }
-        let insufficient = fact.quantity.0 < required;
-        let area = self.project_area(actor)?;
-        let cargo = self.state.inventories.values().find(|stock| {
-            stock.good == Good::Timber && stock.location == InventoryLocation::Carried(actor)
-        })?;
-        if cargo.quantity.0 > 0 {
-            if area == plan.area {
-                if self.state.inventories[&target].capacity
-                    == self.state.inventories[&target].quantity
-                {
-                    return None;
-                }
-                return Some(Command::Load {
-                    source: cargo.id,
-                    destination: target,
-                    quantity: Quantity(cargo.quantity.0.min(
-                        self.state.inventories[&target].capacity.0
-                            - self.state.inventories[&target].quantity.0,
-                    )),
-                });
-            }
-            return decisions::known_path(&mind.routes, area, plan.area)
-                .ok()
-                .map(|_| Command::Move {
-                    destination: plan.area,
-                });
-        }
-        if !insufficient {
-            return None;
-        }
-        for source in mind.knowledge.values().filter(|fact| {
-            fact.good == Good::Timber
-                && fact.inventory != target
-                && fact.accessible
-                && fact.quantity.0 >= required
-        }) {
-            if source.area == area {
-                let held = self
-                    .state
-                    .inventories
-                    .values()
-                    .filter(|stock| stock.location == InventoryLocation::Carried(actor))
-                    .map(|stock| u128::from(stock.quantity.0))
-                    .sum::<u128>();
-                let room = u128::from(
-                    self.state
-                        .physical
-                        .as_ref()
-                        .unwrap()
-                        .rules
-                        .carrying_capacity
-                        .0,
-                )
-                .saturating_sub(held)
-                .min(u128::from(cargo.capacity.0 - cargo.quantity.0))
-                    as u64;
-                let amount = source.quantity.0.min(room);
-                if amount > 0 {
-                    return Some(Command::Load {
-                        source: source.inventory,
-                        destination: cargo.id,
-                        quantity: Quantity(amount),
-                    });
-                }
-            } else if decisions::known_path(&mind.routes, area, source.area).is_ok() {
-                return Some(Command::Move {
-                    destination: source.area,
-                });
-            }
-        }
-        // These hints identify a plausible place to investigate, not an unseen
-        // quantity or permission. Depletion learned on arrival ends the search.
-        for hint in world.timber_hints.get(&actor).into_iter().flatten() {
-            if *hint == area
-                || mind
+        let delivery = Delivery::new(
+            Requirement {
+                good: fact.good,
+                quantity: Quantity(missing),
+                source: None,
+            },
+            Destination::Inventory(target),
+        )
+        .ok()?;
+        let hints = world
+            .timber_hints
+            .get(&actor)
+            .into_iter()
+            .flatten()
+            .filter(|area| {
+                !mind
                     .knowledge
                     .values()
-                    .any(|fact| fact.area == *hint && fact.good == Good::Timber)
-            {
-                continue;
-            }
-            if decisions::known_path(&mind.routes, area, *hint).is_ok() {
-                return Some(Command::Move { destination: *hint });
-            }
+                    .any(|fact| fact.area == **area && fact.good == delivery.requirement.good)
+            })
+            .map(|area| AcquisitionOffer {
+                key: area.0,
+                good: delivery.requirement.good,
+                source: None,
+                location: Location::AtArea(*area),
+                observed_at: plan.observed_at,
+                accessible: true,
+                quantity: OfferYield::Unknown,
+                requires_carrying_room: false,
+                requirements: Vec::new(),
+                action: Command::Move { destination: *area },
+            })
+            .collect::<Vec<_>>();
+        match self.plan_delivery_with_offers(actor, &delivery, &destination, Quantity(1), &hints) {
+            Step::Arrived { .. } | Step::Complete => None,
+            step => self.delivery_command(actor, step),
         }
-        None
     }
 
-    pub(crate) fn project_candidate(&self, actor: PersonId) -> Option<Command> {
-        let world = self.state.projects.as_ref()?;
+    pub(crate) fn project_opportunities(&self, actor: PersonId) -> Vec<Command> {
+        let Some(world) = self.state.projects.as_ref() else {
+            return Vec::new();
+        };
         if !self.project_able(actor) {
-            return None;
+            return Vec::new();
         }
-        let body = &self.state.physical.as_ref().unwrap().actors[&actor];
-        let mind = &self.state.decisions.as_ref()?.minds[&actor];
-        if body.vitals.hunger >= self.state.physical.as_ref().unwrap().rules.meal_relief
-            || body.vitals.fatigue >= self.state.physical.as_ref().unwrap().rules.fatigue_limit / 2
-        {
-            return None;
-        }
+        let Some(mind) = self
+            .state
+            .decisions
+            .as_ref()
+            .and_then(|world| world.minds.get(&actor))
+        else {
+            return Vec::new();
+        };
+        let mut opportunities = Vec::new();
         for plan in world
             .projects
             .values()
@@ -1651,40 +1615,21 @@ impl Simulation {
             .filter(|plan| plan.workers.contains(&actor) && self.project_is_known(actor, plan.id))
             .take(8)
         {
-            let obligated=plan.support.iter().filter_map(|id|self.state.agreements.as_ref().unwrap().agreements.get(id)).any(|agreement|agreement.obligations.iter().any(|id|matches!(self.state.agreements.as_ref().unwrap().obligations[id].term,AgreementTerm::ConstructionLabor {debtor,project,..} if debtor==actor&&project==plan.id)&&self.state.agreements.as_ref().unwrap().obligations[id].performed<self.state.agreements.as_ref().unwrap().obligations[id].term.amount()));
-            if self.construction_possible(actor, plan.id)
-                && (plan.sponsor == actor
-                    && (mind.dream == decisions::Aspiration::Independence
-                        && mind.personality.ambition >= 600
-                        || mind.personality.discipline >= 700)
-                    || obligated
-                        && (mind.personality.discipline >= 500 || mind.personality.honesty >= 500)
-                    || mind.dream == decisions::Aspiration::SupportOthers
-                        && mind.personality.empathy >= 700
-                        && plan.beneficiaries.contains(&actor))
-            {
-                return Some(Command::Project {
+            if self.construction_possible(actor, plan.id) {
+                opportunities.push(Command::Project {
                     action: ProjectAction::Work { project: plan.id },
                 });
             }
         }
-        if mind.dream == decisions::Aspiration::Independence
-            && let Some(command) = self.workshop_procurement(actor, mind)
-        {
-            return Some(command);
+        if let Some(command) = self.workshop_procurement(actor, mind) {
+            opportunities.push(command);
         }
         for workshop in world.enterprises.values().filter(|workshop| {
             workshop.sponsor == actor && workshop.area == self.project_area(actor).unwrap()
         }) {
-            if mind.dream != decisions::Aspiration::Independence
-                && !(mind.dream == decisions::Aspiration::SupportOthers
-                    && mind.personality.empathy >= 700)
-            {
-                continue;
-            }
             if matches!(workshop.kind, ProjectKind::Farm { .. }) {
                 if let Some(command) = self.autonomous_field_cultivation(actor, workshop.site) {
-                    return Some(command);
+                    opportunities.push(command);
                 }
                 continue;
             }
@@ -1695,26 +1640,23 @@ impl Simulation {
                     - self.state.inventories[&site.output].quantity.0
                     >= site.output_quantity.0
             {
-                return Some(Command::Work { site: site.id });
+                opportunities.push(Command::Work { site: site.id });
             }
         }
-        if mind.dream != decisions::Aspiration::Independence
-            || mind.personality.ambition < 700
-            || world.known_projects.get(&actor).is_some_and(|known| {
-                known.values().any(|project| {
-                    project.sponsor == actor
-                        && !matches!(
-                            project.status,
-                            ProjectStatus::Cancelled | ProjectStatus::Failed
-                        )
-                })
+        if world.known_projects.get(&actor).is_some_and(|known| {
+            known.values().any(|project| {
+                project.sponsor == actor
+                    && !matches!(
+                        project.status,
+                        ProjectStatus::Cancelled | ProjectStatus::Failed
+                    )
             })
-            || world
-                .next_search
-                .get(&actor)
-                .is_some_and(|time| *time > self.state.time)
+        }) || world
+            .next_search
+            .get(&actor)
+            .is_some_and(|time| *time > self.state.time)
         {
-            return None;
+            return opportunities;
         }
         let area = self.project_area(actor).unwrap();
         let own = |fact: &&StockKnowledge| {
@@ -1733,18 +1675,24 @@ impl Simulation {
                     .get(&fact.inventory)
                     == Some(&actor)
         };
-        let materials = mind
+        let Some(materials) = mind
             .knowledge
             .values()
             .filter(own)
-            .find(|fact| fact.good == Good::Timber && fact.accessible)?
-            .inventory;
-        let tool = mind
+            .find(|fact| fact.good == Good::Timber && fact.accessible)
+            .map(|fact| fact.inventory)
+        else {
+            return opportunities;
+        };
+        let Some(tool) = mind
             .knowledge
             .values()
             .filter(own)
-            .find(|fact| fact.good == Good::Tool && fact.accessible && fact.quantity.0 >= 1_000)?
-            .inventory;
+            .find(|fact| fact.good == Good::Tool && fact.accessible && fact.quantity.0 >= 1_000)
+            .map(|fact| fact.inventory)
+        else {
+            return opportunities;
+        };
         if let Some(plot) = self
             .state
             .ecology
@@ -1762,7 +1710,7 @@ impl Simulation {
             if let (Some(seed), Some(water), Some(food)) =
                 (stock(Good::Seed), stock(Good::Water), stock(Good::Food))
             {
-                return Some(Command::Project {
+                opportunities.push(Command::Project {
                     action: ProjectAction::ProposeFarm {
                         plot: plot.id,
                         materials,
@@ -1772,14 +1720,21 @@ impl Simulation {
                         food,
                         beneficiaries: BTreeSet::from([actor]),
                         workers: BTreeSet::from([actor]),
-                        finish_by: SimTime(self.state.time.0.checked_add(
-                            world.rules.construction_labor.0.saturating_mul(4) + 600_000,
-                        )?),
+                        finish_by: SimTime(
+                            self.state.time.0.saturating_add(
+                                world
+                                    .rules
+                                    .construction_labor
+                                    .0
+                                    .saturating_mul(4)
+                                    .saturating_add(600_000),
+                            ),
+                        ),
                     },
                 });
             }
         }
-        let output = mind
+        let Some(output) = mind
             .knowledge
             .values()
             .filter(own)
@@ -1788,8 +1743,11 @@ impl Simulation {
                     && fact.inventory != tool
                     && fact.accessible
                     && fact.quantity.0 == 0
-            })?
-            .inventory;
+            })
+            .map(|fact| fact.inventory)
+        else {
+            return opportunities;
+        };
         let expected = world
             .rules
             .construction_labor
@@ -1806,8 +1764,10 @@ impl Simulation {
                     .saturating_mul(8),
             )
             .saturating_add(120_000);
-        let finish_by = SimTime(self.state.time.0.checked_add(expected)?);
-        Some(Command::Project {
+        let Some(finish_by) = self.state.time.0.checked_add(expected).map(SimTime) else {
+            return opportunities;
+        };
+        opportunities.push(Command::Project {
             action: ProjectAction::Propose {
                 area,
                 materials,
@@ -1818,7 +1778,8 @@ impl Simulation {
                 workers: BTreeSet::from([actor]),
                 finish_by,
             },
-        })
+        });
+        opportunities
     }
     /// An individual's own blocked livelihood plan can make a first tool
     /// valuable. This is goal utility with risk, not a universal tool price.

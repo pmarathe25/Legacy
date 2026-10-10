@@ -413,8 +413,6 @@ fn acquisition_prospects_use_only_personal_views_and_local_admission_for_every_r
             good: kind.good(),
             quantity: Quantity(500),
             room: Quantity(1_000),
-            honesty: 900,
-            risk_tolerance: 0,
         };
         assert!(world.acquisition_prospects(need, &[]).is_empty());
         world.known.insert(
@@ -556,8 +554,6 @@ fn requesting_known_resource_access_needs_no_material_carrying_room() {
         good: Good::Water,
         quantity: Quantity(0),
         room: Quantity(0),
-        honesty: 900,
-        risk_tolerance: 0,
     };
     let prospects = world.acquisition_prospects(
         need,
@@ -593,5 +589,56 @@ fn requesting_known_resource_access_needs_no_material_carrying_room() {
                 }]
             )
             .is_empty()
+    );
+}
+
+#[test]
+fn source_offers_preserve_permission_and_unauthorized_alternatives_for_personal_judgment() {
+    let mut world = world(ResourceKind::Spring, 1_000);
+    world.known.insert(
+        PersonId(3),
+        BTreeMap::from([(
+            ResourceId(1),
+            ResourceView {
+                id: ResourceId(1),
+                area: AreaId(2),
+                kind: ResourceKind::Spring,
+                available: Quantity(1_000),
+                accessible: false,
+                custodian: Some(PersonId(4)),
+                contamination: 0,
+                observed_at: SimTime(0),
+            },
+        )]),
+    );
+    let offers = world.acquisition_prospects(
+        AcquisitionNeed {
+            actor: PersonId(3),
+            area: AreaId(2),
+            now: SimTime(0),
+            good: Good::Water,
+            quantity: Quantity(500),
+            room: Quantity(500),
+        },
+        &[LocalAcquisition {
+            resource: ResourceId(1),
+            can_prepare: true,
+            can_request: true,
+        }],
+    );
+    assert_eq!(offers.len(), 2);
+    assert_eq!(
+        offers[0].action,
+        EcologyAction::RequestAccess {
+            resource: ResourceId(1)
+        }
+    );
+    assert_eq!(
+        offers[1].action,
+        EcologyAction::Gather {
+            resource: ResourceId(1),
+            quantity: Quantity(500),
+            unauthorized: true,
+        }
     );
 }

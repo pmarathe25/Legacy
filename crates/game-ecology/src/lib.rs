@@ -185,8 +185,6 @@ pub struct AcquisitionNeed {
     pub good: Good,
     pub quantity: Quantity,
     pub room: Quantity,
-    pub honesty: u16,
-    pub risk_tolerance: u16,
 }
 impl Default for EcologyRules {
     fn default() -> Self {
@@ -218,61 +216,56 @@ impl World {
         need: AcquisitionNeed,
         local: &[LocalAcquisition],
     ) -> Vec<AcquisitionProspect> {
-        let may_take = need.honesty < 250 && need.risk_tolerance >= 700;
-        self.known
+        let mut prospects = Vec::new();
+        for known in self
+            .known
             .get(&need.actor)
             .into_iter()
             .flat_map(|known| known.values())
-            .filter_map(|known| {
-                if known.kind.good() != need.good
-                    || known.observed_at > need.now
-                    || known.available.0 == 0
-                {
-                    return None;
-                }
-                let quantity = Quantity(need.quantity.0.min(need.room.0).min(known.available.0));
-                let gather = known.accessible || may_take;
-                if gather && quantity.0 == 0 {
-                    return None;
-                }
-                let local = local.iter().find(|facts| facts.resource == known.id);
-                if known.area == need.area
-                    && (if gather {
-                        local.is_none_or(|facts| !facts.can_prepare)
-                    } else {
-                        local.is_none_or(|facts| !facts.can_request)
-                    })
-                {
-                    return None;
-                }
-                if !gather
-                    && (known.custodian.is_none()
-                        || self
-                            .next_request
-                            .get(&need.actor)
-                            .and_then(|requests| requests.get(&known.id))
-                            .is_some_and(|at| *at > need.now))
-                {
-                    return None;
-                }
-                Some(AcquisitionProspect {
+        {
+            if known.kind.good() != need.good
+                || known.observed_at > need.now
+                || known.available.0 == 0
+            {
+                continue;
+            }
+            let local = local.iter().find(|facts| facts.resource == known.id);
+            let local_here = known.area == need.area;
+            if !known.accessible
+                && known.custodian.is_some()
+                && (!local_here || local.is_some_and(|facts| facts.can_request))
+                && !self
+                    .next_request
+                    .get(&need.actor)
+                    .and_then(|requests| requests.get(&known.id))
+                    .is_some_and(|at| *at > need.now)
+            {
+                prospects.push(AcquisitionProspect {
                     resource: known.id,
                     area: known.area,
                     observed_at: known.observed_at,
-                    quantity: if gather { quantity } else { Quantity(0) },
-                    needs_tool: gather && known.kind == ResourceKind::Coppice,
-                    action: if gather {
-                        EcologyAction::Gather {
-                            resource: known.id,
-                            quantity,
-                            unauthorized: !known.accessible,
-                        }
-                    } else {
-                        EcologyAction::RequestAccess { resource: known.id }
+                    quantity: Quantity(0),
+                    needs_tool: false,
+                    action: EcologyAction::RequestAccess { resource: known.id },
+                });
+            }
+            let quantity = Quantity(need.quantity.0.min(need.room.0).min(known.available.0));
+            if quantity.0 > 0 && (!local_here || local.is_some_and(|facts| facts.can_prepare)) {
+                prospects.push(AcquisitionProspect {
+                    resource: known.id,
+                    area: known.area,
+                    observed_at: known.observed_at,
+                    quantity,
+                    needs_tool: known.kind == ResourceKind::Coppice,
+                    action: EcologyAction::Gather {
+                        resource: known.id,
+                        quantity,
+                        unauthorized: !known.accessible,
                     },
-                })
-            })
-            .collect()
+                });
+            }
+        }
+        prospects
     }
     /// Supplied only after physically inspecting this place. Receiving a report
     /// updates source knowledge separately and cannot fabricate this observation.

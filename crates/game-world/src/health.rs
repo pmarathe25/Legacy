@@ -9,28 +9,20 @@ type HealthCohort = (
     Option<(EncounterId, PersonId)>,
 );
 
-struct WaterPlanningData {
+struct HealthPlanningData {
     area: AreaId,
     stationary: bool,
-    values: game_health::WaterValues,
+    values: game_health::IntakeValues,
     stocks: Vec<game_health::RememberedStock>,
-    springs: Vec<game_health::RememberedSpring>,
-    routes: game_health::KnownRoutes,
-    searched: BTreeMap<AreaId, SimTime>,
-    requests: BTreeSet<InventoryId>,
 }
-impl WaterPlanningData {
-    fn input(&self, now: SimTime) -> game_health::WaterPlanning<'_> {
-        game_health::WaterPlanning {
+impl HealthPlanningData {
+    fn input(&self, now: SimTime) -> game_health::HealthPlanning<'_> {
+        game_health::HealthPlanning {
             now,
             area: self.area,
             stationary: self.stationary,
             values: self.values,
             stocks: &self.stocks,
-            springs: &self.springs,
-            routes: &self.routes,
-            searched: &self.searched,
-            stock_requests: &self.requests,
         }
     }
 }
@@ -256,19 +248,7 @@ impl Simulation {
             .max(self.borrowed_skill_level(actor, Skill::Medicine))
     }
     fn health_remembered_source_here(&self, actor: PersonId, stock: &StockKnowledge) -> bool {
-        let own = self
-            .state
-            .inventories
-            .get(&stock.inventory)
-            .is_some_and(|source| source.location == InventoryLocation::Carried(actor));
-        if self.health_tactical_place(actor).is_some() {
-            return own;
-        }
-        match self.resolved_location(actor) {
-            Location::AtArea(area) => own || stock.area == area,
-            Location::StoppedOnRoad { .. } => own,
-            _ => false,
-        }
+        self.health_stock(actor, stock.inventory, stock.good, Quantity(0))
     }
     fn health_stock(
         &self,
@@ -1091,6 +1071,17 @@ impl Simulation {
         )
         .expect("validated individual metabolism")
     }
+    pub(crate) fn observed_exposure_urgency(&self, actor: PersonId) -> i64 {
+        self.state
+            .health
+            .as_ref()
+            .and_then(|world| {
+                world.clinical.get(&actor).map(|clinical| {
+                    game_health::exposure_urgency(clinical.cold, world.rules.cold_harm)
+                })
+            })
+            .unwrap_or(0)
+    }
     pub(crate) fn observed_hydration_urgency(&self, target: PersonId) -> i64 {
         self.state
             .health
@@ -1404,16 +1395,18 @@ impl Simulation {
             .insert(person, shelter);
         Ok(())
     }
-    fn can_observe_health(&self, observer: PersonId, subject: PersonId) -> bool {
+    pub(crate) fn dependent_signal_visible(&self, observer: PersonId, subject: PersonId) -> bool {
         self.transport_same_place(observer, subject)
-            && !self.transport_is_moving(observer)
             && self.health_tactical_clear(
                 self.health_tactical_place(observer),
                 self.health_tactical_place(subject),
                 false,
             )
-            && self.effective_shelter(observer).map(|s| s.id)
-                == self.effective_shelter(subject).map(|s| s.id)
+            && self.effective_shelter(observer).map(|shelter| shelter.id)
+                == self.effective_shelter(subject).map(|shelter| shelter.id)
+    }
+    fn can_observe_health(&self, observer: PersonId, subject: PersonId) -> bool {
+        self.dependent_signal_visible(observer, subject) && !self.transport_is_moving(observer)
     }
     fn visible_symptoms(&self, person: PersonId) -> SymptomsView {
         let state = self
@@ -1555,19 +1548,6 @@ impl Simulation {
                 .known
                 .entry(observer)
                 .or_default();
-            if let Some(area) = area {
-                if knowledge.water_searched.len() == 16
-                    && !knowledge.water_searched.contains_key(&area)
-                    && let Some(oldest) = knowledge
-                        .water_searched
-                        .iter()
-                        .min_by_key(|(id, at)| (**at, **id))
-                        .map(|(id, _)| *id)
-                {
-                    knowledge.water_searched.remove(&oldest);
-                }
-                knowledge.water_searched.insert(area, self.state.time);
-            }
             for (person, symptoms) in people {
                 knowledge.people.insert(*person, symptoms.clone());
             }
@@ -1660,7 +1640,12 @@ impl Simulation {
                     stock.good == Good::Water
                         && stock.accessible
                         && self.health_remembered_source_here(actor, stock)
-                        && stock.quantity >= w.rules.drink_quantity
+                        && self.health_stock(
+                            actor,
+                            stock.inventory,
+                            Good::Water,
+                            w.rules.drink_quantity,
+                        )
                 }) {
                     actions.push(HealthAction::Drink {
                         source: stock.inventory,
@@ -1701,90 +1686,47 @@ impl Simulation {
             .into_iter()
             .flat_map(|mind| mind.knowledge.values())
             .filter(|s| matches!(s.good, Good::Water | Good::Timber | Good::Tool | Good::Herb))
-            .map(|fact| game_health::RememberedStock {
-                fact: fact.clone(),
-                here: self.health_remembered_source_here(actor, fact),
-                held: self
-                    .state
-                    .inventories
-                    .get(&fact.inventory)
-                    .is_some_and(|stock| stock.location == InventoryLocation::Carried(actor)),
+            .map(|fact| {
+                let here = self.health_remembered_source_here(actor, fact);
+                let mut observed = fact.clone();
+                if here {
+                    observed.quantity = Quantity(self.unreserved_stock(fact.inventory, actor));
+                    observed.accessible = true;
+                    observed.observed_at = self.state.time;
+                    observed.learned_at = self.state.time;
+                    observed.source = KnowledgeSource::Observed(actor);
+                }
+                game_health::RememberedStock {
+                    fact: observed,
+                    here,
+                    held: self
+                        .state
+                        .inventories
+                        .get(&fact.inventory)
+                        .is_some_and(|stock| stock.location == InventoryLocation::Carried(actor)),
+                }
             })
             .collect()
     }
-    fn water_planning_data(&self, actor: PersonId) -> Option<WaterPlanningData> {
+    fn health_planning_data(&self, actor: PersonId) -> Option<HealthPlanningData> {
         let area = self.health_area(actor, true).ok()?;
         let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
         let traits = self
             .invocation_personality(actor)
             .unwrap_or_else(|| mind.personality.clone());
-        let available = self.available_ecology_commands(actor);
-        let springs=self.state.ecology.as_ref().and_then(|w|w.known.get(&actor)).into_iter().flat_map(|known|known.values())
-            .filter(|s|s.kind==ResourceKind::Spring).map(|s|game_health::RememberedSpring {
-                id:s.id,area:s.area,available:s.available,accessible:s.accessible,contamination:s.contamination,observed_at:s.observed_at,
-                can_gather:s.area==area && available.iter().any(|c|matches!(c,Command::Ecology {action:EcologyAction::Gather {resource,..}} if *resource==s.id)),
-                can_request:s.area==area && available.iter().any(|c|matches!(c,Command::Ecology {action:EcologyAction::RequestAccess {resource}} if *resource==s.id))
-                    && self.state.ecology.as_ref().and_then(|w|w.next_request.get(&actor)).and_then(|known|known.get(&s.id)).is_none_or(|at|*at<=self.state.time),
-            }).collect();
-        let requests = self
-            .available_property_commands(actor)
-            .into_iter()
-            .filter_map(|c| match c {
-                Command::Property {
-                    action: PropertyAction::RequestAccess { inventory },
-                } => Some(inventory),
-                _ => None,
-            })
-            .collect();
-        Some(WaterPlanningData {
+        Some(HealthPlanningData {
             area,
             stationary: self.resolved_location(actor) == Location::AtArea(area),
-            values: game_health::WaterValues {
-                honesty: traits.honesty,
+            values: game_health::IntakeValues {
                 risk_tolerance: traits.risk_tolerance,
             },
             stocks: self.remembered_health_stocks(actor),
-            springs,
-            routes: mind.routes.clone(),
-            searched: self
-                .state
-                .health
-                .as_ref()
-                .and_then(|w| w.known.get(&actor))
-                .map(|k| k.water_searched.clone())
-                .unwrap_or_default(),
-            requests,
         })
-    }
-    fn health_intent_command(intent: game_health::HealthIntent) -> Command {
-        match intent {
-            game_health::HealthIntent::Health(action) => Command::Health { action },
-            game_health::HealthIntent::Move { destination } => Command::Move { destination },
-            game_health::HealthIntent::Carry { source, quantity } => {
-                Command::Carry { source, quantity }
-            }
-            game_health::HealthIntent::GatherWater {
-                resource,
-                quantity,
-                unauthorized,
-            } => Command::Ecology {
-                action: EcologyAction::Gather {
-                    resource,
-                    quantity,
-                    unauthorized,
-                },
-            },
-            game_health::HealthIntent::RequestResourceAccess { resource } => Command::Ecology {
-                action: EcologyAction::RequestAccess { resource },
-            },
-            game_health::HealthIntent::RequestStockAccess { inventory } => Command::Property {
-                action: PropertyAction::RequestAccess { inventory },
-            },
-        }
     }
     pub(crate) fn health_candidate(&self, actor: PersonId) -> Option<Command> {
         let world = self.state.health.as_ref()?;
-        let facts = self.water_planning_data(actor)?;
+        let facts = self.health_planning_data(actor)?;
+        let input = facts.input(self.state.time);
         let need = game_health::NeedFacts {
             actor,
             drink_relief: self.health_physiology(actor).drink_relief,
@@ -1795,9 +1737,34 @@ impl Simulation {
                     Location::Carried { .. }
                 ),
         };
-        world
-            .plan_need(need, &facts.input(self.state.time))
-            .map(Self::health_intent_command)
+        match world.plan_need(need, &input)? {
+            game_health::HealthIntent::Action(action) => Some(Command::Health { action }),
+            game_health::HealthIntent::Supply(supply) => {
+                let delivery = game_logistics::Delivery::new(
+                    game_logistics::Requirement {
+                        good: supply.good,
+                        quantity: supply.quantity,
+                        source: supply.source,
+                    },
+                    game_logistics::Destination::Contact(actor),
+                )
+                .ok()?;
+                let destination = game_logistics::KnownDestination {
+                    destination: delivery.destination,
+                    location: self.delivery_observed_location(actor),
+                    observed_at: self.state.time,
+                    accessible: true,
+                    room: None,
+                    direct_transfer: !supply.carried,
+                };
+                match self.plan_delivery(actor, &delivery, &destination, supply.quantity) {
+                    game_logistics::Step::Arrived { source, .. } => world
+                        .consume_supply(actor, source, &input, supply.consumer)
+                        .map(|action| Command::Health { action }),
+                    step => self.delivery_command(actor, step),
+                }
+            }
+        }
     }
     pub(crate) fn health_actor_busy(&self, actor: PersonId) -> bool {
         self.state
@@ -3281,7 +3248,6 @@ mod index_tests {
                 })
                 .collect();
             let knowledge = known.entry(observer.id).or_default();
-            knowledge.water_searched.insert(area, sim.state.time);
             knowledge.people.extend(people);
             knowledge.shelters.extend(shelters);
         }
@@ -3529,5 +3495,361 @@ mod index_tests {
                 "population={population} exposure_index={index_time:?} exposure_exhaustive={reference_time:?} observe_index={observe_indexed:?} observe_exhaustive={observe_reference:?} body_contributions={body_contributions:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod supply_composition_tests {
+    use super::*;
+    #[test]
+    fn self_intake_composes_real_collection_then_native_consumption_across_restore_and_slices() {
+        let mut sim = Simulation::ecology_fixture(29, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        for person in sim.state.people.clone() {
+            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+            let mut traits = decisions::Personality::restful();
+            traits.risk_tolerance = 900;
+            sim.debug_set_personality(person.id, traits, decisions::Aspiration::Comfort)
+                .unwrap();
+        }
+        for stock in sim
+            .state
+            .inventories
+            .values_mut()
+            .filter(|stock| stock.good == Good::Water)
+        {
+            stock.quantity = Quantity(0);
+        }
+        sim.initialize_health(Rules::fixture()).unwrap();
+        let relief = sim.state.health.as_ref().unwrap().rules.drink_relief;
+        sim.state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&actor)
+            .unwrap()
+            .thirst = relief;
+        sim.review_decisions().unwrap();
+        let source = sim.state.ecology.as_ref().unwrap().known[&actor]
+            .values()
+            .find(|source| source.kind == ResourceKind::Spring && source.area == AreaId(1))
+            .unwrap()
+            .id;
+        let original = sim.state.ecology.as_ref().unwrap().resources[&source].remaining;
+        let before = sim.state.clone();
+        let command = sim.health_candidate(actor).unwrap();
+        assert!(
+            matches!(command,Command::Ecology {action:EcologyAction::Gather {resource,quantity:Quantity(1_000),unauthorized:false}} if resource==source)
+        );
+        for _ in 0..20 {
+            assert_eq!(sim.health_candidate(actor), Some(command.clone()));
+        }
+        assert_eq!(sim.state, before);
+        sim.debug_actor_command(actor, command).unwrap();
+        let complete = sim.state.ecology.as_ref().unwrap().jobs[&actor].completes;
+        let duration = complete.0 - sim.state.time.0;
+        let mut restored = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(duration)).unwrap();
+        restored.advance(SimDuration(duration / 2)).unwrap();
+        restored = Simulation::load(
+            &restored.save().unwrap(),
+            Execution {
+                workers: 2,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        restored
+            .advance(SimDuration(duration - duration / 2))
+            .unwrap();
+        assert_eq!(sim.state, restored.state);
+        assert_eq!(
+            sim.state.ecology.as_ref().unwrap().resources[&source].remaining,
+            Quantity(original.0 - 1_000)
+        );
+        assert!(!sim.state.events.iter().any(
+            |event| matches!(event.kind,EventKind::Drank {actor:drinker,..} if drinker==actor)
+        ));
+        let command = sim.health_candidate(actor).unwrap();
+        let Command::Health {
+            action: HealthAction::Drink { source: water },
+        } = command
+        else {
+            panic!("collected water must go through native intake: {command:?}");
+        };
+        let thirst = sim.state.health.as_ref().unwrap().clinical[&actor].thirst;
+        for world in [&mut sim, &mut restored] {
+            world
+                .debug_actor_command(
+                    actor,
+                    Command::Health {
+                        action: HealthAction::Drink { source: water },
+                    },
+                )
+                .unwrap();
+        }
+        let duration = sim.state.health.as_ref().unwrap().rules.drinking_time;
+        sim.advance(duration).unwrap();
+        restored.advance(duration).unwrap();
+        assert_eq!(sim.state, restored.state);
+        assert_eq!(sim.state.inventories[&water].quantity, Quantity(0));
+        assert!(sim.state.health.as_ref().unwrap().clinical[&actor].thirst < thirst);
+        assert!(sim.state.events.iter().any(|event|matches!(event.kind,EventKind::Drank {actor:drinker,source,..} if drinker==actor && source==water)));
+    }
+    #[test]
+    fn a_departed_remembered_stock_cannot_hide_a_real_local_intake_alternative() {
+        let mut sim = Simulation::health_fixture(51, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        let holder = sim
+            .state
+            .people
+            .iter()
+            .find(|person| person.id != actor)
+            .unwrap()
+            .id;
+        for person in sim.state.people.clone() {
+            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+        }
+        let mut traits = decisions::Personality::restful();
+        traits.risk_tolerance = 900;
+        sim.debug_set_personality(actor, traits, decisions::Aspiration::Comfort)
+            .unwrap();
+        let moving = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Carried(holder),
+                Quantity(2_000),
+                Quantity(2_000),
+                BTreeSet::from([actor, holder]),
+            )
+            .unwrap();
+        let alternate = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(AreaId(1)),
+                Quantity(2_000),
+                Quantity(2_000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let mind = sim
+            .state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&actor)
+            .unwrap();
+        mind.knowledge.retain(|_, stock| stock.good != Good::Water);
+        for id in [moving, alternate] {
+            mind.knowledge.insert(
+                id,
+                StockKnowledge {
+                    inventory: id,
+                    area: AreaId(1),
+                    good: Good::Water,
+                    quantity: Quantity(2_000),
+                    accessible: true,
+                    observed_at: sim.state.time,
+                    learned_at: sim.state.time,
+                    source: KnowledgeSource::Observed(actor),
+                },
+            );
+        }
+        let relief = sim.state.health.as_ref().unwrap().rules.drink_relief;
+        sim.state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&actor)
+            .unwrap()
+            .thirst = relief;
+        assert_eq!(
+            sim.health_candidate(actor),
+            Some(Command::Health {
+                action: HealthAction::Drink { source: moving }
+            })
+        );
+        let remembered =
+            sim.state.decisions.as_ref().unwrap().minds[&actor].knowledge[&moving].clone();
+        sim.debug_move_actor(holder, AreaId(3)).unwrap();
+        sim.advance(SimDuration(1)).unwrap();
+        let before = sim.state.clone();
+        assert_eq!(
+            sim.health_candidate(actor),
+            Some(Command::Health {
+                action: HealthAction::Drink { source: alternate }
+            })
+        );
+        assert_eq!(sim.state, before);
+        assert_eq!(
+            sim.state.decisions.as_ref().unwrap().minds[&actor].knowledge[&moving],
+            remembered
+        );
+        let facts = sim.remembered_health_stocks(actor);
+        assert!(
+            !facts
+                .iter()
+                .find(|stock| stock.fact.inventory == moving)
+                .unwrap()
+                .here
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .find(|stock| stock.fact.inventory == moving)
+                .unwrap()
+                .fact
+                .area,
+            AreaId(1)
+        );
+    }
+    #[test]
+    fn private_shelter_hides_new_dependent_needs_and_real_bearers_keep_contact_while_moving() {
+        let mut sim = Simulation::childhood_fixture(11, Execution::default()).unwrap();
+        sim.initialize_health(Rules::fixture()).unwrap();
+        let child = sim.state.ruler;
+        let observer = sim
+            .state
+            .people
+            .iter()
+            .find(|person| {
+                person.id != child
+                    && sim.independent(person.id)
+                    && sim.state.physical.as_ref().unwrap().actors[&person.id]
+                        .vitals
+                        .alive
+            })
+            .unwrap()
+            .id;
+        for person in sim
+            .state
+            .people
+            .clone()
+            .into_iter()
+            .filter(|person| {
+                sim.state.physical.as_ref().unwrap().actors[&person.id]
+                    .vitals
+                    .alive
+            })
+            .map(|person| person.id)
+            .collect::<Vec<_>>()
+        {
+            sim.debug_actor_command(person, Command::Cancel).unwrap();
+        }
+        let Location::AtArea(area) = sim.resolved_location(child) else {
+            panic!("newborn must have an actual local home");
+        };
+        let cost = shelter_cost(&sim.state.health.as_ref().unwrap().rules, 2, 650).unwrap();
+        let timber = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Area(area),
+                cost,
+                cost,
+                BTreeSet::from([observer]),
+            )
+            .unwrap();
+        let shelter = sim
+            .seed_shelter(
+                area,
+                observer,
+                BTreeSet::from([child, observer]),
+                2,
+                650,
+                timber,
+                cost,
+                sim.state.time,
+            )
+            .unwrap();
+        sim.set_initial_shelter_occupancy(child, shelter).unwrap();
+        let hunger = sim.body_rules(child).hunger_harm;
+        sim.state
+            .physical
+            .as_mut()
+            .unwrap()
+            .actors
+            .get_mut(&child)
+            .unwrap()
+            .vitals
+            .hunger = hunger;
+        let thirst = sim.state.health.as_ref().unwrap().rules.thirst_harm;
+        sim.state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&child)
+            .unwrap()
+            .thirst = thirst;
+        sim.state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&observer)
+            .unwrap()
+            .child_signals
+            .clear();
+        assert!(!sim.dependent_signal_visible(observer, child));
+        sim.review_decisions().unwrap();
+        assert!(
+            !sim.state.decisions.as_ref().unwrap().minds[&observer]
+                .child_signals
+                .contains_key(&child)
+        );
+        sim.debug_actor_command(
+            observer,
+            Command::Health {
+                action: HealthAction::EnterShelter { shelter },
+            },
+        )
+        .unwrap();
+        assert!(sim.dependent_signal_visible(observer, child));
+        sim.initialize_transport(game_transport::Rules {
+            lift_time: SimDuration(6_000),
+            ..game_transport::Rules::default()
+        })
+        .unwrap();
+        sim.debug_actor_command(
+            observer,
+            Command::Transport {
+                action: game_transport::Action::OfferCarry { passenger: child },
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(6_000)).unwrap();
+        assert!(
+            matches!(sim.state.people[sim.person_index[&child]].location,Location::Carried {carrier} if carrier==observer)
+        );
+        sim.debug_actor_command(
+            observer,
+            Command::Health {
+                action: HealthAction::LeaveShelter,
+            },
+        )
+        .unwrap();
+        let destination = sim
+            .state
+            .areas
+            .iter()
+            .find(|place| place.id == area)
+            .unwrap()
+            .links[0]
+            .destination;
+        sim.debug_move_actor(observer, destination).unwrap();
+        sim.advance(SimDuration(1)).unwrap();
+        assert!(sim.transport_is_moving(observer));
+        assert!(sim.dependent_signal_visible(observer, child));
+        assert!(!sim.can_observe_health(observer, child));
     }
 }

@@ -2493,65 +2493,36 @@ impl Simulation {
                     quantity,
                     ..
                 } => {
-                    let carried = o.cargo.iter().find(|(_, q)| **q > 0);
-                    if let Some((cargo, q)) = carried {
-                        mind.knowledge.get(&destination).and_then(|k| {
-                            if k.area != area {
-                                decisions::known_path(&mind.routes, area, k.area)
-                                    .ok()
-                                    .map(|_| Command::Move {
-                                        destination: k.area,
-                                    })
-                            } else {
-                                Some(Command::Load {
-                                    source: *cargo,
-                                    destination,
-                                    quantity: Quantity((*q).min(quantity.0 - o.performed)),
-                                })
-                            }
-                        })
-                    } else {
-                        let src = mind.knowledge.get(&source).filter(|k| k.accessible);
-                        let carried = self.state.inventories.values().find(|i| {
-                            i.location == InventoryLocation::Carried(debtor)
-                                && mind
-                                    .knowledge
-                                    .get(&source)
-                                    .is_some_and(|known| i.good == known.good)
-                        });
-                        src.zip(carried)
-                            .and_then(|(k, carried)| {
-                                if k.area != area {
-                                    decisions::known_path(&mind.routes, area, k.area).ok().map(
-                                        |_| Command::Move {
-                                            destination: k.area,
-                                        },
-                                    )
-                                } else {
-                                    Some(Command::Load {
-                                        source,
-                                        destination: carried.id,
-                                        quantity: Quantity(
-                                            k.quantity.0.min(quantity.0 - o.performed).min(
-                                                carried
-                                                    .capacity
-                                                    .0
-                                                    .saturating_sub(carried.quantity.0),
-                                            ),
-                                        ),
-                                    })
-                                }
-                            })
-                            .filter(|c| {
-                                !matches!(
-                                    c,
-                                    Command::Load {
-                                        quantity: Quantity(0),
-                                        ..
-                                    }
-                                )
-                            })
-                    }
+                    let good = match o.term {
+                        AgreementTerm::OutputShare { good, .. } => Some(good),
+                        _ => mind.knowledge.get(&source).map(|known| known.good),
+                    };
+                    good.and_then(|good| {
+                        let mut goal =
+                            self.delivery_known_inventory_destination(debtor, destination)?;
+                        // The debtor remembers an adopted obligation that accepts this
+                        // delivery. This intention is not fresh remote stock access.
+                        goal.accessible = true;
+                        let delivery = game_logistics::Delivery {
+                            requirement: game_logistics::Requirement {
+                                good,
+                                quantity,
+                                source: Some(source),
+                            },
+                            destination: game_logistics::Destination::Inventory(destination),
+                            remaining: Quantity(quantity.0.saturating_sub(o.performed)),
+                            last_receipt: 0,
+                        };
+                        let tags = o.cargo.iter().map(|(id, q)| (*id, Quantity(*q))).collect();
+                        let step = self.plan_delivery_with_source_cargo(
+                            debtor,
+                            &delivery,
+                            &goal,
+                            Quantity(1),
+                            &tags,
+                        );
+                        self.delivery_command(debtor, step)
+                    })
                 }
                 _ => None,
             };

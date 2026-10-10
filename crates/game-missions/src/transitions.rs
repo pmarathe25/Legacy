@@ -345,6 +345,7 @@ impl World {
                             visited: BTreeSet::from([f.area]),
                             delivered: 0,
                             cargo: BTreeMap::new(),
+                            supply_cargo: BTreeMap::new(),
                             contacts: f.contacts.iter().take(64).map(|(p, a)| (*p, *a)).collect(),
                             last_leg_from: None,
                             declared_explanation: "Received an expedition proposal".into(),

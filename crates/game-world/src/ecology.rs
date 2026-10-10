@@ -721,9 +721,6 @@ impl Simulation {
         else {
             return Vec::new();
         };
-        let traits = self
-            .invocation_personality(actor)
-            .unwrap_or_else(|| mind.personality.clone());
         let available = self.available_ecology_commands(actor);
         let local = world.known.get(&actor).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
             let q = Quantity(quantity.0.min(room.0).min(known.available.0));
@@ -743,8 +740,6 @@ impl Simulation {
                 good,
                 quantity,
                 room,
-                honesty: traits.honesty,
-                risk_tolerance: traits.risk_tolerance,
             },
             &local,
         );
@@ -766,7 +761,7 @@ impl Simulation {
                             quantity: Quantity(1_000),
                             source: None,
                         },
-                        placement: PrerequisitePlacement::Carried,
+                        placement: PrerequisitePlacement::CarriedInOneLot,
                     }]
                 } else {
                     Vec::new()
@@ -805,77 +800,54 @@ impl Simulation {
         );
         offers
     }
-    pub(crate) fn ecology_candidate(&self, actor: PersonId) -> Option<Command> {
-        let world = self.state.ecology.as_ref()?;
-        if !self.ecology_able(actor) || world.jobs.contains_key(&actor) {
-            return None;
-        }
-        let physical = self.state.physical.as_ref()?;
-        let body = &physical.actors[&actor];
-        if body.vitals.fatigue >= physical.rules.fatigue_limit / 2 {
-            return None;
-        }
-        let mind = &self.state.decisions.as_ref()?.minds[&actor];
-        let hungry = body.vitals.hunger >= physical.rules.meal_relief;
-        let local_food = mind.knowledge.values().any(|f| {
-            f.good == Good::Food && f.accessible && f.quantity >= physical.rules.meal_size
-        });
-        let desired = if hungry && !local_food {
-            Good::Food
-        } else if mind.dream == decisions::Aspiration::Independence
-            && mind.personality.ambition >= 600
-        {
-            Good::Timber
-        } else {
-            return None;
+    pub(crate) fn ecology_opportunities(&self, actor: PersonId) -> Vec<Command> {
+        let Some(world) = &self.state.ecology else {
+            return Vec::new();
         };
-        let held = self
-            .inventory_index
-            .get(&InventoryLocation::Carried(actor))
-            .into_iter()
-            .flatten()
-            .any(|id| {
-                self.state.inventories[id].good == desired
-                    && self.state.inventories[id].quantity.0
-                        >= if desired == Good::Timber {
-                            5_000
-                        } else {
-                            1_000
-                        }
-            });
-        if held {
-            return None;
+        if !self.ecology_able(actor) || world.jobs.contains_key(&actor) {
+            return Vec::new();
         }
-        let area = self.ecology_area(actor)?;
-        let source = world
-            .known
-            .get(&actor)?
+        let Some(mind) = self
+            .state
+            .decisions
+            .as_ref()
+            .and_then(|w| w.minds.get(&actor))
+        else {
+            return Vec::new();
+        };
+        let Some(area) = self.ecology_area(actor) else {
+            return Vec::new();
+        };
+        let Some(known) = world.known.get(&actor) else {
+            return Vec::new();
+        };
+        let mut commands = self
+            .available_ecology_commands(actor)
+            .into_iter()
+            .filter(|command| match command {
+                Command::Ecology {
+                    action:
+                        EcologyAction::Gather { resource, .. }
+                        | EcologyAction::RequestAccess { resource },
+                } => known.contains_key(resource),
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        let destinations = known
             .values()
-            .filter(|s| s.kind.good() == desired && s.available.0 >= 1_000)
-            .filter(|s| {
-                s.accessible
-                    || s.custodian.is_some()
-                    || mind.personality.honesty < 250 && mind.personality.risk_tolerance >= 700
+            .filter(|source| {
+                source.available.0 > 0
+                    && source.area != area
+                    && decisions::known_path(&mind.routes, area, source.area).is_ok()
             })
-            .min_by_key(|s| (s.area != area, s.id))?;
-        if source.area != area {
-            return decisions::known_path(&mind.routes, area, source.area)
-                .ok()
-                .map(|_| Command::Move {
-                    destination: source.area,
-                });
-        }
-        if !source.accessible
-            && (mind.personality.honesty >= 250 || mind.personality.risk_tolerance < 700)
-        {
-            return self.available_ecology_commands(actor).into_iter().find(|c|matches!(c,Command::Ecology {action:EcologyAction::RequestAccess {resource}} if *resource==source.id));
-        }
-        self.available_ecology_commands(actor)
-            .into_iter()
-            .find(|command| {
-                matches!(command,
-            Command::Ecology {action:EcologyAction::Gather {resource,..}} if *resource==source.id)
-            })
+            .map(|source| source.area)
+            .collect::<BTreeSet<_>>();
+        commands.extend(
+            destinations
+                .into_iter()
+                .map(|destination| Command::Move { destination }),
+        );
+        commands
     }
     pub(crate) fn validate_ecology(&self) -> Result<(), Error> {
         let Some(world) = &self.state.ecology else {

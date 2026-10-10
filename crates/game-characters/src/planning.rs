@@ -30,29 +30,114 @@ pub struct World<A> {
     pub last_learning_event: u64,
     pub switching_margin: i64,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Purpose {
-    Force,
-    Health,
-    Forage,
-    Project,
-    Property,
-    Food(InventoryId),
-    Care {
-        child: PersonId,
-        source: InventoryId,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum NeedRef {
+    Hunger,
+    Hydration,
+    Recovery,
+    Exposure,
+    Company,
+    Freedom,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Capability {
+    Skill(Skill),
+    Interest(ChildhoodInterest),
+    Livelihood,
+    Movement,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum CommitmentRef {
+    Obligation(ObligationId),
+    Project(ProjectId),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Subject {
+    Inventory(InventoryId),
+    Site(SiteId),
+    Project(ProjectId),
+    Resource(ResourceId),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Motive {
+    Relieve {
+        need: NeedRef,
+        beneficiary: PersonId,
     },
-    Comfort(PersonId),
-    Rest,
-    Cultivate,
-    Play(ChildhoodInterest),
-    Work(SiteId),
-    Stop,
-    Resume,
-    CareSupply {
-        child: PersonId,
+    Develop {
+        capability: Capability,
+        beneficiary: PersonId,
+    },
+    Provide {
+        requirement: game_logistics::Requirement,
+        beneficiary: PersonId,
+        need: Option<NeedRef>,
+    },
+    Fulfil {
+        commitment: CommitmentRef,
+    },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum IntentionKey {
+    Relief {
+        need: NeedRef,
+        beneficiary: PersonId,
+    },
+    Development {
+        capability: Capability,
+        beneficiary: PersonId,
+        subject: Option<Subject>,
+    },
+    Provision {
         good: Good,
+        beneficiary: PersonId,
+        source: Option<InventoryId>,
     },
+    Commitment(CommitmentRef),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Effort {
+    Restoration,
+    Light,
+    Practice,
+    Strenuous,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Uncertainty {
+    Observed,
+    Remembered,
+    Conditional,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Risk {
+    Safe,
+    PhysicalDanger,
+    UnconsentedTaking,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prospects {
+    pub duration: SimDuration,
+    pub travel: SimDuration,
+    pub effort: Effort,
+    pub uncertainty: Uncertainty,
+    pub risk: Risk,
+    pub source: Option<InventoryId>,
+    pub site: Option<SiteId>,
+    pub sponsor: Option<PersonId>,
+}
+impl Default for Prospects {
+    fn default() -> Self {
+        Self {
+            duration: SimDuration(0),
+            travel: SimDuration(0),
+            effort: Effort::Light,
+            uncertainty: Uncertainty::Observed,
+            risk: Risk::Safe,
+            source: None,
+            site: None,
+            sponsor: None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionShape {
@@ -62,19 +147,25 @@ pub enum ActionShape {
     Care(PersonId),
     Comfort(PersonId),
     Rest,
+    Stop,
+    Resume,
     Other,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan<A> {
     pub action: A,
-    pub purpose: Purpose,
+    pub key: IntentionKey,
+    pub motives: Vec<Motive>,
+    pub prospects: Prospects,
     pub shape: ActionShape,
     pub delivery: Option<game_logistics::Delivery>,
 }
 #[derive(Clone, Debug)]
 pub struct Candidate<A> {
     pub action: A,
-    pub purpose: Purpose,
+    pub key: IntentionKey,
+    pub motives: Vec<Motive>,
+    pub prospects: Prospects,
     pub shape: ActionShape,
     pub delivery: Option<game_logistics::Delivery>,
 }
@@ -124,6 +215,9 @@ pub struct PersonalFacts {
     pub own_cargo: BTreeSet<InventoryId>,
     pub observed_contacts: BTreeSet<PersonId>,
     pub can_resume: bool,
+    pub hydration_urgency: i64,
+    pub exposure_urgency: i64,
+    pub freedom_restricted: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Decision<A> {
@@ -162,10 +256,11 @@ impl<A: Clone> Mind<A> {
                     .plan
                     .as_ref()
                     .filter(|plan| {
-                        plan.purpose
-                            == Purpose::CareSupply {
-                                child: *child,
+                        plan.key
+                            == IntentionKey::Provision {
+                                beneficiary: *child,
                                 good,
+                                source: None,
                             }
                     })
                     .and_then(|plan| plan.delivery.as_ref())
@@ -198,18 +293,25 @@ impl<A: Clone> Mind<A> {
     /// Fresh local observation can remove the only applicable care signal.
     /// Missing information while away is retained by the observer, so this
     /// does not inspect another person's current body or require continued care.
-    pub fn reconcile_care_observation(&mut self) {
+    pub fn reconcile_care_observation(&mut self, actor: PersonId) {
         if let Some(plan) = &self.plan
-            && let Purpose::CareSupply { child, good } = plan.purpose
+            && let IntentionKey::Provision {
+                beneficiary, good, ..
+            } = plan.key
+            && beneficiary != actor
+            && plan.delivery.is_some()
             && self
                 .child_signals
-                .get(&child)
+                .get(&beneficiary)
                 .is_none_or(|signal| care_urgency(signal, good) == 0)
         {
             self.plan = None;
             self.goal = Goal::Rest;
             self.explanation = explanation(Goal::Rest, 0, 0, 0);
         }
+    }
+    pub fn accepts_risk(&self, risk: Risk) -> bool {
+        self.personality.accepts_risk(risk)
     }
     pub fn record_care_receipt(
         &mut self,
@@ -268,12 +370,12 @@ impl<A: Clone> Mind<A> {
         }
         if let Some(candidate) = candidates
             .iter()
-            .find(|candidate| candidate.purpose == Purpose::Force)
+            .find(|candidate| candidate.motives.iter().any(|motive|matches!(motive,Motive::Relieve {need:NeedRef::Freedom,beneficiary} if *beneficiary==facts.actor)) && facts.freedom_restricted && self.accepts_risk(candidate.prospects.risk))
         {
             return Decision {
                 plan: Some(Plan {
                     action: candidate.action.clone(),
-                    purpose: candidate.purpose,
+                    key:candidate.key,motives:candidate.motives.clone(),prospects:candidate.prospects.clone(),
                     shape: candidate.shape,
                     delivery: candidate.delivery.clone(),
                 }),
@@ -308,14 +410,16 @@ impl<A: Clone> Mind<A> {
             return candidates
                 .iter()
                 .find_map(|candidate| {
-                    if candidate.purpose != Purpose::Stop {
+                    if candidate.shape != ActionShape::Stop {
                         return None;
                     }
                     self.score(facts, candidate, work_concept, contacted, road_distress)
                         .map(|explanation| Decision {
                             plan: Some(Plan {
                                 action: candidate.action.clone(),
-                                purpose: candidate.purpose,
+                                key: candidate.key,
+                                motives: candidate.motives.clone(),
+                                prospects: candidate.prospects.clone(),
                                 shape: candidate.shape,
                                 delivery: candidate.delivery.clone(),
                             }),
@@ -361,7 +465,9 @@ impl<A: Clone> Mind<A> {
         Decision {
             plan: Some(Plan {
                 action: candidate.action.clone(),
-                purpose: candidate.purpose,
+                key: candidate.key,
+                motives: candidate.motives.clone(),
+                prospects: candidate.prospects.clone(),
                 shape: candidate.shape,
                 delivery: candidate.delivery.clone(),
             }),
@@ -376,229 +482,381 @@ impl<A: Clone> Mind<A> {
         contacted: impl Fn(&PersonId, &ChildSignal) -> bool,
         road_distress: bool,
     ) -> Option<Explanation> {
+        if !self.accepts_risk(candidate.prospects.risk) {
+            return None;
+        }
         let urgent = facts.vitals.hunger >= facts.limits.meal_relief;
         let road = !matches!(facts.place, Place::Area(_));
-        let practice = facts.now >= self.retry_after
-            && !urgent
-            && facts.vitals.fatigue < facts.limits.fatigue_limit;
-        let recovery = if road {
-            (facts.vitals.fatigue / 500
-                + facts.limits.max_health.saturating_sub(facts.vitals.health) / 100)
-                .min(i64::MAX as u64) as i64
-        } else {
-            facts.vitals.fatigue as i64 / 500
-                + (facts.limits.max_health - facts.vitals.health) as i64 / 100
-        };
-        match candidate.purpose {
-            Purpose::Force => None,
-            Purpose::Health if !road => Some(explanation(Goal::Recovery, 2_000, 200, 0)),
-            Purpose::Forage if !road => Some(explanation(
-                Goal::Survival,
-                if urgent { 2_000 } else { 0 },
-                200,
-                0,
-            )),
-            Purpose::Project if !road => Some(explanation(
-                Goal::Practice,
-                0,
-                i64::from(self.personality.ambition) + 200,
-                0,
-            )),
-            Purpose::Property if !road => Some(explanation(Goal::Survival, 9_000, 0, 0)),
-            Purpose::Food(inventory) if urgent && (!facts.hunger_exempt || road) => {
-                let fact = self.knowledge.get(&inventory)?;
-                if fact.good != Good::Food
-                    || !fact.accessible
-                    || fact.quantity < facts.limits.meal_size
-                {
-                    return None;
-                }
-                if road {
-                    if fact.source != KnowledgeSource::Observed(facts.actor)
-                        || !facts.own_cargo.contains(&inventory)
-                    {
-                        return None;
-                    }
-                    Some(explanation(
-                        Goal::Survival,
-                        10_000 + facts.vitals.hunger as i64 / 100,
-                        0,
-                        0,
-                    ))
-                } else {
-                    let Place::Area(area) = facts.place else {
-                        unreachable!()
-                    };
-                    let travel = if fact.area == area {
-                        0
-                    } else {
-                        known_path(&self.routes, area, fact.area).ok()?.1.0
-                    };
-                    let survival = facts
-                        .limits
-                        .hunger_harm
-                        .saturating_sub(facts.vitals.hunger)
-                        .saturating_add(facts.vitals.health);
-                    if travel.saturating_add(facts.limits.eating_time.0) > survival {
-                        return None;
-                    }
-                    Some(explanation(
-                        Goal::Survival,
-                        facts.vitals.hunger as i64 / 100 + 10_000,
-                        -((travel / 1_000).min(i64::MAX as u64) as i64),
-                        0,
-                    ))
-                }
-            }
-            Purpose::Care { child, source } => {
-                let signal = self.child_signals.get(&child)?;
-                if !contacted(&child, signal) {
-                    return None;
-                }
-                let motive = self.care_motivation(child);
-                if motive < 300 {
-                    return None;
-                }
-                let fact = self.knowledge.get(&source)?;
-                if !fact.accessible {
-                    return None;
-                }
-                let need = match fact.good {
-                    Good::Food if fact.quantity >= facts.limits.meal_size => signal.urgency,
-                    Good::Water if fact.quantity >= facts.limits.meal_size => {
-                        signal.hydration_urgency
-                    }
-                    _ => return None,
-                };
-                if need == 0 {
-                    return None;
-                }
-                if road
-                    && (fact.source != KnowledgeSource::Observed(facts.actor)
-                        || !facts.own_cargo.contains(&source))
-                {
-                    return None;
-                }
-                if let Place::Area(area) = facts.place
-                    && fact.area != area
-                {
-                    return None;
-                }
-                Some(explanation(Goal::Care, need, motive, 0))
-            }
-            Purpose::Comfort(child) => {
-                let signal = self.child_signals.get(&child)?;
-                if !contacted(&child, signal)
-                    || signal.preference != Some(ChildhoodInterest::Company)
-                {
-                    return None;
-                }
-                let motive = self.care_motivation(child);
-                (motive >= 300).then(|| explanation(Goal::Care, 500, motive, 0))
-            }
-            Purpose::CareSupply { child, good } => {
-                let signal = self.child_signals.get(&child)?;
-                let motive = self.care_motivation(child);
-                let continuing = self.plan.as_ref().is_some_and(|plan| {
-                    plan.purpose == Purpose::CareSupply { child, good }
-                        && plan
-                            .delivery
-                            .as_ref()
-                            .is_some_and(|delivery| delivery.remaining.0 > 0)
-                }) && signal.observed_at <= facts.now;
-                ((contacted(&child, signal) || continuing)
-                    && care_urgency(signal, good) > 0
-                    && motive >= 300)
-                    .then(|| explanation(Goal::Care, care_urgency(signal, good), motive, 0))
-            }
-            Purpose::Rest if facts.place != Place::Moving => Some(explanation(
-                Goal::Recovery,
-                recovery,
-                i64::from(self.personality.hedonism) / 3,
-                0,
-            )),
-            Purpose::Cultivate if !road && practice => Some(explanation(
-                Goal::Practice,
-                0,
-                i64::from(self.personality.discipline + self.personality.ambition) / 4,
-                100,
-            )),
-            Purpose::Play(interest) if !road && practice && facts.child => {
-                let inclination = match interest {
-                    ChildhoodInterest::Company => self.personality.sociability,
-                    ChildhoodInterest::Craft => self.personality.discipline,
-                    ChildhoodInterest::Movement => self.personality.risk_tolerance,
-                    ChildhoodInterest::Food => self.personality.hedonism,
-                };
-                Some(explanation(
-                    Goal::Practice,
-                    0,
-                    i64::from(inclination) / 2,
-                    self.interests.get(&interest).copied().unwrap_or(0) as i64 / 4,
-                ))
-            }
-            Purpose::Work(site) if !road && practice && !facts.child => {
-                let site = self.sites.get(&site)?;
-                let Place::Area(area) = facts.place else {
-                    unreachable!()
-                };
-                if site.area != area
-                    || !site.access
-                    || !self
-                        .knowledge
-                        .get(&site.input)
-                        .is_some_and(|fact| fact.accessible && fact.quantity >= site.input_quantity)
-                    || !self
-                        .knowledge
-                        .get(&site.tool)
-                        .is_some_and(|fact| fact.accessible && fact.quantity.0 >= 1_000)
-                {
-                    return None;
-                }
-                let dream = if self.dream == Aspiration::Independence {
-                    100
-                } else {
-                    0
-                };
-                Some(explanation(
-                    Goal::Practice,
-                    0,
-                    i64::from(self.personality.discipline + self.personality.ambition) / 4
-                        + dream
-                        + (facts.work_units / 10_000).min(100) as i64,
-                    self.values
-                        .get(&work_concept)
-                        .map_or(0, |value| i64::from(value.weight))
-                        + self
-                            .interests
-                            .get(&ChildhoodInterest::Craft)
-                            .copied()
-                            .unwrap_or(0) as i64
-                            / 4,
-                ))
-            }
-            Purpose::Stop
-                if facts.place == Place::Moving
-                    && self.child_signals.iter().any(|(child, signal)| {
-                        contacted(child, signal)
-                            && (signal.urgency > 0
-                                || signal.hydration_urgency > 0
-                                || signal.preference == Some(ChildhoodInterest::Company))
-                            && self.care_motivation(*child) >= 300
-                    }) =>
-            {
-                Some(explanation(Goal::Care, 3_000, 0, 0))
-            }
-            Purpose::Resume
-                if facts.place == Place::Stopped
-                    && recovery == 0
-                    && !road_distress
-                    && facts.can_resume =>
-            {
-                Some(explanation(Goal::Survival, 0, 100, 0))
-            }
-            _ => None,
+        if candidate.shape == ActionShape::Stop {
+            return (facts.place == Place::Moving
+                && self.child_signals.iter().any(|(child, signal)| {
+                    contacted(child, signal)
+                        && (signal.urgency > 0
+                            || signal.hydration_urgency > 0
+                            || signal.preference == Some(ChildhoodInterest::Company))
+                        && self.care_motivation(*child) >= 300
+                }))
+            .then(|| explanation(Goal::Care, 3_000, 0, 0));
         }
+        if candidate.shape == ActionShape::Resume {
+            return (facts.place == Place::Stopped
+                && facts.vitals.fatigue == 0
+                && facts.vitals.health == facts.limits.max_health
+                && !road_distress
+                && facts.can_resume)
+                .then(|| explanation(Goal::Survival, 0, 100, 0));
+        }
+        if let Some(site) = candidate.prospects.site {
+            let site = self.sites.get(&site)?;
+            let Place::Area(area) = facts.place else {
+                return None;
+            };
+            if facts.child
+                || site.area != area
+                || !site.access
+                || !self
+                    .knowledge
+                    .get(&site.input)
+                    .is_some_and(|stock| stock.accessible && stock.quantity >= site.input_quantity)
+                || !self
+                    .knowledge
+                    .get(&site.tool)
+                    .is_some_and(|stock| stock.accessible && stock.quantity.0 >= 1_000)
+            {
+                return None;
+            }
+        }
+        let mut scores = Vec::new();
+        for motive in &candidate.motives {
+            let score = match motive {
+                Motive::Relieve { need, beneficiary } => {
+                    let pressure =
+                        self.need_pressure(*need, *beneficiary, facts, candidate.key, &contacted)?;
+                    if *beneficiary == facts.actor {
+                        if pressure == 0 && *need != NeedRef::Recovery {
+                            continue;
+                        }
+                        if *need == NeedRef::Hunger && facts.hunger_exempt {
+                            continue;
+                        }
+                        if let Some(source) = candidate.prospects.source {
+                            let fact = self.knowledge.get(&source)?;
+                            let good = match need {
+                                NeedRef::Hunger => Some(Good::Food),
+                                NeedRef::Hydration => Some(Good::Water),
+                                _ => None,
+                            };
+                            if good.is_some_and(|good| fact.good != good)
+                                || !fact.accessible
+                                || fact.quantity
+                                    < if *need == NeedRef::Hydration {
+                                        facts.limits.drink_quantity
+                                    } else {
+                                        facts.limits.meal_size
+                                    }
+                            {
+                                continue;
+                            }
+                            if road
+                                && (!facts.own_cargo.contains(&source)
+                                    || fact.source != KnowledgeSource::Observed(facts.actor))
+                            {
+                                continue;
+                            }
+                        }
+                        if *need == NeedRef::Hunger {
+                            let travel = if let (Place::Area(area), Some(source)) =
+                                (facts.place, candidate.prospects.source)
+                            {
+                                let fact = self.knowledge.get(&source)?;
+                                if fact.area != area {
+                                    known_path(&self.routes, area, fact.area).ok()?.1.0
+                                } else {
+                                    0
+                                }
+                            } else {
+                                candidate.prospects.travel.0
+                            };
+                            if travel.saturating_add(facts.limits.eating_time.0)
+                                > facts
+                                    .limits
+                                    .hunger_harm
+                                    .saturating_sub(facts.vitals.hunger)
+                                    .saturating_add(facts.vitals.health)
+                            {
+                                continue;
+                            }
+                        }
+                        let benefit = if candidate.prospects.effort == Effort::Restoration {
+                            i64::from(self.personality.hedonism) / 3
+                        } else {
+                            0
+                        };
+                        Some(explanation(
+                            if matches!(need, NeedRef::Recovery | NeedRef::Exposure) {
+                                Goal::Recovery
+                            } else {
+                                Goal::Survival
+                            },
+                            pressure,
+                            benefit,
+                            0,
+                        ))
+                    } else {
+                        let motive = self.care_motivation(*beneficiary);
+                        (motive >= 300 && pressure > 0)
+                            .then(|| explanation(Goal::Care, pressure, motive, 0))
+                    }
+                }
+                Motive::Provide {
+                    requirement,
+                    beneficiary,
+                    need,
+                } => {
+                    if requirement.quantity.0 == 0 {
+                        continue;
+                    }
+                    if let Some(need) = need {
+                        let pressure = self.need_pressure(
+                            *need,
+                            *beneficiary,
+                            facts,
+                            candidate.key,
+                            &contacted,
+                        )?;
+                        let attachment = if *beneficiary == facts.actor {
+                            0
+                        } else {
+                            self.care_motivation(*beneficiary)
+                        };
+                        if pressure == 0 || *beneficiary != facts.actor && attachment < 300 {
+                            continue;
+                        }
+                        if candidate.shape == ActionShape::Care(*beneficiary)
+                            && let Some(source) = candidate.prospects.source
+                        {
+                            let stock = self.knowledge.get(&source)?;
+                            if stock.good != requirement.good
+                                || !stock.accessible
+                                || stock.quantity < facts.limits.meal_size
+                                || road
+                                    && (!facts.own_cargo.contains(&source)
+                                        || stock.source != KnowledgeSource::Observed(facts.actor))
+                            {
+                                continue;
+                            }
+                        }
+                        Some(explanation(
+                            if *beneficiary == facts.actor {
+                                Goal::Survival
+                            } else {
+                                Goal::Care
+                            },
+                            pressure,
+                            attachment,
+                            0,
+                        ))
+                    } else {
+                        let held = facts
+                            .own_cargo
+                            .iter()
+                            .filter_map(|id| self.knowledge.get(id))
+                            .filter(|stock| {
+                                stock.good == requirement.good
+                                    && stock.source == KnowledgeSource::Observed(facts.actor)
+                            })
+                            .map(|stock| u128::from(stock.quantity.0))
+                            .sum::<u128>();
+                        if *beneficiary == facts.actor && held >= u128::from(requirement.quantity.0)
+                        {
+                            continue;
+                        }
+                        let interested = if *beneficiary == facts.actor {
+                            self.dream == Aspiration::Independence
+                                && self.personality.ambition >= 600
+                        } else {
+                            self.care_motivation(*beneficiary) >= 300
+                        };
+                        interested.then(|| {
+                            explanation(
+                                Goal::Practice,
+                                0,
+                                i64::from(self.personality.ambition) / 2,
+                                0,
+                            )
+                        })
+                    }
+                }
+                Motive::Develop {
+                    capability,
+                    beneficiary,
+                } => {
+                    if road
+                        || urgent
+                        || facts.now < self.retry_after
+                        || facts.vitals.fatigue >= facts.limits.fatigue_limit
+                    {
+                        continue;
+                    }
+                    let other = *beneficiary != facts.actor;
+                    let benefit = match capability {
+                        Capability::Livelihood => {
+                            let desired = if other {
+                                self.dream == Aspiration::SupportOthers
+                                    && self.personality.empathy >= 700
+                            } else {
+                                self.dream == Aspiration::Independence
+                                    && self.personality.ambition >= 600
+                                    || self.personality.discipline >= 700
+                            };
+                            if !desired {
+                                continue;
+                            }
+                            i64::from(if other {
+                                self.personality.empathy
+                            } else {
+                                self.personality.ambition
+                            }) + 200
+                        }
+                        Capability::Interest(interest) => {
+                            if !facts.child {
+                                continue;
+                            }
+                            let inclination = match interest {
+                                ChildhoodInterest::Company => self.personality.sociability,
+                                ChildhoodInterest::Craft => self.personality.discipline,
+                                ChildhoodInterest::Movement => self.personality.risk_tolerance,
+                                ChildhoodInterest::Food => self.personality.hedonism,
+                            };
+                            i64::from(inclination) / 2
+                                + self.interests.get(interest).copied().unwrap_or(0) as i64 / 4
+                        }
+                        Capability::Skill(skill) => {
+                            let base =
+                                i64::from(self.personality.discipline + self.personality.ambition)
+                                    / 4;
+                            if *skill == Skill::Craft {
+                                base + if self.dream == Aspiration::Independence {
+                                    100
+                                } else {
+                                    0
+                                } + (facts.work_units / 10_000).min(100) as i64
+                            } else {
+                                base + 100
+                            }
+                        }
+                        Capability::Movement => i64::from(self.personality.risk_tolerance) / 2,
+                    };
+                    let value = if *capability == Capability::Skill(Skill::Craft) {
+                        self.values
+                            .get(&work_concept)
+                            .map_or(0, |value| i64::from(value.weight))
+                            + self
+                                .interests
+                                .get(&ChildhoodInterest::Craft)
+                                .copied()
+                                .unwrap_or(0) as i64
+                                / 4
+                    } else {
+                        0
+                    };
+                    Some(explanation(Goal::Practice, 0, benefit, value))
+                }
+                Motive::Fulfil { .. } => {
+                    if urgent
+                        || facts.vitals.fatigue >= facts.limits.fatigue_limit
+                        || self.personality.discipline < 500 && self.personality.honesty < 500
+                    {
+                        continue;
+                    }
+                    Some(explanation(
+                        Goal::Practice,
+                        0,
+                        i64::from(self.personality.discipline.max(self.personality.honesty)) + 200,
+                        0,
+                    ))
+                }
+            };
+            if let Some(score) = score {
+                scores.push(score);
+            }
+        }
+        let mut result = scores.into_iter().max_by_key(|score| score.total)?;
+        let time = candidate
+            .prospects
+            .travel
+            .0
+            .saturating_add(candidate.prospects.duration.0);
+        let cost = (time / 1_000).min(1_000) as i64
+            + match candidate.prospects.uncertainty {
+                Uncertainty::Observed => 0,
+                Uncertainty::Remembered => 25,
+                Uncertainty::Conditional => 100,
+            }
+            + match candidate.prospects.effort {
+                Effort::Restoration | Effort::Light => 0,
+                Effort::Practice => 0,
+                Effort::Strenuous => 50,
+            };
+        result.benefit -= cost;
+        result.total = result.need + result.benefit + result.value;
+        Some(result)
+    }
+    fn need_pressure(
+        &self,
+        need: NeedRef,
+        beneficiary: PersonId,
+        facts: &PersonalFacts,
+        key: IntentionKey,
+        contacted: &impl Fn(&PersonId, &ChildSignal) -> bool,
+    ) -> Option<i64> {
+        if beneficiary == facts.actor {
+            return Some(match need {
+                NeedRef::Hunger => {
+                    if facts.vitals.hunger >= facts.limits.meal_relief {
+                        10_000 + (facts.vitals.hunger / 100).min(10_000) as i64
+                    } else {
+                        0
+                    }
+                }
+                NeedRef::Hydration => {
+                    if facts.hydration_urgency > 0 {
+                        10_000 + facts.hydration_urgency
+                    } else {
+                        0
+                    }
+                }
+                NeedRef::Exposure => facts.exposure_urgency,
+                NeedRef::Recovery => (facts.vitals.fatigue / 500
+                    + facts.limits.max_health.saturating_sub(facts.vitals.health) / 100)
+                    .min(40_000) as i64,
+                NeedRef::Freedom => {
+                    if facts.freedom_restricted {
+                        20_000
+                    } else {
+                        0
+                    }
+                }
+                NeedRef::Company => i64::from(self.personality.sociability) / 2,
+            });
+        }
+        let signal = self.child_signals.get(&beneficiary)?;
+        let continuing = self.plan.as_ref().is_some_and(|plan| {
+            plan.key == key
+                && plan
+                    .delivery
+                    .as_ref()
+                    .is_some_and(|delivery| delivery.remaining.0 > 0)
+        });
+        if !contacted(&beneficiary, signal) && !(continuing && signal.observed_at <= facts.now) {
+            return None;
+        }
+        Some(match need {
+            NeedRef::Hunger => signal.urgency,
+            NeedRef::Hydration => signal.hydration_urgency,
+            NeedRef::Company if signal.preference == Some(ChildhoodInterest::Company) => 500,
+            _ => 0,
+        })
     }
     pub fn record_attempt(
         &mut self,
@@ -798,7 +1056,21 @@ mod tests {
             assert_eq!(goal.delivery.requirement.quantity, f.limits.meal_size);
             let supply = Candidate {
                 action: 1,
-                purpose: Purpose::CareSupply { child, good },
+                key: IntentionKey::Provision {
+                    good,
+                    beneficiary: child,
+                    source: None,
+                },
+                motives: vec![Motive::Provide {
+                    requirement: goal.delivery.requirement.clone(),
+                    beneficiary: child,
+                    need: Some(if good == Good::Food {
+                        NeedRef::Hunger
+                    } else {
+                        NeedRef::Hydration
+                    }),
+                }],
+                prospects: Prospects::default(),
                 shape: ActionShape::Move(AreaId(2)),
                 delivery: Some(goal.delivery),
             };
@@ -849,10 +1121,17 @@ mod tests {
         let goal = m.care_deliveries(&f).pop().unwrap();
         let supply = Candidate {
             action: 1,
-            purpose: Purpose::CareSupply {
-                child,
+            key: IntentionKey::Provision {
                 good: Good::Food,
+                beneficiary: child,
+                source: None,
             },
+            motives: vec![Motive::Provide {
+                requirement: goal.delivery.requirement.clone(),
+                beneficiary: child,
+                need: Some(NeedRef::Hunger),
+            }],
+            prospects: Prospects::default(),
             shape: ActionShape::Move(AreaId(2)),
             delivery: Some(goal.delivery),
         };
@@ -860,11 +1139,11 @@ mod tests {
         m.record_attempt(f.now, decision.plan.unwrap(), decision.explanation, true)
             .unwrap();
         // While absent, the last contact remains a dated reason to continue.
-        m.reconcile_care_observation();
+        m.reconcile_care_observation(f.actor);
         assert!(m.plan.is_some());
         // The observer later removes the signal after local inapplicability.
         m.child_signals.remove(&child);
-        m.reconcile_care_observation();
+        m.reconcile_care_observation(f.actor);
         assert!(m.plan.is_none());
         assert_eq!(m.goal, Goal::Rest);
     }
@@ -898,6 +1177,9 @@ mod tests {
             own_cargo: BTreeSet::new(),
             observed_contacts: BTreeSet::new(),
             can_resume: false,
+            hydration_urgency: 0,
+            exposure_urgency: 0,
+            freedom_restricted: false,
         }
     }
     fn stock(id: u64, good: Good, area: u64, quantity: u64) -> StockKnowledge {
@@ -912,10 +1194,104 @@ mod tests {
             source: KnowledgeSource::Observed(PersonId(1)),
         }
     }
-    fn candidate(action: u8, purpose: Purpose, shape: ActionShape) -> Candidate<u8> {
+    #[derive(Clone, Copy)]
+    enum Example {
+        Food(InventoryId),
+        Care {
+            child: PersonId,
+            source: InventoryId,
+        },
+        Rest,
+        Work(SiteId),
+        Stop,
+        Resume,
+    }
+    fn candidate(action: u8, example: Example, shape: ActionShape) -> Candidate<u8> {
+        let actor = PersonId(1);
+        let mut prospects = Prospects::default();
+        let (key, motive) = match example {
+            Example::Food(source) => {
+                prospects.source = Some(source);
+                (
+                    IntentionKey::Relief {
+                        need: NeedRef::Hunger,
+                        beneficiary: actor,
+                    },
+                    Motive::Relieve {
+                        need: NeedRef::Hunger,
+                        beneficiary: actor,
+                    },
+                )
+            }
+            Example::Care { child, source } => {
+                prospects.source = Some(source);
+                (
+                    IntentionKey::Provision {
+                        good: Good::Water,
+                        beneficiary: child,
+                        source: None,
+                    },
+                    Motive::Provide {
+                        requirement: game_logistics::Requirement {
+                            good: Good::Water,
+                            quantity: Quantity(1_000),
+                            source: None,
+                        },
+                        beneficiary: child,
+                        need: Some(NeedRef::Hydration),
+                    },
+                )
+            }
+            Example::Rest => {
+                prospects.effort = Effort::Restoration;
+                (
+                    IntentionKey::Relief {
+                        need: NeedRef::Recovery,
+                        beneficiary: actor,
+                    },
+                    Motive::Relieve {
+                        need: NeedRef::Recovery,
+                        beneficiary: actor,
+                    },
+                )
+            }
+            Example::Work(site) => {
+                prospects.site = Some(site);
+                prospects.effort = Effort::Practice;
+                (
+                    IntentionKey::Development {
+                        capability: Capability::Skill(Skill::Craft),
+                        beneficiary: actor,
+                        subject: Some(Subject::Site(site)),
+                    },
+                    Motive::Develop {
+                        capability: Capability::Skill(Skill::Craft),
+                        beneficiary: actor,
+                    },
+                )
+            }
+            Example::Stop | Example::Resume => (
+                IntentionKey::Development {
+                    capability: Capability::Movement,
+                    beneficiary: actor,
+                    subject: None,
+                },
+                Motive::Develop {
+                    capability: Capability::Movement,
+                    beneficiary: actor,
+                },
+            ),
+        };
+        let shape = match example {
+            Example::Stop => ActionShape::Stop,
+            Example::Resume => ActionShape::Resume,
+            _ => shape,
+        };
         Candidate {
             action,
-            purpose,
+            key,
+            motives: vec![motive],
+            prospects,
             shape,
             delivery: None,
         }
@@ -937,7 +1313,7 @@ mod tests {
                 access: true,
             },
         );
-        candidate(2, Purpose::Work(SiteId(2)), ActionShape::Work(SiteId(2)))
+        candidate(2, Example::Work(SiteId(2)), ActionShape::Work(SiteId(2)))
     }
     fn choose(m: &Mind<u8>, f: &PersonalFacts, c: &[Candidate<u8>]) -> Decision<u8> {
         m.decide(f, c, ConceptId(6), 100)
@@ -947,7 +1323,7 @@ mod tests {
         let mut m = mind();
         let f = facts();
         let work = work(&mut m);
-        let rest = candidate(1, Purpose::Rest, ActionShape::Rest);
+        let rest = candidate(1, Example::Rest, ActionShape::Rest);
         assert_eq!(
             choose(&m, &f, &[rest.clone(), work.clone()])
                 .plan
@@ -1005,7 +1381,7 @@ mod tests {
         f.vitals.hunger = 10_000;
         let food = candidate(
             9,
-            Purpose::Food(InventoryId(9)),
+            Example::Food(InventoryId(9)),
             ActionShape::Move(AreaId(2)),
         );
         assert!(choose(&m, &f, std::slice::from_ref(&food)).plan.is_none());
@@ -1080,7 +1456,7 @@ mod tests {
                 &[
                     candidate(
                         9,
-                        Purpose::Food(InventoryId(9)),
+                        Example::Food(InventoryId(9)),
                         ActionShape::Eat(InventoryId(9))
                     ),
                     work
@@ -1093,7 +1469,7 @@ mod tests {
         );
         f.control = Control::Manual;
         assert!(
-            choose(&m, &f, &[candidate(1, Purpose::Rest, ActionShape::Rest)])
+            choose(&m, &f, &[candidate(1, Example::Rest, ActionShape::Rest)])
                 .plan
                 .is_none()
         );
@@ -1117,7 +1493,7 @@ mod tests {
             .insert(InventoryId(9), stock(9, Good::Water, 1, 1_000));
         let care = candidate(
             9,
-            Purpose::Care {
+            Example::Care {
                 child,
                 source: InventoryId(9),
             },
@@ -1165,13 +1541,13 @@ mod tests {
             .insert(InventoryId(9), stock(9, Good::Water, 1, 1_000));
         let care = candidate(
             9,
-            Purpose::Care {
+            Example::Care {
                 child,
                 source: InventoryId(9),
             },
             ActionShape::Care(child),
         );
-        let stop = candidate(1, Purpose::Stop, ActionShape::Other);
+        let stop = candidate(1, Example::Stop, ActionShape::Other);
         f.place = Place::Moving;
         assert!(choose(&m, &f, std::slice::from_ref(&care)).plan.is_none());
         assert_eq!(
@@ -1183,7 +1559,7 @@ mod tests {
         f.own_cargo.insert(InventoryId(9));
         assert_eq!(choose(&m, &f, &[care]).plan.unwrap().action, 9);
         f.can_resume = true;
-        let resume = candidate(3, Purpose::Resume, ActionShape::Other);
+        let resume = candidate(3, Example::Resume, ActionShape::Other);
         assert!(choose(&m, &f, std::slice::from_ref(&resume)).plan.is_none());
         m.child_signals.clear();
         assert_eq!(choose(&m, &f, &[resume]).plan.unwrap().action, 3);

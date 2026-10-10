@@ -15,6 +15,9 @@ pub struct Companion {
     pub visited: BTreeSet<AreaId>,
     pub delivered: u64,
     pub cargo: BTreeMap<InventoryId, u64>,
+    /// Actual supply receipts, keyed by promised source then carried compartment.
+    /// These tags qualify existing goods and cannot be spent as inventory.
+    pub supply_cargo: BTreeMap<InventoryId, BTreeMap<InventoryId, u64>>,
     pub contacts: BTreeMap<PersonId, AreaId>,
     pub last_leg_from: Option<AreaId>,
     pub explanation: String,

@@ -203,7 +203,15 @@ impl World {
                 }
                 for old in self.missions.values().filter(|m| !terminal(m.status)) {
                     let relevant = old.members.values().any(|p| {
-                        p.cargo.contains_key(source)
+                        p.supply_cargo
+                            .values()
+                            .any(|tags| tags.contains_key(source))
+                            || old
+                                .proposal
+                                .supplies
+                                .iter()
+                                .any(|s| s.carrier == p.person && s.source == *source)
+                            || p.cargo.contains_key(source)
                             || p.person == *actor
                                 && p.status == CompanionStatus::Accepted
                                 && matches!(p.directive, MissionObjective::Deliver { .. })
@@ -213,6 +221,50 @@ impl World {
                     }
                     let mut m = old.clone();
                     for p in m.members.values_mut() {
+                        let mut unallocated = quantity.0;
+                        let mut moved_tags = BTreeMap::new();
+                        // Debit existing provenance first. A carried compartment may
+                        // itself be another named source; its identity cannot leave
+                        // older tags behind after those physical goods moved away.
+                        for (origin, tags) in &mut p.supply_cargo {
+                            let tagged = tags.remove(source).unwrap_or(0);
+                            let moved = tagged.min(unallocated);
+                            if tagged > moved {
+                                tags.insert(*source, tagged - moved);
+                            }
+                            unallocated -= moved;
+                            moved_tags.insert(*origin, moved);
+                        }
+                        let mut supplies = BTreeMap::<InventoryId, u64>::new();
+                        for supply in m.proposal.supplies.iter().filter(|s| s.carrier == p.person) {
+                            supplies
+                                .entry(supply.source)
+                                .and_modify(|q| *q = (*q).max(supply.quantity.0))
+                                .or_insert(supply.quantity.0);
+                        }
+                        for (origin, quantity_owed) in supplies {
+                            let tags = p.supply_cargo.entry(origin).or_default();
+                            let moved = moved_tags.get(&origin).copied().unwrap_or(0);
+                            if p.status == CompanionStatus::Accepted
+                                && *destination_carrier == Some(p.person)
+                            {
+                                let picked = if *source == origin {
+                                    unallocated
+                                } else {
+                                    moved
+                                };
+                                let held: u128 = tags.values().map(|q| u128::from(*q)).sum();
+                                let room = u128::from(quantity_owed).saturating_sub(held) as u64;
+                                let credited = picked.min(room);
+                                if credited > 0 {
+                                    *tags.entry(*destination).or_default() += credited;
+                                    if *source == origin {
+                                        unallocated -= credited;
+                                    }
+                                }
+                            }
+                        }
+                        p.supply_cargo.retain(|_, tags| !tags.is_empty());
                         let tagged = p.cargo.get(source).copied().unwrap_or(0).min(quantity.0);
                         if tagged > 0 {
                             let left = p.cargo[source] - tagged;
@@ -252,13 +304,27 @@ impl World {
                 }
             }
             MissionReceipt::Lost { source, quantity } => {
-                for old in self
-                    .missions
-                    .values()
-                    .filter(|m| m.members.values().any(|p| p.cargo.contains_key(source)))
-                {
+                for old in self.missions.values().filter(|m| {
+                    m.members.values().any(|p| {
+                        p.cargo.contains_key(source)
+                            || p.supply_cargo
+                                .values()
+                                .any(|tags| tags.contains_key(source))
+                    })
+                }) {
                     let mut m = old.clone();
                     for p in m.members.values_mut() {
+                        let mut lost = quantity.0;
+                        for tags in p.supply_cargo.values_mut() {
+                            if let Some(held) = tags.remove(source) {
+                                let removed = held.min(lost);
+                                lost -= removed;
+                                if held > removed {
+                                    tags.insert(*source, held - removed);
+                                }
+                            }
+                        }
+                        p.supply_cargo.retain(|_, tags| !tags.is_empty());
                         if let Some(held) = p.cargo.get_mut(source) {
                             *held = held.saturating_sub(quantity.0);
                             if *held == 0 {
@@ -466,6 +532,7 @@ fn finish(
     m.explanation = message.into();
     for member in m.members.values_mut() {
         member.cargo.clear();
+        member.supply_cargo.clear();
     }
     plan.events.push(MissionEvent::Finished {
         mission: m.id,

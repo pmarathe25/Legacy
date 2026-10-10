@@ -918,7 +918,7 @@ impl Simulation {
         let should_rest = matches!(body.activity, Activity::Idle | Activity::Work { .. });
         let meal_size = self.body_rules(guardian).meal_size;
         let together = self.transport_same_place(guardian, target);
-        let applicable = together.then(|| {
+        let applicable = self.dependent_signal_visible(guardian, target).then(|| {
             self.state.development.as_ref().is_some_and(|world| {
                 world
                     .lives

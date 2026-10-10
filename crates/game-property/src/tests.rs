@@ -519,7 +519,7 @@ fn listener_interruption_cancels_the_speakers_frozen_report_and_releases_occupan
     assert!(world.reports.is_empty());
 }
 #[test]
-fn permission_policy_is_commodity_agnostic_and_uses_only_supplied_known_opportunities() {
+fn acquisition_offers_include_permission_and_taking_without_choosing_personal_policy() {
     let world = world();
     let opportunity = NeedOpportunity {
         known: StockKnowledge {
@@ -535,21 +535,67 @@ fn permission_policy_is_commodity_agnostic_and_uses_only_supplied_known_opportun
         local_custodian: true,
         can_take: true,
     };
-    let need = NeedFacts {
+    let need = AcquisitionFacts {
         actor: actor(1, 0),
-        needed: true,
         good: Good::Timber,
-        honesty: 900,
-        risk_tolerance: 100,
-        destination: InventoryId(11),
+        destination: Some(InventoryId(11)),
         quantity: Quantity(500),
     };
     assert_eq!(
-        world.plan_need(need, &[opportunity]),
-        Some(PropertyAction::RequestAccess {
-            inventory: InventoryId(10)
-        })
+        world.acquisition_opportunities(need, &[opportunity]),
+        vec![
+            PropertyAction::RequestAccess {
+                inventory: InventoryId(10)
+            },
+            PropertyAction::Take {
+                source: InventoryId(10),
+                destination: InventoryId(11),
+                quantity: Quantity(500),
+            }
+        ]
     );
+}
+#[test]
+fn acquisition_offers_require_known_local_stock_capacity_and_a_capable_actor() {
+    let world = world();
+    for good in [Good::Food, Good::Water, Good::Timber, Good::Tool] {
+        let mut opportunity = NeedOpportunity {
+            known: StockKnowledge {
+                inventory: InventoryId(10),
+                area: AreaId(5),
+                good,
+                quantity: Quantity(1_000),
+                accessible: false,
+                observed_at: SimTime(0),
+                learned_at: SimTime(0),
+                source: KnowledgeSource::Observed(PersonId(1)),
+            },
+            local_custodian: true,
+            can_take: false,
+        };
+        let facts = || AcquisitionFacts {
+            actor: actor(1, 0),
+            good,
+            destination: Some(InventoryId(11)),
+            quantity: Quantity(500),
+        };
+        assert_eq!(
+            world.acquisition_opportunities(facts(), std::slice::from_ref(&opportunity)),
+            vec![PropertyAction::RequestAccess {
+                inventory: InventoryId(10)
+            }]
+        );
+        opportunity.known.area = AreaId(99);
+        assert!(
+            world
+                .acquisition_opportunities(facts(), &[opportunity])
+                .is_empty()
+        );
+        assert!(world.acquisition_opportunities(facts(), &[]).is_empty());
+        let mut incapable = facts();
+        incapable.actor.capable = false;
+        assert!(world.acquisition_opportunities(incapable, &[]).is_empty());
+    }
 }
 #[test]
 fn receipt_prefix_and_claim_commit_are_atomic_and_current_restore_keeps_pending_reports() {

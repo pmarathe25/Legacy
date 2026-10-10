@@ -1056,38 +1056,57 @@ impl Simulation {
         }
     }
 
-    pub(crate) fn property_candidate(&self, actor: PersonId) -> Option<Command> {
-        let world = self.state.property.as_ref()?;
-        let physical = self.state.physical.as_ref()?;
-        let body = physical.actors.get(&actor)?;
-        let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
-        let destination = self.state.people[*self.person_index.get(&actor)?].inventory;
+    pub(crate) fn property_opportunities(&self, actor: PersonId) -> Vec<Command> {
+        let Some(world) = &self.state.property else {
+            return Vec::new();
+        };
+        let Some(physical) = &self.state.physical else {
+            return Vec::new();
+        };
+        let Some(mind) = self
+            .state
+            .decisions
+            .as_ref()
+            .and_then(|w| w.minds.get(&actor))
+        else {
+            return Vec::new();
+        };
         let quantity = physical.rules.meal_size;
-        let opportunities = mind
-            .knowledge
-            .values()
-            .map(|known| game_property::NeedOpportunity {
+        let mut actions = Vec::new();
+        for known in mind.knowledge.values() {
+            let destination = self
+                .state
+                .inventories
+                .values()
+                .find(|stock| {
+                    stock.good == known.good && stock.location == InventoryLocation::Carried(actor)
+                })
+                .map(|stock| stock.id);
+            let opportunity = game_property::NeedOpportunity {
                 known: known.clone(),
                 local_custodian: self.property_custodian(known.inventory).is_some_and(|c| {
                     c != actor && self.property_area(c) == self.property_area(actor)
                 }),
-                can_take: self.taking_possible(actor, known.inventory, destination, quantity, true),
-            })
-            .collect::<Vec<_>>();
-        world
-            .plan_need(
-                game_property::NeedFacts {
-                    actor: self.property_actor_facts(actor),
-                    needed: body.vitals.hunger >= physical.rules.meal_relief,
-                    good: Good::Food,
-                    honesty: mind.personality.honesty,
-                    risk_tolerance: mind.personality.risk_tolerance,
-                    destination,
-                    quantity,
-                },
-                &opportunities,
-            )
-            .map(|action| Command::Property { action })
+                can_take: destination.is_some_and(|destination| {
+                    self.taking_possible(actor, known.inventory, destination, quantity, true)
+                }),
+            };
+            actions.extend(
+                world
+                    .acquisition_opportunities(
+                        game_property::AcquisitionFacts {
+                            actor: self.property_actor_facts(actor),
+                            good: known.good,
+                            destination,
+                            quantity,
+                        },
+                        &[opportunity],
+                    )
+                    .into_iter()
+                    .map(|action| Command::Property { action }),
+            );
+        }
+        actions
     }
     pub(crate) fn review_property_sharing(&mut self) {
         let actors = self

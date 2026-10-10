@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 24;
+const SAVE_VERSION: u32 = 25;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -1736,6 +1736,92 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             {
                 return Err(fail());
             }
+            if let Some(plan) = &mind.plan {
+                use game_characters::decisions::{CommitmentRef, IntentionKey, Motive, Subject};
+                let commitment_exists = |commitment: CommitmentRef| match commitment {
+                    CommitmentRef::Obligation(id) => s
+                        .agreements
+                        .as_ref()
+                        .is_some_and(|w| w.obligations.contains_key(&id)),
+                    CommitmentRef::Project(id) => s
+                        .projects
+                        .as_ref()
+                        .is_some_and(|w| w.projects.contains_key(&id)),
+                };
+                let subject_exists = |subject: Subject| match subject {
+                    Subject::Inventory(id) => s.inventories.contains_key(&id),
+                    Subject::Site(id) => s
+                        .physical
+                        .as_ref()
+                        .is_some_and(|w| w.sites.contains_key(&id)),
+                    Subject::Project(id) => s
+                        .projects
+                        .as_ref()
+                        .is_some_and(|w| w.projects.contains_key(&id)),
+                    Subject::Resource(id) => s
+                        .ecology
+                        .as_ref()
+                        .is_some_and(|w| w.resources.contains_key(&id)),
+                };
+                let key_valid = match plan.key {
+                    IntentionKey::Relief { beneficiary, .. } => people.contains_key(&beneficiary),
+                    IntentionKey::Development {
+                        beneficiary,
+                        subject,
+                        ..
+                    } => people.contains_key(&beneficiary) && subject.is_none_or(subject_exists),
+                    IntentionKey::Provision {
+                        good,
+                        beneficiary,
+                        source,
+                    } => {
+                        people.contains_key(&beneficiary)
+                            && source.is_none_or(|id| {
+                                s.inventories
+                                    .get(&id)
+                                    .is_some_and(|stock| stock.good == good)
+                            })
+                    }
+                    IntentionKey::Commitment(commitment) => commitment_exists(commitment),
+                };
+                let motives_valid = plan.motives.iter().all(|motive| match motive {
+                    Motive::Relieve { beneficiary, .. } | Motive::Develop { beneficiary, .. } => {
+                        people.contains_key(beneficiary)
+                    }
+                    Motive::Provide {
+                        requirement,
+                        beneficiary,
+                        ..
+                    } => {
+                        people.contains_key(beneficiary)
+                            && requirement.quantity.0 > 0
+                            && requirement.source.is_none_or(|id| {
+                                s.inventories
+                                    .get(&id)
+                                    .is_some_and(|stock| stock.good == requirement.good)
+                            })
+                    }
+                    Motive::Fulfil { commitment } => commitment_exists(*commitment),
+                });
+                if !key_valid
+                    || !motives_valid
+                    || plan
+                        .prospects
+                        .source
+                        .is_some_and(|id| !s.inventories.contains_key(&id))
+                    || plan.prospects.site.is_some_and(|id| {
+                        !s.physical
+                            .as_ref()
+                            .is_some_and(|w| w.sites.contains_key(&id))
+                    })
+                    || plan
+                        .prospects
+                        .sponsor
+                        .is_some_and(|id| !people.contains_key(&id))
+                {
+                    return Err(fail());
+                }
+            }
             if let Some(plan) = &mind.plan
                 && let Some(delivery) = &plan.delivery
             {
@@ -1745,13 +1831,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     }
                     game_logistics::Destination::Contact(target) => people.contains_key(&target),
                 };
-                let matches_motive = match plan.purpose {
-                    game_characters::decisions::Purpose::CareSupply { child, good } => {
-                        delivery.destination == game_logistics::Destination::Contact(child)
-                            && delivery.requirement.good == good
+                let matches_motive = plan.motives.iter().all(|motive| match motive {
+                    game_characters::decisions::Motive::Provide {
+                        requirement,
+                        beneficiary,
+                        ..
+                    } => {
+                        delivery.destination == game_logistics::Destination::Contact(*beneficiary)
+                            && delivery.requirement.good == requirement.good
+                            && delivery.requirement.source == requirement.source
                     }
                     _ => true,
-                };
+                });
                 if !delivery.valid()
                     || !target_exists
                     || !matches_motive

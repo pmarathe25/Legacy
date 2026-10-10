@@ -6,30 +6,29 @@ pub struct NeedOpportunity {
     pub local_custodian: bool,
     pub can_take: bool,
 }
-pub struct NeedFacts {
+pub struct AcquisitionFacts {
     pub actor: ActorFacts,
-    pub needed: bool,
     pub good: Good,
-    pub honesty: u16,
-    pub risk_tolerance: u16,
-    pub destination: InventoryId,
+    pub destination: Option<InventoryId>,
     pub quantity: Quantity,
 }
 impl World {
-    pub fn plan_need(
+    /// Enumerates known feasible actions; personal motives belong to the actor.
+    pub fn acquisition_opportunities(
         &self,
-        need: NeedFacts,
+        need: AcquisitionFacts,
         opportunities: &[NeedOpportunity],
-    ) -> Option<PropertyAction> {
+    ) -> Vec<PropertyAction> {
         if !need.actor.capable
-            || !need.needed
+            || need.quantity.0 == 0
             || self
                 .next_search
                 .get(&need.actor.actor)
                 .is_some_and(|at| *at > need.actor.now)
         {
-            return None;
+            return Vec::new();
         }
+        let mut actions = Vec::new();
         for opportunity in opportunities {
             let stock = &opportunity.known;
             if stock.good != need.good
@@ -39,21 +38,22 @@ impl World {
             {
                 continue;
             }
-            if need.honesty >= 400 || need.risk_tolerance < 600 {
-                if opportunity.local_custodian {
-                    return Some(PropertyAction::RequestAccess {
-                        inventory: stock.inventory,
-                    });
-                }
-            } else if opportunity.can_take {
-                return Some(PropertyAction::Take {
+            if opportunity.local_custodian {
+                actions.push(PropertyAction::RequestAccess {
+                    inventory: stock.inventory,
+                });
+            }
+            if opportunity.can_take
+                && let Some(destination) = need.destination
+            {
+                actions.push(PropertyAction::Take {
                     source: stock.inventory,
-                    destination: need.destination,
+                    destination,
                     quantity: need.quantity,
                 });
             }
         }
-        None
+        actions
     }
     pub fn plan_sharing(
         &self,

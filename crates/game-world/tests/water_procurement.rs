@@ -259,11 +259,7 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
         Location::AtArea(AreaId(3))
     );
     assert!(state.health.as_ref().unwrap().clinical[&actor].thirst < HOUR);
-    assert!(
-        state.health.as_ref().unwrap().known[&actor]
-            .water_searched
-            .contains_key(&AreaId(2))
-    );
+    assert!(state.ecology.as_ref().unwrap().observed_areas[&actor].contains_key(&AreaId(2)));
     let remaining = state
         .ecology
         .as_ref()
@@ -331,32 +327,62 @@ fn a_present_custodian_can_refuse_water_without_granting_access_or_forcing_a_the
 #[test]
 fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_slices() {
     let (mut unknown, actor) = dry_opening(false, false);
-    unknown
-        .advance(SimDuration(2 * HOUR + 10 * 60_000))
-        .unwrap();
-    assert_eq!(
-        unknown
-            .canonical_state()
-            .people
-            .iter()
-            .find(|p| p.id == actor)
-            .unwrap()
-            .location,
-        Location::AtArea(AreaId(1))
-    );
     assert!(
         unknown.canonical_state().ecology.as_ref().unwrap().known[&actor]
             .values()
-            .all(|s| s.area == AreaId(1))
+            .all(|source| source.area == AreaId(1))
     );
+    unknown
+        .advance(SimDuration(2 * HOUR + 10 * 60_000))
+        .unwrap();
+    let state = unknown.canonical_state();
+    // Local roads are observable even after authored route memory is cleared.
+    // Exploring them can discover water, but distant facts require real arrival.
+    let arrivals = state
+        .events
+        .iter()
+        .filter_map(|event| match event.kind {
+            EventKind::Arrived {
+                actor: person,
+                area,
+            } if person == actor => Some((area, event.time)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for source in state.ecology.as_ref().unwrap().known[&actor]
+        .values()
+        .filter(|source| source.area != AreaId(1))
+    {
+        assert!(
+            arrivals
+                .iter()
+                .any(|(area, at)| *area == source.area && *at <= source.observed_at)
+        );
+    }
+    let collected = state
+        .events
+        .iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ResourceCollected {
+                actor: person,
+                resource,
+                ..
+            } if person == actor => Some((resource, event.time)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     assert!(
-        !unknown
-            .canonical_state()
-            .events
-            .iter()
-            .any(|e| matches!(e.kind,
-        EventKind::ResourceCollected {actor:a,..} if a==actor))
+        !collected.is_empty(),
+        "personally observed roads permit actual exploration"
     );
+    for (resource, time) in collected {
+        let source = &state.ecology.as_ref().unwrap().known[&actor][&resource];
+        assert!(
+            arrivals
+                .iter()
+                .any(|(area, at)| *area == source.area && *at < time)
+        );
+    }
     let (mut whole, _) = dry_opening(false, true);
     whole.advance(SimDuration(2 * HOUR + 61_003)).unwrap();
     let mut restored = Simulation::load(

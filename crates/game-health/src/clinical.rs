@@ -13,7 +13,6 @@ pub fn validate_rules(r: &Rules) -> Result<(), Error> {
         || r.shelter_timber_per_place.0 == 0
         || [
             r.drinking_time,
-            r.water_search_retry,
             r.incubation,
             r.illness_duration,
             r.boiling_time,

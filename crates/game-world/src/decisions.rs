@@ -12,7 +12,10 @@ pub type Mind = game_characters::decisions::Mind<Command>;
 pub type World = game_characters::decisions::World<Command>;
 pub(crate) use game_characters::decisions::Control;
 pub(crate) use game_characters::decisions::known_path;
-use game_characters::decisions::{ActionShape, Candidate, Decision, PersonalFacts, Purpose};
+use game_characters::decisions::{
+    ActionShape, Candidate, Capability, CommitmentRef, Decision, Effort, IntentionKey, Motive,
+    NeedRef, PersonalFacts, Prospects, Subject, Uncertainty,
+};
 use game_characters::decisions::{Activity as PersonalActivity, NeedLimits, Place};
 
 /// Stored plan geometry is derived from the executable command, never authored
@@ -25,6 +28,12 @@ pub(crate) fn action_shape(command: &Command) -> ActionShape {
         Command::Care { child, .. } => ActionShape::Care(child),
         Command::Comfort { child } => ActionShape::Comfort(child),
         Command::Rest => ActionShape::Rest,
+        Command::Transport {
+            action: TransportAction::Stop,
+        } => ActionShape::Stop,
+        Command::Transport {
+            action: TransportAction::Resume,
+        } => ActionShape::Resume,
         _ => ActionShape::Other,
     }
 }
@@ -220,8 +229,8 @@ impl Simulation {
                             .and_then(|w| w.groups.get(child))
                             .is_some_and(|g| g.bearers.contains(&p.id))
                 })
+                .filter(|child| self.dependent_signal_visible(p.id, **child))
                 .take(64)
-                .filter(|child| self.transport_same_place(p.id, **child))
                 .copied()
                 .collect();
             let mind = self
@@ -297,7 +306,7 @@ impl Simulation {
                     },
                 );
             }
-            mind.reconcile_care_observation();
+            mind.reconcile_care_observation(p.id);
             for site in self
                 .state
                 .physical
@@ -546,26 +555,25 @@ impl Simulation {
                 .collect(),
             observed_contacts,
             can_resume: place == Place::Stopped && self.transport_can_depart(id),
+            hydration_urgency: self.observed_hydration_urgency(id),
+            exposure_urgency: self.observed_exposure_urgency(id),
+            freedom_restricted: self
+                .state
+                .combat
+                .as_ref()
+                .is_some_and(|world| world.captivity.contains_key(&id)),
         };
         let care_goals = mind.care_deliveries(&facts);
         let mut candidates = Vec::new();
-        let mut add = |action, purpose| {
-            let shape = action_shape(&action);
-            candidates.push(Candidate {
-                action,
-                purpose,
-                shape,
-                delivery: match purpose {
-                    Purpose::CareSupply { child, good } => care_goals
-                        .iter()
-                        .find(|goal| {
-                            goal.delivery.destination == game_logistics::Destination::Contact(child)
-                                && goal.delivery.requirement.good == good
-                        })
-                        .map(|goal| goal.delivery.clone()),
-                    _ => None,
-                },
-            });
+        let mut add = |action: Command,
+                       key: IntentionKey,
+                       motives: Vec<Motive>,
+                       delivery: Option<game_logistics::Delivery>| {
+            if let Some(candidate) =
+                self.decision_evidence(id, mind, action, key, motives, delivery)
+            {
+                candidates.push(candidate);
+            }
         };
         for goal in &care_goals {
             let game_logistics::Destination::Contact(child) = goal.delivery.destination else {
@@ -597,30 +605,201 @@ impl Simulation {
                 step => self.delivery_command(id, step),
             };
             if let Some(action) = action {
+                let good = goal.delivery.requirement.good;
+                let key = IntentionKey::Provision {
+                    good,
+                    beneficiary: child,
+                    source: goal.delivery.requirement.source,
+                };
                 add(
                     action,
-                    Purpose::CareSupply {
-                        child,
-                        good: goal.delivery.requirement.good,
-                    },
+                    key,
+                    vec![Motive::Provide {
+                        requirement: goal.delivery.requirement.clone(),
+                        beneficiary: child,
+                        need: Some(if good == Good::Food {
+                            NeedRef::Hunger
+                        } else {
+                            NeedRef::Hydration
+                        }),
+                    }],
+                    Some(goal.delivery.clone()),
                 );
             }
         }
         if let Some(action) = self.force_candidate(id) {
-            add(action, Purpose::Force);
+            add(
+                action,
+                IntentionKey::Relief {
+                    need: NeedRef::Freedom,
+                    beneficiary: id,
+                },
+                vec![Motive::Relieve {
+                    need: NeedRef::Freedom,
+                    beneficiary: id,
+                }],
+                None,
+            );
         }
         if matches!(place, Place::Area(_)) {
             if let Some(action) = self.health_candidate(id) {
-                add(action, Purpose::Health);
+                let need = if matches!(
+                    action,
+                    Command::Health {
+                        action: HealthAction::EnterShelter { .. }
+                            | HealthAction::BuildShelter { .. }
+                            | HealthAction::LeaveShelter
+                    }
+                ) {
+                    NeedRef::Exposure
+                } else {
+                    NeedRef::Hydration
+                };
+                add(
+                    action,
+                    IntentionKey::Relief {
+                        need,
+                        beneficiary: id,
+                    },
+                    vec![Motive::Relieve {
+                        need,
+                        beneficiary: id,
+                    }],
+                    None,
+                );
             }
-            if let Some(action) = self.ecology_candidate(id) {
-                add(action, Purpose::Forage);
+            for action in self.ecology_opportunities(id) {
+                let goods = match &action {
+                    Command::Ecology {
+                        action:
+                            EcologyAction::Gather { resource, .. }
+                            | EcologyAction::RequestAccess { resource },
+                    } => self
+                        .state
+                        .ecology
+                        .as_ref()
+                        .and_then(|world| world.known.get(&id))
+                        .and_then(|known| known.get(resource))
+                        .map(|source| BTreeSet::from([source.kind.good()]))
+                        .unwrap_or_default(),
+                    Command::Move { destination } => self
+                        .state
+                        .ecology
+                        .as_ref()
+                        .and_then(|world| world.known.get(&id))
+                        .into_iter()
+                        .flat_map(|known| known.values())
+                        .filter(|source| source.area == *destination && source.available.0 > 0)
+                        .map(|source| source.kind.good())
+                        .collect(),
+                    _ => BTreeSet::new(),
+                };
+                for good in goods {
+                    let quantity = if good == Good::Timber {
+                        Quantity(5_000)
+                    } else {
+                        rules.meal_size
+                    };
+                    let need = match good {
+                        Good::Food => Some(NeedRef::Hunger),
+                        Good::Water => Some(NeedRef::Hydration),
+                        _ => None,
+                    };
+                    add(
+                        action.clone(),
+                        IntentionKey::Provision {
+                            good,
+                            beneficiary: id,
+                            source: None,
+                        },
+                        vec![Motive::Provide {
+                            requirement: game_logistics::Requirement {
+                                good,
+                                quantity,
+                                source: None,
+                            },
+                            beneficiary: id,
+                            need,
+                        }],
+                        None,
+                    );
+                }
             }
-            if let Some(action) = self.project_candidate(id) {
-                add(action, Purpose::Project);
+            for action in self.project_opportunities(id) {
+                let mut motives = vec![Motive::Develop {
+                    capability: Capability::Livelihood,
+                    beneficiary: id,
+                }];
+                let mut key = IntentionKey::Development {
+                    capability: Capability::Livelihood,
+                    beneficiary: id,
+                    subject: None,
+                };
+                if let Command::Project {
+                    action: ProjectAction::Work { project },
+                } = &action
+                    && let Some(plan) = self
+                        .state
+                        .projects
+                        .as_ref()
+                        .and_then(|world| world.known_projects.get(&id))
+                        .and_then(|known| known.get(project))
+                {
+                    motives = plan
+                        .beneficiaries
+                        .iter()
+                        .map(|beneficiary| Motive::Develop {
+                            capability: Capability::Livelihood,
+                            beneficiary: *beneficiary,
+                        })
+                        .collect();
+                    key = IntentionKey::Development {
+                        capability: Capability::Livelihood,
+                        beneficiary: id,
+                        subject: Some(Subject::Project(*project)),
+                    };
+                    if let Some(obligation)=self.state.agreements.as_ref().and_then(|world|world.knowledge.get(&id)).into_iter().flat_map(|known|known.values()).flat_map(|agreement|agreement.obligations.iter()).find(|obligation|matches!(obligation.term,AgreementTerm::ConstructionLabor {debtor,project:target,..} if debtor==id&&target==*project)&&obligation.performed<obligation.term.amount()) {
+                            motives.push(Motive::Fulfil {commitment:CommitmentRef::Obligation(obligation.id)});key=IntentionKey::Commitment(CommitmentRef::Obligation(obligation.id));
+                        }
+                }
+                add(action, key, motives, None);
             }
-            if let Some(action) = self.property_candidate(id) {
-                add(action, Purpose::Property);
+            for action in self.property_opportunities(id) {
+                let inventory = match action {
+                    Command::Property {
+                        action: PropertyAction::RequestAccess { inventory },
+                    } => inventory,
+                    Command::Property {
+                        action: PropertyAction::Take { source, .. },
+                    } => source,
+                    _ => continue,
+                };
+                let Some(good) = mind.knowledge.get(&inventory).map(|stock| stock.good) else {
+                    continue;
+                };
+                let need = match good {
+                    Good::Food => Some(NeedRef::Hunger),
+                    Good::Water => Some(NeedRef::Hydration),
+                    _ => None,
+                };
+                add(
+                    action,
+                    IntentionKey::Provision {
+                        good,
+                        beneficiary: id,
+                        source: None,
+                    },
+                    vec![Motive::Provide {
+                        requirement: game_logistics::Requirement {
+                            good,
+                            quantity: rules.meal_size,
+                            source: None,
+                        },
+                        beneficiary: id,
+                        need,
+                    }],
+                    None,
+                );
             }
         }
         for fact in mind
@@ -636,15 +815,80 @@ impl Simulation {
                     source: fact.inventory,
                 },
             };
-            add(action, Purpose::Food(fact.inventory));
+            let mut candidate = self.decision_evidence(
+                id,
+                mind,
+                action,
+                IntentionKey::Relief {
+                    need: NeedRef::Hunger,
+                    beneficiary: id,
+                },
+                vec![Motive::Relieve {
+                    need: NeedRef::Hunger,
+                    beneficiary: id,
+                }],
+                None,
+            );
+            if let Some(candidate) = &mut candidate {
+                candidate.prospects.source = Some(fact.inventory);
+            }
+            if let Some(candidate) = candidate {
+                candidates.push(candidate);
+            }
         }
         for child in &facts.observed_contacts {
-            add(Command::Comfort { child: *child }, Purpose::Comfort(*child));
+            if let Some(candidate) = self.decision_evidence(
+                id,
+                mind,
+                Command::Comfort { child: *child },
+                IntentionKey::Relief {
+                    need: NeedRef::Company,
+                    beneficiary: *child,
+                },
+                vec![Motive::Relieve {
+                    need: NeedRef::Company,
+                    beneficiary: *child,
+                }],
+                None,
+            ) {
+                candidates.push(candidate);
+            }
         }
-        add(Command::Rest, Purpose::Rest);
+        if let Some(candidate) = self.decision_evidence(
+            id,
+            mind,
+            Command::Rest,
+            IntentionKey::Relief {
+                need: NeedRef::Recovery,
+                beneficiary: id,
+            },
+            vec![Motive::Relieve {
+                need: NeedRef::Recovery,
+                beneficiary: id,
+            }],
+            None,
+        ) {
+            candidates.push(candidate);
+        }
+        let mut add = |action, key, motives| {
+            if let Some(candidate) = self.decision_evidence(id, mind, action, key, motives, None) {
+                candidates.push(candidate);
+            }
+        };
         if let Place::Area(_) = place {
             if let Some(action) = self.autonomous_cultivation(id) {
-                add(action, Purpose::Cultivate);
+                add(
+                    action,
+                    IntentionKey::Development {
+                        capability: Capability::Skill(Skill::Farming),
+                        beneficiary: id,
+                        subject: None,
+                    },
+                    vec![Motive::Develop {
+                        capability: Capability::Skill(Skill::Farming),
+                        beneficiary: id,
+                    }],
+                );
             }
             for interest in [
                 ChildhoodInterest::Food,
@@ -652,24 +896,48 @@ impl Simulation {
                 ChildhoodInterest::Movement,
                 ChildhoodInterest::Craft,
             ] {
-                add(Command::Play { interest }, Purpose::Play(interest));
+                add(
+                    Command::Play { interest },
+                    IntentionKey::Development {
+                        capability: Capability::Interest(interest),
+                        beneficiary: id,
+                        subject: None,
+                    },
+                    vec![Motive::Develop {
+                        capability: Capability::Interest(interest),
+                        beneficiary: id,
+                    }],
+                );
             }
             for site in mind.sites.values() {
-                add(Command::Work { site: site.site }, Purpose::Work(site.site));
+                add(
+                    Command::Work { site: site.site },
+                    IntentionKey::Development {
+                        capability: Capability::Skill(Skill::Craft),
+                        beneficiary: id,
+                        subject: Some(Subject::Site(site.site)),
+                    },
+                    vec![Motive::Develop {
+                        capability: Capability::Skill(Skill::Craft),
+                        beneficiary: id,
+                    }],
+                );
             }
         } else {
-            add(
-                Command::Transport {
-                    action: TransportAction::Stop,
-                },
-                Purpose::Stop,
-            );
-            add(
-                Command::Transport {
-                    action: TransportAction::Resume,
-                },
-                Purpose::Resume,
-            );
+            for action in [TransportAction::Stop, TransportAction::Resume] {
+                add(
+                    Command::Transport { action },
+                    IntentionKey::Development {
+                        capability: Capability::Movement,
+                        beneficiary: id,
+                        subject: None,
+                    },
+                    vec![Motive::Develop {
+                        capability: Capability::Movement,
+                        beneficiary: id,
+                    }],
+                );
+            }
         }
         Intention {
             actor: id,
@@ -681,6 +949,67 @@ impl Simulation {
             ),
         }
     }
+    /// Translate physical action facts into evidence; no final preference or
+    /// provider identity is attached to these opportunities.
+    fn decision_evidence(
+        &self,
+        actor: PersonId,
+        mind: &Mind,
+        action: Command,
+        key: IntentionKey,
+        motives: Vec<Motive>,
+        delivery: Option<game_logistics::Delivery>,
+    ) -> Option<Candidate<Command>> {
+        let mut prospects = Prospects {
+            risk: crate::logistics::acquisition_risk(&action),
+            ..Default::default()
+        };
+        match &action {
+            Command::Move { destination } => {
+                if let Location::AtArea(area) = self.resolved_location(actor) {
+                    prospects.travel = known_path(&mind.routes, area, *destination).ok()?.1;
+                }
+                prospects.uncertainty = Uncertainty::Remembered;
+            }
+            Command::Eat { source } => {
+                prospects.source = Some(*source);
+                prospects.duration = self.body_rules(actor).eating_time;
+            }
+            Command::Care { source, .. } => {
+                prospects.source = Some(*source);
+            }
+            Command::Rest => prospects.effort = Effort::Restoration,
+            Command::Play { .. } => prospects.effort = Effort::Practice,
+            Command::Work { site } => {
+                prospects.site = Some(*site);
+                prospects.effort = Effort::Practice;
+            }
+            Command::Health {
+                action: HealthAction::Drink { source } | HealthAction::Boil { source, .. },
+            } => {
+                prospects.source = Some(*source);
+            }
+            Command::Project { .. } => {
+                prospects.effort = Effort::Practice;
+                prospects.uncertainty = Uncertainty::Conditional;
+            }
+            Command::Ecology { .. }
+            | Command::Property { .. }
+            | Command::Carry { .. }
+            | Command::Load { .. } => prospects.uncertainty = Uncertainty::Conditional,
+            _ => {}
+        }
+        let shape = action_shape(&action);
+        Some(Candidate {
+            action,
+            key,
+            motives,
+            prospects,
+            shape,
+            delivery,
+        })
+    }
+
     pub(crate) fn on_delivery_event(&mut self, kind: &EventKind, sequence: EventId) {
         let EventKind::Cared {
             caregiver,

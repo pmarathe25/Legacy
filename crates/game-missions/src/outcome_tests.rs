@@ -482,3 +482,141 @@ fn fleeing_uses_own_injury_and_remembered_return_order_not_remote_authority() {
         Some(MissionStatus::Returning)
     ));
 }
+
+#[test]
+fn provisions_follow_only_conserved_source_receipts_and_never_complete_service() {
+    let mut w = expedition(MissionObjective::Visit { destination: AWAY });
+    let origin = InventoryId(20);
+    let cargo = InventoryId(40);
+    let staged = InventoryId(41);
+    receipt(
+        &mut w,
+        1,
+        MissionReceipt::Transferred {
+            actor: A,
+            source: InventoryId(50),
+            destination: cargo,
+            quantity: Quantity(2000),
+            destination_carrier: Some(A),
+        },
+    );
+    assert!(w.missions[&ID].members[&A].supply_cargo.is_empty());
+    let pickup = MissionReceipt::Transferred {
+        actor: A,
+        source: origin,
+        destination: cargo,
+        quantity: Quantity(1800),
+        destination_carrier: Some(A),
+    };
+    receipt(&mut w, 2, pickup.clone());
+    let once = w.clone();
+    receipt(&mut w, 2, pickup);
+    assert_eq!(w, once);
+    assert_eq!(
+        w.missions[&ID].members[&A].supply_cargo[&origin][&cargo],
+        1800
+    );
+    receipt(
+        &mut w,
+        3,
+        MissionReceipt::Transferred {
+            actor: A,
+            source: cargo,
+            destination: staged,
+            quantity: Quantity(600),
+            destination_carrier: Some(A),
+        },
+    );
+    receipt(
+        &mut w,
+        4,
+        MissionReceipt::Lost {
+            source: cargo,
+            quantity: Quantity(300),
+        },
+    );
+    receipt(
+        &mut w,
+        5,
+        MissionReceipt::Transferred {
+            actor: B,
+            source: staged,
+            destination: InventoryId(42),
+            quantity: Quantity(500),
+            destination_carrier: Some(B),
+        },
+    );
+    let tags = &w.missions[&ID].members[&A].supply_cargo[&origin];
+    assert_eq!(tags[&cargo], 900);
+    assert_eq!(tags[&staged], 100);
+    assert!(!tags.contains_key(&InventoryId(42)));
+    assert_eq!(w.missions[&ID].members[&A].delivered, 0);
+    assert_eq!(w.missions[&ID].status, MissionStatus::Traveling);
+    receipt(
+        &mut w,
+        6,
+        MissionReceipt::Transferred {
+            actor: B,
+            source: origin,
+            destination: staged,
+            quantity: Quantity(800),
+            destination_carrier: Some(A),
+        },
+    );
+    assert_eq!(
+        w.missions[&ID].members[&A].supply_cargo[&origin][&staged],
+        900
+    );
+    assert_eq!(w.missions[&ID].members[&A].delivered, 0);
+    let encoded = serde_json::to_string(&w).unwrap();
+    assert_eq!(w, serde_json::from_str(&encoded).unwrap());
+}
+
+#[test]
+fn staging_from_another_named_supply_source_cannot_leave_phantom_or_double_tags() {
+    let mut w = expedition(MissionObjective::Visit { destination: AWAY });
+    w.missions
+        .get_mut(&ID)
+        .unwrap()
+        .proposal
+        .supplies
+        .push(MissionSupply {
+            carrier: A,
+            source: InventoryId(10),
+            quantity: Quantity(1000),
+        });
+    receipt(
+        &mut w,
+        1,
+        MissionReceipt::Transferred {
+            actor: A,
+            source: InventoryId(20),
+            destination: InventoryId(10),
+            quantity: Quantity(1000),
+            destination_carrier: Some(A),
+        },
+    );
+    receipt(
+        &mut w,
+        2,
+        MissionReceipt::Transferred {
+            actor: A,
+            source: InventoryId(10),
+            destination: InventoryId(40),
+            quantity: Quantity(1000),
+            destination_carrier: Some(A),
+        },
+    );
+    let tags = &w.missions[&ID].members[&A].supply_cargo;
+    assert_eq!(
+        tags[&InventoryId(20)],
+        BTreeMap::from([(InventoryId(40), 1000)])
+    );
+    assert!(!tags.contains_key(&InventoryId(10)));
+    assert_eq!(
+        tags.values()
+            .flat_map(|entries| entries.values())
+            .sum::<u64>(),
+        1000
+    );
+}

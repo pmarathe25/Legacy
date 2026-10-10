@@ -38,6 +38,13 @@ impl Personality {
             ..Self::industrious()
         }
     }
+    pub fn accepts_risk(&self, risk: Risk) -> bool {
+        match risk {
+            Risk::Safe => true,
+            Risk::PhysicalDanger => self.risk_tolerance >= 300,
+            Risk::UnconsentedTaking => self.honesty < 250 && self.risk_tolerance >= 700,
+        }
+    }
     pub fn valid(&self) -> bool {
         [
             self.discipline,
