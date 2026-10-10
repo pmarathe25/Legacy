@@ -329,7 +329,7 @@ mod tests {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )
             .unwrap();
         }

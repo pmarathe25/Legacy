@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality},
+    decisions::{Aspiration, Personality},
     *,
 };
 use std::collections::BTreeSet;
@@ -18,7 +18,7 @@ fn sim(workers: usize) -> Simulation {
 fn peaceful(sim: &mut Simulation) {
     let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
     for id in people {
-        sim.debug_set_personality(id, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
 }
@@ -29,7 +29,7 @@ fn personality_changes_autonomous_choices_with_the_same_physical_opportunities()
     peaceful(&mut sim);
     let worker = sim.canonical_state().people[3].id;
     let resting = sim.canonical_state().people[4].id;
-    sim.debug_set_personality(worker, Personality::industrious(), Dream::Independence)
+    sim.debug_set_personality(worker, Personality::industrious(), Aspiration::Independence)
         .unwrap();
     sim.advance(MINUTE).unwrap();
     let physical = sim.canonical_state().physical.as_ref().unwrap();
@@ -376,5 +376,26 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
     let mind = &sim.canonical_state().decisions.as_ref().unwrap().minds[&actor];
     assert_eq!(mind.knowledge[&source].quantity, Quantity(0));
     assert_eq!(mind.last_failure, Some((SimTime(480_000), source)));
-    assert_eq!(mind.plan, Some(Command::Rest));
+    assert_eq!(
+        mind.plan.as_ref().map(|plan| &plan.action),
+        Some(&Command::Rest)
+    );
+}
+
+#[test]
+fn a_saved_plan_cannot_forge_movement_shape_for_a_different_command() {
+    let mut simulation = sim(1);
+    peaceful(&mut simulation);
+    simulation.advance(MINUTE).unwrap();
+    let actor = simulation.canonical_state().people[3].id;
+    let bytes = simulation.save().unwrap();
+    let mut data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let plan = &mut data["state"]["decisions"]["minds"][actor.0.to_string()]["plan"];
+    assert_eq!(plan["action"], serde_json::json!("Rest"));
+    plan["shape"] = serde_json::json!({"Move":1});
+    assert!(matches!(
+        Simulation::load(&serde_json::to_vec(&data).unwrap(), Execution::default()),
+        Err(Error::InvalidSave(_))
+    ));
+    assert!(Simulation::load(&bytes, Execution::default()).is_ok());
 }

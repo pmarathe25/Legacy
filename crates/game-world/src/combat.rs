@@ -782,6 +782,12 @@ impl Simulation {
                 ref objective,
             } => {
                 self.validate_mission_combat_order(actor, mission, objective)?;
+                let leader = self.state.missions.as_ref().unwrap().missions[&mission]
+                    .proposal
+                    .leader;
+                if leader != actor && !reachable(leader) {
+                    return Err(Error::Unavailable);
+                }
             }
             CombatAction::Attack { target } => {
                 if target == actor
@@ -1696,7 +1702,7 @@ mod reinforcement_tests {
         sim.debug_set_personality(
             reinforcement,
             decisions::Personality::restful(),
-            decisions::Dream::Comfort,
+            decisions::Aspiration::Comfort,
         )
         .unwrap();
         sim.debug_move_actor(reinforcement, AreaId(2)).unwrap();

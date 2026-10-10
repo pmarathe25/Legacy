@@ -3,10 +3,149 @@ use game_api::{
 };
 use game_world::{
     Execution, Simulation,
-    decisions::{Dream, Personality},
+    decisions::{Aspiration, Personality},
 };
 
 const HOUR: u64 = 3_600_000;
+
+#[test]
+fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
+    let mut sim = Simulation::playable_scenario(
+        "child-successor",
+        81,
+        Execution::default(),
+        game_world::scenarios::Config::default(),
+    )
+    .unwrap();
+    sim.advance(SimDuration(60_000)).unwrap();
+    let child = sim.canonical_state().ruler;
+    assert_eq!(sim.observe().life_stage, Some(game_api::LifeStage::Infant));
+    let guardians: Vec<_> = sim
+        .canonical_state()
+        .lineage
+        .as_ref()
+        .unwrap()
+        .guardians
+        .keys()
+        .copied()
+        .collect();
+    for person in sim.canonical_state().people.clone() {
+        if person.id != child
+            && sim.canonical_state().physical.as_ref().unwrap().actors[&person.id]
+                .vitals
+                .alive
+        {
+            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+            let mut personality = Personality::restful();
+            personality.empathy = 0;
+            sim.debug_set_personality(person.id, personality, Aspiration::Comfort)
+                .unwrap();
+        }
+    }
+    let mut snapshot: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+    let state = &mut snapshot["state"];
+    for stock in state["inventories"].as_object_mut().unwrap().values_mut() {
+        if stock["good"] == "Water" {
+            stock["quantity"] = 0.into();
+        }
+    }
+    let water_ids: Vec<_> = state["inventories"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, stock)| stock["good"] == "Water")
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in water_ids {
+        state["property"]["portions"][&id] = serde_json::json!({});
+        state["health"]["water"][&id] = serde_json::json!({
+            "basis_quantity": 0, "basis_load": 0,
+            "removed_quantity": 0, "removed_load": 0,
+        });
+    }
+    for mind in state["decisions"]["minds"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        mind["plan"] = serde_json::Value::Null;
+        for fact in mind["knowledge"].as_object_mut().unwrap().values_mut() {
+            if fact["good"] == "Water" {
+                fact["quantity"] = 0.into();
+            }
+        }
+    }
+    for source in state["ecology"]["resources"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        if source["kind"] == "Spring" {
+            source["daily_growth"] = 0.into();
+            source["contamination"] = 0.into();
+            source["runoff_contamination"] = 0.into();
+            if source["area"] == 1 {
+                source["remaining"] = 0.into();
+            }
+        }
+    }
+    state["health"]["clinical"][child.0.to_string()]["thirst"] = (2 * HOUR).into();
+    let mut sim = Simulation::load(
+        &serde_json::to_vec(&snapshot).unwrap(),
+        Execution::default(),
+    )
+    .unwrap();
+    let mut split = Simulation::load(
+        &sim.save().unwrap(),
+        Execution {
+            workers: 2,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    let initial_events = sim.canonical_state().events.len();
+    sim.advance(SimDuration(30 * 60_000)).unwrap();
+    split.advance(SimDuration(60_000)).unwrap();
+    let mut split = Simulation::load(
+        &split.save().unwrap(),
+        Execution {
+            workers: 2,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+    split.advance(SimDuration(29 * 60_000)).unwrap();
+    assert_eq!(sim.canonical_state(), split.canonical_state());
+    let events = &sim.canonical_state().events[initial_events..];
+    let collector = events
+        .iter()
+        .find_map(|e| match e.kind {
+            EventKind::ResourceCollected {
+                actor,
+                good: Good::Water,
+                ..
+            } if guardians.contains(&actor) => Some(actor),
+            _ => None,
+        })
+        .expect("an actual guardian must collect remaining distant water");
+    assert!(events.iter().any(|e| matches!(e.kind,
+        EventKind::Cared { caregiver, child: target, .. }
+            if caregiver == collector && target == child)));
+    assert!(
+        sim.canonical_state().physical.as_ref().unwrap().actors[&child]
+            .vitals
+            .alive
+    );
+    assert!(sim.canonical_state().health.as_ref().unwrap().clinical[&child].thirst < 2 * HOUR);
+    Simulation::load(
+        &sim.save().unwrap(),
+        Execution {
+            workers: 2,
+            reverse_jobs: true,
+        },
+    )
+    .unwrap();
+}
 
 // Author a dry opening once, before its clock runs. The public simulation then
 // has to discover, collect, carry and consume actual remaining natural water.
@@ -22,7 +161,7 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
         .id;
     for person in sim.canonical_state().people.clone() {
         sim.debug_actor_command(person.id, Command::Cancel).unwrap();
-        sim.debug_set_personality(person.id, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(person.id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     let ruler = sim.canonical_state().ruler;

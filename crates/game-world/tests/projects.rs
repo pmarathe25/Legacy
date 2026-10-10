@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality},
+    decisions::{Aspiration, Personality},
     *,
 };
 use std::collections::BTreeSet;
@@ -25,7 +25,7 @@ fn quiet(sim: &mut Simulation) {
         .map(|person| person.id)
         .collect::<Vec<_>>();
     for person in people {
-        sim.debug_set_personality(person, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(person, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
 }
@@ -272,7 +272,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     let maker = actor(&sim, 3);
     let mut withholding = Personality::restful();
     withholding.honesty = 0;
-    sim.debug_set_personality(maker, withholding, Dream::Comfort)
+    sim.debug_set_personality(maker, withholding, Aspiration::Comfort)
         .unwrap();
     let helper = actor(&sim, 6);
     let plan = propose(
@@ -525,7 +525,7 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
     // Changing the debtor's own willingness does not erase the wage obligation.
     let mut unwilling = Personality::restful();
     unwilling.honesty = 0;
-    sim.debug_set_personality(maker, unwilling, Dream::Comfort)
+    sim.debug_set_personality(maker, unwilling, Aspiration::Comfort)
         .unwrap();
     sim.advance(SimDuration(deadline.0 - sim.canonical_state().time.0))
         .unwrap();
@@ -565,7 +565,7 @@ fn cautious_financier_refuses_startup_risk_without_any_stock_transfer() {
     let financier = actor(&sim, 5);
     let mut cautious = Personality::industrious();
     cautious.risk_tolerance = 0;
-    sim.debug_set_personality(financier, cautious, Dream::Independence)
+    sim.debug_set_personality(financier, cautious, Aspiration::Independence)
         .unwrap();
     let before = sim.canonical_state().inventories.clone();
     sim.advance(SimDuration(200_000)).unwrap();

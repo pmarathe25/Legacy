@@ -246,7 +246,7 @@ fn battle(
     if injured_opponent {
         let mut traits = game_world::decisions::Personality::industrious();
         traits.risk_tolerance = 0;
-        sim.debug_set_personality(enemy, traits, game_world::decisions::Dream::Comfort)
+        sim.debug_set_personality(enemy, traits, game_world::decisions::Aspiration::Comfort)
             .unwrap();
         sim.debug_injure(enemy, 100_000).unwrap();
     }
@@ -528,7 +528,7 @@ fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
     traits.sociability = 0;
     traits.risk_tolerance = 0;
     traits.empathy = 1_000;
-    sim.debug_set_personality(leader, traits, game_world::decisions::Dream::Comfort)
+    sim.debug_set_personality(leader, traits, game_world::decisions::Aspiration::Comfort)
         .unwrap();
     submit(
         &mut sim,

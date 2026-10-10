@@ -2,6 +2,12 @@
 //! cross-system command dispatcher or authoritative receipt sequence.
 use crate::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActivityOwner {
+    Projects,
+    Health,
+}
+
 impl Simulation {
     pub(crate) fn conversation_actor_available(&self, actor: PersonId) -> bool {
         self.state.physical.as_ref().is_some_and(|w| {
@@ -151,29 +157,35 @@ impl Simulation {
         self.start_physical_action(actor, command)
     }
     pub(crate) fn interrupt_actor_activity(&mut self, actor: PersonId) {
-        self.interrupt_actor_activity_with_projects(actor, true);
+        self.interrupt_actor_activity_preserving(actor, None);
     }
 
     pub(crate) fn interrupt_actor_activity_except_projects(&mut self, actor: PersonId) {
-        self.interrupt_actor_activity_with_projects(actor, false);
+        self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Projects));
     }
 
-    fn interrupt_actor_activity_with_projects(
+    pub(crate) fn interrupt_actor_activity_except_health(&mut self, actor: PersonId) {
+        self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Health));
+    }
+
+    fn interrupt_actor_activity_preserving(
         &mut self,
         actor: PersonId,
-        interrupt_projects: bool,
+        owner: Option<ActivityOwner>,
     ) {
         self.interrupt_army_talk(actor);
         self.interrupt_realm(actor);
         self.interrupt_transport_lift(actor);
         self.interrupt_social(actor);
         self.interrupt_enforcement(actor);
-        self.cancel_health_activity(actor);
+        if owner != Some(ActivityOwner::Health) {
+            self.cancel_health_activity(actor);
+        }
         self.interrupt_ecology(actor);
         self.cancel_mission_talk(actor);
         self.interrupt_force(actor);
         self.cancel_invocation_action(actor);
-        if interrupt_projects {
+        if owner != Some(ActivityOwner::Projects) {
             self.interrupt_construction(actor);
         }
         self.interrupt_lesson(actor);

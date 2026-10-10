@@ -637,3 +637,75 @@ fn prepared_adoption_rejects_a_later_concurrent_proposal_without_partial_changes
     assert_eq!(prepared.commit(&mut state), Err(Error::Unavailable));
     assert_eq!(state, before);
 }
+
+#[test]
+fn service_commitment_needs_exact_heard_terms_and_resolved_counteroffer() {
+    let state = State::default();
+    let facts = facts();
+    let consent = HeardServiceConsent {
+        recruitment: RecruitmentId(400),
+        sponsor: A,
+        recruit: B,
+        offered_terms: vec![labor(A, 100, 1000)],
+        accepted_terms: vec![labor(A, 100, 1000)],
+        unanswered_counteroffer: false,
+    };
+    let ids = TransitionIds {
+        agreement: Some(AGREEMENT),
+        obligations: vec![ObligationId(2)],
+        ..Default::default()
+    };
+    assert!(
+        state
+            .prepare_service_commitment(
+                &HeardServiceConsent {
+                    unanswered_counteroffer: true,
+                    ..consent.clone()
+                },
+                &facts,
+                &ids
+            )
+            .is_err()
+    );
+    assert!(
+        state
+            .prepare_service_commitment(
+                &HeardServiceConsent {
+                    accepted_terms: vec![labor(A, 200, 1000)],
+                    ..consent.clone()
+                },
+                &facts,
+                &ids
+            )
+            .is_err()
+    );
+    let mut missing = facts.clone();
+    missing.present.remove(&B);
+    assert!(
+        state
+            .prepare_service_commitment(&consent, &missing, &ids)
+            .is_err()
+    );
+    let plan = state
+        .prepare_service_commitment(&consent, &facts, &ids)
+        .unwrap();
+    assert_eq!(
+        plan.events,
+        vec![
+            TransitionEvent::Proposed {
+                agreement: AGREEMENT,
+                proposer: A
+            },
+            TransitionEvent::Activated {
+                agreement: AGREEMENT
+            }
+        ]
+    );
+    let mut after = state;
+    plan.commit(&mut after).unwrap();
+    assert_eq!(
+        after.agreements[&AGREEMENT].accepted,
+        BTreeSet::from([A, B])
+    );
+    assert_eq!(after.obligations[&ObligationId(2)].performed, 0);
+}

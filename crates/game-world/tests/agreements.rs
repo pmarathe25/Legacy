@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality},
+    decisions::{Aspiration, Personality},
     *,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,7 +16,7 @@ fn fixture(workers: usize) -> Simulation {
     .unwrap();
     let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
     for person in people {
-        sim.debug_set_personality(person, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(person, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     sim

@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality},
+    decisions::{Aspiration, Personality},
     property::Attitude,
     *,
 };
@@ -23,7 +23,7 @@ fn fixture(workers: usize) -> Simulation {
         .collect::<Vec<_>>();
     for person in people {
         sim.debug_actor_command(person, Command::Cancel).unwrap();
-        sim.debug_set_personality(person, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(person, Personality::restful(), Aspiration::Comfort)
             .unwrap();
         sim.debug_set_property_attitude(
             person,
@@ -590,7 +590,7 @@ fn a_hungry_risk_taking_npc_can_steal_from_known_local_food_without_remote_aware
     let mut personality = Personality::restful();
     personality.honesty = 0;
     personality.risk_tolerance = 900;
-    sim.debug_set_personality(thief, personality, Dream::Comfort)
+    sim.debug_set_personality(thief, personality, Aspiration::Comfort)
         .unwrap();
     sim.debug_move_actor(owner, AreaId(3)).unwrap();
     sim.advance(SimDuration(360_000)).unwrap();

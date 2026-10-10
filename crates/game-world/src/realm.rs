@@ -93,7 +93,7 @@ impl Simulation {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )?;
             sim.interrupt_actor_activity(actor);
         }

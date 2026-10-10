@@ -73,6 +73,13 @@ pub struct Assignment {
     pub accepted_at: SimTime,
 }
 
+/// A remembered care intention, rather than knowledge of a distant body's needs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaterProvision {
+    pub child: PersonId,
+    pub observed_at: SimTime,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Guardian {
     pub target: Option<PersonId>,
@@ -84,6 +91,7 @@ pub struct Guardian {
     pub explanation: String,
     pub assessments: BTreeMap<PersonId, Assessment>,
     pub assignment: Option<Assignment>,
+    pub water_provision: Option<WaterProvision>,
     pub knows_invocation: bool,
 }
 

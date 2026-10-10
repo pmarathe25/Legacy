@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality, Relationship},
+    decisions::{Aspiration, Personality, Relationship},
     lineage::GuardianGoal,
     *,
 };
@@ -51,7 +51,7 @@ fn quiet_other_caregivers(sim: &mut Simulation, child: PersonId) {
     for citizen in citizens {
         let mut personality = Personality::restful();
         personality.empathy = 0;
-        sim.debug_set_personality(citizen, personality, Dream::Comfort)
+        sim.debug_set_personality(citizen, personality, Aspiration::Comfort)
             .unwrap();
         sim.debug_set_relationship(
             citizen,
@@ -215,12 +215,16 @@ fn guardians_disagree_from_observed_conduct_and_do_not_credit_unseen_practice() 
     let mut sim = child_for_mentorship(1);
     let child = sim.canonical_state().ruler;
     let observers = guardians(&sim);
-    sim.debug_set_personality(observers[0], Personality::restful(), Dream::SupportOthers)
-        .unwrap();
+    sim.debug_set_personality(
+        observers[0],
+        Personality::restful(),
+        Aspiration::SupportOthers,
+    )
+    .unwrap();
     sim.debug_set_personality(
         observers[1],
         Personality::industrious(),
-        Dream::SupportOthers,
+        Aspiration::SupportOthers,
     )
     .unwrap();
     send(
@@ -278,7 +282,7 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
     let mut sim = child_for_mentorship(1);
     let child = sim.canonical_state().ruler;
     let guardian = guardians(&sim)[0];
-    sim.debug_set_personality(guardian, Personality::restful(), Dream::SupportOthers)
+    sim.debug_set_personality(guardian, Personality::restful(), Aspiration::SupportOthers)
         .unwrap();
     let food = sim
         .debug_add_inventory(
@@ -517,7 +521,7 @@ fn simultaneous_births_use_persistent_order_without_rebinding_to_the_second_chil
         .collect();
     for (first, second) in pairs {
         for (person, partner) in [(first, second), (second, first)] {
-            sim.debug_set_personality(person, Personality::restful(), Dream::Parenthood)
+            sim.debug_set_personality(person, Personality::restful(), Aspiration::Parenthood)
                 .unwrap();
             sim.debug_set_relationship(
                 person,
@@ -754,7 +758,7 @@ fn births_before_death_are_ineligible_and_an_unbounded_gap_manufactures_nothing(
     for citizen in citizens {
         // Stop any newly coupled conception using the physical cancellation path.
         sim.debug_actor_command(citizen, Command::Cancel).ok();
-        sim.debug_set_personality(citizen, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(citizen, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     let count = sim.canonical_state().people.len();

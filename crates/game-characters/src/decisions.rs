@@ -1,4 +1,5 @@
 //! Personal dispositions and decision evidence, without world access.
+pub use crate::planning::*;
 use game_core::*;
 use serde::{Deserialize, Serialize};
 
@@ -54,10 +55,10 @@ impl Personality {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Dream {
-    Independence,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Aspiration {
     Comfort,
+    Independence,
     SupportOthers,
     Parenthood,
 }
@@ -103,6 +104,7 @@ pub struct ChildSignal {
     pub preference: Option<ChildhoodInterest>,
     pub location: game_core::Location,
     pub urgency: i64,
+    pub hydration_urgency: i64,
     pub observed_at: SimTime,
 }
 

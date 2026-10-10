@@ -69,7 +69,7 @@ impl Simulation {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )?;
         }
         // This opening supplies a court and watch rather than the autonomy
@@ -294,7 +294,7 @@ impl Simulation {
         willing.aggression = 900;
         willing.risk_tolerance = 900;
         willing.empathy = 100;
-        sim.debug_set_personality(officer, willing, decisions::Dream::SupportOthers)?;
+        sim.debug_set_personality(officer, willing, decisions::Aspiration::SupportOthers)?;
         sim.debug_set_relationship(
             officer,
             judge,

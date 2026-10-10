@@ -49,8 +49,12 @@ fn fixture(seed: u64) -> (Simulation, Context) {
     let mut disposition = game_world::decisions::Personality::restful();
     disposition.honesty = 100;
     disposition.discipline = 100;
-    sim.debug_set_personality(mayor, disposition, game_world::decisions::Dream::Comfort)
-        .unwrap();
+    sim.debug_set_personality(
+        mayor,
+        disposition,
+        game_world::decisions::Aspiration::Comfort,
+    )
+    .unwrap();
     let institutions = sim.canonical_state().institutions.as_ref().unwrap();
     let a = institutions
         .institutions

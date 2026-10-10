@@ -1323,7 +1323,7 @@ impl Simulation {
                 busy: !matches!(body.activity, Activity::Idle | Activity::Rest),
                 trust: relation.trust,
                 affection: relation.affection,
-                independence_goal: mind.dream == decisions::Dream::Independence,
+                independence_goal: mind.dream == decisions::Aspiration::Independence,
                 sufficient_support: sufficient,
             });
             self.record_transport_response(passenger, offers[0].bearer, kind, reason);
@@ -1674,7 +1674,7 @@ mod connected_tests {
         for actor in citizens {
             let mut traits = decisions::Personality::restful();
             traits.empathy = 0;
-            sim.debug_set_personality(actor, traits, decisions::Dream::Comfort)
+            sim.debug_set_personality(actor, traits, decisions::Aspiration::Comfort)
                 .unwrap();
         }
     }
@@ -2087,7 +2087,7 @@ mod connected_tests {
         sim.advance(SimDuration(6_000)).unwrap();
         let mut traits = decisions::Personality::restful();
         traits.empathy = 900;
-        sim.debug_set_personality(mother, traits, decisions::Dream::Comfort)
+        sim.debug_set_personality(mother, traits, decisions::Aspiration::Comfort)
             .unwrap();
         sim.state
             .physical
@@ -2328,7 +2328,7 @@ mod connected_tests {
         sim.debug_set_personality(
             declining,
             decisions::Personality::restful(),
-            decisions::Dream::Independence,
+            decisions::Aspiration::Independence,
         )
         .unwrap();
         sim.debug_set_relationship(
@@ -2385,7 +2385,7 @@ mod connected_tests {
         sim.debug_injure(passenger, 120_000).unwrap();
         let mut personality = decisions::Personality::restful();
         personality.empathy = 900;
-        sim.debug_set_personality(helper, personality, decisions::Dream::Comfort)
+        sim.debug_set_personality(helper, personality, decisions::Aspiration::Comfort)
             .unwrap();
         sim.debug_set_relationship(
             helper,

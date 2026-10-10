@@ -60,6 +60,15 @@ pub struct ClinicalPhysiology {
     pub drink_relief: u64,
     pub cold_tolerance_centi: i16,
 }
+pub fn hydration_urgency(state: &Clinical, physiology: ClinicalPhysiology) -> i64 {
+    if state.thirst >= physiology.thirst_harm {
+        20_000
+    } else if state.thirst >= physiology.drink_relief / 4 {
+        3_000
+    } else {
+        0
+    }
+}
 pub fn clinical_physiology(
     rules: &Rules,
     metabolism_milli: u16,

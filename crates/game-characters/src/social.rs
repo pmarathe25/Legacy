@@ -29,13 +29,7 @@ pub enum SocialAction {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Aspiration {
-    Comfort,
-    Independence,
-    SupportOthers,
-    Parenthood,
-}
+pub use crate::decisions::Aspiration;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TeachingOfferView {
@@ -833,5 +827,138 @@ mod tests {
         let restored: World = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(world, restored);
         validate_local(&restored, SimTime(0)).unwrap();
+    }
+}
+
+/// Actual available contacts and practice materials. The person's routes,
+/// received offers, relationship history and intentions stay in domain state.
+#[derive(Clone, Debug)]
+pub struct ChoiceFacts {
+    pub actor: PersonId,
+    pub now: SimTime,
+    pub autonomous: bool,
+    pub can_speak: bool,
+    pub adult: bool,
+    pub family_peers: Vec<PersonId>,
+    pub available_teachers: BTreeSet<PersonId>,
+    pub own_levels: BTreeMap<Skill, u16>,
+    pub can_practice_craft: bool,
+    pub companionship_partner: Option<PersonId>,
+}
+impl World {
+    pub fn choose_personal<A>(
+        &self,
+        mind: &crate::decisions::Mind<A>,
+        facts: &ChoiceFacts,
+    ) -> Option<SocialAction> {
+        if !facts.autonomous
+            || !facts.can_speak
+            || self.development.get(&facts.actor)?.next_choice > facts.now
+        {
+            return None;
+        }
+        if mind.dream == Aspiration::Parenthood && facts.adult {
+            let mut peers = facts.family_peers.clone();
+            peers.sort_by_key(|partner| {
+                (
+                    self.approaches
+                        .get(&facts.actor)
+                        .and_then(|attempts| attempts.get(partner))
+                        .copied()
+                        .unwrap_or(SimTime(0)),
+                    *partner,
+                )
+            });
+            for partner in peers {
+                let pair = pair(facts.actor, partner);
+                if !self.family_intent.contains(&pair) {
+                    let affectionate = mind
+                        .relationships
+                        .get(&partner)
+                        .is_some_and(|relation| relation.affection >= 100);
+                    return Some(SocialAction::Talk {
+                        partner,
+                        topic: if self.companionship.contains(&pair) && affectionate {
+                            SocialTopic::FamilyPlans
+                        } else {
+                            SocialTopic::Companionship
+                        },
+                    });
+                }
+            }
+        }
+        for offer in self
+            .offers
+            .get(&facts.actor)
+            .into_iter()
+            .flat_map(|offers| offers.values())
+        {
+            if !facts.available_teachers.contains(&offer.teacher) {
+                continue;
+            }
+            if offer.topics.contains(&InstructionTopic::Routes)
+                && !self
+                    .learned
+                    .get(&facts.actor)
+                    .is_some_and(|known| known.contains(&(offer.teacher, InstructionTopic::Routes)))
+                && mind.routes.len() < 2
+            {
+                return Some(SocialAction::Learn {
+                    teacher: offer.teacher,
+                    topic: InstructionTopic::Routes,
+                });
+            }
+            for topic in &offer.topics {
+                if let InstructionTopic::Skill(skill) = topic
+                    && facts.own_levels.get(skill).copied().unwrap_or(0) == 0
+                    && matches!(
+                        skill,
+                        Skill::Craft
+                            | Skill::Farming
+                            | Skill::Medicine
+                            | Skill::Negotiation
+                            | Skill::Leadership
+                    )
+                {
+                    return Some(SocialAction::Learn {
+                        teacher: offer.teacher,
+                        topic: *topic,
+                    });
+                }
+            }
+        }
+        if mind.personality.discipline + mind.personality.ambition >= 800
+            && facts.can_practice_craft
+        {
+            return Some(SocialAction::Practice {
+                skill: Skill::Craft,
+            });
+        }
+        if mind.personality.sociability >= 500 {
+            return facts
+                .companionship_partner
+                .map(|partner| SocialAction::Talk {
+                    partner,
+                    topic: SocialTopic::Companionship,
+                });
+        }
+        None
+    }
+    pub fn finish_personal_choice(
+        &mut self,
+        actor: PersonId,
+        now: SimTime,
+    ) -> Result<(), game_core::Error> {
+        let next = SimTime(
+            now.0
+                .checked_add(self.rules.review.0)
+                .ok_or(game_core::Error::Overflow)?,
+        );
+        let record = self
+            .development
+            .get_mut(&actor)
+            .ok_or(game_core::Error::Unavailable)?;
+        record.next_choice = next;
+        Ok(())
     }
 }

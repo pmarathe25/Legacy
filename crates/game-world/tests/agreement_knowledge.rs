@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality},
+    decisions::{Aspiration, Personality},
     *,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,7 +18,7 @@ fn quiet(sim: &mut Simulation) {
         personality.discipline = 0;
         personality.honesty = 0;
         personality.empathy = 0;
-        sim.debug_set_personality(actor, personality, Dream::Comfort)
+        sim.debug_set_personality(actor, personality, Aspiration::Comfort)
             .unwrap();
     }
 }

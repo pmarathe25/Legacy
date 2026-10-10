@@ -1450,7 +1450,7 @@ mod tests {
             sim.debug_set_personality(
                 person,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )
             .unwrap();
         }
@@ -1602,7 +1602,7 @@ mod tests {
         let mut hostile = decisions::Personality::industrious();
         hostile.aggression = 900;
         hostile.risk_tolerance = 900;
-        sim.debug_set_personality(captor, hostile, decisions::Dream::Comfort)
+        sim.debug_set_personality(captor, hostile, decisions::Aspiration::Comfort)
             .unwrap();
         sim.state
             .combat
@@ -1803,7 +1803,7 @@ mod tests {
         let mut hostile = decisions::Personality::industrious();
         hostile.aggression = 900;
         hostile.risk_tolerance = 900;
-        sim.debug_set_personality(captor, hostile, decisions::Dream::Comfort)
+        sim.debug_set_personality(captor, hostile, decisions::Aspiration::Comfort)
             .unwrap();
         sim.advance(SimDuration(114_000)).unwrap();
         assert!(sim.in_combat(captive));
@@ -1847,7 +1847,7 @@ mod transport_force_tests {
             sim.debug_set_personality(
                 person,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )
             .unwrap();
         }

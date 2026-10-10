@@ -34,7 +34,7 @@ pub struct Settlement {
 }
 fn mind(
     personality: decisions::Personality,
-    dream: decisions::Dream,
+    dream: decisions::Aspiration,
     routes: BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>,
     now: SimTime,
 ) -> decisions::Mind {
@@ -112,7 +112,7 @@ impl Simulation {
                     .minds
                     .get_mut(&actor)
                     .unwrap();
-                mind.dream = decisions::Dream::Parenthood;
+                mind.dream = decisions::Aspiration::Parenthood;
                 mind.relationships.insert(
                     partner,
                     decisions::Relationship {
@@ -310,7 +310,7 @@ impl Simulation {
             .minds
             .get_mut(&healer)
             .unwrap()
-            .dream = decisions::Dream::SupportOthers;
+            .dream = decisions::Aspiration::SupportOthers;
         let timber = lots
             .iter()
             .find(|id| {
@@ -657,9 +657,9 @@ impl Simulation {
                     decisions::Personality::industrious()
                 };
                 let dream = if local % 3 == 1 {
-                    decisions::Dream::Comfort
+                    decisions::Aspiration::Comfort
                 } else {
-                    decisions::Dream::Independence
+                    decisions::Aspiration::Independence
                 };
                 minds.insert(
                     actor,

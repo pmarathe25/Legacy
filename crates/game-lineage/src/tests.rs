@@ -22,6 +22,7 @@ fn initial() -> World {
                     request: GuardianRequest::Work { site: SiteId(7) },
                     accepted_at: SimTime(0),
                 }),
+                water_provision: None,
                 knows_invocation: true,
             },
         )]),
@@ -294,6 +295,7 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
             location: Location::AtArea(AreaId(1)),
             observed_at: SimTime(40),
             urgency: 50,
+            hydration_urgency: 0,
             preference: None,
         }),
         ..base
@@ -330,4 +332,125 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
         ..local.clone()
     };
     assert_eq!(guardian_intention(stale).action, Some(GuardianAction::Rest));
+    let water = [StockKnowledge {
+        good: Good::Water,
+        ..stocks[0].clone()
+    }];
+    let thirsty = GuardianInput {
+        need: Some(NeedObservation {
+            urgency: 0,
+            hydration_urgency: 3_000,
+            ..local.need.clone().unwrap()
+        }),
+        known_stocks: &water,
+        ..local.clone()
+    };
+    assert_eq!(
+        guardian_intention(thirsty.clone()).action,
+        Some(GuardianAction::Care {
+            child: PersonId(9),
+            source: InventoryId(10)
+        })
+    );
+    assert_eq!(
+        guardian_intention(GuardianInput {
+            need: Some(NeedObservation {
+                observed_at: SimTime(39),
+                ..thirsty.need.unwrap()
+            }),
+            ..thirsty
+        })
+        .action,
+        Some(GuardianAction::Rest)
+    );
+}
+
+#[test]
+fn a_water_trip_persists_from_observed_need_until_real_contact_resolves_it() {
+    let child = PersonId(9);
+    let need = NeedObservation {
+        location: Location::AtArea(AreaId(1)),
+        observed_at: SimTime(40),
+        urgency: 0,
+        hydration_urgency: 3_000,
+        preference: None,
+    };
+    // A remote or stale signal cannot start a trip.
+    assert_eq!(
+        review_water_provision(None, child, SimTime(40), false, Some(&need), None, true),
+        (None, None)
+    );
+    assert_eq!(
+        review_water_provision(None, child, SimTime(41), true, Some(&need), None, true),
+        (None, None)
+    );
+    let (plan, action) =
+        review_water_provision(None, child, SimTime(40), true, Some(&need), None, true);
+    assert_eq!(action, Some(ProvisionAction::AcquireWater));
+    let plan = plan.unwrap();
+    assert_eq!(
+        review_water_provision(Some(&plan), child, SimTime(50), false, None, None, false).1,
+        Some(ProvisionAction::Continue)
+    );
+    // Arrival at a source must not cause an empty-handed return to the child.
+    assert_eq!(
+        review_water_provision(Some(&plan), child, SimTime(60), false, None, None, true).1,
+        Some(ProvisionAction::AcquireWater)
+    );
+    let water = InventoryId(20);
+    assert_eq!(
+        review_water_provision(
+            Some(&plan),
+            child,
+            SimTime(70),
+            false,
+            None,
+            Some(water),
+            true
+        )
+        .1,
+        Some(ProvisionAction::ReturnToChild)
+    );
+    assert_eq!(
+        review_water_provision(
+            Some(&plan),
+            child,
+            SimTime(80),
+            true,
+            None,
+            Some(water),
+            true
+        )
+        .1,
+        Some(ProvisionAction::Care { source: water })
+    );
+    let satisfied = NeedObservation {
+        observed_at: SimTime(81),
+        hydration_urgency: 0,
+        ..need
+    };
+    assert_eq!(
+        review_water_provision(
+            Some(&plan),
+            child,
+            SimTime(81),
+            true,
+            Some(&satisfied),
+            Some(water),
+            true
+        ),
+        (None, None)
+    );
+    assert_eq!(
+        review_water_provision(
+            Some(&plan),
+            PersonId(10),
+            SimTime(90),
+            false,
+            None,
+            Some(water),
+            true
+        ),
+        (None, None)
+    );
 }

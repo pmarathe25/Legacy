@@ -463,7 +463,7 @@ mod tests {
         sim.debug_set_personality(
             worker,
             decisions::Personality::restful(),
-            decisions::Dream::Comfort,
+            decisions::Aspiration::Comfort,
         )
         .unwrap();
         for actor in [farmer, worker] {

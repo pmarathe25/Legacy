@@ -1295,7 +1295,7 @@ impl Simulation {
         actor: PersonId,
         action: &AgreementAction,
     ) -> Result<(), Error> {
-        use game_agreements::{TransitionEvent, TransitionFacts, TransitionIds};
+        use game_agreements::{TransitionFacts, TransitionIds};
         let area = self.agreement_actor_area(actor)?;
         self.reserve_agreement_ids(0)?;
         let world = self.state.agreements.as_ref().ok_or(Error::Unavailable)?;
@@ -1339,7 +1339,76 @@ impl Simulation {
         let prepared = world
             .ledger
             .prepare_transition(actor, action, &facts, &ids)?;
-        prepared.check(&world.ledger)?;
+        self.apply_prepared_agreement(actor, prepared, next)
+    }
+
+    pub(crate) fn prepare_service_agreement(
+        &self,
+        consent: &game_missions::ServiceConsent,
+    ) -> Result<(game_agreements::PreparedTransition, u64), Error> {
+        let area = self.agreement_actor_area(consent.recruit)?;
+        if self.agreement_actor_area(consent.sponsor)? != area {
+            return Err(Error::Unavailable);
+        }
+        let offer = self
+            .state
+            .missions
+            .as_ref()
+            .and_then(|w| w.recruitments.get(&consent.recruitment))
+            .ok_or(Error::Unavailable)?;
+        let mission = &self.state.missions.as_ref().unwrap().missions[&offer.mission];
+        if consent.agreement.0 != self.state.next_id
+            || offer.person != consent.recruit
+            || mission.sponsor != consent.sponsor
+        {
+            return Err(Error::Unavailable);
+        }
+        let count = 1 + consent.terms.len() as u64;
+        self.reserve_agreement_ids(count)?;
+        let next = self.state.next_id + count;
+        let facts = game_agreements::TransitionFacts {
+            actor_available: true,
+            present: BTreeSet::from([consent.sponsor, consent.recruit]),
+            assets: self.economic_terms_context(&consent.terms),
+        };
+        let ids = game_agreements::TransitionIds {
+            agreement: Some(consent.agreement),
+            obligations: (self.state.next_id + 1..next).map(ObligationId).collect(),
+            ..Default::default()
+        };
+        let accepted = game_agreements::HeardServiceConsent {
+            recruitment: consent.recruitment,
+            sponsor: consent.sponsor,
+            recruit: consent.recruit,
+            offered_terms: offer.compensation.clone(),
+            accepted_terms: consent.terms.clone(),
+            unanswered_counteroffer: offer.countered,
+        };
+        let prepared = self
+            .state
+            .agreements
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .ledger
+            .prepare_service_commitment(&accepted, &facts, &ids)?;
+        Ok((prepared, next))
+    }
+
+    pub(crate) fn apply_prepared_agreement(
+        &mut self,
+        actor: PersonId,
+        prepared: game_agreements::PreparedTransition,
+        next: u64,
+    ) -> Result<(), Error> {
+        use game_agreements::TransitionEvent;
+        prepared.check(
+            &self
+                .state
+                .agreements
+                .as_ref()
+                .ok_or(Error::Unavailable)?
+                .ledger,
+        )?;
         self.ensure_event_capacity(prepared.events.len())?;
         let permissions = prepared.permissions.clone();
         let events = prepared.events.clone();
@@ -1489,7 +1558,10 @@ impl Simulation {
         }
     }
 
-    fn economic_terms_context(&self, terms: &[AgreementTerm]) -> game_agreements::TermsContext {
+    pub(crate) fn economic_terms_context(
+        &self,
+        terms: &[AgreementTerm],
+    ) -> game_agreements::TermsContext {
         use game_agreements::{InventoryTerms, PermissionAsset, TermsContext};
         let mut context = TermsContext {
             now: self.state.time,

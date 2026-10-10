@@ -248,7 +248,7 @@ impl Simulation {
                 .minds
                 .get_mut(&actor)
                 .unwrap();
-            mind.dream = decisions::Dream::Parenthood;
+            mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 900;
             mind.relationships.insert(
                 partner,
@@ -301,6 +301,7 @@ impl Simulation {
                             .into(),
                         assessments: BTreeMap::new(),
                         assignment: None,
+                        water_provision: None,
                         knows_invocation: true,
                     },
                 )
@@ -868,7 +869,7 @@ impl Simulation {
             .unwrap();
         mind.personality.empathy = 900;
         mind.personality.patience = 900;
-        mind.dream = decisions::Dream::SupportOthers;
+        mind.dream = decisions::Aspiration::SupportOthers;
         self.update_property_events();
         Ok(())
     }

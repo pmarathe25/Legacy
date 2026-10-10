@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality, Relationship},
+    decisions::{Aspiration, Personality, Relationship},
     development::PregnancyState,
     *,
 };
@@ -150,7 +150,7 @@ fn a_player_request_cannot_supply_the_other_adults_consent() {
     let mut sim = sim(1);
     let ruler = sim.canonical_state().ruler;
     let partner = sim.canonical_state().people[3].id;
-    sim.debug_set_personality(partner, Personality::restful(), Dream::Comfort)
+    sim.debug_set_personality(partner, Personality::restful(), Aspiration::Comfort)
         .unwrap();
     let allocator = sim.canonical_state().next_id;
     sim.submit(Submission {
@@ -174,7 +174,7 @@ fn a_player_request_cannot_supply_the_other_adults_consent() {
         }));
     let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
     for id in people {
-        sim.debug_set_personality(id, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     sim.advance(SimDuration(600_000)).unwrap();
@@ -219,7 +219,7 @@ fn interrupting_conception_cancels_both_primary_actions_and_creates_no_child() {
         PregnancyState::Ended
     );
     for parent in [p.gestator, p.partner] {
-        sim.debug_set_personality(parent, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(parent, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     sim.advance(SimDuration(400_000)).unwrap();
@@ -382,7 +382,7 @@ fn a_motivated_nonparent_responds_to_observed_distress_without_player_orders() {
     let caregiver = sim.canonical_state().people[5].id;
     let mut personality = Personality::restful();
     personality.empathy = 1_000;
-    sim.debug_set_personality(caregiver, personality, Dream::SupportOthers)
+    sim.debug_set_personality(caregiver, personality, Aspiration::SupportOthers)
         .unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     let source = food(&sim);

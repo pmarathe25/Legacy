@@ -33,6 +33,7 @@ impl Simulation {
                         Guardian {
                             assessments: BTreeMap::new(),
                             assignment: None,
+                            water_provision: None,
                             knows_invocation: true,
                             target: Some(ruler),
                             sensed_location: Some(location.clone()),
@@ -873,7 +874,7 @@ impl Simulation {
     }
 
     fn guardian_intention(
-        &self,
+        &mut self,
         guardian: PersonId,
         target: PersonId,
         own_location: &Location,
@@ -903,25 +904,86 @@ impl Simulation {
                 location: signal.location.clone(),
                 observed_at: signal.observed_at,
                 urgency: signal.urgency,
+                hydration_urgency: signal.hydration_urgency,
                 preference: signal.preference,
             });
+        let can_reconsider = matches!(
+            body.activity,
+            Activity::Idle | Activity::Rest | Activity::Work { .. }
+        );
+        let should_rest = matches!(body.activity, Activity::Idle | Activity::Work { .. });
+        let meal_size = self.state.physical.as_ref().unwrap().rules.meal_size;
+        let carried_water = self
+            .inventory_index
+            .get(&InventoryLocation::Carried(guardian))
+            .into_iter()
+            .flatten()
+            .copied()
+            .find(|id| {
+                let stock = &self.state.inventories[id];
+                stock.good == Good::Water && stock.quantity >= meal_size
+            });
+        let (plan, provision) = game_lineage::review_water_provision(
+            self.state.lineage.as_ref().unwrap().guardians[&guardian]
+                .water_provision
+                .as_ref(),
+            target,
+            self.state.time,
+            own_location == target_location,
+            need.as_ref().filter(|need| &need.location == own_location),
+            carried_water,
+            can_reconsider,
+        );
+        self.state
+            .lineage
+            .as_mut()
+            .unwrap()
+            .guardians
+            .get_mut(&guardian)
+            .unwrap()
+            .water_provision = plan;
+        match provision {
+            Some(ProvisionAction::AcquireWater) => {
+                return (
+                    GuardianGoal::Mentoring,
+                    "Seeking real water for thirst observed during contact with the incarnation"
+                        .into(),
+                    self.plan_water_for_delivery(guardian),
+                );
+            }
+            Some(ProvisionAction::Care { source }) => {
+                return (
+                    GuardianGoal::Mentoring,
+                    "Providing carried water for observed thirst".into(),
+                    Some(Command::Care {
+                        child: target,
+                        source,
+                    }),
+                );
+            }
+            Some(ProvisionAction::Continue) => {
+                return (
+                    GuardianGoal::Mentoring,
+                    "Continuing physical water procurement for the incarnation".into(),
+                    None,
+                );
+            }
+            Some(ProvisionAction::ReturnToChild) | None => {}
+        }
         let intent = game_lineage::guardian_intention(GuardianInput {
             target,
             own_location,
             target_location,
             now: self.state.time,
-            can_reconsider: matches!(
-                body.activity,
-                Activity::Idle | Activity::Rest | Activity::Work { .. }
-            ),
-            should_rest: matches!(body.activity, Activity::Idle | Activity::Work { .. }),
+            can_reconsider,
+            should_rest,
             ready: self.state.lineage.as_ref().unwrap().guardians[&guardian]
                 .assessments
                 .get(&target)
                 .is_some_and(|a| a.ready),
             need,
             known_stocks: &stocks,
-            meal_size: self.state.physical.as_ref().unwrap().rules.meal_size,
+            meal_size,
         });
         let command = intent.action.map(|action| match action {
             GuardianAction::ApproachRoad {
@@ -1098,6 +1160,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             || guardian.sensed_at > state.time
             || guardian.target.is_some() != guardian.sensed_location.is_some()
         {
+            return Err(fail());
+        }
+        if guardian.water_provision.as_ref().is_some_and(|plan| {
+            Some(plan.child) != world.current() || plan.observed_at > state.time
+        }) {
             return Err(fail());
         }
         for (person, assessment) in &guardian.assessments {

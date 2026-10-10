@@ -1,6 +1,6 @@
 use game_api::*;
 use game_world::{
-    decisions::{Dream, Personality},
+    decisions::{Aspiration, Personality},
     *,
 };
 use std::collections::BTreeSet;
@@ -16,7 +16,7 @@ fn fixture(workers: usize) -> Simulation {
     .unwrap();
     let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
     for actor in people {
-        sim.debug_set_personality(actor, Personality::restful(), Dream::Comfort)
+        sim.debug_set_personality(actor, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     let owner = owner(&sim);
@@ -26,7 +26,7 @@ fn fixture(workers: usize) -> Simulation {
             empathy: 900,
             ..Personality::restful()
         },
-        Dream::SupportOthers,
+        Aspiration::SupportOthers,
     )
     .unwrap();
     sim
@@ -452,7 +452,7 @@ fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
             empathy: 100,
             ..Personality::restful()
         },
-        Dream::Comfort,
+        Aspiration::Comfort,
     )
     .unwrap();
     let rule = InstitutionalRule {

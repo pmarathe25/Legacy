@@ -21,3 +21,18 @@ impl MissionObjective {
         matches!(self, Self::Defeat { .. } | Self::Confine { .. })
     }
 }
+
+mod transitions;
+pub use transitions::*;
+
+#[cfg(test)]
+mod transition_tests;
+
+mod outcomes;
+pub use outcomes::*;
+
+mod observations;
+pub use observations::*;
+
+#[cfg(test)]
+mod outcome_tests;

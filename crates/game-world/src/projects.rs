@@ -103,7 +103,7 @@ impl Simulation {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )?;
         }
         let mut personality = decisions::Personality::restful();
@@ -111,7 +111,7 @@ impl Simulation {
         personality.discipline = 700;
         personality.honesty = 800;
         personality.risk_tolerance = 700;
-        sim.debug_set_personality(farmer, personality, decisions::Dream::Independence)?;
+        sim.debug_set_personality(farmer, personality, decisions::Aspiration::Independence)?;
         let mut willing = decisions::Personality::restful();
         willing.empathy = 900;
         willing.discipline = 800;
@@ -119,7 +119,7 @@ impl Simulation {
         willing.hedonism = 900;
         willing.ambition = 900;
         willing.risk_tolerance = 700;
-        sim.debug_set_personality(supporter, willing, decisions::Dream::SupportOthers)?;
+        sim.debug_set_personality(supporter, willing, decisions::Aspiration::SupportOthers)?;
         sim.observe_ecology();
         sim.observe_projects();
         sim.review_decisions()?;
@@ -158,7 +158,7 @@ impl Simulation {
             sim.debug_set_personality(
                 *person,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )?;
         }
         // The old continuous food fixture is not the workshop's recipe.
@@ -243,11 +243,11 @@ impl Simulation {
         sim.debug_set_personality(
             sponsor,
             decisions::Personality::industrious(),
-            decisions::Dream::Independence,
+            decisions::Aspiration::Independence,
         )?;
         let mut investor = decisions::Personality::industrious();
         investor.risk_tolerance = 850;
-        sim.debug_set_personality(financier, investor, decisions::Dream::Independence)?;
+        sim.debug_set_personality(financier, investor, decisions::Aspiration::Independence)?;
         sim.state.projects = Some(World {
             rules: Rules::default(),
             projects: BTreeMap::new(),
@@ -1177,7 +1177,8 @@ impl Simulation {
                 continue;
             }
             let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
-            if mind.dream != decisions::Dream::Independence || mind.personality.ambition < 600 {
+            if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
+            {
                 continue;
             }
             let required = self
@@ -1340,7 +1341,8 @@ impl Simulation {
             }
             let actor = plan.sponsor;
             let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
-            if mind.dream != decisions::Dream::Independence || mind.personality.ambition < 600 {
+            if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
+            {
                 continue;
             }
             if self
@@ -1652,12 +1654,12 @@ impl Simulation {
             let obligated=plan.support.iter().filter_map(|id|self.state.agreements.as_ref().unwrap().agreements.get(id)).any(|agreement|agreement.obligations.iter().any(|id|matches!(self.state.agreements.as_ref().unwrap().obligations[id].term,AgreementTerm::ConstructionLabor {debtor,project,..} if debtor==actor&&project==plan.id)&&self.state.agreements.as_ref().unwrap().obligations[id].performed<self.state.agreements.as_ref().unwrap().obligations[id].term.amount()));
             if self.construction_possible(actor, plan.id)
                 && (plan.sponsor == actor
-                    && (mind.dream == decisions::Dream::Independence
+                    && (mind.dream == decisions::Aspiration::Independence
                         && mind.personality.ambition >= 600
                         || mind.personality.discipline >= 700)
                     || obligated
                         && (mind.personality.discipline >= 500 || mind.personality.honesty >= 500)
-                    || mind.dream == decisions::Dream::SupportOthers
+                    || mind.dream == decisions::Aspiration::SupportOthers
                         && mind.personality.empathy >= 700
                         && plan.beneficiaries.contains(&actor))
             {
@@ -1666,7 +1668,7 @@ impl Simulation {
                 });
             }
         }
-        if mind.dream == decisions::Dream::Independence
+        if mind.dream == decisions::Aspiration::Independence
             && let Some(command) = self.workshop_procurement(actor, mind)
         {
             return Some(command);
@@ -1674,8 +1676,8 @@ impl Simulation {
         for workshop in world.enterprises.values().filter(|workshop| {
             workshop.sponsor == actor && workshop.area == self.project_area(actor).unwrap()
         }) {
-            if mind.dream != decisions::Dream::Independence
-                && !(mind.dream == decisions::Dream::SupportOthers
+            if mind.dream != decisions::Aspiration::Independence
+                && !(mind.dream == decisions::Aspiration::SupportOthers
                     && mind.personality.empathy >= 700)
             {
                 continue;
@@ -1696,7 +1698,7 @@ impl Simulation {
                 return Some(Command::Work { site: site.id });
             }
         }
-        if mind.dream != decisions::Dream::Independence
+        if mind.dream != decisions::Aspiration::Independence
             || mind.personality.ambition < 700
             || world.known_projects.get(&actor).is_some_and(|known| {
                 known.values().any(|project| {
@@ -1836,7 +1838,7 @@ impl Simulation {
         else {
             return 0;
         };
-        if mind.dream != decisions::Dream::Independence || mind.personality.ambition < 600 {
+        if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600 {
             return 0;
         }
         let own = |fact: &&StockKnowledge| {
@@ -2357,7 +2359,7 @@ mod farm_tests {
         let mut personality = decisions::Personality::restful();
         personality.risk_tolerance = 0;
         personality.empathy = 0;
-        sim.debug_set_personality(supporter, personality, decisions::Dream::Comfort)
+        sim.debug_set_personality(supporter, personality, decisions::Aspiration::Comfort)
             .unwrap();
         sim.advance(SimDuration(600_000)).unwrap();
         let project = sim
@@ -2393,7 +2395,7 @@ mod farm_tests {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )
             .unwrap();
         }

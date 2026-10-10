@@ -34,7 +34,7 @@ impl Simulation {
                 empathy: 900,
                 ..decisions::Personality::industrious()
             },
-            decisions::Dream::SupportOthers,
+            decisions::Aspiration::SupportOthers,
         )?;
         sim.state.institutions = Some(World {
             institutions: BTreeMap::new(),
@@ -1676,7 +1676,7 @@ impl Simulation {
                 {
                     score += 700;
                 }
-                if mind.dream == decisions::Dream::SupportOthers {
+                if mind.dream == decisions::Aspiration::SupportOthers {
                     score += 300;
                 }
             }

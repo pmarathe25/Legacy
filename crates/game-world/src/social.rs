@@ -6,22 +6,6 @@ use crate::*;
 use game_characters::social::{ConversationInput, Temperament, UpbringingEvidence, pair};
 pub use game_characters::social::{Development, Interaction, Offer, Rules, World};
 
-fn dream(aim: Aspiration) -> decisions::Dream {
-    match aim {
-        Aspiration::Comfort => decisions::Dream::Comfort,
-        Aspiration::Independence => decisions::Dream::Independence,
-        Aspiration::SupportOthers => decisions::Dream::SupportOthers,
-        Aspiration::Parenthood => decisions::Dream::Parenthood,
-    }
-}
-fn aim(value: decisions::Dream) -> Aspiration {
-    match value {
-        decisions::Dream::Comfort => Aspiration::Comfort,
-        decisions::Dream::Independence => Aspiration::Independence,
-        decisions::Dream::SupportOthers => Aspiration::SupportOthers,
-        decisions::Dream::Parenthood => Aspiration::Parenthood,
-    }
-}
 fn temperament(personality: &decisions::Personality) -> Temperament {
     Temperament {
         discipline: personality.discipline,
@@ -31,8 +15,8 @@ fn temperament(personality: &decisions::Personality) -> Temperament {
         empathy: personality.empathy,
     }
 }
-fn baseline(personality: &decisions::Personality, current: decisions::Dream) -> Development {
-    Development::baseline(temperament(personality), aim(current))
+fn baseline(personality: &decisions::Personality, current: decisions::Aspiration) -> Development {
+    Development::baseline(temperament(personality), current)
         .expect("validated personal temperament")
 }
 impl Simulation {
@@ -137,7 +121,7 @@ impl Simulation {
                 fatigue_limit: physical.fatigue_limit,
                 recipient_adult: self.social_adult(recipient),
                 sender_adult: self.social_adult(sender),
-                recipient_aspiration: aim(mind.dream),
+                recipient_aspiration: mind.dream,
                 chosen_companionship: self
                     .state
                     .social
@@ -814,7 +798,7 @@ impl Simulation {
                 let personality = self.state.decisions.as_ref().unwrap().minds[&child]
                     .personality
                     .clone();
-                let mut record = baseline(&personality, decisions::Dream::Comfort);
+                let mut record = baseline(&personality, decisions::Aspiration::Comfort);
                 record.next_choice = self.state.time;
                 self.state
                     .social
@@ -909,33 +893,26 @@ impl Simulation {
         // Thinking about learned aims does not require a free physical action
         // slot. Teaching, caregiving or travel cannot indefinitely freeze a
         // developing person's aspirations behind an action cooldown.
-        let changes: Vec<_> = self
+        let agency: Vec<_> = self
             .state
             .social
             .as_ref()
             .unwrap()
             .development
-            .iter()
-            .filter_map(|(actor, record)| {
-                let body = &self.state.physical.as_ref().unwrap().actors[actor];
-                if *actor == self.state.ruler
-                    || self.state.people[self.person_index[actor]].role == Role::Guardian
-                    || !self.independent(*actor)
-                    || !body.vitals.alive
-                    || body.vitals.health == 0
-                {
-                    return None;
-                }
-                let current = self.state.decisions.as_ref().unwrap().minds[actor].dream;
-                record
-                    .preferred_aspiration(
-                        aim(current),
-                        self.state.social.as_ref().unwrap().rules.aspiration_margin,
-                    )
-                    .map(|aspiration| (*actor, dream(aspiration)))
+            .keys()
+            .map(|actor| {
+                let control = if *actor == self.state.ruler {
+                    decisions::Control::Manual
+                } else if self.state.people[self.person_index[actor]].role == Role::Guardian {
+                    decisions::Control::Delegated
+                } else {
+                    decisions::Control::Autonomous
+                };
+                (*actor, control, self.independent(*actor))
             })
             .collect();
-        for (actor, aspiration) in changes {
+        let social = self.state.social.as_ref().unwrap();
+        for (actor, control, independent) in agency {
             self.state
                 .decisions
                 .as_mut()
@@ -943,7 +920,13 @@ impl Simulation {
                 .minds
                 .get_mut(&actor)
                 .unwrap()
-                .dream = aspiration;
+                .develop_aspiration(
+                    &social.development[&actor],
+                    control,
+                    independent,
+                    &self.state.physical.as_ref().unwrap().actors[&actor].vitals,
+                    social.rules.aspiration_margin,
+                );
         }
 
         // These are deliberate local declarations of teaching availability.
@@ -964,7 +947,7 @@ impl Simulation {
             };
             local.entry(area).or_default().push(*teacher);
             let mind = &self.state.decisions.as_ref().unwrap().minds[teacher];
-            if mind.personality.empathy + mind.personality.patience < 800 {
+            if !mind.offers_teaching() {
                 continue;
             }
             let mut topics = BTreeSet::new();
@@ -1039,172 +1022,79 @@ impl Simulation {
             if record.next_choice > self.state.time {
                 continue;
             }
-            let mut chosen = None;
             let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
-            let desires_family =
-                mind.dream == decisions::Dream::Parenthood && self.social_adult(actor);
-            if desires_family {
-                let Location::AtArea(area) = self.state.people[self.person_index[&actor]].location
-                else {
-                    continue;
-                };
-                let nearby = &local[&area];
-                let offset = (actor.0 % nearby.len() as u64) as usize;
-                let mut peers: Vec<_> = nearby
-                    .iter()
-                    .cycle()
-                    .skip(offset)
-                    .take(nearby.len().min(64))
-                    .map(|id| &self.state.people[self.person_index[id]])
-                    .collect();
-                peers.sort_by_key(|person| {
-                    (
-                        self.state
-                            .social
-                            .as_ref()
-                            .unwrap()
-                            .approaches
-                            .get(&actor)
-                            .and_then(|attempts| attempts.get(&person.id))
-                            .copied()
-                            .unwrap_or(SimTime(0)),
-                        person.id,
-                    )
-                });
-                for partner in peers {
-                    if partner.id == self.state.ruler
-                        || !self.social_local_pair(actor, partner.id)
-                        || !self.social_adult(partner.id)
-                    {
-                        continue;
-                    }
-                    // The actor knows their own reproductive body and visible
-                    // peer stage; recipient consent is evaluated on the request.
-                    if !self
-                        .state
-                        .social
-                        .as_ref()
-                        .unwrap()
-                        .family_intent
-                        .contains(&pair(actor, partner.id))
-                    {
-                        let companionship = self
-                            .state
-                            .social
-                            .as_ref()
-                            .unwrap()
-                            .companionship
-                            .contains(&pair(actor, partner.id));
-                        let relation = self.relationship(actor, partner.id);
-                        chosen = Some(SocialAction::Talk {
-                            partner: partner.id,
-                            topic: if companionship && relation.affection >= 100 {
-                                SocialTopic::FamilyPlans
-                            } else {
-                                SocialTopic::Companionship
-                            },
-                        });
-                        break;
-                    }
-                }
-            }
-            if chosen.is_none() {
-                let offers = self.state.social.as_ref().unwrap().offers.get(&actor);
-                for offer in offers.into_iter().flat_map(|offers| offers.values()) {
-                    if offer.teacher == self.state.ruler
-                        || !self.social_local_pair(actor, offer.teacher)
-                    {
-                        continue;
-                    }
-                    let remembered_routes = &mind.routes;
-                    if offer.topics.contains(&InstructionTopic::Routes)
-                        && !self
-                            .state
-                            .social
-                            .as_ref()
-                            .unwrap()
-                            .learned
-                            .get(&actor)
-                            .is_some_and(|known| {
-                                known.contains(&(offer.teacher, InstructionTopic::Routes))
-                            })
-                        && remembered_routes.len() < 2
-                    {
-                        chosen = Some(SocialAction::Learn {
-                            teacher: offer.teacher,
-                            topic: InstructionTopic::Routes,
-                        });
-                        break;
-                    }
-                    for topic in &offer.topics {
-                        if let InstructionTopic::Skill(skill) = topic
-                            && self.own_skill_level(actor, *skill) == 0
-                            && matches!(
-                                skill,
-                                Skill::Craft
-                                    | Skill::Farming
-                                    | Skill::Medicine
-                                    | Skill::Negotiation
-                                    | Skill::Leadership
-                            )
-                        {
-                            chosen = Some(SocialAction::Learn {
-                                teacher: offer.teacher,
-                                topic: *topic,
-                            });
-                            break;
-                        }
-                    }
-                    if chosen.is_some() {
-                        break;
-                    }
-                }
-            }
-            if chosen.is_none()
-                && mind.personality.discipline + mind.personality.ambition >= 800
-                && self.social_tool(actor).is_some()
-                && self
-                    .social_material(
-                        actor,
-                        Good::Timber,
-                        self.state.social.as_ref().unwrap().rules.practice_material,
-                    )
-                    .is_some()
-            {
-                chosen = Some(SocialAction::Practice {
-                    skill: Skill::Craft,
-                });
-            }
-            if chosen.is_none() && mind.personality.sociability >= 500 {
-                chosen = self
+            let Location::AtArea(area) = self.state.people[self.person_index[&actor]].location
+            else {
+                continue;
+            };
+            let nearby = &local[&area];
+            let offset = (actor.0 % nearby.len() as u64) as usize;
+            let family_peers = nearby
+                .iter()
+                .cycle()
+                .skip(offset)
+                .take(nearby.len().min(64))
+                .filter(|partner| {
+                    **partner != self.state.ruler
+                        && self.social_local_pair(actor, **partner)
+                        && self.social_adult(**partner)
+                })
+                .copied()
+                .collect();
+            let available_teachers = world
+                .offers
+                .get(&actor)
+                .into_iter()
+                .flat_map(|offers| offers.keys())
+                .filter(|teacher| {
+                    **teacher != self.state.ruler && self.social_local_pair(actor, **teacher)
+                })
+                .copied()
+                .collect();
+            let own_levels = [
+                Skill::Craft,
+                Skill::Farming,
+                Skill::Medicine,
+                Skill::Negotiation,
+                Skill::Leadership,
+            ]
+            .into_iter()
+            .map(|skill| (skill, self.own_skill_level(actor, skill)))
+            .collect();
+            let choice = game_characters::social::ChoiceFacts {
+                actor,
+                now: self.state.time,
+                autonomous: actor != self.state.ruler,
+                can_speak: self.social_speech(actor),
+                adult: self.social_adult(actor),
+                family_peers,
+                available_teachers,
+                own_levels,
+                can_practice_craft: self.social_tool(actor).is_some()
+                    && self
+                        .social_material(actor, Good::Timber, world.rules.practice_material)
+                        .is_some(),
+                companionship_partner: self
                     .state
                     .people
                     .iter()
-                    .filter(|person| {
+                    .find(|person| {
                         person.id != self.state.ruler && self.social_local_pair(actor, person.id)
                     })
-                    .map(|person| SocialAction::Talk {
-                        partner: person.id,
-                        topic: SocialTopic::Companionship,
-                    })
-                    .next();
-            }
+                    .map(|person| person.id),
+            };
+            let chosen = world.choose_personal(mind, &choice);
             if let Some(action) = chosen {
                 match self.start_social(actor, action) {
                     Ok(()) | Err(Error::Unavailable) => {}
                     Err(error) => return Err(error),
                 }
             }
-            let next =
-                SimTime(self.state.time.0 + self.state.social.as_ref().unwrap().rules.review.0);
             self.state
                 .social
                 .as_mut()
                 .unwrap()
-                .development
-                .get_mut(&actor)
-                .unwrap()
-                .next_choice = next;
+                .finish_personal_choice(actor, self.state.time)?;
         }
         Ok(())
     }
@@ -1505,7 +1395,7 @@ mod tests {
                 .minds
                 .get_mut(&actor)
                 .unwrap();
-            mind.dream = decisions::Dream::Parenthood;
+            mind.dream = decisions::Aspiration::Parenthood;
             mind.relationships.insert(
                 partner,
                 decisions::Relationship {
@@ -1578,7 +1468,7 @@ mod tests {
                 .minds
                 .get_mut(&actor)
                 .unwrap()
-                .dream = decisions::Dream::SupportOthers;
+                .dream = decisions::Aspiration::SupportOthers;
         }
         sim.state
             .development
@@ -1702,7 +1592,7 @@ mod tests {
         sim.debug_set_personality(
             actor,
             decisions::Personality::restful(),
-            decisions::Dream::Comfort,
+            decisions::Aspiration::Comfort,
         )
         .unwrap();
         let own = sim.state.skills.as_ref().unwrap().records[&actor][&Skill::Craft].practice_ms;
@@ -1744,7 +1634,7 @@ mod tests {
         sim.debug_set_personality(
             actor,
             decisions::Personality::restful(),
-            decisions::Dream::Comfort,
+            decisions::Aspiration::Comfort,
         )
         .unwrap();
         sim.advance(MINUTE).unwrap();
@@ -1789,7 +1679,7 @@ mod tests {
             .minds
             .get_mut(&recipient)
             .unwrap()
-            .dream = decisions::Dream::Comfort;
+            .dream = decisions::Aspiration::Comfort;
         social(
             &mut sim,
             actor,
@@ -1831,7 +1721,7 @@ mod tests {
         );
         assert_ne!(
             sim.state.decisions.as_ref().unwrap().minds[&child].dream,
-            decisions::Dream::Comfort
+            decisions::Aspiration::Comfort
         );
         assert!(
             sim.state.development.as_ref().unwrap().lives[&child]
@@ -1934,7 +1824,7 @@ mod generations {
                 .minds
                 .get_mut(&actor)
                 .unwrap();
-            mind.dream = decisions::Dream::Parenthood;
+            mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 650;
             mind.personality.sociability = 1_000;
             mind.personality.discipline = 0;
@@ -1974,7 +1864,7 @@ mod generations {
                     .minds
                     .get_mut(&actor)
                     .unwrap();
-                mind.dream = decisions::Dream::Parenthood;
+                mind.dream = decisions::Aspiration::Parenthood;
                 mind.personality.empathy = 650;
                 mind.personality.sociability = 1_000;
                 mind.personality.discipline = 0;
@@ -2061,7 +1951,7 @@ mod generations {
                     .minds
                     .get_mut(&actor)
                     .unwrap()
-                    .dream = decisions::Dream::SupportOthers;
+                    .dream = decisions::Aspiration::SupportOthers;
             }
         }
         let food = sim
@@ -2108,7 +1998,7 @@ mod generations {
             );
             assert_eq!(
                 sim.state.decisions.as_ref().unwrap().minds[child].dream,
-                decisions::Dream::Parenthood,
+                decisions::Aspiration::Parenthood,
                 "child {child:?} at {:?}: {:?}, body {:?}",
                 sim.state.time,
                 sim.state.social.as_ref().unwrap().development[child],

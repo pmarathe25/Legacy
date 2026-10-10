@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 22;
+const SAVE_VERSION: u32 = 23;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -1715,6 +1715,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         for (id, mind) in &world.minds {
             if !people.contains_key(id)
                 || mind.interests.values().any(|v| *v > 1_000)
+                || mind
+                    .plan
+                    .as_ref()
+                    .is_some_and(|plan| plan.shape != decisions::action_shape(&plan.action))
                 || [
                     mind.personality.discipline,
                     mind.personality.ambition,
@@ -1789,6 +1793,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     }
                     || signal.observed_at > s.time
                     || ![0, 3_000, 20_000].contains(&signal.urgency)
+                    || ![0, 3_000, 20_000].contains(&signal.hydration_urgency)
                 {
                     return Err(fail());
                 }

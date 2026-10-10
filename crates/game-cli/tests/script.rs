@@ -742,7 +742,7 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
         sim.debug_set_personality(
             actor,
             game_world::decisions::Personality::restful(),
-            game_world::decisions::Dream::Comfort,
+            game_world::decisions::Aspiration::Comfort,
         )
         .unwrap();
     }
@@ -884,7 +884,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         sim.debug_set_personality(
             person,
             game_world::decisions::Personality::restful(),
-            game_world::decisions::Dream::Comfort,
+            game_world::decisions::Aspiration::Comfort,
         )
         .unwrap();
     }

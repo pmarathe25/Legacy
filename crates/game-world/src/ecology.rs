@@ -698,72 +698,10 @@ impl Simulation {
         actor: PersonId,
         local_only: bool,
     ) -> Option<Command> {
-        let world = self.state.ecology.as_ref()?;
-        if !self.ecology_able(actor) || world.jobs.contains_key(&actor) {
+        if !self.ecology_able(actor) || self.state.ecology.as_ref()?.jobs.contains_key(&actor) {
             return None;
         }
-        let area = self.ecology_area(actor)?;
-        let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
-        let traits = self
-            .invocation_personality(actor)
-            .unwrap_or_else(|| mind.personality.clone());
-        let may_take = traits.honesty < 250 && traits.risk_tolerance >= 700;
-        let local = self.available_ecology_commands(actor);
-        world
-            .known
-            .get(&actor)?
-            .values()
-            .filter(|s| s.kind == ResourceKind::Spring && (!local_only || s.area == area))
-            .filter(|s| s.available.0 >= 1_000)
-            .filter_map(|s| {
-                if s.area != area {
-                    if !s.accessible && !may_take {
-                        return None;
-                    }
-                    return decisions::known_path(&mind.routes, area, s.area).ok().map(
-                        |(_, cost)| {
-                            (
-                                cost,
-                                s.contamination,
-                                s.id,
-                                Command::Move {
-                                    destination: s.area,
-                                },
-                            )
-                        },
-                    );
-                }
-                // Permission requests are considered before a risky collection.
-                let command = if !s.accessible && !may_take {
-                    local.iter().find(|c| {
-                        matches!(c,
-                        Command::Ecology {action:EcologyAction::RequestAccess {resource}}
-                        if *resource==s.id && world.next_request.get(&actor)
-                            .and_then(|k|k.get(resource)).is_none_or(|at|*at<=self.state.time))
-                    })
-                } else {
-                    local.iter().find(|c| {
-                        matches!(c,
-                        Command::Ecology {action:EcologyAction::Gather {resource,..}}
-                        if *resource==s.id)
-                    })
-                }?;
-                Some((SimDuration(0), s.contamination, s.id, command.clone()))
-            })
-            .min_by_key(|(cost, contamination, id, command)| {
-                (
-                    *cost,
-                    matches!(
-                        command,
-                        Command::Ecology {
-                            action: EcologyAction::RequestAccess { .. }
-                        }
-                    ),
-                    *contamination,
-                    *id,
-                )
-            })
-            .map(|(_, _, _, command)| command)
+        self.health_spring_candidate(actor, local_only)
     }
     pub(crate) fn ecology_candidate(&self, actor: PersonId) -> Option<Command> {
         let world = self.state.ecology.as_ref()?;
@@ -782,7 +720,9 @@ impl Simulation {
         });
         let desired = if hungry && !local_food {
             Good::Food
-        } else if mind.dream == decisions::Dream::Independence && mind.personality.ambition >= 600 {
+        } else if mind.dream == decisions::Aspiration::Independence
+            && mind.personality.ambition >= 600
+        {
             Good::Timber
         } else {
             return None;
@@ -966,7 +906,7 @@ mod tests {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
-                decisions::Dream::Comfort,
+                decisions::Aspiration::Comfort,
             )
             .unwrap();
         }
@@ -1182,7 +1122,7 @@ mod tests {
         let mut mind = decisions::Personality::restful();
         mind.aggression = 900;
         mind.risk_tolerance = 900;
-        sim.debug_set_personality(custodian, mind, decisions::Dream::Comfort)
+        sim.debug_set_personality(custodian, mind, decisions::Aspiration::Comfort)
             .unwrap();
         sim.debug_ecology_action(
             actor,

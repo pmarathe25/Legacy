@@ -143,7 +143,7 @@ impl Simulation {
                         last_failure: None,
                         child_signals: BTreeMap::new(),
                         personality,
-                        dream: decisions::Dream::Independence,
+                        dream: decisions::Aspiration::Independence,
                         knowledge: BTreeMap::from([(
                             food,
                             StockKnowledge {

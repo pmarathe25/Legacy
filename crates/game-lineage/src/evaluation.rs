@@ -195,6 +195,7 @@ pub fn observe_death(
     });
     for (id, guardian) in &mut lineage.guardians {
         guardian.assignment = None;
+        guardian.water_provision = None;
         guardian.target = None;
         guardian.sensed_location = None;
         guardian.sensed_at = now;
@@ -265,7 +266,51 @@ pub struct NeedObservation {
     pub location: Location,
     pub observed_at: SimTime,
     pub urgency: i64,
+    pub hydration_urgency: i64,
     pub preference: Option<ChildhoodInterest>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProvisionAction {
+    AcquireWater,
+    ReturnToChild,
+    Care { source: InventoryId },
+    Continue,
+}
+
+/// Only fresh contact can start or resolve this intention. Absence preserves
+/// the remembered reason for a trip without revealing the child's current need.
+pub fn review_water_provision(
+    before: Option<&WaterProvision>,
+    target: PersonId,
+    now: SimTime,
+    together: bool,
+    fresh_need: Option<&NeedObservation>,
+    carried_water: Option<InventoryId>,
+    can_reconsider: bool,
+) -> (Option<WaterProvision>, Option<ProvisionAction>) {
+    let mut next = before.filter(|plan| plan.child == target).cloned();
+    if together && let Some(need) = fresh_need.filter(|need| need.observed_at == now) {
+        next = (need.hydration_urgency > 0).then_some(WaterProvision {
+            child: target,
+            observed_at: now,
+        });
+    }
+    if next.is_none() {
+        return (None, None);
+    }
+    let action = if !can_reconsider {
+        ProvisionAction::Continue
+    } else if let Some(source) = carried_water {
+        if together {
+            ProvisionAction::Care { source }
+        } else {
+            ProvisionAction::ReturnToChild
+        }
+    } else {
+        ProvisionAction::AcquireWater
+    };
+    (next, Some(action))
 }
 #[derive(Clone, Debug)]
 pub struct GuardianInput<'a> {
@@ -374,6 +419,24 @@ pub fn guardian_intention(input: GuardianInput<'_>) -> GuardianIntent {
         .need
         .filter(|need| need.location == Location::AtArea(*area) && need.observed_at == input.now)
     {
+        if need.hydration_urgency > 0
+            && need.hydration_urgency >= need.urgency
+            && let Some(water) = input.known_stocks.iter().find(|stock| {
+                stock.good == Good::Water
+                    && stock.area == *area
+                    && stock.accessible
+                    && stock.quantity >= input.meal_size
+            })
+        {
+            return intent(
+                GuardianGoal::Mentoring,
+                "Responding to locally observed thirst with accessible water",
+                Some(GuardianAction::Care {
+                    child: input.target,
+                    source: water.inventory,
+                }),
+            );
+        }
         if need.urgency > 0 {
             if let Some(food) = input.known_stocks.iter().find(|stock| {
                 stock.good == Good::Food

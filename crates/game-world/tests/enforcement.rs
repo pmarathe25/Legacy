@@ -195,8 +195,12 @@ fn an_officer_can_refuse_a_funded_order_without_physical_capture_or_spending() {
     personality.risk_tolerance = 0;
     personality.empathy = 0;
     personality.aggression = 0;
-    sim.debug_set_personality(officer, personality, game_world::decisions::Dream::Comfort)
-        .unwrap();
+    sim.debug_set_personality(
+        officer,
+        personality,
+        game_world::decisions::Aspiration::Comfort,
+    )
+    .unwrap();
     sim.debug_set_relationship(
         officer,
         judge,
@@ -420,7 +424,7 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     let mut opponent = game_world::decisions::Personality::restful();
     opponent.aggression = 900;
     opponent.risk_tolerance = 900;
-    sim.debug_set_personality(target, opponent, game_world::decisions::Dream::Comfort)
+    sim.debug_set_personality(target, opponent, game_world::decisions::Aspiration::Comfort)
         .unwrap();
     let proposal = dispatch_proposal(&mut sim, case);
     let binding_source = proposal

@@ -80,7 +80,7 @@ impl Simulation {
                 .minds
                 .get_mut(&id)
                 .unwrap();
-            mind.dream = decisions::Dream::Parenthood;
+            mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 900;
             mind.relationships.insert(
                 partner,
@@ -152,7 +152,7 @@ impl Simulation {
             hunger: body.vitals.hunger,
             meal_relief: self.body_rules(id).meal_relief,
             available: matches!(body.activity, Activity::Idle | Activity::Rest),
-            wants_parenthood: mind.dream == decisions::Dream::Parenthood,
+            wants_parenthood: mind.dream == decisions::Aspiration::Parenthood,
             partner_affection: relationship.map_or(0, |relation| relation.affection),
             partner_trust: relationship.map_or(0, |relation| relation.trust),
             knows_adequate_food: mind
@@ -265,7 +265,7 @@ impl Simulation {
         let mut pairs = BTreeSet::new();
         for id in world.lives.keys().filter(|id| **id != self.state.ruler) {
             let mind = &self.state.decisions.as_ref().unwrap().minds[id];
-            if mind.dream != decisions::Dream::Parenthood {
+            if mind.dream != decisions::Aspiration::Parenthood {
                 continue;
             }
             for partner in mind
@@ -535,7 +535,7 @@ impl Simulation {
         mind.sites.clear();
         mind.values.clear();
         mind.relationships.clear();
-        mind.dream = decisions::Dream::Comfort;
+        mind.dream = decisions::Aspiration::Comfort;
         mind.plan = None;
         mind.retry_after = self.state.time;
         mind.goal = decisions::Goal::Survival;

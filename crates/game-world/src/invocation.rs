@@ -1426,7 +1426,7 @@ impl Simulation {
             return Ok(());
         }
         if !matches!(person.location, Location::AtArea(_)) {
-            if changed && mind.dream == decisions::Dream::Comfort {
+            if changed && mind.dream == decisions::Aspiration::Comfort {
                 let _ = self.debug_actor_command(a.actor, Command::Cancel);
             }
             return Ok(());
@@ -1498,7 +1498,7 @@ impl Simulation {
                 .unwrap_or(Command::Rest)
         } else if body.vitals.fatigue
             > self.state.physical.as_ref().unwrap().rules.fatigue_limit / 2
-            || mind.dream == decisions::Dream::Comfort
+            || mind.dream == decisions::Aspiration::Comfort
             || traits.hedonism > traits.discipline
         {
             Command::Rest
@@ -1518,7 +1518,7 @@ impl Simulation {
                 .map(|p| Command::Engage { target: p.id })
                 .next()
                 .unwrap_or(Command::Rest)
-        } else if (mind.dream == decisions::Dream::SupportOthers
+        } else if (mind.dream == decisions::Aspiration::SupportOthers
             || mind.goal == decisions::Goal::Care)
             && traits.empathy >= 500
         {

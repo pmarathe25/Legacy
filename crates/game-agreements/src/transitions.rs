@@ -772,3 +772,72 @@ fn amendment_peers(state: &State, agreement: AgreementId, revision: u64) -> BTre
         .map(|m| m.id)
         .collect()
 }
+
+/// Consent to an already communicated service offer. The service owner must
+/// guard the referenced recruitment and its current terms in the same commit.
+/// This is not a mandate or permission to sign arbitrary parties' promises.
+#[derive(Clone, Debug)]
+pub struct HeardServiceConsent {
+    pub recruitment: RecruitmentId,
+    pub sponsor: PersonId,
+    pub recruit: PersonId,
+    pub offered_terms: Vec<AgreementTerm>,
+    pub accepted_terms: Vec<AgreementTerm>,
+    pub unanswered_counteroffer: bool,
+}
+impl State {
+    pub fn prepare_service_commitment(
+        &self,
+        consent: &HeardServiceConsent,
+        facts: &TransitionFacts,
+        ids: &TransitionIds,
+    ) -> Result<PreparedTransition, Error> {
+        if consent.recruitment.0 == 0
+            || consent.sponsor == consent.recruit
+            || consent.offered_terms.is_empty()
+            || consent.offered_terms.len() > 8
+            || consent.offered_terms != consent.accepted_terms
+            || consent.unanswered_counteroffer
+            || ids.obligations.len() != consent.offered_terms.len()
+            || ids.amendment.is_some()
+            || ids.agreement.is_none()
+        {
+            return Err(Error::Unavailable);
+        }
+        let parties = BTreeSet::from([consent.sponsor, consent.recruit]);
+        let propose = AgreementAction::Propose {
+            parties,
+            terms: consent.offered_terms.clone(),
+            procedure: None,
+        };
+        let proposal_ids = TransitionIds {
+            agreement: ids.agreement,
+            ..TransitionIds::default()
+        };
+        let mut plan = self.prepare_transition(consent.sponsor, &propose, facts, &proposal_ids)?;
+        let mut unique = BTreeSet::from([ids.agreement.unwrap().0]);
+        for id in &ids.obligations {
+            if id.0 == 0 || !unique.insert(id.0) || id_exists(self, id.0) {
+                return Err(Error::Unavailable);
+            }
+        }
+        let proposal = &mut plan.agreements[0].after;
+        proposal.accepted.insert(consent.recruit);
+        let activation = activation_for(proposal, &ids.obligations, &facts.assets)?;
+        plan.agreements[0].after = activation.after;
+        plan.permissions = activation.permissions;
+        plan.obligations = activation
+            .obligations
+            .into_iter()
+            .map(|after| Patch {
+                id: after.id,
+                before: None,
+                after,
+            })
+            .collect();
+        plan.events.push(TransitionEvent::Activated {
+            agreement: ids.agreement.unwrap(),
+        });
+        Ok(plan)
+    }
+}

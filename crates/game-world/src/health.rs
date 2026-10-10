@@ -9,6 +9,31 @@ type HealthCohort = (
     Option<(EncounterId, PersonId)>,
 );
 
+struct WaterPlanningData {
+    area: AreaId,
+    stationary: bool,
+    values: game_health::WaterValues,
+    stocks: Vec<game_health::RememberedStock>,
+    springs: Vec<game_health::RememberedSpring>,
+    routes: game_health::KnownRoutes,
+    searched: BTreeMap<AreaId, SimTime>,
+    requests: BTreeSet<InventoryId>,
+}
+impl WaterPlanningData {
+    fn input(&self, now: SimTime) -> game_health::WaterPlanning<'_> {
+        game_health::WaterPlanning {
+            now,
+            area: self.area,
+            stationary: self.stationary,
+            values: self.values,
+            stocks: &self.stocks,
+            springs: &self.springs,
+            routes: &self.routes,
+            searched: &self.searched,
+            stock_requests: &self.requests,
+        }
+    }
+}
 impl Simulation {
     /// Called after the physical water enters a stock. Existing contamination
     /// is mixed with this source; collection never changes physical quantity.
@@ -359,6 +384,18 @@ impl Simulation {
             .insert(patient, state);
         Ok(())
     }
+    fn preflight_water_received(
+        &self,
+        patient: PersonId,
+        source: InventoryId,
+        quantity: Quantity,
+    ) -> Result<(), Error> {
+        let _ = (patient, self.water_dose(source, quantity));
+        game_health::preflight_intake(
+            &self.state.health.as_ref().ok_or(Error::Unavailable)?.rules,
+            self.state.time,
+        )
+    }
     pub(crate) fn health_selected_tool(&self, actor: PersonId) -> Option<InventoryId> {
         match &self.state.health.as_ref()?.jobs.get(&actor)?.work {
             Work::Boil { tool, .. } | Work::Shelter { tool, .. } => Some(*tool),
@@ -366,31 +403,16 @@ impl Simulation {
         }
     }
     pub(crate) fn health_reserved_stock(&self, source: InventoryId, except: PersonId) -> u64 {
-        self.state.health.as_ref().map_or(0, |w| {
-            w.jobs
-                .values()
-                .filter(|job| job.actor != except)
-                .filter_map(|job| match job.work {
-                    Work::Drink {
-                        source: id,
-                        quantity,
-                    }
-                    | Work::Boil {
-                        source: id,
-                        quantity,
-                        ..
-                    } if id == source => Some(quantity.0),
-                    _ => None,
-                })
-                .fold(0, u64::saturating_add)
-        })
+        self.state
+            .health
+            .as_ref()
+            .map_or(0, |w| w.reserved_stock(source, except))
     }
     pub(crate) fn health_patient_resting(&self, actor: PersonId) -> bool {
-        self.state.health.as_ref().is_some_and(|w| {
-            w.jobs
-                .values()
-                .any(|job| matches!(job.work,Work::Treat {patient,..}if patient==actor))
-        })
+        self.state
+            .health
+            .as_ref()
+            .is_some_and(|w| w.patient_busy(actor))
     }
     pub(crate) fn health_work_exerting(&self, actor: PersonId) -> bool {
         self.state
@@ -401,93 +423,106 @@ impl Simulation {
                 !matches!(job.work, Work::Drink { .. }) && self.health_job_can_progress(job)
             })
     }
-    fn start_health_job(
-        &mut self,
-        actor: PersonId,
-        area: AreaId,
-        duration: SimDuration,
-        kind: HealthWorkKind,
-        work: Work,
-    ) -> Result<(), Error> {
-        let completes = SimTime(
-            self.state
-                .time
-                .0
-                .checked_add(duration.0)
-                .ok_or(Error::Overflow)?,
-        );
-        self.interrupt_actor_activity(actor);
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::HealthWork { kind, completes };
-        self.state.health.as_mut().unwrap().jobs.insert(
-            actor,
-            Job {
-                actor,
-                area,
-                completes,
-                work,
-            },
-        );
-        Ok(())
-    }
     pub(crate) fn cancel_health_activity(&mut self, actor: PersonId) {
-        let Some(w) = &self.state.health else { return };
-        let jobs: Vec<_> = w
-            .jobs
-            .values()
-            .filter(|job| {
-                job.actor == actor || matches!(job.work,Work::Treat {patient,..}if patient==actor)
-            })
-            .cloned()
-            .collect();
-        for job in jobs {
-            self.state.health.as_mut().unwrap().jobs.remove(&job.actor);
-            if matches!(self.state.physical.as_ref().unwrap().actors[&job.actor].activity,Activity::HealthWork {completes,..}if completes==job.completes)
-            {
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&job.actor)
-                    .unwrap()
-                    .activity = Activity::Idle;
-            }
+        if let Some(world) = &self.state.health {
+            let change = world.prepare_cancel(actor);
+            let _ = self.apply_health_change(change);
         }
-        self.state
-            .health
-            .as_mut()
-            .unwrap()
-            .offers
-            .retain(|(giver, patient), _| *giver != actor && *patient != actor);
     }
-    pub(crate) fn leave_shelter_on_movement(&mut self, actor: PersonId) {
-        if self.state.health.is_none() {
-            return;
+    fn health_actor_facts(&self, actor: PersonId) -> game_health::ActorFacts {
+        if !self.person_index.contains_key(&actor) {
+            return game_health::ActorFacts {
+                actor,
+                now: self.state.time,
+                area: None,
+                present: false,
+                capable: false,
+                at_area: false,
+                carried: false,
+                tactical: false,
+            };
         }
+        let area = self.health_area(actor, false).ok();
+        game_health::ActorFacts {
+            actor,
+            now: self.state.time,
+            area,
+            present: area.is_some(),
+            capable: self.health_area(actor, true).is_ok(),
+            at_area: matches!(self.resolved_location(actor), Location::AtArea(_)),
+            carried: self.person_index.get(&actor).is_some_and(|index| {
+                matches!(self.state.people[*index].location, Location::Carried { .. })
+            }),
+            tactical: self.person_index.contains_key(&actor)
+                && self.health_tactical_place(actor).is_some(),
+        }
+    }
+    fn health_stock_facts(
+        &self,
+        actor: PersonId,
+        id: InventoryId,
+    ) -> Result<game_health::StockFacts, Error> {
+        let stock = self.state.inventories.get(&id).ok_or(Error::Unavailable)?;
+        Ok(game_health::StockFacts {
+            id,
+            good: stock.good,
+            quantity: stock.quantity,
+            available: Quantity(self.unreserved_stock(id, actor)),
+            usable: self.health_stock(actor, id, stock.good, Quantity(0)),
+            tool_available: self.tool_available_for(actor, id),
+        })
+    }
+    fn health_patient_facts(
+        &self,
+        giver: PersonId,
+        patient: PersonId,
+    ) -> game_health::PatientFacts {
+        let present = self.health_area(patient, false).is_ok();
+        let physiology = if self.person_index.contains_key(&patient) {
+            self.health_physiology(patient)
+        } else {
+            game_health::clinical_physiology(&self.state.health.as_ref().unwrap().rules, 1_000, 0)
+                .unwrap()
+        };
+        game_health::PatientFacts {
+            id: patient,
+            present,
+            contact: present
+                && self.person_index.contains_key(&giver)
+                && self.can_observe_health(giver, patient),
+            resting: self
+                .state
+                .physical
+                .as_ref()
+                .and_then(|w| w.actors.get(&patient))
+                .is_some_and(|body| body.activity == Activity::Rest),
+            physiology,
+        }
+    }
+    fn health_leaving_group(&self, actor: PersonId) -> Vec<PersonId> {
         let mut carried: BTreeMap<PersonId, Vec<PersonId>> = BTreeMap::new();
-        if let Some(transport) = &self.state.transport {
-            for group in transport.groups.values() {
+        if let Some(world) = &self.state.transport {
+            for group in world.groups.values() {
                 carried
                     .entry(group.anchor)
                     .or_default()
                     .push(group.passenger);
             }
         }
-        let mut leaving = vec![actor];
-        while let Some(actor) = leaving.pop() {
+        let mut result = Vec::new();
+        let mut pending = vec![actor];
+        while let Some(actor) = pending.pop() {
+            result.push(actor);
             if let Some(passengers) = carried.get(&actor) {
-                leaving.extend(passengers);
+                pending.extend(passengers);
             }
-            if let Some(shelter) = self.state.health.as_mut().unwrap().occupancy.remove(&actor) {
-                self.emit(EventKind::ShelterLeft { shelter, actor });
-            }
+        }
+        result
+    }
+    pub(crate) fn leave_shelter_on_movement(&mut self, actor: PersonId) {
+        if let Some(world) = &self.state.health {
+            let change = world.prepare_leave(&self.health_leaving_group(actor));
+            let _ = self.apply_health_change(change);
         }
     }
     pub(crate) fn health_before_putdown(&self, passenger: PersonId) -> Option<ShelterId> {
@@ -520,410 +555,241 @@ impl Simulation {
         actor: PersonId,
         action: &HealthAction,
     ) -> Result<(), Error> {
-        let rules = self
-            .state
-            .health
-            .as_ref()
-            .ok_or(Error::Unavailable)?
-            .rules
-            .clone();
-        let area = self.health_area(
-            actor,
-            !matches!(
-                action,
-                HealthAction::AcceptTreatment { .. }
-                    | HealthAction::RefuseTreatment { .. }
-                    | HealthAction::RequestTreatment { .. }
-            ),
-        )?;
-        if self.health_tactical_place(actor).is_some()
-            && matches!(
-                action,
-                HealthAction::BuildShelter { .. }
-                    | HealthAction::EnterShelter { .. }
-                    | HealthAction::LeaveShelter
-            )
-        {
+        use game_health::ActionFacts;
+        if self.state.health.is_none() || !self.person_index.contains_key(&actor) {
             return Err(Error::Unavailable);
         }
-        if matches!(
-            action,
-            HealthAction::BuildShelter { .. }
-                | HealthAction::ShelterAccess { .. }
-                | HealthAction::EnterShelter { .. }
-                | HealthAction::LeaveShelter
-        ) && self.resolved_location(actor) != Location::AtArea(area)
-            || matches!(
-                action,
-                HealthAction::EnterShelter { .. } | HealthAction::LeaveShelter
-            ) && matches!(
-                self.state.people[self.person_index[&actor]].location,
-                Location::Carried { .. }
-            )
-        {
-            return Err(Error::Unavailable);
-        }
-        self.ensure_event_capacity(12)?;
-        match *action {
-            HealthAction::Drink { source } => {
-                if !self.health_stock(actor, source, Good::Water, rules.drink_quantity) {
-                    return Err(Error::Unavailable);
+        let facts = match *action {
+            HealthAction::Drink { source } => ActionFacts::Drink {
+                water: self.health_stock_facts(actor, source)?,
+                physiology: self.health_physiology(actor),
+            },
+            HealthAction::Boil { source, fuel, tool } => ActionFacts::Boil {
+                water: self.health_stock_facts(actor, source)?,
+                fuel: self.health_stock_facts(actor, fuel)?,
+                tool: self.health_stock_facts(actor, tool)?,
+            },
+            HealthAction::BuildShelter { timber, tool, .. } => ActionFacts::ShelterBuild {
+                timber: self.health_stock_facts(actor, timber)?,
+                tool: self.health_stock_facts(actor, tool)?,
+            },
+            HealthAction::ShelterAccess { person, .. } => ActionFacts::ShelterAccess {
+                recipient_exists: self.person_index.contains_key(&person),
+            },
+            HealthAction::EnterShelter { .. } | HealthAction::LeaveShelter => {
+                ActionFacts::ShelterOccupancy {
+                    leaving: self.health_leaving_group(actor),
                 }
-                self.preflight_water_received(actor, source, rules.drink_quantity)?;
-                self.start_health_job(
-                    actor,
-                    area,
-                    rules.drinking_time,
-                    HealthWorkKind::Drink,
-                    Work::Drink {
-                        source,
-                        quantity: rules.drink_quantity,
-                    },
-                )?;
-            }
-            HealthAction::Boil { source, fuel, tool } => {
-                if !self.health_stock(actor, source, Good::Water, rules.drink_quantity)
-                    || !self.health_stock(actor, fuel, Good::Timber, rules.boiling_fuel)
-                    || !self.health_stock(actor, tool, Good::Tool, Quantity(1_000))
-                    || !self.tool_available_for(actor, tool)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.state
-                    .time
-                    .0
-                    .checked_add(rules.boiling_time.0)
-                    .ok_or(Error::Overflow)?;
-                self.start_health_job(
-                    actor,
-                    area,
-                    rules.boiling_time,
-                    HealthWorkKind::Boil,
-                    Work::Boil {
-                        source,
-                        quantity: rules.drink_quantity,
-                        tool,
-                    },
-                )?;
-                self.consume_health_stock(actor, fuel, rules.boiling_fuel);
-            }
-            HealthAction::BuildShelter {
-                timber,
-                tool,
-                capacity,
-                insulation,
-            } => {
-                let quantity = shelter_cost(&rules, capacity, insulation)?;
-                if !self.health_stock(actor, timber, Good::Timber, quantity)
-                    || !self.health_stock(actor, tool, Good::Tool, Quantity(1_000))
-                    || !self.tool_available_for(actor, tool)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-                let duration = SimDuration(
-                    rules
-                        .shelter_time_per_place
-                        .0
-                        .checked_mul(u64::from(capacity))
-                        .ok_or(Error::Overflow)?,
-                );
-                self.start_health_job(
-                    actor,
-                    area,
-                    duration,
-                    HealthWorkKind::Shelter,
-                    Work::Shelter {
-                        timber_used: quantity,
-                        tool,
-                        capacity,
-                        insulation,
-                        started: self.state.time,
-                    },
-                )?;
-                self.consume_health_stock(actor, timber, quantity);
-            }
-            HealthAction::ShelterAccess {
-                shelter,
-                person,
-                allowed,
-            } => {
-                let s = self
-                    .state
-                    .health
-                    .as_ref()
-                    .unwrap()
-                    .shelters
-                    .get(&shelter)
-                    .ok_or(Error::Unavailable)?;
-                if s.custodian != actor
-                    || s.area != area
-                    || !self.person_index.contains_key(&person)
-                    || person == actor
-                {
-                    return Err(Error::Unavailable);
-                }
-                let s = self
-                    .state
-                    .health
-                    .as_mut()
-                    .unwrap()
-                    .shelters
-                    .get_mut(&shelter)
-                    .unwrap();
-                if allowed {
-                    s.access.insert(person);
-                } else {
-                    s.access.remove(&person);
-                }
-                // Acknowledged access cannot teleport someone out of an occupied building.
-                self.emit(EventKind::ShelterAccessChanged {
-                    shelter,
-                    actor,
-                    person,
-                    allowed,
-                });
-            }
-            HealthAction::EnterShelter { shelter } => {
-                let w = self.state.health.as_ref().unwrap();
-                let s = w.shelters.get(&shelter).ok_or(Error::Unavailable)?;
-                if s.area != area
-                    || !s.access.contains(&actor)
-                    || w.occupancy.values().filter(|id| **id == shelter).count()
-                        >= s.capacity as usize
-                    || w.occupancy.get(&actor) == Some(&shelter)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.leave_shelter_on_movement(actor);
-                self.interrupt_actor_activity(actor);
-                self.state
-                    .health
-                    .as_mut()
-                    .unwrap()
-                    .occupancy
-                    .insert(actor, shelter);
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&actor)
-                    .unwrap()
-                    .activity = Activity::Rest;
-                self.emit(EventKind::ShelterEntered { shelter, actor });
-            }
-            HealthAction::LeaveShelter => {
-                if !self
-                    .state
-                    .health
-                    .as_ref()
-                    .unwrap()
-                    .occupancy
-                    .contains_key(&actor)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.leave_shelter_on_movement(actor);
             }
             HealthAction::RequestTreatment { caregiver } => {
-                if caregiver == actor
-                    || self.health_area(caregiver, true).is_err()
-                    || !self.can_observe_health(actor, caregiver)
-                {
-                    return Err(Error::Unavailable);
-                }
-                if let Some((herbs, water)) = self.willing_health_supplies(caregiver, actor) {
-                    self.health_command(
-                        caregiver,
-                        &HealthAction::OfferTreatment {
-                            patient: actor,
-                            herbs,
-                            water,
-                        },
-                    )?;
-                } else {
-                    self.emit(EventKind::TreatmentRefused {
-                        caregiver,
-                        patient: actor,
-                    });
+                let giver = self.health_actor_facts(caregiver);
+                let supplies = self
+                    .willing_health_supplies(caregiver, actor)
+                    .map(|(herbs, water)| {
+                        Ok((
+                            self.health_stock_facts(caregiver, herbs)?,
+                            self.health_stock_facts(caregiver, water)?,
+                        ))
+                    })
+                    .transpose()?;
+                ActionFacts::RequestCare {
+                    giver,
+                    patient: self.health_patient_facts(caregiver, actor),
+                    medicine: if giver.capable {
+                        self.medical_level(caregiver)
+                    } else {
+                        0
+                    },
+                    supplies,
                 }
             }
             HealthAction::OfferTreatment {
                 patient,
                 herbs,
                 water,
-            } => {
-                if patient == actor
-                    || self.health_area(patient, false).is_err()
-                    || !self.can_observe_health(actor, patient)
-                    || self.medical_level(actor) == 0
-                    || !self.health_stock(actor, herbs, Good::Herb, rules.treatment_herbs)
-                    || !self.health_stock(actor, water, Good::Water, rules.treatment_water)
-                {
-                    return Err(Error::Unavailable);
-                }
-                let expires = SimTime(
-                    self.state
-                        .time
-                        .0
-                        .checked_add(rules.offer_duration.0)
-                        .ok_or(Error::Overflow)?,
-                );
-                self.state.health.as_mut().unwrap().offers.insert(
-                    (actor, patient),
-                    Offer {
-                        caregiver: actor,
-                        patient,
-                        herbs,
-                        water,
-                        expires,
-                        accepted: false,
-                    },
-                );
-                self.emit(EventKind::TreatmentOffered {
-                    caregiver: actor,
-                    patient,
-                });
-            }
-            HealthAction::AcceptTreatment { caregiver } => {
-                let offer = self
-                    .state
-                    .health
-                    .as_ref()
-                    .unwrap()
-                    .offers
-                    .get(&(caregiver, actor))
-                    .ok_or(Error::Unavailable)?
-                    .clone();
-                if offer.accepted
-                    || offer.expires <= self.state.time
-                    || self.health_area(caregiver, true).is_err()
-                    || !self.can_observe_health(actor, caregiver)
-                {
-                    return Err(Error::Unavailable);
-                }
-                // Acceptance names this caregiver and these supplies, rather than giving a permanent mandate.
-                self.interrupt_actor_activity(actor);
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&actor)
-                    .unwrap()
-                    .activity = Activity::Rest;
-                self.state.health.as_mut().unwrap().offers.insert(
-                    (caregiver, actor),
-                    Offer {
-                        accepted: true,
-                        ..offer
-                    },
-                );
-                self.emit(EventKind::TreatmentAccepted {
-                    caregiver,
-                    patient: actor,
-                });
-            }
-            HealthAction::RefuseTreatment { caregiver } => {
-                if self
-                    .state
-                    .health
-                    .as_mut()
-                    .unwrap()
-                    .offers
-                    .remove(&(caregiver, actor))
-                    .is_none()
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.cancel_health_activity(actor);
-                self.emit(EventKind::TreatmentRefused {
-                    caregiver,
-                    patient: actor,
-                });
-            }
+            } => ActionFacts::OfferCare {
+                patient: self.health_patient_facts(actor, patient),
+                medicine: self.medical_level(actor),
+                herbs: self.health_stock_facts(actor, herbs)?,
+                water: self.health_stock_facts(actor, water)?,
+            },
+            HealthAction::AcceptTreatment { caregiver } => ActionFacts::AcceptCare {
+                giver_present: self.health_area(caregiver, true).is_ok(),
+                contact: self.person_index.contains_key(&caregiver)
+                    && self.can_observe_health(actor, caregiver),
+            },
+            HealthAction::RefuseTreatment { .. } => ActionFacts::RefuseCare,
             HealthAction::Treat {
                 patient,
                 herbs,
                 water,
-            } => {
-                if self.health_area(patient, false).is_err()
-                    || !self.can_observe_health(actor, patient)
-                    || self.medical_level(actor) == 0
-                    || !self.health_stock(actor, herbs, Good::Herb, rules.treatment_herbs)
-                    || !self.health_stock(actor, water, Good::Water, rules.treatment_water)
-                    || self.health_patient_resting(patient)
-                {
-                    return Err(Error::Unavailable);
-                }
-                if patient != actor
-                    && !self
-                        .state
-                        .health
-                        .as_ref()
-                        .unwrap()
-                        .offers
-                        .get(&(actor, patient))
-                        .is_some_and(|o| {
-                            o.accepted
-                                && o.herbs == herbs
-                                && o.water == water
-                                && o.expires > self.state.time
-                        })
-                {
-                    return Err(Error::Unavailable);
-                }
-                if patient != actor
-                    && self.state.physical.as_ref().unwrap().actors[&patient].activity
-                        != Activity::Rest
-                {
-                    return Err(Error::Unavailable);
-                }
-                let until = self
-                    .state
-                    .time
-                    .0
-                    .checked_add(rules.treatment_time.0)
-                    .and_then(|t| t.checked_add(rules.treatment_duration.0))
-                    .ok_or(Error::Overflow)?;
-                let _ = until;
-                self.preflight_water_received(patient, water, rules.treatment_water)?;
-                let dose = self.water_dose(water, rules.treatment_water);
-                self.start_health_job(
-                    actor,
-                    area,
-                    rules.treatment_time,
-                    HealthWorkKind::Treat,
-                    Work::Treat {
-                        patient,
-                        skill_ms: 0,
-                        elapsed: 0,
-                    },
-                )?;
-                self.consume_health_stock(actor, herbs, rules.treatment_herbs);
-                self.consume_health_stock(patient, water, rules.treatment_water);
-                self.received_water(patient, water, rules.treatment_water, dose)?;
-            }
-        }
+            } => ActionFacts::Treat {
+                patient: self.health_patient_facts(actor, patient),
+                medicine: self.medical_level(actor),
+                herbs: self.health_stock_facts(actor, herbs)?,
+                water: self.health_stock_facts(actor, water)?,
+            },
+        };
+        let prepared = self.state.health.as_ref().unwrap().prepare_action(
+            self.health_actor_facts(actor),
+            action,
+            facts,
+        )?;
+        self.apply_health_change(prepared)?;
         self.observe_health();
         Ok(())
     }
-    fn preflight_water_received(
-        &self,
-        patient: PersonId,
-        source: InventoryId,
-        quantity: Quantity,
-    ) -> Result<(), Error> {
-        let _ = self.water_dose(source, quantity);
-        let _ = patient;
-        let r = &self.state.health.as_ref().unwrap().rules;
-        self.state
-            .time
-            .0
-            .checked_add(r.incubation.0)
-            .and_then(|t| t.checked_add(r.illness_duration.0))
-            .ok_or(Error::Overflow)?;
+    fn apply_health_change(&mut self, change: game_health::PreparedHealth) -> Result<(), Error> {
+        use game_health::HealthEffect;
+        let mut next_id = self.state.next_id;
+        let mut consumed = BTreeMap::<InventoryId, u128>::new();
+        let mut event_bound = 0usize;
+        for effect in change.effects() {
+            match effect {
+                HealthEffect::ShelterBuilt { shelter, .. } => {
+                    if shelter.0 != next_id {
+                        return Err(Error::Unavailable);
+                    }
+                    next_id = next_id.checked_add(1).ok_or(Error::Overflow)?;
+                }
+                HealthEffect::Consume {
+                    source, quantity, ..
+                } => *consumed.entry(*source).or_default() += u128::from(quantity.0),
+                _ => {}
+            }
+            event_bound = event_bound
+                .checked_add(match effect {
+                    HealthEffect::Interrupt { actor } => {
+                        if self
+                            .state
+                            .physical
+                            .as_ref()
+                            .and_then(|w| w.actors.get(actor))
+                            .is_some_and(|body| {
+                                matches!(body.activity, Activity::HealthWork { .. })
+                            })
+                        {
+                            0
+                        } else {
+                            128
+                        }
+                    }
+                    HealthEffect::ClearWork { .. }
+                    | HealthEffect::Start { .. }
+                    | HealthEffect::Rest { .. } => 0,
+                    _ => 1,
+                })
+                .ok_or(Error::Overflow)?;
+        }
+        if consumed.iter().any(|(id, q)| {
+            self.state
+                .inventories
+                .get(id)
+                .is_none_or(|s| u128::from(s.quantity.0) < *q)
+        }) {
+            return Err(Error::Unavailable);
+        }
+        self.ensure_event_capacity(event_bound)?;
+        let effects = change.commit(self.state.health.as_mut().ok_or(Error::Unavailable)?)?;
+        self.state.next_id = next_id;
+        for effect in effects {
+            match effect {
+                HealthEffect::Interrupt { actor } => {
+                    self.interrupt_actor_activity_except_health(actor)
+                }
+                HealthEffect::ClearWork { actor, completes } => {
+                    let body = self
+                        .state
+                        .physical
+                        .as_mut()
+                        .unwrap()
+                        .actors
+                        .get_mut(&actor)
+                        .unwrap();
+                    if matches!(body.activity,Activity::HealthWork {completes:at,..} if at==completes)
+                    {
+                        body.activity = Activity::Idle;
+                    }
+                }
+                HealthEffect::Start {
+                    actor,
+                    kind,
+                    completes,
+                } => {
+                    self.state
+                        .physical
+                        .as_mut()
+                        .unwrap()
+                        .actors
+                        .get_mut(&actor)
+                        .unwrap()
+                        .activity = Activity::HealthWork { kind, completes };
+                }
+                HealthEffect::Rest { actor } => {
+                    self.state
+                        .physical
+                        .as_mut()
+                        .unwrap()
+                        .actors
+                        .get_mut(&actor)
+                        .unwrap()
+                        .activity = Activity::Rest;
+                }
+                HealthEffect::Consume {
+                    actor,
+                    source,
+                    quantity,
+                } => self.consume_health_stock(actor, source, quantity),
+                HealthEffect::Drank {
+                    actor,
+                    source,
+                    quantity,
+                } => {
+                    self.emit(EventKind::Drank {
+                        actor,
+                        source,
+                        quantity,
+                    });
+                }
+                HealthEffect::Purified { actor, source } => {
+                    self.emit(EventKind::WaterPurified { actor, source });
+                }
+                HealthEffect::ShelterBuilt { shelter, builder } => {
+                    self.emit(EventKind::ShelterBuilt { shelter, builder });
+                }
+                HealthEffect::ShelterAccess {
+                    shelter,
+                    actor,
+                    person,
+                    allowed,
+                } => {
+                    self.emit(EventKind::ShelterAccessChanged {
+                        shelter,
+                        actor,
+                        person,
+                        allowed,
+                    });
+                }
+                HealthEffect::ShelterEntered { shelter, actor } => {
+                    self.emit(EventKind::ShelterEntered { shelter, actor });
+                }
+                HealthEffect::ShelterLeft { shelter, actor } => {
+                    self.emit(EventKind::ShelterLeft { shelter, actor });
+                }
+                HealthEffect::Offered { caregiver, patient } => {
+                    self.emit(EventKind::TreatmentOffered { caregiver, patient });
+                }
+                HealthEffect::Accepted { caregiver, patient } => {
+                    self.emit(EventKind::TreatmentAccepted { caregiver, patient });
+                }
+                HealthEffect::Refused { caregiver, patient } => {
+                    self.emit(EventKind::TreatmentRefused { caregiver, patient });
+                }
+                HealthEffect::Treated { caregiver, patient } => {
+                    self.emit(EventKind::TreatmentCompleted { caregiver, patient });
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -1225,6 +1091,15 @@ impl Simulation {
         )
         .expect("validated individual metabolism")
     }
+    pub(crate) fn observed_hydration_urgency(&self, target: PersonId) -> i64 {
+        self.state
+            .health
+            .as_ref()
+            .and_then(|w| w.clinical.get(&target))
+            .map_or(0, |state| {
+                game_health::hydration_urgency(state, self.health_physiology(target))
+            })
+    }
     pub(crate) fn health_body_delta(
         &self,
         actor: PersonId,
@@ -1394,7 +1269,7 @@ impl Simulation {
                 }
             }
         }
-        let due: Vec<_> = self
+        let due = self
             .state
             .health
             .as_ref()
@@ -1403,149 +1278,42 @@ impl Simulation {
             .values()
             .filter(|job| job.completes <= self.state.time)
             .cloned()
-            .collect();
+            .collect::<Vec<_>>();
         for job in due {
             let valid = self.health_area(job.actor, true).ok() == Some(job.area)
                 && (!matches!(job.work, Work::Boil { .. } | Work::Shelter { .. })
                     || closing_equipment.get(&job.actor).copied().unwrap_or(false))
                 && matches!(self.state.physical.as_ref().unwrap().actors[&job.actor].activity,Activity::HealthWork {completes,..} if completes==job.completes);
-            self.state.health.as_mut().unwrap().jobs.remove(&job.actor);
-            if !valid {
-                continue;
-            }
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&job.actor)
-                .unwrap()
-                .activity = Activity::Idle;
-            match job.work {
-                Work::Drink { source, quantity } => {
-                    if !self.health_stock(job.actor, source, Good::Water, quantity) {
-                        continue;
-                    }
-                    let dose = self.water_dose(source, quantity);
-                    self.consume_health_stock(job.actor, source, quantity);
-                    self.received_water(job.actor, source, quantity, dose)?;
-                    self.emit(EventKind::Drank {
-                        actor: job.actor,
-                        source,
-                        quantity,
-                    });
-                }
-                Work::Boil {
-                    source,
-                    quantity,
-                    tool: _,
-                } => {
-                    if !self.health_stock(job.actor, source, Good::Water, quantity) {
-                        continue;
-                    }
-                    let before = self.state.inventories[&source].quantity.0;
-                    let lot = self
-                        .state
-                        .health
-                        .as_ref()
-                        .unwrap()
-                        .water
-                        .get(&source)
-                        .cloned()
-                        .unwrap_or_else(|| WaterLot::new(before, 0));
-                    let effect = game_health::purify_water(&lot, quantity.0)?;
-                    let load = effect.remaining.load();
-                    self.state
-                        .health
-                        .as_mut()
-                        .unwrap()
-                        .water
-                        .insert(source, effect.remaining);
-                    let safety = WaterSafetyView {
-                        inventory: source,
-                        purified: load == 0,
-                        suspected_unsafe: load > 0,
-                        observed_at: self.state.time,
-                    };
-                    self.state
-                        .health
-                        .as_mut()
-                        .unwrap()
-                        .known
-                        .entry(job.actor)
-                        .or_default()
-                        .water
-                        .insert(source, safety);
-                    self.emit(EventKind::WaterPurified {
-                        actor: job.actor,
-                        source,
-                    });
-                }
-                Work::Shelter {
-                    timber_used,
-                    tool: _,
-                    capacity,
-                    insulation,
-                    started,
-                } => {
-                    let id = ShelterId(allocate(&mut self.state)?);
-                    let s = Shelter {
-                        id,
-                        area: job.area,
-                        custodian: job.actor,
-                        access: BTreeSet::from([job.actor]),
-                        capacity,
-                        insulation,
-                        built_at: self.state.time,
-                        timber_used,
-                        labor_ms: self.state.time.0 - started.0,
-                    };
-                    self.state.health.as_mut().unwrap().shelters.insert(id, s);
-                    self.emit(EventKind::ShelterBuilt {
-                        shelter: id,
-                        builder: job.actor,
-                    });
-                }
-                Work::Treat {
-                    patient,
-                    skill_ms,
-                    elapsed,
-                } => {
-                    if self.health_area(patient, false).is_err()
-                        || !self.can_observe_health(job.actor, patient)
-                        || self.state.physical.as_ref().unwrap().actors[&patient].activity
-                            != Activity::Rest
-                            && patient != job.actor
-                    {
-                        continue;
-                    }
-                    let course = game_health::treatment_course(
-                        &self.state.health.as_ref().unwrap().rules,
-                        self.state.time,
-                        skill_ms,
-                        elapsed,
-                    )?;
-                    self.state
-                        .health
-                        .as_mut()
-                        .unwrap()
-                        .clinical
-                        .entry(patient)
-                        .or_default()
-                        .treatment = Some(course);
-                    self.emit(EventKind::TreatmentCompleted {
-                        caregiver: job.actor,
-                        patient,
-                    });
-                }
-            }
+            let facts = match job.work {
+                Work::Drink { source, .. } => game_health::FinishFacts::Drink {
+                    water: self.health_stock_facts(job.actor, source)?,
+                    physiology: self.health_physiology(job.actor),
+                },
+                Work::Boil { source, .. } => game_health::FinishFacts::Boil {
+                    water: self.health_stock_facts(job.actor, source)?,
+                },
+                Work::Shelter { .. } => game_health::FinishFacts::Shelter {
+                    id: ShelterId(self.state.next_id),
+                },
+                Work::Treat { patient, .. } => game_health::FinishFacts::Treat {
+                    patient: self.health_patient_facts(job.actor, patient),
+                },
+            };
+            let change = self.state.health.as_ref().unwrap().prepare_finish(
+                job.actor,
+                self.state.time,
+                valid,
+                facts,
+            )?;
+            self.apply_health_change(change)?;
         }
-        self.state
+        let expired = self
+            .state
             .health
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .offers
-            .retain(|_, offer| offer.expires > self.state.time);
+            .prepare_expire_offers(self.state.time);
+        self.apply_health_change(expired)?;
         self.observe_health();
         Ok(())
     }
@@ -1925,166 +1693,136 @@ impl Simulation {
             .map(|action| Command::Health { action })
             .collect()
     }
-    pub(crate) fn health_candidate(&self, actor: PersonId) -> Option<Command> {
-        let w = self.state.health.as_ref()?;
-        let clinical = w.clinical.get(&actor).cloned().unwrap_or_default();
+    fn remembered_health_stocks(&self, actor: PersonId) -> Vec<game_health::RememberedStock> {
+        self.state
+            .decisions
+            .as_ref()
+            .and_then(|w| w.minds.get(&actor))
+            .into_iter()
+            .flat_map(|mind| mind.knowledge.values())
+            .filter(|s| matches!(s.good, Good::Water | Good::Timber | Good::Tool | Good::Herb))
+            .map(|fact| game_health::RememberedStock {
+                fact: fact.clone(),
+                here: self.health_remembered_source_here(actor, fact),
+                held: self
+                    .state
+                    .inventories
+                    .get(&fact.inventory)
+                    .is_some_and(|stock| stock.location == InventoryLocation::Carried(actor)),
+            })
+            .collect()
+    }
+    fn water_planning_data(&self, actor: PersonId) -> Option<WaterPlanningData> {
         let area = self.health_area(actor, true).ok()?;
-        if w.jobs.contains_key(&actor) || self.health_patient_resting(actor) {
-            return None;
-        }
         let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
         let traits = self
             .invocation_personality(actor)
             .unwrap_or_else(|| mind.personality.clone());
-        if clinical.thirst >= self.health_physiology(actor).drink_relief / 4 {
-            let stock = mind
-                .knowledge
-                .values()
-                .filter(|s| {
-                    s.good == Good::Water
-                        && s.accessible
-                        && self.health_remembered_source_here(actor, s)
-                        && s.quantity >= w.rules.drink_quantity
-                })
-                .min_by_key(|s| s.inventory);
-            let Some(stock) = stock else {
-                return self.health_water_procurement(actor);
-            };
-            let safety = w
-                .known
-                .get(&actor)
-                .and_then(|k| k.water.get(&stock.inventory));
-            if !safety.is_some_and(|s| s.purified)
-                && (safety.is_some_and(|s| s.suspected_unsafe) || traits.risk_tolerance < 500)
-            {
-                let fuel = mind.knowledge.values().find(|s| {
-                    s.good == Good::Timber
-                        && self.health_remembered_source_here(actor, s)
-                        && s.accessible
-                        && s.quantity >= w.rules.boiling_fuel
-                });
-                let tool = mind.knowledge.values().find(|s| {
-                    s.good == Good::Tool
-                        && self.health_remembered_source_here(actor, s)
-                        && s.accessible
-                        && s.quantity >= Quantity(1_000)
-                });
-                if let (Some(fuel), Some(tool)) = (fuel, tool) {
-                    if stock.quantity > w.rules.drink_quantity
-                        && !self
-                            .state
-                            .inventories
-                            .get(&stock.inventory)
-                            .is_some_and(|s| s.location == InventoryLocation::Carried(actor))
-                    {
-                        return Some(Command::Carry {
-                            source: stock.inventory,
-                            quantity: w.rules.drink_quantity,
-                        });
-                    }
-                    return Some(Command::Health {
-                        action: HealthAction::Boil {
-                            source: stock.inventory,
-                            fuel: fuel.inventory,
-                            tool: tool.inventory,
-                        },
-                    });
-                }
-            }
-            return Some(Command::Health {
-                action: HealthAction::Drink {
-                    source: stock.inventory,
-                },
-            });
-        }
-        if clinical.cold >= w.rules.cold_harm / 4
-            && self.effective_shelter(actor).is_none()
-            && self.resolved_location(actor) == Location::AtArea(area)
-            && !matches!(
-                self.state.people[self.person_index[&actor]].location,
-                Location::Carried { .. }
-            )
-            && let Some(shelter) = w
-                .known
-                .get(&actor)
-                .into_iter()
-                .flat_map(|k| k.shelters.values())
-                .filter(|s| {
-                    s.area == area && s.accessible && s.known_occupants.len() < s.capacity as usize
-                })
-                .max_by_key(|s| (s.insulation, s.id))
-        {
-            return Some(Command::Health {
-                action: HealthAction::EnterShelter {
-                    shelter: shelter.id,
-                },
-            });
-        }
-        None
+        let available = self.available_ecology_commands(actor);
+        let springs=self.state.ecology.as_ref().and_then(|w|w.known.get(&actor)).into_iter().flat_map(|known|known.values())
+            .filter(|s|s.kind==ResourceKind::Spring).map(|s|game_health::RememberedSpring {
+                id:s.id,area:s.area,available:s.available,accessible:s.accessible,contamination:s.contamination,observed_at:s.observed_at,
+                can_gather:s.area==area && available.iter().any(|c|matches!(c,Command::Ecology {action:EcologyAction::Gather {resource,..}} if *resource==s.id)),
+                can_request:s.area==area && available.iter().any(|c|matches!(c,Command::Ecology {action:EcologyAction::RequestAccess {resource}} if *resource==s.id))
+                    && self.state.ecology.as_ref().and_then(|w|w.next_request.get(&actor)).and_then(|known|known.get(&s.id)).is_none_or(|at|*at<=self.state.time),
+            }).collect();
+        let requests = self
+            .available_property_commands(actor)
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Property {
+                    action: PropertyAction::RequestAccess { inventory },
+                } => Some(inventory),
+                _ => None,
+            })
+            .collect();
+        Some(WaterPlanningData {
+            area,
+            stationary: self.resolved_location(actor) == Location::AtArea(area),
+            values: game_health::WaterValues {
+                honesty: traits.honesty,
+                risk_tolerance: traits.risk_tolerance,
+            },
+            stocks: self.remembered_health_stocks(actor),
+            springs,
+            routes: mind.routes.clone(),
+            searched: self
+                .state
+                .health
+                .as_ref()
+                .and_then(|w| w.known.get(&actor))
+                .map(|k| k.water_searched.clone())
+                .unwrap_or_default(),
+            requests,
+        })
     }
-    /// Procurement reads remembered leads. Execution revalidates real access,
-    /// quantity and capacity after the person actually reaches the source.
-    pub(crate) fn health_water_procurement(&self, actor: PersonId) -> Option<Command> {
+    fn health_intent_command(intent: game_health::HealthIntent) -> Command {
+        match intent {
+            game_health::HealthIntent::Health(action) => Command::Health { action },
+            game_health::HealthIntent::Move { destination } => Command::Move { destination },
+            game_health::HealthIntent::Carry { source, quantity } => {
+                Command::Carry { source, quantity }
+            }
+            game_health::HealthIntent::GatherWater {
+                resource,
+                quantity,
+                unauthorized,
+            } => Command::Ecology {
+                action: EcologyAction::Gather {
+                    resource,
+                    quantity,
+                    unauthorized,
+                },
+            },
+            game_health::HealthIntent::RequestResourceAccess { resource } => Command::Ecology {
+                action: EcologyAction::RequestAccess { resource },
+            },
+            game_health::HealthIntent::RequestStockAccess { inventory } => Command::Property {
+                action: PropertyAction::RequestAccess { inventory },
+            },
+        }
+    }
+    pub(crate) fn health_spring_candidate(
+        &self,
+        actor: PersonId,
+        local_only: bool,
+    ) -> Option<Command> {
+        let facts = self.water_planning_data(actor)?;
+        game_health::plan_spring(&facts.input(self.state.time), local_only)
+            .map(Self::health_intent_command)
+    }
+    pub(crate) fn health_candidate(&self, actor: PersonId) -> Option<Command> {
         let world = self.state.health.as_ref()?;
-        let area = self.health_area(actor, true).ok()?;
-        if self.resolved_location(actor) != Location::AtArea(area) {
-            return None;
-        }
-        let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
-        if let Some(command) = self.ecology_water_candidate(actor, true) {
-            return Some(command);
-        }
-        // A remote quantity is a dated lead, not a reservation or current fact.
-        if let Some((_, stock)) = mind
-            .knowledge
-            .values()
-            .filter(|s| {
-                s.good == Good::Water
-                    && s.accessible
-                    && s.quantity >= world.rules.drink_quantity
-                    && s.area != area
-            })
-            .filter_map(|s| {
-                decisions::known_path(&mind.routes, area, s.area)
-                    .ok()
-                    .map(|(_, cost)| (cost, s))
-            })
-            .min_by_key(|(cost, s)| (*cost, s.inventory))
-        {
-            return Some(Command::Move {
-                destination: stock.area,
-            });
-        }
-        if let Some(command) = self.ecology_water_candidate(actor, false) {
-            return Some(command);
-        }
-        // Ask an actual present custodian. The normal property command retains
-        // their refusal, personal judgment and request cooldown.
-        if let Some(command) = self.available_property_commands(actor).into_iter().find(|c| {
-            matches!(c, Command::Property {action:PropertyAction::RequestAccess {inventory}}
-                if mind.knowledge.get(inventory).is_some_and(|s|s.good==Good::Water && s.quantity>=world.rules.drink_quantity))
-        }) {
-            return Some(command);
-        }
-        let searched = world.known.get(&actor).map(|k| &k.water_searched);
-        // Search at most sixteen personally known places per retry interval.
-        // A dry observation eventually becomes stale; it is not permanent truth.
-        mind.routes
-            .keys()
-            .take(16)
-            .filter(|destination| **destination != area)
-            .filter(|destination| {
-                searched.and_then(|k| k.get(destination)).is_none_or(|at| {
-                    self.state.time.0.saturating_sub(at.0) >= world.rules.water_search_retry.0
-                })
-            })
-            .filter_map(|destination| {
-                decisions::known_path(&mind.routes, area, *destination)
-                    .ok()
-                    .map(|(_, cost)| (cost, *destination))
-            })
-            .min_by_key(|(cost, destination)| (*cost, *destination))
-            .map(|(_, destination)| Command::Move { destination })
+        let facts = self.water_planning_data(actor)?;
+        let need = game_health::NeedFacts {
+            actor,
+            drink_relief: self.health_physiology(actor).drink_relief,
+            sheltered: self.effective_shelter(actor).is_some(),
+            can_enter_shelter: facts.stationary
+                && !matches!(
+                    self.state.people[self.person_index[&actor]].location,
+                    Location::Carried { .. }
+                ),
+        };
+        world
+            .plan_need(need, &facts.input(self.state.time))
+            .map(Self::health_intent_command)
+    }
+    pub(crate) fn health_water_procurement(&self, actor: PersonId) -> Option<Command> {
+        let facts = self.water_planning_data(actor)?;
+        game_health::plan_water_procurement(
+            &self.state.health.as_ref()?.rules,
+            &facts.input(self.state.time),
+        )
+        .map(Self::health_intent_command)
+    }
+    pub(crate) fn plan_water_for_delivery(&self, actor: PersonId) -> Option<Command> {
+        let facts = self.water_planning_data(actor)?;
+        game_health::plan_water_delivery(
+            &self.state.health.as_ref()?.rules,
+            &facts.input(self.state.time),
+        )
+        .map(Self::health_intent_command)
     }
     pub(crate) fn health_actor_busy(&self, actor: PersonId) -> bool {
         self.state
@@ -2112,17 +1850,22 @@ impl Simulation {
             .cloned()
             .collect();
         for job in jobs {
-            if job.actor == self.state.ruler && !self.past_life_controls_actor(job.actor)
-                || matches!(job.work, Work::Drink { .. })
-            {
+            if job.actor == self.state.ruler && !self.past_life_controls_actor(job.actor) {
                 continue;
             }
             let body = &self.state.physical.as_ref().unwrap().actors[&job.actor];
             let physical = self.body_rules(job.actor);
-            if body.vitals.fatigue >= physical.fatigue_limit / 2
-                || body.vitals.hunger >= physical.meal_relief
-                || body.vitals.health <= physical.max_health / 3
-            {
+            if game_health::should_pause_work(
+                &job.work,
+                game_health::WorkNeeds {
+                    hunger: body.vitals.hunger,
+                    meal_relief: physical.meal_relief,
+                    fatigue: body.vitals.fatigue,
+                    fatigue_limit: physical.fatigue_limit,
+                    health: body.vitals.health,
+                    max_health: physical.max_health,
+                },
+            ) {
                 self.interrupt_actor_activity(job.actor);
                 let _ = self.debug_actor_command(job.actor, Command::Rest);
             }
@@ -2149,20 +1892,11 @@ impl Simulation {
                 continue;
             };
             let symptoms = self.visible_symptoms(offer.patient);
-            let want = symptoms.fever || symptoms.wounded || symptoms.shivering;
             let trust = patient
                 .relationships
                 .get(&offer.caregiver)
                 .map_or(0, |r| r.trust);
-            let action = if want && trust >= -100 {
-                HealthAction::AcceptTreatment {
-                    caregiver: offer.caregiver,
-                }
-            } else {
-                HealthAction::RefuseTreatment {
-                    caregiver: offer.caregiver,
-                }
-            };
+            let action = game_health::offer_response(offer.caregiver, &symptoms, trust);
             let _ = self.health_command(offer.patient, &action);
         }
         let offers: Vec<_> = self
@@ -2202,31 +1936,8 @@ impl Simulation {
             let body = &self.state.physical.as_ref().unwrap().actors[&caregiver];
             let rules = &self.state.health.as_ref().unwrap().rules;
             let physical = self.body_rules(caregiver);
-            if mind.personality.empathy < 300
-                || body.vitals.hunger >= physical.meal_relief
-                || body.vitals.fatigue >= physical.fatigue_limit / 2
-            {
-                continue;
-            }
-            self.health_area(caregiver, true)?;
-            let herbs = mind.knowledge.values().find(|s| {
-                s.good == Good::Herb
-                    && s.accessible
-                    && self.health_remembered_source_here(caregiver, s)
-                    && s.quantity >= rules.treatment_herbs
-            });
-            let water = mind.knowledge.values().find(|s| {
-                s.good == Good::Water
-                    && s.accessible
-                    && self.health_remembered_source_here(caregiver, s)
-                    && s.quantity >= rules.treatment_water
-            });
-            let (Some(herbs), Some(water)) = (herbs, water) else {
-                continue;
-            };
-            let herbs = herbs.inventory;
-            let water = water.inventory;
-            let patient = self
+            let stocks = self.remembered_health_stocks(caregiver);
+            let patients = self
                 .state
                 .health
                 .as_ref()
@@ -2235,41 +1946,41 @@ impl Simulation {
                 .get(&caregiver)
                 .into_iter()
                 .flat_map(|k| k.people.values())
-                .filter(|s| {
-                    s.person != caregiver
-                        && (s.fever || s.wounded || s.shivering)
-                        && self.can_observe_health(caregiver, s.person)
-                        && !self
-                            .state
-                            .health
-                            .as_ref()
-                            .unwrap()
-                            .offers
-                            .contains_key(&(caregiver, s.person))
-                        && !self.health_patient_resting(s.person)
+                .map(|symptoms| game_health::PatientOpportunity {
+                    symptoms: symptoms.clone(),
+                    contact: self.can_observe_health(caregiver, symptoms.person),
+                    offer_exists: self
+                        .state
+                        .health
+                        .as_ref()
+                        .unwrap()
+                        .offers
+                        .contains_key(&(caregiver, symptoms.person)),
+                    busy: self.health_patient_resting(symptoms.person),
                 })
-                .min_by_key(|s| s.person)
-                .map(|s| s.person);
-            if let Some(patient) = patient {
-                let _ = self.health_command(
-                    caregiver,
-                    &HealthAction::OfferTreatment {
-                        patient,
-                        herbs,
-                        water,
-                    },
-                );
+                .collect::<Vec<_>>();
+            let facts = game_health::WillingCare {
+                capable: self.health_area(caregiver, true).is_ok(),
+                medicine: self.medical_level(caregiver),
+                busy: self.health_actor_busy(caregiver),
+                hungry: body.vitals.hunger >= physical.meal_relief,
+                fatigued: body.vitals.fatigue >= physical.fatigue_limit / 2,
+                urgent_dependent: false,
+                empathy: mind.personality.empathy,
+                trust: 0,
+                stocks: &stocks,
+            };
+            if let Some(action) = game_health::proactive_offer(caregiver, rules, facts, &patients) {
+                let _ = self.health_command(caregiver, &action);
             }
         }
         Ok(())
     }
     pub(crate) fn health_allocation_bound(&self, next: SimTime) -> u64 {
-        self.state.health.as_ref().map_or(0, |w| {
-            w.jobs
-                .values()
-                .filter(|job| job.completes <= next && matches!(job.work, Work::Shelter { .. }))
-                .count() as u64
-        })
+        self.state
+            .health
+            .as_ref()
+            .map_or(0, |w| w.allocation_bound(next))
     }
     pub(crate) fn health_event_bound(&self) -> usize {
         self.state.health.as_ref().map_or(0, |w| {
@@ -2358,30 +2069,29 @@ impl Simulation {
 
 impl Simulation {
     fn health_job_can_progress(&self, job: &Job) -> bool {
-        if self.health_area(job.actor, true).ok() != Some(job.area) {
+        let Some(physical) = &self.state.physical else {
             return false;
-        }
-        if !matches!(job.work, Work::Drink { .. })
-            && self.state.physical.as_ref().unwrap().actors[&job.actor]
-                .vitals
-                .fatigue
-                >= self.state.physical.as_ref().unwrap().rules.fatigue_limit
-        {
+        };
+        let Some(body) = physical.actors.get(&job.actor) else {
             return false;
-        }
-        match job.work {
-            Work::Boil { tool, .. } | Work::Shelter { tool, .. } => {
-                self.tool_available_for(job.actor, tool)
-            }
-            Work::Treat { patient, .. } => {
-                self.health_area(patient, false).is_ok()
-                    && self.can_observe_health(job.actor, patient)
-                    && (patient == job.actor
-                        || self.state.physical.as_ref().unwrap().actors[&patient].activity
-                            == Activity::Rest)
-            }
-            Work::Drink { .. } => true,
-        }
+        };
+        let patient = job
+            .patient()
+            .map(|id| self.health_patient_facts(job.actor, id));
+        game_health::can_progress(
+            job,
+            game_health::ProgressFacts {
+                area: self.health_area(job.actor, true).ok(),
+                fatigue: body.vitals.fatigue,
+                fatigue_limit: physical.rules.fatigue_limit,
+                tool_available: job
+                    .required_tool()
+                    .is_some_and(|tool| self.tool_available_for(job.actor, tool)),
+                patient_present: patient.is_some_and(|p| p.present),
+                patient_contact: patient.is_some_and(|p| p.contact),
+                patient_resting: patient.is_some_and(|p| p.resting),
+            },
+        )
     }
 }
 
@@ -2556,46 +2266,25 @@ impl Simulation {
         giver: PersonId,
         patient: PersonId,
     ) -> Option<(InventoryId, InventoryId)> {
-        if self.medical_level(giver) == 0 || self.health_actor_busy(giver) {
-            return None;
-        }
-        self.health_area(giver, true).ok()?;
-        let mind = &self.state.decisions.as_ref()?.minds[&giver];
-        let body = &self.state.physical.as_ref()?.actors[&giver];
-        let r = &self.state.health.as_ref()?.rules;
+        let mind = self.state.decisions.as_ref()?.minds.get(&giver)?;
+        let body = self.state.physical.as_ref()?.actors.get(&giver)?;
+        let rules = &self.state.health.as_ref()?.rules;
         let physical = self.body_rules(giver);
-        if body.vitals.hunger >= physical.meal_relief
-            || body.vitals.fatigue >= physical.fatigue_limit / 2
-            || mind.child_signals.values().any(|s| s.urgency >= 20_000)
-        {
-            return None;
-        }
-        let goodwill = i64::from(mind.personality.empathy)
-            + i64::from(mind.relationships.get(&patient).map_or(0, |v| v.trust));
-        if goodwill < 300 {
-            return None;
-        }
-        let herbs = mind
-            .knowledge
-            .values()
-            .find(|s| {
-                s.good == Good::Herb
-                    && s.accessible
-                    && self.health_remembered_source_here(giver, s)
-                    && s.quantity >= r.treatment_herbs
-            })?
-            .inventory;
-        let water = mind
-            .knowledge
-            .values()
-            .find(|s| {
-                s.good == Good::Water
-                    && s.accessible
-                    && self.health_remembered_source_here(giver, s)
-                    && s.quantity >= r.treatment_water
-            })?
-            .inventory;
-        Some((herbs, water))
+        let stocks = self.remembered_health_stocks(giver);
+        game_health::willing_supplies(
+            rules,
+            game_health::WillingCare {
+                capable: self.health_area(giver, true).is_ok(),
+                medicine: self.medical_level(giver),
+                busy: self.health_actor_busy(giver),
+                hungry: body.vitals.hunger >= physical.meal_relief,
+                fatigued: body.vitals.fatigue >= physical.fatigue_limit / 2,
+                urgent_dependent: mind.child_signals.values().any(|s| s.urgency >= 20_000),
+                empathy: mind.personality.empathy,
+                trust: mind.relationships.get(&patient).map_or(0, |r| r.trust),
+                stocks: &stocks,
+            },
+        )
     }
 }
 
