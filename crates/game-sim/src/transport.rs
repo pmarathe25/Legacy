@@ -5,6 +5,11 @@ pub use game_transport::{
     Action, Authority, Body, CarryGroup, Permission, Position, RoadPosition, Rules, View, World,
 };
 
+struct ComponentFacts {
+    groups: BTreeMap<PersonId, CarryGroup>,
+    bodies: BTreeMap<PersonId, Body>,
+}
+
 impl Simulation {
     pub fn initialize_transport(&mut self, rules: Rules) -> Result<(), Error> {
         if self.state.transport.is_some() || self.state.physical.is_none() {
@@ -104,15 +109,20 @@ impl Simulation {
             .is_some_and(|w| matches!(w.actors[&actor].activity, Activity::Lift { .. }))
     }
     fn transport_bodies_at(&self, now: SimTime) -> Result<BTreeMap<PersonId, Body>, Error> {
+        self.transport_body_facts_at(self.state.people.iter(), now)
+    }
+    fn transport_body_facts_at<'a>(
+        &self,
+        people: impl Iterator<Item = &'a Person>,
+        now: SimTime,
+    ) -> Result<BTreeMap<PersonId, Body>, Error> {
         let rules = &self
             .state
             .transport
             .as_ref()
             .ok_or(Error::Unavailable)?
             .rules;
-        self.state
-            .people
-            .iter()
+        people
             .map(|person| {
                 let body = &self
                     .state
@@ -173,6 +183,27 @@ impl Simulation {
             })
             .collect()
     }
+    fn transport_component_facts(&self, actor: PersonId) -> Result<ComponentFacts, Error> {
+        let world = self.state.transport.as_ref().ok_or(Error::Unavailable)?;
+        let component = world.component(actor);
+        let people = component
+            .iter()
+            .map(|id| {
+                self.person_index
+                    .get(id)
+                    .and_then(|index| self.state.people.get(*index))
+                    .ok_or(Error::Unavailable)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let bodies = self.transport_body_facts_at(people.into_iter(), self.state.time)?;
+        let groups = world
+            .groups
+            .iter()
+            .filter(|(id, _)| component.contains(id))
+            .map(|(id, group)| (*id, group.clone()))
+            .collect();
+        Ok(ComponentFacts { groups, bodies })
+    }
     pub(crate) fn transport_bodies(&self) -> Result<BTreeMap<PersonId, Body>, Error> {
         self.transport_bodies_at(self.state.time)
     }
@@ -183,7 +214,7 @@ impl Simulation {
         if w.groups.contains_key(&actor) || w.busy(actor) {
             return false;
         }
-        let Ok(bodies) = self.transport_bodies() else {
+        let Ok(ComponentFacts { groups, bodies }) = self.transport_component_facts(actor) else {
             return false;
         };
         if !bodies
@@ -192,20 +223,20 @@ impl Simulation {
         {
             return false;
         }
-        let Ok(plan) = game_transport::capacity_plan(&w.groups, &bodies) else {
+        let Ok(plan) = game_transport::capacity_plan(&groups, &bodies) else {
             return false;
         };
         let component = w.component(actor);
         plan.unable.is_disjoint(&component) && plan.overloaded.is_disjoint(&component)
     }
     pub(crate) fn transport_body_load(&self, actor: PersonId) -> Quantity {
-        let Some(w) = &self.state.transport else {
+        let Some(_) = &self.state.transport else {
             return Quantity(0);
         };
-        let Ok(bodies) = self.transport_bodies() else {
+        let Ok(ComponentFacts { groups, bodies }) = self.transport_component_facts(actor) else {
             return Quantity(0);
         };
-        let Ok(plan) = game_transport::capacity_plan(&w.groups, &bodies) else {
+        let Ok(plan) = game_transport::capacity_plan(&groups, &bodies) else {
             return Quantity(0);
         };
         Quantity(
@@ -217,13 +248,13 @@ impl Simulation {
         )
     }
     pub(crate) fn transport_transfer_capacity(&self, actor: PersonId, amount: u64) -> bool {
-        let Some(world) = &self.state.transport else {
+        let Some(_) = &self.state.transport else {
             return true;
         };
-        let Ok(bodies) = self.transport_bodies() else {
+        let Ok(ComponentFacts { groups, bodies }) = self.transport_component_facts(actor) else {
             return false;
         };
-        game_transport::transfer_capacity(&world.groups, &bodies, actor, Quantity(amount))
+        game_transport::transfer_capacity(&groups, &bodies, actor, Quantity(amount))
             .unwrap_or(false)
     }
     pub(crate) fn transport_boundary(&self, limit: SimTime) -> Result<SimTime, Error> {
@@ -1701,6 +1732,35 @@ mod connected_tests {
         let child = sim.state.ruler;
         assert_ne!(child, predecessor);
         (sim, gestator, child)
+    }
+    #[test]
+    fn component_capacity_checks_match_the_full_body_snapshot() {
+        let (sim, _, _) = traveling_birth(1);
+        let world = sim.state.transport.as_ref().unwrap();
+        let bodies = sim.transport_bodies().unwrap();
+        let full = game_transport::capacity_plan(&world.groups, &bodies).unwrap();
+        for actor in bodies.keys().copied() {
+            for amount in [0, 500, 2_000, 20_000] {
+                assert_eq!(
+                    sim.transport_transfer_capacity(actor, amount),
+                    game_transport::transfer_capacity(
+                        &world.groups,
+                        &bodies,
+                        actor,
+                        Quantity(amount)
+                    )
+                    .unwrap()
+                );
+            }
+            let load = full
+                .shares
+                .iter()
+                .filter(|((_, bearer), _)| *bearer == actor)
+                .map(|(_, q)| q.0)
+                .sum();
+            assert_eq!(sim.transport_body_load(actor), Quantity(load));
+        }
+        assert!(!sim.transport_transfer_capacity(PersonId(u64::MAX), 1));
     }
     #[test]
     fn actual_newborn_follows_the_carrier_on_later_legs_without_own_arrival() {
