@@ -1,7 +1,7 @@
 //! Agricultural adapter: factual inputs and atomic stock/event application.
 use crate::*;
 pub use game_agriculture::{
-    Catalog, Crop, CropId, CropPhase, CropRules, Cultivation, Field, Soil, World,
+    Catalog, Crop, CropId, CropPhase, CropRules, Cultivation, Field, Runtime, Soil,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,28 +173,32 @@ impl Simulation {
             seed,
         )?);
         sim.register_weather_cells()?;
-        let mut agriculture = World::from_content(
+        let agriculture = Runtime::from_content(
             crop_document,
             sim.state.environment.as_ref().unwrap().weather_day,
         )?;
         let crop_id = agriculture.catalog.default_crop.clone();
         agriculture
-            .insert_field(Field {
-                custodian: None,
-                id,
-                area: farm,
-                access: people,
-                seed: seed_stock,
-                tool,
-                water,
-                food,
-            })
+            .insert_field(
+                &mut sim.state.components,
+                Field {
+                    custodian: None,
+                    id,
+                    area: farm,
+                    access: people,
+                    seed: seed_stock,
+                    tool,
+                    water,
+                    food,
+                },
+            )
             .expect("validated component insertion");
         agriculture
-            .insert_crop(id, Crop::new(crop_id))
+            .insert_crop(&mut sim.state.components, id, Crop::new(crop_id))
             .expect("validated component insertion");
         agriculture
             .insert_soil(
+                &mut sim.state.components,
                 id,
                 Soil {
                     fertility: 900,
@@ -217,7 +221,7 @@ impl Simulation {
             .agriculture
             .as_ref()
             .unwrap()
-            .field(id)
+            .field(&sim.state.components, id)
             .expect("component exists")
             .clone();
         private_field.id = private_field_id;
@@ -228,22 +232,24 @@ impl Simulation {
             .agriculture
             .as_mut()
             .unwrap()
-            .insert_field(private_field)
+            .insert_field(&mut sim.state.components, private_field)
             .expect("validated component insertion");
         let world = sim.state.agriculture.as_mut().unwrap();
+        let private_crop = world
+            .crop(&sim.state.components, id)
+            .expect("component exists")
+            .clone();
+        let private_soil = world
+            .soil(&sim.state.components, id)
+            .expect("component exists")
+            .clone();
         world
-            .insert_crop(
-                private_field_id,
-                world.crop(id).expect("component exists").clone(),
-            )
+            .insert_crop(&mut sim.state.components, private_field_id, private_crop)
             .expect("validated component insertion");
         world
-            .insert_soil(
-                private_field_id,
-                world.soil(id).expect("component exists").clone(),
-            )
+            .insert_soil(&mut sim.state.components, private_field_id, private_soil)
             .expect("validated component insertion");
-        let crop = world.rules_for(id)?;
+        let crop = world.rules_for(&sim.state.components, id)?;
         let food_capacity = 10_000_000.max(3_000_000 + crop.food_yield.0);
         let seed_capacity = 1_000_000.max(10_000 + crop.seed_yield.0);
         sim.state.inventories.get_mut(&food).unwrap().capacity = Quantity(food_capacity);
@@ -282,11 +288,18 @@ impl Simulation {
                 .collect(),
         });
         world
-            .prepare_advance(self.state.time, next, day.as_ref(), |inputs| {
-                self.engine
-                    .executor()
-                    .map_ordered(inputs, |input| input.evaluate())
-            })
+            .prepare_advance(
+                &self.state.components,
+                &self.agriculture_queries,
+                self.state.time,
+                next,
+                day.as_ref(),
+                |inputs| {
+                    self.engine
+                        .executor()
+                        .map_ordered(inputs, |input| input.evaluate())
+                },
+            )
             .map(Some)
     }
 
@@ -302,7 +315,7 @@ impl Simulation {
             .agriculture
             .as_mut()
             .ok_or(Error::Unavailable)?
-            .commit_advance(output)?;
+            .commit_advance(&mut self.state.components, output)?;
         for field in failed {
             self.emit(EventKind::CropFailed { field });
         }
@@ -315,7 +328,9 @@ impl Simulation {
         resources: Option<&equipment::RankingResources>,
     ) -> Result<game_agriculture::BeginFacts, Error> {
         let world = self.state.agriculture.as_ref().ok_or(Error::Unavailable)?;
-        let land = world.field(field).ok_or(Error::Unavailable)?;
+        let land = world
+            .field(&self.state.components, field)
+            .ok_or(Error::Unavailable)?;
         let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let body = physical.actors.get(&actor).ok_or(Error::Unavailable)?;
         let environment = self.state.environment.as_ref();
@@ -387,7 +402,7 @@ impl Simulation {
     ) -> Result<game_agriculture::BeginEffect, Error> {
         let facts = self.cultivation_facts(actor, field, resources)?;
         let world = self.state.agriculture.as_ref().ok_or(Error::Unavailable)?;
-        let (land, crop, soil, rules) = world.field_bundle(field)?;
+        let (land, crop, soil, rules) = world.field_bundle(&self.state.components, field)?;
         game_agriculture::prepare_begin(land, crop, soil, rules, operation, facts)
     }
     pub(crate) fn cultivation_possible(
@@ -430,7 +445,7 @@ impl Simulation {
         let completes = plan.job.completes;
         let world = self.state.agriculture.as_mut().unwrap();
         world
-            .insert_crop(field, plan.crop)
+            .insert_crop(&mut self.state.components, field, plan.crop)
             .expect("validated component insertion");
         world.jobs.insert(actor, plan.job);
         self.state
@@ -484,18 +499,24 @@ impl Simulation {
             .cultivation_facts(actor, job.field, None)
             .expect("validated cultivation actor");
         let world = self.state.agriculture.as_ref().unwrap();
-        let field = &world.field(job.field).expect("component exists");
+        let field = &world
+            .field(&self.state.components, job.field)
+            .expect("component exists");
         let room = |id: InventoryId| {
             let stock = &self.state.inventories[&id];
             Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))
         };
         let plan = game_agriculture::prepare_completion(
             field,
-            world.crop(job.field).expect("component exists"),
-            world.soil(job.field).expect("component exists"),
+            world
+                .crop(&self.state.components, job.field)
+                .expect("component exists"),
+            world
+                .soil(&self.state.components, job.field)
+                .expect("component exists"),
             &job,
             world
-                .rules_for(job.field)
+                .rules_for(&self.state.components, job.field)
                 .expect("validated crop definition"),
             game_agriculture::CompletionFacts {
                 now: self.state.time,
@@ -527,10 +548,10 @@ impl Simulation {
         });
         let world = self.state.agriculture.as_mut().unwrap();
         world
-            .insert_crop(job.field, plan.crop)
+            .insert_crop(&mut self.state.components, job.field, plan.crop)
             .expect("validated component insertion");
         world
-            .insert_soil(job.field, plan.soil)
+            .insert_soil(&mut self.state.components, job.field, plan.soil)
             .expect("validated component insertion");
         self.state
             .physical
@@ -567,12 +588,12 @@ impl Simulation {
         };
         Some(AgricultureView {
             fields: world
-                .fields()
+                .fields(&self.state.components)
                 .map(|(_, value)| value)
                 .filter(|field| field.area == area)
                 .filter_map(|field| {
-                    let crop = world.crop(field.id)?;
-                    let soil = world.soil(field.id)?;
+                    let crop = world.crop(&self.state.components, field.id)?;
+                    let soil = world.soil(&self.state.components, field.id)?;
                     Some(FieldView {
                         id: field.id,
                         crop: crop.definition.clone(),
@@ -594,7 +615,7 @@ impl Simulation {
             return Vec::new();
         };
         world
-            .fields()
+            .fields(&self.state.components)
             .map(|(id, _)| id)
             .flat_map(|field| {
                 [
@@ -623,7 +644,7 @@ impl Simulation {
     ) -> Option<Command> {
         let world = self.state.agriculture.as_ref()?;
         world
-            .fields()
+            .fields(&self.state.components)
             .map(|(id, _)| id)
             .find_map(|field| self.autonomous_field_cultivation(actor, field, resources))
     }
@@ -634,7 +655,7 @@ impl Simulation {
         resources: Option<&equipment::RankingResources>,
     ) -> Option<Command> {
         let world = self.state.agriculture.as_ref()?;
-        let (_, crop, soil, rules) = world.field_bundle(field).ok()?;
+        let (_, crop, soil, rules) = world.field_bundle(&self.state.components, field).ok()?;
         let operation = game_agriculture::next_operation(crop, soil, rules)?;
         self.prepare_cultivation_start(actor, field, operation, resources)
             .is_ok()
@@ -643,17 +664,29 @@ impl Simulation {
 
     pub(crate) fn validate_agriculture(&self) -> Result<(), Error> {
         let Some(world) = &self.state.agriculture else {
+            if self.state.components.iter::<Field>().next().is_some()
+                || self.state.components.iter::<Crop>().next().is_some()
+                || self.state.components.iter::<Soil>().next().is_some()
+            {
+                return Err(Error::InvalidSave(
+                    "agricultural components have no runtime".into(),
+                ));
+            }
             return Ok(());
         };
         let invalid = || Error::InvalidSave("invalid calendar, climate, crop or field".into());
         let environment = self.state.environment.as_ref();
         world
-            .validate(self.state.time, environment.map(|w| w.calendar.year_days()))
+            .validate(
+                &self.state.components,
+                self.state.time,
+                environment.map(|w| w.calendar.year_days()),
+            )
             .map_err(|_| invalid())?;
         if environment.is_some_and(|w| world.day != w.weather_day) {
             return Err(invalid());
         }
-        for (id, field) in world.fields() {
+        for (id, field) in world.fields(&self.state.components) {
             if id != field.id
                 || id.0 >= self.state.next_id
                 || self
@@ -670,7 +703,7 @@ impl Simulation {
                     .iter()
                     .chain(
                         world
-                            .crop(id)
+                            .crop(&self.state.components, id)
                             .expect("component exists")
                             .contributions
                             .keys(),
@@ -697,7 +730,7 @@ impl Simulation {
             }
         }
         for (actor, job) in &world.jobs {
-            let Some(field) = world.field(job.field) else {
+            let Some(field) = world.field(&self.state.components, job.field) else {
                 return Err(invalid());
             };
             if !self.person_index.contains_key(actor)

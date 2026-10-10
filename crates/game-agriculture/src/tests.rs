@@ -1,5 +1,192 @@
 use super::*;
 
+/// Standalone tests assemble a host store explicitly. This wrapper is test-only;
+/// production runtime metadata never contains or copies component storage.
+struct Fixture {
+    runtime: Runtime,
+    store: game_ecs::Store,
+    queries: Queries,
+}
+impl std::ops::Deref for Fixture {
+    type Target = Runtime;
+    fn deref(&self) -> &Runtime {
+        &self.runtime
+    }
+}
+impl std::ops::DerefMut for Fixture {
+    fn deref_mut(&mut self) -> &mut Runtime {
+        &mut self.runtime
+    }
+}
+impl Fixture {
+    fn with_runtime(runtime: Runtime) -> Result<Self, Error> {
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema)?;
+        let mut store = game_ecs::Store::with_schema(schema);
+        let queries = Runtime::bind(&mut store);
+        Ok(Self {
+            runtime,
+            store,
+            queries,
+        })
+    }
+    fn new(catalog: Catalog, day: u64) -> Result<Self, Error> {
+        Self::with_runtime(Runtime::new(catalog, day)?)
+    }
+    #[cfg(feature = "content")]
+    fn from_content(document: game_content::Document<Catalog>, day: u64) -> Result<Self, Error> {
+        Self::with_runtime(Runtime::from_content(document, day)?)
+    }
+    fn fields(&self) -> impl Iterator<Item = (SiteId, &Field)> {
+        self.runtime.fields(&self.store)
+    }
+    fn soils(&self) -> impl Iterator<Item = (SiteId, &Soil)> {
+        self.runtime.soils(&self.store)
+    }
+    fn field(&self, id: SiteId) -> Option<&Field> {
+        self.runtime.field(&self.store, id)
+    }
+    fn crop(&self, id: SiteId) -> Option<&Crop> {
+        self.runtime.crop(&self.store, id)
+    }
+    fn soil(&self, id: SiteId) -> Option<&Soil> {
+        self.runtime.soil(&self.store, id)
+    }
+    fn field_mut(&mut self, id: SiteId) -> Option<&mut Field> {
+        self.runtime.field_mut(&mut self.store, id)
+    }
+    fn crop_mut(&mut self, id: SiteId) -> Option<&mut Crop> {
+        self.runtime.crop_mut(&mut self.store, id)
+    }
+    fn soil_mut(&mut self, id: SiteId) -> Option<&mut Soil> {
+        self.runtime.soil_mut(&mut self.store, id)
+    }
+    fn insert_field(&mut self, field: Field) -> Result<(), Error> {
+        self.runtime.insert_field(&mut self.store, field)?;
+        self.queries.refresh(&self.store)
+    }
+    fn insert_crop(&mut self, id: SiteId, crop: Crop) -> Result<(), Error> {
+        self.runtime.insert_crop(&mut self.store, id, crop)?;
+        self.queries.refresh(&self.store)
+    }
+    fn insert_soil(&mut self, id: SiteId, soil: Soil) -> Result<(), Error> {
+        self.runtime.insert_soil(&mut self.store, id, soil)?;
+        self.queries.refresh(&self.store)
+    }
+    fn remove_soil(&mut self, id: SiteId) -> Result<Option<Soil>, Error> {
+        let previous = self.runtime.remove_soil(&mut self.store, id)?;
+        self.queries.refresh(&self.store)?;
+        Ok(previous)
+    }
+    fn rules_for(&self, id: SiteId) -> Result<&CropRules, Error> {
+        self.runtime.rules_for(&self.store, id)
+    }
+    fn field_bundle(&self, id: SiteId) -> Result<(&Field, &Crop, &Soil, &CropRules), Error> {
+        self.runtime.field_bundle(&self.store, id)
+    }
+    fn validate(&self, now: SimTime, year_days: Option<u64>) -> Result<(), Error> {
+        self.runtime.validate(&self.store, now, year_days)
+    }
+    fn prepare_advance(
+        &self,
+        from: SimTime,
+        next: SimTime,
+        day: Option<&LocalWeatherDay>,
+        evaluate: impl FnOnce(
+            &[(SiteId, GrowthInput<'_>)],
+        ) -> Result<Vec<(SiteId, GrowthOutput)>, Error>,
+    ) -> Result<PreparedAdvance, Error> {
+        self.runtime
+            .prepare_advance(&self.store, &self.queries, from, next, day, evaluate)
+    }
+    fn prepare_advance_serial(
+        &self,
+        from: SimTime,
+        next: SimTime,
+        day: Option<&LocalWeatherDay>,
+    ) -> Result<PreparedAdvance, Error> {
+        self.runtime
+            .prepare_advance_serial(&self.store, &self.queries, from, next, day)
+    }
+    fn commit_advance(&mut self, prepared: PreparedAdvance) -> Result<(), Error> {
+        self.runtime.commit_advance(&mut self.store, prepared)
+    }
+    fn advance(
+        &self,
+        from: SimTime,
+        next: SimTime,
+        day: Option<&LocalWeatherDay>,
+    ) -> Result<Self, Error> {
+        let prepared = self.prepare_advance_serial(from, next, day)?;
+        let mut next = self.clone();
+        next.commit_advance(prepared)?;
+        Ok(next)
+    }
+}
+impl Clone for Fixture {
+    fn clone(&self) -> Self {
+        let mut store = self.store.clone();
+        let queries = Runtime::bind(&mut store);
+        Self {
+            runtime: self.runtime.clone(),
+            store,
+            queries,
+        }
+    }
+}
+impl PartialEq for Fixture {
+    fn eq(&self, other: &Self) -> bool {
+        self.runtime == other.runtime && self.store == other.store
+    }
+}
+impl std::fmt::Debug for Fixture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fixture")
+            .field("runtime", &self.runtime)
+            .field("store", &self.store)
+            .finish()
+    }
+}
+#[derive(Serialize)]
+struct FixtureRef<'a> {
+    runtime: &'a Runtime,
+    components: game_ecs::Snapshot,
+}
+#[derive(Deserialize)]
+struct SavedFixture {
+    runtime: Runtime,
+    components: game_ecs::Snapshot,
+}
+impl Serialize for Fixture {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        FixtureRef {
+            runtime: &self.runtime,
+            components: self.store.snapshot().map_err(serde::ser::Error::custom)?,
+        }
+        .serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for Fixture {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let saved = SavedFixture::deserialize(deserializer)?;
+        saved
+            .runtime
+            .catalog
+            .validate(None)
+            .map_err(serde::de::Error::custom)?;
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).map_err(serde::de::Error::custom)?;
+        let mut store =
+            game_ecs::Store::restore(schema, saved.components).map_err(serde::de::Error::custom)?;
+        let queries = Runtime::bind(&mut store);
+        Ok(Self {
+            runtime: saved.runtime,
+            store,
+            queries,
+        })
+    }
+}
+
 fn rules() -> CropRules {
     // Test fixture, deliberately distinct from the authored setting.
     CropRules {
@@ -24,10 +211,10 @@ fn rules() -> CropRules {
         soil_recovery: 1,
     }
 }
-fn world() -> World {
+fn world() -> Fixture {
     let rules = rules();
     let definition = CropId("test/cereal".into());
-    let mut world = World::new(
+    let mut world = Fixture::new(
         Catalog {
             default_crop: definition.clone(),
             crops: BTreeMap::from([(definition.clone(), rules.clone())]),
@@ -115,12 +302,16 @@ fn closing(now: SimTime) -> CompletionFacts {
         seed_room: Quantity(u64::MAX),
     }
 }
-fn start(world: &World, operation: FarmOperation, facts: BeginFacts) -> Result<BeginEffect, Error> {
+fn start(
+    world: &Fixture,
+    operation: FarmOperation,
+    facts: BeginFacts,
+) -> Result<BeginEffect, Error> {
     let (field, crop, soil, rules) = world.field_bundle(SiteId(1))?;
     prepare_begin(field, crop, soil, rules, operation, facts)
 }
 fn finish(
-    world: &World,
+    world: &Fixture,
     job: &Cultivation,
     facts: CompletionFacts,
 ) -> Result<CropCompletion, Error> {
@@ -274,7 +465,7 @@ fn labor_and_restore_are_identical_across_slices() {
         .advance(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
         .unwrap();
     let early = world.advance(SimTime(0), SimTime(17_001), None).unwrap();
-    let restored: World = serde_json::from_slice(&serde_json::to_vec(&early).unwrap()).unwrap();
+    let restored: Fixture = serde_json::from_slice(&serde_json::to_vec(&early).unwrap()).unwrap();
     let split = restored
         .advance(SimTime(17_001), SimTime(60_000), Some(&day(1, 10)))
         .unwrap();
@@ -381,13 +572,14 @@ fn calendar_validation_is_optional_and_has_no_climate_state_dependency() {
 fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
     let mut valid = world();
     valid.crop_mut(SiteId(1)).unwrap().tending = 0;
+    let completes = SimTime(valid.rules_for(SiteId(1)).unwrap().tend_labor.0);
     valid.jobs.insert(
         PersonId(3),
         Cultivation {
             field: SiteId(1),
             operation: FarmOperation::Tend,
             labor_ms: 0,
-            completes: SimTime(valid.rules_for(SiteId(1)).unwrap().tend_labor.0),
+            completes,
         },
     );
     valid.validate(SimTime(0), Some(365)).unwrap();
@@ -398,7 +590,8 @@ fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
     bad.jobs.get_mut(&PersonId(3)).unwrap().completes.0 += 1;
     assert!(bad.validate(SimTime(0), Some(365)).is_err());
     let mut bad = valid.clone();
-    bad.jobs.insert(PersonId(8), bad.jobs[&PersonId(3)].clone());
+    let duplicate = bad.jobs[&PersonId(3)].clone();
+    bad.jobs.insert(PersonId(8), duplicate);
     assert!(bad.validate(SimTime(0), None).is_err());
     let mut bad = valid.clone();
     bad.crop_mut(SiteId(1))
@@ -533,9 +726,10 @@ fn authored_crop_content_round_trips_and_edits_change_behavior_without_code_chan
     ))
     .unwrap();
     document.data.validate(Some(365)).unwrap();
-    let original = World::from_content(document.clone(), 0).unwrap();
+    let original = Fixture::from_content(document.clone(), 0).unwrap();
     assert!(original.content.is_some());
-    let restored: World = serde_json::from_slice(&serde_json::to_vec(&original).unwrap()).unwrap();
+    let restored: Fixture =
+        serde_json::from_slice(&serde_json::to_vec(&original).unwrap()).unwrap();
     assert_eq!(original, restored);
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -544,7 +738,7 @@ fn authored_crop_content_round_trips_and_edits_change_behavior_without_code_chan
     .unwrap();
     let edited: game_content::Document<Catalog> =
         game_content::parse(&source.replace("food_yield = 6000000", "food_yield = 250")).unwrap();
-    let changed = World::from_content(edited, 0).unwrap();
+    let changed = Fixture::from_content(edited, 0).unwrap();
     assert_ne!(original.content, changed.content);
     let crop = world().crop(SiteId(1)).unwrap().clone();
     let soil = Soil {
@@ -750,7 +944,7 @@ fn pure_growth_batches_are_identical_under_threaded_evaluation_and_zero_duration
 fn native_component_allocation_order_clone_and_restore_do_not_change_growth_or_save() {
     let sample = world();
     let make = |reverse: bool| {
-        let mut world = World::new(sample.catalog.clone(), 0).unwrap();
+        let mut world = Fixture::new(sample.catalog.clone(), 0).unwrap();
         let ids = if reverse {
             [SiteId(8), SiteId(1)]
         } else {
@@ -776,7 +970,7 @@ fn native_component_allocation_order_clone_and_restore_do_not_change_growth_or_s
         serde_json::to_vec(&first).unwrap(),
         serde_json::to_vec(&second).unwrap()
     );
-    let restored: World = serde_json::from_slice(&serde_json::to_vec(&second).unwrap()).unwrap();
+    let restored: Fixture = serde_json::from_slice(&serde_json::to_vec(&second).unwrap()).unwrap();
     assert_eq!(restored, first);
     let forcing = day(1, 10);
     let outcomes: Vec<_> = [first.clone(), second, restored]
@@ -913,4 +1107,102 @@ fn dense_growth_and_sparse_labor_merge_once_in_stable_order() {
     assert_eq!(world.crop(SiteId(8)).unwrap().degree_days_milli, 0);
     assert_eq!(world.crop(SiteId(3)).unwrap().degree_days_milli, 10_000);
     world.validate(SimTime(60_000), None).unwrap();
+}
+
+#[test]
+fn shared_host_foreign_components_survive_agricultural_commits_and_bind_after_structure_changes() {
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct ForeignTag {
+        value: u64,
+    }
+    let fixture = world();
+    let mut runtime = fixture.runtime.clone();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<ForeignTag>("fixture/foreign-tag", |_| Ok(()))
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    runtime
+        .insert_field(&mut store, fixture.field(SiteId(1)).unwrap().clone())
+        .unwrap();
+    runtime
+        .insert_crop(
+            &mut store,
+            SiteId(1),
+            fixture.crop(SiteId(1)).unwrap().clone(),
+        )
+        .unwrap();
+    runtime
+        .insert_soil(
+            &mut store,
+            SiteId(1),
+            fixture.soil(SiteId(1)).unwrap().clone(),
+        )
+        .unwrap();
+    let mut queries = Runtime::bind(&mut store);
+    store
+        .insert(game_ecs::StableId(1), ForeignTag { value: 4 })
+        .unwrap();
+    assert!(
+        runtime
+            .prepare_advance_serial(
+                &store,
+                &queries,
+                SimTime(0),
+                SimTime(60_000),
+                Some(&day(1, 10))
+            )
+            .is_err()
+    );
+    queries.refresh(&store).unwrap();
+    let batch = runtime
+        .prepare_advance_serial(
+            &store,
+            &queries,
+            SimTime(0),
+            SimTime(60_000),
+            Some(&day(1, 10)),
+        )
+        .unwrap();
+    store
+        .get_mut::<ForeignTag>(game_ecs::StableId(1))
+        .unwrap()
+        .value = 8;
+    runtime.validate_advance(&store, &batch).unwrap();
+    runtime.commit_advance(&mut store, batch).unwrap();
+    assert_eq!(
+        store.get::<ForeignTag>(game_ecs::StableId(1)),
+        Some(&ForeignTag { value: 8 })
+    );
+    assert_eq!(
+        runtime.crop(&store, SiteId(1)).unwrap().degree_days_milli,
+        10_000
+    );
+    let snapshot = store.snapshot().unwrap();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<ForeignTag>("fixture/foreign-tag", |_| Ok(()))
+        .unwrap();
+    let mut restored = game_ecs::Store::restore(schema, snapshot).unwrap();
+    let bound = Runtime::bind(&mut restored);
+    let batch = runtime
+        .prepare_advance_serial(
+            &restored,
+            &bound,
+            SimTime(60_000),
+            SimTime(120_000),
+            Some(&day(2, 10)),
+        )
+        .unwrap();
+    runtime.commit_advance(&mut restored, batch).unwrap();
+    assert_eq!(
+        runtime.crop(&restored, SiteId(1)).unwrap().phase,
+        CropPhase::Ripe
+    );
+    assert_eq!(
+        restored.get::<ForeignTag>(game_ecs::StableId(1)),
+        Some(&ForeignTag { value: 8 })
+    );
 }

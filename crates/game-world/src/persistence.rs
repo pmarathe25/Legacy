@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 25;
+const SAVE_VERSION: u32 = 26;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -52,6 +52,9 @@ impl Simulation {
 fn validate(s: &CanonicalState) -> Result<(), Error> {
     genetics::validate(s)?;
     let fail = || Error::InvalidSave("inconsistent committed state".into());
+    if s.components.ids().any(|id| id.0 == 0 || id.0 >= s.next_id) {
+        return Err(fail());
+    }
     let playable = scenarios::PLAYABLE.contains(&s.scenario.id.as_str());
     let enforcement_fixture = matches!(
         s.scenario.id.as_str(),
@@ -346,7 +349,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     if let Some(world) = &s.agriculture {
-        for id in world.fields().map(|(id, _)| id) {
+        for id in world.fields(&s.components).map(|(id, _)| id) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -1659,7 +1662,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .agriculture
                         .as_ref()
-                        .is_some_and(|w| w.field(field).is_some())
+                        .is_some_and(|w| w.field(&s.components, field).is_some())
                 {
                     return Err(fail());
                 }
@@ -1668,7 +1671,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .agriculture
                     .as_ref()
-                    .is_some_and(|w| w.field(field).is_some())
+                    .is_some_and(|w| w.field(&s.components, field).is_some())
                 {
                     return Err(fail());
                 }

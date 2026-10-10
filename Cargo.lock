@@ -734,6 +734,7 @@ dependencies = [
  "game-content",
  "game-core",
  "game-ecology",
+ "game-ecs",
  "game-environment",
  "game-genetics",
  "game-health",

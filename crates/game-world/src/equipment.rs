@@ -149,7 +149,7 @@ impl Simulation {
                     .state
                     .agriculture
                     .as_ref()
-                    .and_then(|world| world.field(field))
+                    .and_then(|world| world.field(&self.state.components, field))
                     .map(|field| field.tool),
                 Activity::Instruction { .. } | Activity::Practice { .. } => {
                     self.social_selected_tool(*actor)
@@ -380,7 +380,7 @@ impl Simulation {
         self.state
             .agriculture
             .as_ref()
-            .and_then(|world| world.field(field))
+            .and_then(|world| world.field(&self.state.components, field))
             .is_some_and(|field| self.tool_available_for(actor, field.tool))
     }
 
@@ -775,7 +775,7 @@ mod tests {
             .agriculture
             .as_ref()
             .unwrap()
-            .fields()
+            .fields(&sim.state.components)
             .map(|(_, value)| value)
             .next()
             .unwrap()
@@ -798,7 +798,7 @@ mod tests {
             .agriculture
             .as_mut()
             .unwrap()
-            .crop_mut(field.id)
+            .crop_mut(&mut sim.state.components, field.id)
             .unwrap();
         land.preparation_ms = 0;
         land.phase = agriculture::CropPhase::Fallow;
@@ -886,7 +886,7 @@ mod tests {
                 .agriculture
                 .as_ref()
                 .unwrap()
-                .crop(field.id)
+                .crop(&sim.state.components, field.id)
                 .expect("component exists")
                 .phase,
             agriculture::CropPhase::Prepared

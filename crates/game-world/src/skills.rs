@@ -486,7 +486,7 @@ mod tests {
             .agriculture
             .as_ref()
             .unwrap()
-            .fields()
+            .fields(&farmer.state.components)
             .find(|(_, field)| field.access == BTreeSet::from([actor]))
             .unwrap()
             .0;
@@ -495,7 +495,7 @@ mod tests {
             .agriculture
             .as_ref()
             .unwrap()
-            .field(field)
+            .field(&farmer.state.components, field)
             .unwrap()
             .area;
         farmer.debug_move_actor(actor, area).unwrap();

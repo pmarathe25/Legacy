@@ -6,6 +6,7 @@ pub mod armies;
 pub mod benchmark;
 pub mod combat;
 mod commands;
+mod components;
 pub mod compute;
 pub mod decisions;
 pub mod development;
@@ -36,6 +37,7 @@ pub mod skills;
 pub mod social;
 pub mod transport;
 
+pub use components::Components;
 use game_api::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -119,6 +121,7 @@ enum Due {
 /// Logical state in persistent ID order; excludes host publication counters and timings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalState {
+    pub components: Components,
     pub armies: Option<armies::World>,
     pub realm: Option<realm::World>,
     pub transport: Option<game_transport::World>,
@@ -146,7 +149,7 @@ pub struct CanonicalState {
     pub combat: Option<combat::World>,
     #[serde(default)]
     pub environment: Option<environment::World>,
-    pub agriculture: Option<game_agriculture::World>,
+    pub agriculture: Option<game_agriculture::Runtime>,
     #[serde(default)]
     pub agreements: Option<agreements::World>,
     #[serde(default)]
@@ -190,6 +193,7 @@ pub struct Simulation {
     pregnancy_index: BTreeMap<PersonId, PregnancyId>,
     care_index: BTreeMap<PersonId, PersonId>,
     dependent_index: BTreeMap<AreaId, BTreeSet<PersonId>>,
+    agriculture_queries: game_agriculture::Queries,
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
@@ -428,6 +432,7 @@ impl Simulation {
             ));
         }
         let mut state = CanonicalState {
+            components: Components::new()?,
             transport: None,
             genetics: None,
             physical_traits: None,
@@ -545,7 +550,7 @@ impl Simulation {
     }
 
     fn from_state(
-        state: CanonicalState,
+        mut state: CanonicalState,
         execution: Execution,
         revision: u64,
     ) -> Result<Self, Error> {
@@ -609,6 +614,7 @@ impl Simulation {
                 }
             }
         }
+        let agriculture_queries = game_agriculture::Runtime::bind(&mut state.components);
         let sim = Self {
             state,
             engine,
@@ -620,6 +626,7 @@ impl Simulation {
             pregnancy_index,
             care_index,
             dependent_index,
+            agriculture_queries,
         };
         sim.validate_environment()?;
         sim.validate_agriculture()?;
@@ -1190,6 +1197,7 @@ impl Simulation {
                 .ok_or(Error::Overflow)?,
         );
         while self.state.time < requested {
+            self.agriculture_queries.refresh(&self.state.components)?;
             if let Some(warning) = self.required_invocation_input() {
                 return Ok(AdvanceResult {
                     requested,
@@ -1346,12 +1354,16 @@ impl Simulation {
                     possible_outputs.push((
                         field,
                         Good::Food,
-                        agriculture.rules_for(field)?.food_yield,
+                        agriculture
+                            .rules_for(&self.state.components, field)?
+                            .food_yield,
                     ));
                     possible_outputs.push((
                         field,
                         Good::Seed,
-                        agriculture.rules_for(field)?.seed_yield,
+                        agriculture
+                            .rules_for(&self.state.components, field)?
+                            .seed_yield,
                     ));
                 }
             }
@@ -1413,10 +1425,9 @@ impl Simulation {
             self.mission_event_bound() as u64,
             self.army_event_bound() as u64,
             self.health_event_bound() as u64,
-            self.state
-                .agriculture
-                .as_ref()
-                .map_or(0, |world| world.fields().count() as u64),
+            self.state.agriculture.as_ref().map_or(0, |world| {
+                world.fields(&self.state.components).count() as u64
+            }),
             ledger_demand.events()?,
             society_demand.events,
             invocation_output.event_demand(),
@@ -1540,7 +1551,7 @@ impl Simulation {
                 .agriculture
                 .as_ref()
                 .ok_or(Error::Unavailable)?
-                .validate_advance(batch)?;
+                .validate_advance(&self.state.components, batch)?;
         }
         self.profile.evaluation_ns += evaluation_ns;
         self.profile.arbitration_ns += arbitration_ns;

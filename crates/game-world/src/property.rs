@@ -873,7 +873,7 @@ impl Simulation {
                         .state
                         .agriculture
                         .as_ref()
-                        .and_then(|w| w.field(field))
+                        .and_then(|w| w.field(&self.state.components, field))
                         .ok_or(Error::Unavailable)?;
                     touched.insert(land.food);
                     touched.insert(land.seed);

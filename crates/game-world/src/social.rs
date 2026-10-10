@@ -342,16 +342,19 @@ impl Simulation {
                             };
                             if skill == Skill::Farming
                                 && !self.state.agriculture.as_ref().is_some_and(|w| {
-                                    w.fields().map(|(_, value)| value).any(|field| {
-                                        field.area
-                                            == match self.state.people[self.person_index[&teacher]]
-                                                .location
-                                            {
-                                                Location::AtArea(a) => a,
-                                                _ => unreachable!(),
-                                            }
-                                            && field.access.contains(&teacher)
-                                    })
+                                    w.fields(&self.state.components)
+                                        .map(|(_, value)| value)
+                                        .any(|field| {
+                                            field.area
+                                                == match self.state.people
+                                                    [self.person_index[&teacher]]
+                                                    .location
+                                                {
+                                                    Location::AtArea(a) => a,
+                                                    _ => unreachable!(),
+                                                }
+                                                && field.access.contains(&teacher)
+                                        })
                                 })
                             {
                                 return Err(Error::Unavailable);

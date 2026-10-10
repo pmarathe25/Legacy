@@ -257,9 +257,12 @@ impl Simulation {
         // It does not prescribe property or caregiving for other societies.
         let residents: BTreeSet<_> = self.state.people.iter().map(|p| p.id).collect();
         let world = self.state.agriculture.as_mut().unwrap();
-        let fields: Vec<_> = world.fields().map(|(id, _)| id).collect();
+        let fields: Vec<_> = world
+            .fields(&self.state.components)
+            .map(|(id, _)| id)
+            .collect();
         for id in fields {
-            let field = world.field_mut(id).unwrap();
+            let field = world.field_mut(&mut self.state.components, id).unwrap();
             field.access = residents.clone();
             self.state.inventories.get_mut(&field.tool).unwrap().access = residents.clone();
         }

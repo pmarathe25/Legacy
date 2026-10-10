@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 game-content.workspace = true
+game-ecs.workspace = true
 game-workshop.workspace = true
 game-cargo.workspace = true
 game-logistics.workspace = true

@@ -83,7 +83,7 @@ fn merge_site_rows<T>(left: Vec<(SiteId, T)>, right: Vec<(SiteId, T)>) -> Vec<(S
     merged.extend(right);
     merged
 }
-impl World {
+impl Runtime {
     pub fn next_boundary(&self, now: SimTime, limit: SimTime) -> SimTime {
         self.jobs
             .values()
@@ -94,6 +94,8 @@ impl World {
 
     pub fn prepare_advance(
         &self,
+        store: &game_ecs::Store,
+        queries: &Queries,
         from: SimTime,
         next: SimTime,
         day: Option<&LocalWeatherDay>,
@@ -120,13 +122,13 @@ impl World {
             if !occupied.insert(job.field) || next > job.completes {
                 return Err(bad());
             }
-            let crop = self.crop(job.field).ok_or_else(bad)?;
+            let crop = self.crop(store, job.field).ok_or_else(bad)?;
             let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
             crop.validate(rules)?;
             if elapsed == 0 {
                 continue;
             }
-            let field = self.field(job.field).ok_or_else(bad)?;
+            let field = self.field(store, job.field).ok_or_else(bad)?;
             let mut next_crop = crop.clone();
             let mut next_job = job.clone();
             next_job.labor_ms = next_job
@@ -169,9 +171,7 @@ impl World {
                 return Err(bad());
             }
             let mut joined = Vec::new();
-            for (stable_id, field, opening_crop, soil) in
-                self.growth_query.iter(&self.components)?
-            {
+            for (stable_id, field, opening_crop, soil) in queries.growth.iter(store)? {
                 let Some(weather) = day.cells.get(&field.area) else {
                     continue;
                 };
@@ -285,11 +285,13 @@ impl World {
 
     pub fn prepare_advance_serial(
         &self,
+        store: &game_ecs::Store,
+        queries: &Queries,
         from: SimTime,
         next: SimTime,
         day: Option<&LocalWeatherDay>,
     ) -> Result<PreparedAdvance, Error> {
-        self.prepare_advance(from, next, day, |inputs| {
+        self.prepare_advance(store, queries, from, next, day, |inputs| {
             inputs
                 .iter()
                 .map(|(id, input)| Ok((*id, input.evaluate()?)))
@@ -298,22 +300,26 @@ impl World {
     }
 
     /// Checks the complete read set without publishing component rows.
-    pub fn validate_advance(&self, prepared: &PreparedAdvance) -> Result<(), Error> {
+    pub fn validate_advance(
+        &self,
+        store: &game_ecs::Store,
+        prepared: &PreparedAdvance,
+    ) -> Result<(), Error> {
         if self.day != prepared.opening_day
             || prepared
                 .crops
                 .iter()
-                .any(|(id, change)| self.crop(*id) != Some(&change.before))
+                .any(|(id, change)| self.crop(store, *id) != Some(&change.before))
             || prepared
                 .soils
                 .iter()
-                .any(|(id, change)| self.soil(*id) != Some(&change.before))
+                .any(|(id, change)| self.soil(store, *id) != Some(&change.before))
             || prepared
                 .jobs
                 .iter()
                 .any(|(id, change)| self.jobs.get(id) != Some(&change.before))
             || prepared.fields.iter().any(|(id, expected)| {
-                self.field(*id).map(|field| (field.id, field.area)) != Some(*expected)
+                self.field(store, *id).map(|field| (field.id, field.area)) != Some(*expected)
             })
             || prepared
                 .rules
@@ -338,32 +344,22 @@ impl World {
     }
 
     /// Publishes only prepared rows after validating the complete read set.
-    pub fn commit_advance(&mut self, prepared: PreparedAdvance) -> Result<(), Error> {
-        self.validate_advance(&prepared)?;
+    pub fn commit_advance(
+        &mut self,
+        store: &mut game_ecs::Store,
+        prepared: PreparedAdvance,
+    ) -> Result<(), Error> {
+        self.validate_advance(store, &prepared)?;
         for (id, change) in prepared.crops {
-            *self.crop_mut(id).expect("preflighted crop exists") = change.after;
+            *self.crop_mut(store, id).expect("preflighted crop exists") = change.after;
         }
         for (id, change) in prepared.soils {
-            *self.soil_mut(id).expect("preflighted soil exists") = change.after;
+            *self.soil_mut(store, id).expect("preflighted soil exists") = change.after;
         }
         for (id, change) in prepared.jobs {
             self.jobs.insert(id, change.after);
         }
         self.day = prepared.next_day;
         Ok(())
-    }
-
-    /// Snapshot convenience for callers that need a separate future world.
-    /// Runtime integration should prepare and commit the sparse row changes.
-    pub fn advance(
-        &self,
-        from: SimTime,
-        next: SimTime,
-        day: Option<&LocalWeatherDay>,
-    ) -> Result<Self, Error> {
-        let prepared = self.prepare_advance_serial(from, next, day)?;
-        let mut next = self.clone();
-        next.commit_advance(prepared)?;
-        Ok(next)
     }
 }

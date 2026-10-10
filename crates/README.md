@@ -15,7 +15,8 @@ flowchart TD
     World --> API
     World --> Sim[game-sim]
     World --> Content[game-content]
-    Domains -->|migrated component stores| ECS[game-ecs]
+    World --> ECS
+    Domains -->|typed component access| ECS[game-ecs]
     ECS --> Core
     ECS --> Backend[private ECS backend]
     World --> Domains[Domain crates]
@@ -52,7 +53,9 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 
 **Storage boundary:** `game-ecs` hides the chosen ECS engine. Feature data uses ordinary Rust types, stable game IDs, registered save schemas, and typed joins. Native entity handles, engine derives, and query internals remain in its private adapter. `game-sim` retains logical scheduling and per-simulation bounded execution.
 
-**Ownership:** A feature owns its component stores, validation, rules, and prepared changes. IDs join components across stores. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
+**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Agriculture already uses this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
+
+**Engine independence:** Feature interfaces expose plain values, borrowed component rows, and typed prepared changes. They do not expose engine entity handles, derives, query types, or schedules. Replacing the engine changes the private `game-ecs` adapter; its callers keep the same interfaces. Systems order authoritative results by stable game IDs because engine iteration order is unspecified.
 
 **Shared space:** Features share `game-core::AreaId` and `Location`, rather than defining separate maps. Fields refer to an area; soil attaches to the field entity; weather cells use the same area IDs. `Location::cell()` keeps a road segment in its departure cell until its scheduled arrival; carried entities use their resolved carrier location. Different spatial resolutions will use explicit mappings within this common model.
 

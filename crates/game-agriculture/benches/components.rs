@@ -1,10 +1,13 @@
 //! Isolated feature benchmark: actual daily crop logic, including preparation,
 //! immutable joins, executor dispatch, staged rows, guards, and commit.
 use game_agriculture::{
-    Catalog, Crop, CropPhase, Field, LocalWeatherDay, Soil, WeatherFacts, World,
+    Catalog, Crop, CropPhase, Field, LocalWeatherDay, Queries, Runtime, Soil, WeatherFacts,
+    register_components,
 };
 use game_core::{AreaId, Error, InventoryId, SimTime, SiteId};
+use game_ecs::{Schema, Snapshot, Store};
 use game_sim::{Execution, Executor};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
@@ -15,43 +18,87 @@ const DAY: u64 = 86_400_000;
 const IDLE_STEPS: u64 = 1_000;
 #[derive(Clone, Copy)]
 enum Mode {
-    Snapshot,
     Serial,
     Ordered(usize),
 }
 impl Mode {
     fn name(self) -> String {
         match self {
-            Self::Snapshot => "snapshot_baseline".into(),
             Self::Serial => "components_serial".into(),
             Self::Ordered(workers) => format!("components_ordered_{workers}"),
         }
     }
 }
-fn initial_world(fields: usize, path: &PathBuf) -> Result<World, Error> {
-    let mut world = World::from_content(Catalog::read(path)?, 0)?;
-    let definition = world.catalog.default_crop.clone();
-    let rules = world.catalog.crops[&definition].clone();
-    for index in 0..fields {
+/// Benchmark composition owns the store. Runtime has no component authority;
+/// query metadata is bound outside the saved data and rebuilt after restoration.
+struct Fixture {
+    runtime: Runtime,
+    store: Store,
+    queries: Queries,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Saved {
+    runtime: Runtime,
+    components: Snapshot,
+}
+fn schema() -> Result<Schema, Error> {
+    let mut schema = Schema::new();
+    register_components(&mut schema)?;
+    Ok(schema)
+}
+impl Fixture {
+    fn saved(&self) -> Result<Saved, Error> {
+        Ok(Saved {
+            runtime: self.runtime.clone(),
+            components: self.store.snapshot()?,
+        })
+    }
+    fn restore(saved: Saved) -> Result<Self, Error> {
+        let mut store = Store::restore(schema()?, saved.components)?;
+        let queries = Runtime::bind(&mut store);
+        Ok(Self {
+            runtime: saved.runtime,
+            store,
+            queries,
+        })
+    }
+    fn validate(&self, now: SimTime) -> Result<(), Error> {
+        self.runtime.validate(&self.store, now, Some(365))
+    }
+}
+fn initial_world(fields: usize, path: &PathBuf, reverse: bool) -> Result<Fixture, Error> {
+    let runtime = Runtime::from_content(Catalog::read(path)?, 0)?;
+    let mut store = Store::with_schema(schema()?);
+    let definition = runtime.catalog.default_crop.clone();
+    let rules = &runtime.catalog.crops[&definition];
+    let mut indices: Vec<_> = (0..fields).collect();
+    if reverse {
+        indices.reverse();
+    }
+    for index in indices {
         let id = SiteId(index as u64 + 1);
         let inventory = |slot| InventoryId(index as u64 * 4 + slot);
-        world.insert_field(Field {
-            id,
-            area: AreaId(index as u64 / 100 + 1),
-            access: BTreeSet::new(),
-            custodian: None,
-            seed: inventory(1),
-            tool: inventory(2),
-            water: inventory(3),
-            food: inventory(4),
-        })?;
+        runtime.insert_field(
+            &mut store,
+            Field {
+                id,
+                area: AreaId(index as u64 / 100 + 1),
+                access: BTreeSet::new(),
+                custodian: None,
+                seed: inventory(1),
+                tool: inventory(2),
+                water: inventory(3),
+                food: inventory(4),
+            },
+        )?;
         let mut crop = Crop::new(definition.clone());
         crop.phase = CropPhase::Growing;
         crop.preparation_ms = rules.prepare_labor.0;
         crop.planting_ms = rules.plant_labor.0;
         crop.tending = (index % 1_001) as u16;
-        world.insert_crop(id, crop)?;
-        world.insert_soil(
+        runtime.insert_crop(&mut store, id, crop)?;
+        runtime.insert_soil(
+            &mut store,
             id,
             Soil {
                 fertility: 500 + (index % 501) as u16,
@@ -60,14 +107,20 @@ fn initial_world(fields: usize, path: &PathBuf) -> Result<World, Error> {
             },
         )?;
     }
-    world.validate(SimTime(0), Some(365))?;
-    Ok(world)
+    let queries = Runtime::bind(&mut store);
+    let fixture = Fixture {
+        runtime,
+        store,
+        queries,
+    };
+    fixture.validate(SimTime(0))?;
+    Ok(fixture)
 }
-fn weather(world: &World, days: u64) -> Vec<LocalWeatherDay> {
+fn weather(world: &Fixture, days: u64) -> Vec<LocalWeatherDay> {
     let areas: BTreeSet<_> = world
-        .fields()
-        .map(|(_, field)| field)
-        .map(|field| field.area)
+        .runtime
+        .fields(&world.store)
+        .map(|(_, field)| field.area)
         .collect();
     (1..=days)
         .map(|day| LocalWeatherDay {
@@ -90,10 +143,10 @@ fn weather(world: &World, days: u64) -> Vec<LocalWeatherDay> {
         .collect()
 }
 fn execute(
-    mut world: World,
+    mut world: Fixture,
     days: &[LocalWeatherDay],
     mode: Mode,
-) -> Result<(World, f64, usize), Error> {
+) -> Result<(Fixture, f64, usize), Error> {
     // Executor creation is startup work; every advance pays its full dispatch cost.
     let executor = match mode {
         Mode::Ordered(workers) => Some(Executor::new(Execution {
@@ -107,27 +160,30 @@ fn execute(
     for day in days {
         let from = SimTime((day.day - 1) * DAY);
         let next = SimTime(day.day * DAY);
-        match mode {
-            Mode::Snapshot => {
-                growth_rows += world.fields().count();
-                world = world.advance(from, next, Some(day))?;
-            }
-            Mode::Serial => {
-                let prepared = world.prepare_advance_serial(from, next, Some(day))?;
-                growth_rows += prepared.growth_rows();
-                world.commit_advance(prepared)?;
-            }
-            Mode::Ordered(_) => {
-                let prepared = world.prepare_advance(from, next, Some(day), |inputs| {
+        let prepared = match mode {
+            Mode::Serial => world.runtime.prepare_advance_serial(
+                &world.store,
+                &world.queries,
+                from,
+                next,
+                Some(day),
+            )?,
+            Mode::Ordered(_) => world.runtime.prepare_advance(
+                &world.store,
+                &world.queries,
+                from,
+                next,
+                Some(day),
+                |inputs| {
                     executor
                         .as_ref()
                         .unwrap()
                         .map_ordered(inputs, |input| input.evaluate())
-                })?;
-                growth_rows += prepared.growth_rows();
-                world.commit_advance(prepared)?;
-            }
-        }
+                },
+            )?,
+        };
+        growth_rows += prepared.growth_rows();
+        world.runtime.commit_advance(&mut world.store, prepared)?;
     }
     let milliseconds = started.elapsed().as_secs_f64() * 1_000.;
     Ok((world, milliseconds, growth_rows))
@@ -139,26 +195,35 @@ fn resident_high_water_kib() -> Option<u64> {
             .and_then(|value| value.split_whitespace().next()?.parse().ok())
     })
 }
-fn check_idle(world: &World) -> Result<(), Error> {
-    let mut next_world = world.clone();
+fn check_idle(world: &Fixture) -> Result<(), Error> {
+    let before = world.saved()?;
+    let mut next_world = Fixture::restore(before.clone())?;
     let mut callback_calls = 0;
     let started = Instant::now();
     for step in 0..IDLE_STEPS {
-        let prepared =
-            next_world.prepare_advance(SimTime(step), SimTime(step + 1), None, |_| {
+        let prepared = next_world.runtime.prepare_advance(
+            &next_world.store,
+            &next_world.queries,
+            SimTime(step),
+            SimTime(step + 1),
+            None,
+            |_| {
                 callback_calls += 1;
                 Err(Error::Unavailable)
-            })?;
+            },
+        )?;
         assert_eq!(prepared.growth_rows(), 0);
-        next_world.commit_advance(prepared)?;
+        next_world
+            .runtime
+            .commit_advance(&mut next_world.store, prepared)?;
     }
     let milliseconds = started.elapsed().as_secs_f64() * 1_000.;
     assert_eq!(callback_calls, 0);
-    assert_eq!(&next_world, world);
+    assert_eq!(next_world.saved()?, before);
     println!(
         "mode=subday_idle fields={} jobs={} steps={IDLE_STEPS} growth_rows=0 callback_calls={callback_calls} elapsed_ms={milliseconds:.3}",
-        world.fields().count(),
-        world.jobs.len()
+        world.runtime.fields(&world.store).count(),
+        world.runtime.jobs.len()
     );
     Ok(())
 }
@@ -174,32 +239,35 @@ fn main() -> Result<(), Error> {
     let fields: usize = argument(&args, 0, 10_000);
     let days: u64 = argument(&args, 1, 30);
     let samples: usize = argument(&args, 2, 3);
-    assert!(fields > 0 && days > 0 && samples > 0);
+    assert!(fields > 0 && days > 0 && days <= u64::MAX / DAY && samples > 0);
     let path = args.get(3).map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/agriculture/crops.toml")
     });
-    let initial = initial_world(fields, &path)?;
+    let initial = initial_world(fields, &path, false)?;
     let days = weather(&initial, days);
     check_idle(&initial)?;
+    let opening = initial.saved()?;
     let mut expected = None;
-    // This measures one isolated system, not full-game performance. The snapshot
-    // mode is the current convenience API, not a timing from an older release.
+    // This measures one isolated system, not full-game performance. Component
+    // allocation and save conversion are outside the measured daily pipeline.
     for mode in [
         Mode::Serial,
         Mode::Ordered(1),
         Mode::Ordered(2),
         Mode::Ordered(4),
-        Mode::Snapshot,
     ] {
         let mut timings = Vec::new();
         let mut rows = 0;
         let mut final_world = None;
         for sample in 0..samples {
-            let (world, milliseconds, evaluated) = execute(initial.clone(), &days, mode)?;
+            let fixture = initial_world(fields, &path, sample % 2 == 1)?;
+            assert_eq!(fixture.saved()?, opening);
+            let (world, milliseconds, evaluated) = execute(fixture, &days, mode)?;
+            let canonical = world.saved()?;
             if let Some(expected) = &expected {
-                assert_eq!(&world, expected, "mode={} sample={sample}", mode.name());
+                assert_eq!(&canonical, expected, "mode={} sample={sample}", mode.name());
             } else {
-                expected = Some(world.clone());
+                expected = Some(canonical);
             }
             rows = evaluated;
             timings.push(milliseconds);
@@ -208,30 +276,31 @@ fn main() -> Result<(), Error> {
         timings.sort_by(f64::total_cmp);
         let median = timings[timings.len() / 2];
         let final_world = final_world.unwrap();
-        final_world.validate(SimTime(days.len() as u64 * DAY), Some(365))?;
-        let saved = serde_json::to_vec(&final_world).unwrap();
-        let restored: World = serde_json::from_slice(&saved).unwrap();
-        restored.validate(SimTime(days.len() as u64 * DAY), Some(365))?;
-        assert_eq!(final_world, restored);
-        let growing = final_world
-            .crops()
-            .map(|(_, crop)| crop)
-            .filter(|crop| crop.phase == CropPhase::Growing)
-            .count();
-        let ripe = final_world
-            .crops()
-            .map(|(_, crop)| crop)
-            .filter(|crop| crop.phase == CropPhase::Ripe)
-            .count();
-        let failed = final_world
-            .crops()
-            .map(|(_, crop)| crop)
-            .filter(|crop| crop.phase == CropPhase::Failed)
-            .count();
+        let now = SimTime(days.len() as u64 * DAY);
+        final_world.validate(now)?;
+        let canonical = final_world.saved()?;
+        let saved = serde_json::to_vec(&canonical).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::to_vec(expected.as_ref().unwrap()).unwrap()
+        );
+        let restored = Fixture::restore(serde_json::from_slice(&saved).unwrap())?;
+        restored.validate(now)?;
+        assert_eq!(canonical, restored.saved()?);
+        let phase_count = |phase| {
+            final_world
+                .runtime
+                .crops(&final_world.store)
+                .filter(|(_, crop)| crop.phase == phase)
+                .count()
+        };
+        let growing = phase_count(CropPhase::Growing);
+        let ripe = phase_count(CropPhase::Ripe);
+        let failed = phase_count(CropPhase::Failed);
         println!(
             "mode={} fields={fields} jobs={} days={} samples={samples} growth_rows={rows} median_ms={median:.3} min_ms={:.3} max_ms={:.3} rows_per_second={:.0} growing={growing} ripe={ripe} failed={failed} save_bytes={} process_peak_rss_kib={:?}",
             mode.name(),
-            final_world.jobs.len(),
+            final_world.runtime.jobs.len(),
             days.len(),
             timings[0],
             timings[timings.len() - 1],
@@ -240,6 +309,8 @@ fn main() -> Result<(), Error> {
             resident_high_water_kib()
         );
     }
-    println!("canonical_equivalence=true save_roundtrip=true scope=isolated_agriculture");
+    println!(
+        "canonical_equivalence=true reverse_allocation_equivalence=true save_roundtrip=true scope=isolated_agriculture shared_store=true"
+    );
     Ok(())
 }

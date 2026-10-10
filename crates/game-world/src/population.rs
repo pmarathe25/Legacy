@@ -716,7 +716,7 @@ impl Simulation {
             seed,
         )?);
         sim.register_weather_cells()?;
-        sim.state.agriculture = Some(game_agriculture::World::from_content(
+        sim.state.agriculture = Some(game_agriculture::Runtime::from_content(
             crop_document,
             weather_day,
         )?);
@@ -848,26 +848,31 @@ impl Simulation {
                     .agriculture
                     .as_mut()
                     .unwrap()
-                    .insert_field(agriculture::Field {
-                        id,
-                        area: settlement.fields,
-                        access: permission,
-                        custodian: private.then_some(settlement.residents[0]),
-                        seed: seed_stock,
-                        tool: field_tool,
-                        water,
-                        food: farm_food,
-                    })
+                    .insert_field(
+                        &mut sim.state.components,
+                        agriculture::Field {
+                            id,
+                            area: settlement.fields,
+                            access: permission,
+                            custodian: private.then_some(settlement.residents[0]),
+                            seed: seed_stock,
+                            tool: field_tool,
+                            water,
+                            food: farm_food,
+                        },
+                    )
                     .expect("validated component insertion");
                 let world = sim.state.agriculture.as_mut().unwrap();
                 world
                     .insert_crop(
+                        &mut sim.state.components,
                         id,
                         agriculture::Crop::new(world.catalog.default_crop.clone()),
                     )
                     .expect("validated component insertion");
                 world
                     .insert_soil(
+                        &mut sim.state.components,
                         id,
                         agriculture::Soil {
                             fertility: 900,

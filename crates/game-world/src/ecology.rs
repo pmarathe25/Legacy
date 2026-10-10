@@ -983,7 +983,7 @@ impl Simulation {
                     .state
                     .agriculture
                     .as_ref()
-                    .is_some_and(|w| w.field(*id).is_some())
+                    .is_some_and(|w| w.field(&self.state.components, *id).is_some())
                 || self.state.physical.as_ref().unwrap().sites.contains_key(id)
             {
                 return Err(bad());
@@ -1061,7 +1061,7 @@ impl Simulation {
                                 .state
                                 .agriculture
                                 .as_ref()
-                                .is_some_and(|w| w.field(*id).is_some()))
+                                .is_some_and(|w| w.field(&self.state.components, *id).is_some()))
                         || k.observed_at > self.state.time
                         || !area_exists(k.area)
                         || k.soil_fertility > 1_000
