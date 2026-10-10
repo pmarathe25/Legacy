@@ -246,6 +246,7 @@ impl Simulation {
         &self,
         actor: PersonId,
         field: SiteId,
+        resources: Option<&equipment::RankingResources>,
     ) -> Result<game_agriculture::BeginFacts, Error> {
         let world = self.state.agriculture.as_ref().ok_or(Error::Unavailable)?;
         let land = world.fields.get(&field).ok_or(Error::Unavailable)?;
@@ -272,7 +273,7 @@ impl Simulation {
                         && self.has_stock_access(actor, stock)
                         && self.inventory_area(stock) == Some(land.area)
                 })
-                .map(|_| Quantity(self.unreserved_stock(id, actor)))
+                .map(|_| Quantity(self.unreserved_stock_for_planning(id, actor, resources)))
         };
         let room = |id: InventoryId| {
             self.state
@@ -294,7 +295,7 @@ impl Simulation {
                 && !self.care_index.contains_key(&actor)
                 && mature,
             tool_available: available(land.tool, Good::Tool).is_some_and(|q| q.0 >= 1_000)
-                && self.tool_available_for(actor, land.tool),
+                && self.tool_available_for_planning(actor, land.tool, resources),
             field_available: !world
                 .jobs
                 .iter()
@@ -314,8 +315,9 @@ impl Simulation {
         actor: PersonId,
         field: SiteId,
         operation: FarmOperation,
+        resources: Option<&equipment::RankingResources>,
     ) -> Result<game_agriculture::BeginEffect, Error> {
-        let facts = self.cultivation_facts(actor, field)?;
+        let facts = self.cultivation_facts(actor, field, resources)?;
         let world = self.state.agriculture.as_ref().ok_or(Error::Unavailable)?;
         game_agriculture::prepare_begin(&world.fields[&field], &world.crop, operation, facts)
     }
@@ -325,7 +327,7 @@ impl Simulation {
         field: SiteId,
         operation: FarmOperation,
     ) -> bool {
-        self.prepare_cultivation_start(actor, field, operation)
+        self.prepare_cultivation_start(actor, field, operation, None)
             .is_ok()
     }
     pub(crate) fn start_cultivation(
@@ -334,7 +336,7 @@ impl Simulation {
         field: SiteId,
         operation: FarmOperation,
     ) -> Result<(), Error> {
-        let plan = self.prepare_cultivation_start(actor, field, operation)?;
+        let plan = self.prepare_cultivation_start(actor, field, operation, None)?;
         let project_input = if let Some(input) = plan.consumed {
             self.prepare_farm_input(field, input.inventory, input.quantity)?
         } else {
@@ -408,7 +410,7 @@ impl Simulation {
             return;
         }
         let access = self
-            .cultivation_facts(actor, job.field)
+            .cultivation_facts(actor, job.field, None)
             .expect("validated cultivation actor");
         let world = self.state.agriculture.as_ref().unwrap();
         let field = &world.fields[&job.field];
@@ -536,22 +538,28 @@ impl Simulation {
 
     /// Candidate facts are observed only in the actor's current area. Acceptance
     /// still rechecks physical stocks, access, and competition at commit time.
-    pub(crate) fn autonomous_cultivation(&self, actor: PersonId) -> Option<Command> {
+    pub(crate) fn autonomous_cultivation(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Option<Command> {
         let world = self.state.agriculture.as_ref()?;
         world
             .fields
             .keys()
-            .find_map(|field| self.autonomous_field_cultivation(actor, *field))
+            .find_map(|field| self.autonomous_field_cultivation(actor, *field, resources))
     }
     pub(crate) fn autonomous_field_cultivation(
         &self,
         actor: PersonId,
         field: SiteId,
+        resources: Option<&equipment::RankingResources>,
     ) -> Option<Command> {
         let world = self.state.agriculture.as_ref()?;
         let land = world.fields.get(&field)?;
         let operation = game_agriculture::next_operation(land, &world.crop)?;
-        self.cultivation_possible(actor, field, operation)
+        self.prepare_cultivation_start(actor, field, operation, resources)
+            .is_ok()
             .then_some(Command::Cultivate { field, operation })
     }
 

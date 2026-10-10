@@ -275,7 +275,7 @@ impl Simulation {
                             )
                     }
                 }
-                && self.unreserved_stock(id, actor) >= quantity.0
+                && (quantity.0 == 0 || self.unreserved_stock(id, actor) >= quantity.0)
         })
     }
     fn health_tactical_place(&self, actor: PersonId) -> Option<(EncounterId, PersonId)> {
@@ -381,12 +381,6 @@ impl Simulation {
             Work::Boil { tool, .. } | Work::Shelter { tool, .. } => Some(*tool),
             _ => None,
         }
-    }
-    pub(crate) fn health_reserved_stock(&self, source: InventoryId, except: PersonId) -> u64 {
-        self.state
-            .health
-            .as_ref()
-            .map_or(0, |w| w.reserved_stock(source, except))
     }
     pub(crate) fn health_patient_resting(&self, actor: PersonId) -> bool {
         self.state
@@ -1652,7 +1646,7 @@ impl Simulation {
                     });
                 }
             }
-            if let Some(planning) = self.health_planning_data(actor) {
+            if let Some(planning) = self.health_planning_data(actor, None) {
                 let input = planning.input(self.state.time);
                 for stock in &planning.stocks {
                     let Some(action) = w.boiling_action(actor, stock.fact.inventory, &input) else {
@@ -1701,7 +1695,11 @@ impl Simulation {
             .map(|action| Command::Health { action })
             .collect()
     }
-    fn remembered_health_stocks(&self, actor: PersonId) -> Vec<game_health::RememberedStock> {
+    fn remembered_health_stocks(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Vec<game_health::RememberedStock> {
         self.state
             .decisions
             .as_ref()
@@ -1713,7 +1711,11 @@ impl Simulation {
                 let here = self.health_remembered_source_here(actor, fact);
                 let mut observed = fact.clone();
                 if here {
-                    observed.quantity = Quantity(self.unreserved_stock(fact.inventory, actor));
+                    observed.quantity = Quantity(self.unreserved_stock_for_planning(
+                        fact.inventory,
+                        actor,
+                        resources,
+                    ));
                     observed.accessible = true;
                     observed.observed_at = self.state.time;
                     observed.learned_at = self.state.time;
@@ -1731,7 +1733,11 @@ impl Simulation {
             })
             .collect()
     }
-    fn health_planning_data(&self, actor: PersonId) -> Option<HealthPlanningData> {
+    fn health_planning_data(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Option<HealthPlanningData> {
         let area = self.health_area(actor, true).ok()?;
         let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
         let traits = self
@@ -1744,18 +1750,22 @@ impl Simulation {
                 risk_tolerance: traits.risk_tolerance,
             },
             stocks: self
-                .remembered_health_stocks(actor)
+                .remembered_health_stocks(actor, resources)
                 .into_iter()
                 .filter(|stock| {
                     stock.fact.good != Good::Tool
-                        || self.tool_available_for(actor, stock.fact.inventory)
+                        || self.tool_available_for_planning(actor, stock.fact.inventory, resources)
                 })
                 .collect(),
         })
     }
-    pub(crate) fn health_candidate(&self, actor: PersonId) -> Option<Command> {
+    pub(crate) fn health_candidate(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Option<Command> {
         let world = self.state.health.as_ref()?;
-        let facts = self.health_planning_data(actor)?;
+        let facts = self.health_planning_data(actor, resources)?;
         let input = facts.input(self.state.time);
         let need = game_health::NeedFacts {
             actor,
@@ -1787,7 +1797,14 @@ impl Simulation {
                     room: None,
                     direct_transfer: !supply.carried,
                 };
-                match self.plan_delivery(actor, &delivery, &destination, supply.quantity) {
+                match self.plan_delivery_for_planning(
+                    actor,
+                    &delivery,
+                    &destination,
+                    supply.quantity,
+                    &[],
+                    resources,
+                ) {
                     game_logistics::Step::Arrived { source, .. } => world
                         .consume_supply(actor, source, &input, supply.consumer)
                         .map(|action| Command::Health { action }),
@@ -1908,7 +1925,7 @@ impl Simulation {
             let body = &self.state.physical.as_ref().unwrap().actors[&caregiver];
             let rules = &self.state.health.as_ref().unwrap().rules;
             let physical = self.body_rules(caregiver);
-            let stocks = self.remembered_health_stocks(caregiver);
+            let stocks = self.remembered_health_stocks(caregiver, None);
             let patients = self
                 .state
                 .health
@@ -2242,7 +2259,7 @@ impl Simulation {
         let body = self.state.physical.as_ref()?.actors.get(&giver)?;
         let rules = &self.state.health.as_ref()?.rules;
         let physical = self.body_rules(giver);
-        let stocks = self.remembered_health_stocks(giver);
+        let stocks = self.remembered_health_stocks(giver, None);
         game_health::willing_supplies(
             rules,
             game_health::WillingCare {
@@ -2827,7 +2844,7 @@ mod integration_tests {
             action: HealthAction::EnterShelter { shelter },
         };
         assert!(sim.available_health_commands(actor).contains(&expected));
-        assert_eq!(sim.health_candidate(actor), Some(expected.clone()));
+        assert_eq!(sim.health_candidate(actor, None), Some(expected.clone()));
         sim.set_initial_shelter_occupancy(other, shelter).unwrap();
         sim.observe_health();
         assert!(
@@ -2842,7 +2859,7 @@ mod integration_tests {
                 .is_empty()
         );
         assert!(sim.available_health_commands(actor).contains(&expected));
-        assert_eq!(sim.health_candidate(actor), Some(expected.clone()));
+        assert_eq!(sim.health_candidate(actor, None), Some(expected.clone()));
         assert_eq!(
             sim.debug_actor_command(actor, expected),
             Err(Error::Unavailable)
@@ -3027,7 +3044,7 @@ mod transport_health_tests {
             .unwrap()
             .thirst = 100_000;
         assert_eq!(
-            sim.health_candidate(bearer),
+            sim.health_candidate(bearer, None),
             Some(Command::Health {
                 action: HealthAction::Drink { source: water }
             })
@@ -3568,12 +3585,12 @@ mod supply_composition_tests {
             .id;
         let original = sim.state.ecology.as_ref().unwrap().resources[&source].remaining;
         let before = sim.state.clone();
-        let command = sim.health_candidate(actor).unwrap();
+        let command = sim.health_candidate(actor, None).unwrap();
         assert!(
             matches!(command,Command::Ecology {action:EcologyAction::Gather {resource,quantity:Quantity(1_000),unauthorized:false}} if resource==source)
         );
         for _ in 0..20 {
-            assert_eq!(sim.health_candidate(actor), Some(command.clone()));
+            assert_eq!(sim.health_candidate(actor, None), Some(command.clone()));
         }
         assert_eq!(sim.state, before);
         sim.debug_actor_command(actor, command).unwrap();
@@ -3608,7 +3625,7 @@ mod supply_composition_tests {
         assert!(!sim.state.events.iter().any(
             |event| matches!(event.kind,EventKind::Drank {actor:drinker,..} if drinker==actor)
         ));
-        let command = sim.health_candidate(actor).unwrap();
+        let command = sim.health_candidate(actor, None).unwrap();
         let Command::Health {
             action: HealthAction::Drink { source: water },
         } = command
@@ -3704,7 +3721,7 @@ mod supply_composition_tests {
             .unwrap()
             .thirst = relief;
         assert_eq!(
-            sim.health_candidate(actor),
+            sim.health_candidate(actor, None),
             Some(Command::Health {
                 action: HealthAction::Drink { source: moving }
             })
@@ -3715,7 +3732,7 @@ mod supply_composition_tests {
         sim.advance(SimDuration(1)).unwrap();
         let before = sim.state.clone();
         assert_eq!(
-            sim.health_candidate(actor),
+            sim.health_candidate(actor, None),
             Some(Command::Health {
                 action: HealthAction::Drink { source: alternate }
             })
@@ -3725,7 +3742,7 @@ mod supply_composition_tests {
             sim.state.decisions.as_ref().unwrap().minds[&actor].knowledge[&moving],
             remembered
         );
-        let facts = sim.remembered_health_stocks(actor);
+        let facts = sim.remembered_health_stocks(actor, None);
         assert!(
             !facts
                 .iter()

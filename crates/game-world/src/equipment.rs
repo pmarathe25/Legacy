@@ -2,6 +2,11 @@
 //! new use; a working person's equipment disappears only through physical change.
 use crate::*;
 
+pub(crate) struct RankingResources {
+    pub(crate) reservations: game_cargo::ReservationTotals,
+    allocations: game_cargo::ToolAllocations,
+}
+
 impl Simulation {
     /// Bind a contact handoff to an actual compartment and the normal timed
     /// transfer action. Permission still comes from the receiving owner.
@@ -116,11 +121,19 @@ impl Simulation {
         }
         self.apply_cargo_load(plan.job)
     }
-    fn tool_users(&self) -> BTreeMap<InventoryId, Vec<PersonId>> {
-        let Some(physical) = &self.state.physical else {
-            return BTreeMap::new();
-        };
-        let mut groups: BTreeMap<InventoryId, Vec<PersonId>> = BTreeMap::new();
+    pub(crate) fn prepare_ranking_resources(&self) -> Result<RankingResources, Error> {
+        Ok(RankingResources {
+            reservations: self.reservation_totals(None)?,
+            allocations: self.prepare_tool_allocations(None)?,
+        })
+    }
+
+    fn prepare_tool_allocations(
+        &self,
+        only: Option<InventoryId>,
+    ) -> Result<game_cargo::ToolAllocations, Error> {
+        let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        let mut uses = Vec::new();
         for (actor, body) in &physical.actors {
             if !body.vitals.alive || body.vitals.health == 0 {
                 continue;
@@ -153,19 +166,41 @@ impl Simulation {
                 _ => None,
             };
             if let Some(tool) = selected
+                && only.is_none_or(|wanted| tool == wanted)
                 && let Some(stock) = self.state.inventories.get(&tool)
                 && stock.good == Good::Tool
                 && let Some(area) = self.inventory_area(stock)
                 && self.state.people[self.person_index[actor]].location == Location::AtArea(area)
             {
-                groups.entry(tool).or_default().push(*actor);
+                uses.push(game_cargo::ToolUse {
+                    actor: *actor,
+                    tool,
+                });
             }
         }
-        for (tool, users) in &mut groups {
-            let cursor = self.state.inventories[tool].last_granted;
-            users.sort_by_key(|actor| (cursor.is_some_and(|last| *actor <= last), *actor));
-        }
-        groups
+        let selected = |stock: &Inventory| {
+            (stock.good == Good::Tool).then_some(game_cargo::ToolSlots {
+                tool: stock.id,
+                quantity: stock.quantity,
+                last_granted: stock.last_granted,
+            })
+        };
+        let tools = match only {
+            Some(id) => self
+                .state
+                .inventories
+                .get(&id)
+                .and_then(selected)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            None => self
+                .state
+                .inventories
+                .values()
+                .filter_map(selected)
+                .collect(),
+        };
+        game_cargo::ToolAllocations::prepare(tools, uses)
     }
 
     /// Compute once for an interval or closing commit, before any workers finish.
@@ -198,10 +233,8 @@ impl Simulation {
                 )
             })
             .collect();
-        for (tool, users) in self.tool_users() {
-            let slots = usize::try_from(self.state.inventories[&tool].quantity.0 / 1_000)
-                .unwrap_or(usize::MAX);
-            for actor in users.into_iter().take(slots) {
+        if let Ok(allocations) = self.prepare_tool_allocations(None) {
+            for actor in allocations.allocated_actors() {
                 available.insert(actor, true);
             }
         }
@@ -211,6 +244,15 @@ impl Simulation {
     /// Check a current allocation, or whether a prospective actor can take one
     /// free allocation without displacing workers already using the toolkit.
     pub(crate) fn tool_available_for(&self, actor: PersonId, tool: InventoryId) -> bool {
+        self.tool_available_for_planning(actor, tool, None)
+    }
+
+    pub(crate) fn tool_available_for_planning(
+        &self,
+        actor: PersonId,
+        tool: InventoryId,
+        resources: Option<&RankingResources>,
+    ) -> bool {
         let Some(index) = self.person_index.get(&actor) else {
             return false;
         };
@@ -235,13 +277,11 @@ impl Simulation {
         {
             return false;
         }
-        let users = self.tool_users().remove(&tool).unwrap_or_default();
-        let slots = stock.quantity.0 / 1_000;
-        if let Some(position) = users.iter().position(|user| *user == actor) {
-            (position as u64) < slots
-        } else {
-            (users.len() as u64) < slots
+        if let Some(resources) = resources {
+            return resources.allocations.allows(actor, tool);
         }
+        self.prepare_tool_allocations(Some(tool))
+            .is_ok_and(|allocations| allocations.allows(actor, tool))
     }
 
     pub(crate) fn select_work_tool(&self, actor: PersonId, site: SiteId) -> Option<InventoryId> {
@@ -259,7 +299,7 @@ impl Simulation {
             return None;
         }
         let resumed = body.job.as_ref().filter(|job| job.site == site.id);
-        let users = self.tool_users();
+        let allocations = self.prepare_tool_allocations(None).ok()?;
         let mut candidates = Vec::new();
         if let Some(tool) = resumed.and_then(|job| job.tool) {
             candidates.push(tool);
@@ -301,12 +341,9 @@ impl Simulation {
             let Some(after_input) = stock.quantity.0.checked_sub(consumed) else {
                 return false;
             };
-            let currently_allocated = users
-                .get(tool)
-                .into_iter()
-                .flatten()
-                .take(usize::try_from(stock.quantity.0 / 1_000).unwrap_or(usize::MAX))
-                .filter(|user| **user != actor)
+            let currently_allocated = allocations
+                .allocated_users(*tool)
+                .filter(|user| *user != actor)
                 .count() as u64;
             after_input / 1_000 > currently_allocated
         })
@@ -388,6 +425,259 @@ mod tests {
         site.id = id;
         sim.state.physical.as_mut().unwrap().sites.insert(id, site);
         id
+    }
+
+    fn compare_resource_queries(sim: &Simulation) {
+        let resources = sim.prepare_ranking_resources().unwrap();
+        for person in &sim.state.people {
+            for stock in sim.state.inventories.values() {
+                assert_eq!(
+                    sim.unreserved_stock(stock.id, person.id),
+                    sim.unreserved_stock_for_planning(stock.id, person.id, Some(&resources)),
+                );
+                assert_eq!(
+                    sim.tool_available_for(person.id, stock.id),
+                    sim.tool_available_for_planning(person.id, stock.id, Some(&resources)),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ranking_projection_matches_live_provider_facts_without_mutation() {
+        let sim = Simulation::ecology_fixture(47, Execution::default()).unwrap();
+        let before = sim.state.clone();
+        let resources = sim.prepare_ranking_resources().unwrap();
+        compare_resource_queries(&sim);
+        for person in &sim.state.people {
+            let actor = person.id;
+            assert_eq!(
+                sim.health_candidate(actor, None),
+                sim.health_candidate(actor, Some(&resources))
+            );
+            assert_eq!(
+                sim.ecology_opportunities(actor, None),
+                sim.ecology_opportunities(actor, Some(&resources))
+            );
+            assert_eq!(
+                sim.project_opportunities(actor, None),
+                sim.project_opportunities(actor, Some(&resources))
+            );
+            assert_eq!(
+                sim.autonomous_cultivation(actor, None),
+                sim.autonomous_cultivation(actor, Some(&resources))
+            );
+            let delivery = game_logistics::Delivery::new(
+                game_logistics::Requirement {
+                    good: Good::Water,
+                    quantity: Quantity(1_000),
+                    source: None,
+                },
+                game_logistics::Destination::Contact(actor),
+            )
+            .unwrap();
+            let destination = game_logistics::KnownDestination {
+                destination: delivery.destination,
+                location: sim.delivery_observed_location(actor),
+                observed_at: sim.state.time,
+                accessible: true,
+                room: None,
+                direct_transfer: true,
+            };
+            assert_eq!(
+                sim.plan_delivery(actor, &delivery, &destination, Quantity(1_000)),
+                sim.plan_delivery_for_planning(
+                    actor,
+                    &delivery,
+                    &destination,
+                    Quantity(1_000),
+                    &[],
+                    Some(&resources)
+                )
+            );
+        }
+        assert_eq!(sim.state, before);
+    }
+
+    #[test]
+    fn ranking_projection_extracts_care_doses_load_amounts_and_health_water() {
+        let mut sim = Simulation::health_fixture(48, Execution::default()).unwrap();
+        let actors = sim
+            .state
+            .people
+            .iter()
+            .take(5)
+            .map(|person| person.id)
+            .collect::<Vec<_>>();
+        assert_eq!(actors.len(), 5);
+        for actor in sim
+            .state
+            .people
+            .iter()
+            .map(|person| person.id)
+            .collect::<Vec<_>>()
+        {
+            sim.interrupt_actor_activity(actor);
+        }
+        let access = actors.iter().copied().collect();
+        let water = sim
+            .add_inventory(
+                Good::Water,
+                InventoryLocation::Area(AreaId(1)),
+                Quantity(10_000),
+                Quantity(10_000),
+                access,
+            )
+            .unwrap();
+        let food = sim.state.people[sim.person_index[&actors[0]]].inventory;
+        let completes = SimTime(sim.state.time.0 + MINUTE.0);
+        let body = sim.state.physical.as_mut().unwrap();
+        body.actors.get_mut(&actors[0]).unwrap().activity = Activity::Eat {
+            source: food,
+            completes,
+        };
+        body.actors.get_mut(&actors[1]).unwrap().activity = Activity::Care {
+            child: actors[0],
+            source: water,
+            completes,
+        };
+        body.actors.get_mut(&actors[2]).unwrap().activity = Activity::Load {
+            source: water,
+            destination: food,
+            quantity: Quantity(277),
+            completes,
+        };
+        let health = sim.state.health.as_mut().unwrap();
+        for (actor, work) in [
+            (
+                actors[3],
+                game_health::Work::Drink {
+                    source: water,
+                    quantity: Quantity(311),
+                },
+            ),
+            (
+                actors[4],
+                game_health::Work::Boil {
+                    source: water,
+                    quantity: Quantity(509),
+                    tool: food,
+                },
+            ),
+        ] {
+            health.jobs.insert(
+                actor,
+                game_health::Job {
+                    actor,
+                    area: AreaId(1),
+                    completes,
+                    work,
+                },
+            );
+        }
+        let care = sim.care_dose(Good::Water).unwrap().0;
+        let resources = sim.prepare_ranking_resources().unwrap();
+        assert_eq!(
+            sim.unreserved_stock_for_planning(water, actors[0], Some(&resources)),
+            10_000 - care - 277 - 311 - 509
+        );
+        assert_eq!(
+            sim.unreserved_stock_for_planning(water, actors[1], Some(&resources)),
+            10_000 - 277 - 311 - 509
+        );
+        assert_eq!(
+            sim.unreserved_stock_for_planning(water, actors[2], Some(&resources)),
+            10_000 - care - 311 - 509
+        );
+        assert_eq!(
+            sim.unreserved_stock_for_planning(water, actors[3], Some(&resources)),
+            10_000 - care - 277 - 509
+        );
+        assert_eq!(
+            sim.unreserved_stock_for_planning(water, actors[4], Some(&resources)),
+            10_000 - care - 277 - 311
+        );
+        assert_eq!(
+            sim.unreserved_stock_for_planning(food, actors[1], Some(&resources)),
+            sim.state.inventories[&food]
+                .quantity
+                .0
+                .saturating_sub(sim.state.physical.as_ref().unwrap().rules.meal_size.0)
+        );
+        compare_resource_queries(&sim);
+    }
+
+    #[test]
+    fn ranking_projection_rebuilds_after_cancellation_death_and_tool_movement() {
+        let mut sim = Simulation::autonomy_fixture(49, Execution::default()).unwrap();
+        let worker = sim.state.ruler;
+        let carrier = sim.state.people[3].id;
+        for actor in sim
+            .state
+            .people
+            .iter()
+            .map(|person| person.id)
+            .collect::<Vec<_>>()
+        {
+            sim.interrupt_actor_activity(actor);
+        }
+        let site = local_site(&sim);
+        let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
+        sim.debug_actor_command(worker, Command::Work { site })
+            .unwrap();
+        compare_resource_queries(&sim);
+        assert!(!sim.tool_available_for(carrier, tool));
+        sim.debug_actor_command(worker, Command::Rest).unwrap();
+        compare_resource_queries(&sim);
+        assert!(sim.tool_available_for(carrier, tool));
+        sim.debug_actor_command(worker, Command::Work { site })
+            .unwrap();
+        let opening = sim.save().unwrap();
+        let mut dead = Simulation::load(&opening, Execution::default()).unwrap();
+        dead.debug_injure(worker, dead.body_rules(worker).max_health)
+            .unwrap();
+        assert!(
+            !dead.state.physical.as_ref().unwrap().actors[&worker]
+                .vitals
+                .alive
+        );
+        compare_resource_queries(&dead);
+        assert!(dead.tool_available_for(carrier, tool));
+        Simulation::load(&dead.save().unwrap(), Execution::default()).unwrap();
+
+        sim.carry_good(carrier, tool, Quantity(1_000)).unwrap();
+        compare_resource_queries(&sim);
+        let carried = match sim.state.physical.as_ref().unwrap().actors[&carrier].activity {
+            Activity::Load { destination, .. } => destination,
+            _ => panic!("actual carry schedules loading"),
+        };
+        let save = sim.save().unwrap();
+        let mut chunked = Simulation::load(
+            &save,
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(MINUTE).unwrap();
+        chunked.advance(SimDuration(MINUTE.0 / 2)).unwrap();
+        chunked = Simulation::load(
+            &chunked.save().unwrap(),
+            Execution {
+                workers: 2,
+                reverse_jobs: false,
+            },
+        )
+        .unwrap();
+        chunked.advance(SimDuration(MINUTE.0 / 2)).unwrap();
+        assert_eq!(sim.state, chunked.state);
+        assert_eq!(sim.state.inventories[&tool].quantity, Quantity(0));
+        assert_eq!(sim.state.inventories[&carried].quantity, Quantity(1_000));
+        compare_resource_queries(&sim);
+        sim.debug_move_actor(carrier, AreaId(2)).unwrap();
+        assert!(!sim.tool_available_for(worker, carried));
+        compare_resource_queries(&sim);
     }
 
     #[test]

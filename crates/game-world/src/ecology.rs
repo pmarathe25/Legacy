@@ -202,12 +202,21 @@ impl Simulation {
         self.state.ecology.as_ref()?.jobs.get(&actor)?.tool
     }
     fn ecology_tool(&self, actor: PersonId) -> Option<InventoryId> {
+        self.ecology_tool_for_planning(actor, None)
+    }
+
+    fn ecology_tool_for_planning(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Option<InventoryId> {
         self.inventory_index
             .get(&InventoryLocation::Carried(actor))?
             .iter()
             .copied()
             .find(|id| {
-                self.state.inventories[id].good == Good::Tool && self.tool_available_for(actor, *id)
+                self.state.inventories[id].good == Good::Tool
+                    && self.tool_available_for_planning(actor, *id, resources)
             })
     }
     pub fn debug_ecology_action(
@@ -635,9 +644,18 @@ impl Simulation {
                 .unwrap_or_default(),
         }
     }
+    #[cfg(test)]
     pub(crate) fn available_ecology_commands(&self, actor: PersonId) -> Vec<Command> {
+        self.available_ecology_commands_for_planning(actor, None)
+    }
+
+    fn available_ecology_commands_for_planning(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Vec<Command> {
         let mut commands = Vec::new();
-        for opportunity in self.ecology_quantity_opportunities(actor) {
+        for opportunity in self.ecology_quantity_opportunities_for_planning(actor, resources) {
             commands.extend(
                 opportunity
                     .suggested
@@ -676,6 +694,14 @@ impl Simulation {
         &self,
         actor: PersonId,
     ) -> Vec<QuantityOpportunity> {
+        self.ecology_quantity_opportunities_for_planning(actor, None)
+    }
+
+    fn ecology_quantity_opportunities_for_planning(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Vec<QuantityOpportunity> {
         if !self.ecology_able(actor) || self.past_life_controls_actor(actor) {
             return Vec::new();
         }
@@ -701,7 +727,7 @@ impl Simulation {
             carrying_room: Quantity(
                 u128::from(physical.rules.carrying_capacity.0).saturating_sub(held) as u64,
             ),
-            tool: self.ecology_tool(actor),
+            tool: self.ecology_tool_for_planning(actor, resources),
         };
         let mut opportunities = Vec::new();
         for source in world
@@ -750,6 +776,7 @@ impl Simulation {
         good: Good,
         quantity: Quantity,
         room: Quantity,
+        resources: Option<&equipment::RankingResources>,
     ) -> Vec<game_logistics::AcquisitionOffer<Command>> {
         use game_logistics::{
             AcquisitionOffer, OfferYield, Prerequisite, PrerequisitePlacement, Requirement,
@@ -768,13 +795,13 @@ impl Simulation {
         else {
             return Vec::new();
         };
-        let available = self.available_ecology_commands(actor);
+        let available = self.available_ecology_commands_for_planning(actor, resources);
         let local = world.known.get(&actor).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
             let q = Quantity(quantity.0.min(room.0).min(known.available.0));
             let facts = game_ecology::GatherFacts { now: self.state.time, area,
                 capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|w| w.actors[&actor].vitals.fatigue < self.body_rules(actor).fatigue_limit),
                 adult: self.state.development.as_ref().is_none_or(|w| matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)),
-                carrying_room: room, tool: self.ecology_tool(actor) };
+                carrying_room: room, tool: self.ecology_tool_for_planning(actor, resources) };
             game_ecology::LocalAcquisition { resource: known.id,
                 can_prepare: world.gathering_conditions(actor, known.id, q, !known.accessible, facts).is_ok(),
                 can_request: available.iter().any(|command| matches!(command, Command::Ecology {action: EcologyAction::RequestAccess {resource}} if *resource == known.id)) }
@@ -847,7 +874,11 @@ impl Simulation {
         );
         offers
     }
-    pub(crate) fn ecology_opportunities(&self, actor: PersonId) -> Vec<Command> {
+    pub(crate) fn ecology_opportunities(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Vec<Command> {
         let Some(world) = &self.state.ecology else {
             return Vec::new();
         };
@@ -869,7 +900,7 @@ impl Simulation {
             return Vec::new();
         };
         let mut commands = self
-            .available_ecology_commands(actor)
+            .available_ecology_commands_for_planning(actor, resources)
             .into_iter()
             .filter(|command| match command {
                 Command::Ecology {

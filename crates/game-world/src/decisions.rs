@@ -397,15 +397,19 @@ impl Simulation {
         self.profile
             .record_phase("review.review_conception", phase_started);
         let phase_started = Instant::now();
-        let world = self.state.decisions.as_ref().unwrap();
-        let evaluate =
-            |(id, mind): (&PersonId, &Mind)| self.decide(*id, mind, world.switching_margin);
-        let mut intentions: Vec<_> = if self.execution.workers == 1 {
-            world.minds.iter().map(evaluate).collect()
-        } else {
-            self.engine
-                .executor()
-                .install(|| world.minds.par_iter().map(evaluate).collect())
+        let mut intentions: Vec<_> = {
+            let resources = self.prepare_ranking_resources()?;
+            let world = self.state.decisions.as_ref().unwrap();
+            let evaluate = |(id, mind): (&PersonId, &Mind)| {
+                self.decide(*id, mind, world.switching_margin, Some(&resources))
+            };
+            if self.execution.workers == 1 {
+                world.minds.iter().map(evaluate).collect()
+            } else {
+                self.engine
+                    .executor()
+                    .install(|| world.minds.par_iter().map(evaluate).collect())
+            }
         };
         self.profile.record_phase("review.rank", phase_started);
         let phase_started = Instant::now();
@@ -469,7 +473,13 @@ impl Simulation {
         Ok(())
     }
 
-    fn decide(&self, id: PersonId, mind: &Mind, margin: i64) -> Intention {
+    fn decide(
+        &self,
+        id: PersonId,
+        mind: &Mind,
+        margin: i64,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Intention {
         let p = &self.state.people[self.person_index[&id]];
         let actor = &self.state.physical.as_ref().unwrap().actors[&id];
         let rules = self.body_rules(id);
@@ -608,11 +618,13 @@ impl Simulation {
                 room: None,
                 direct_transfer: true,
             };
-            let step = self.plan_delivery(
+            let step = self.plan_delivery_for_planning(
                 id,
                 &goal.delivery,
                 &destination,
                 goal.delivery.requirement.quantity,
+                &[],
+                resources,
             );
             let action = match step {
                 game_logistics::Step::Arrived { source, .. } => {
@@ -658,7 +670,7 @@ impl Simulation {
             );
         }
         if matches!(place, Place::Area(_)) {
-            if let Some(action) = self.health_candidate(id) {
+            if let Some(action) = self.health_candidate(id, resources) {
                 let need = if matches!(
                     action,
                     Command::Health {
@@ -684,7 +696,7 @@ impl Simulation {
                     None,
                 );
             }
-            for action in self.ecology_opportunities(id) {
+            for action in self.ecology_opportunities(id, resources) {
                 let goods = match &action {
                     Command::Ecology {
                         action:
@@ -741,7 +753,7 @@ impl Simulation {
                     );
                 }
             }
-            for action in self.project_opportunities(id) {
+            for action in self.project_opportunities(id, resources) {
                 let mut motives = vec![Motive::Develop {
                     capability: Capability::Livelihood,
                     beneficiary: id,
@@ -892,7 +904,7 @@ impl Simulation {
             }
         };
         if let Place::Area(_) = place {
-            if let Some(action) = self.autonomous_cultivation(id) {
+            if let Some(action) = self.autonomous_cultivation(id, resources) {
                 add(
                     action,
                     IntentionKey::Development {

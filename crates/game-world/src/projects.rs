@@ -331,11 +331,23 @@ impl Simulation {
         good: Good,
         quantity: u64,
     ) -> bool {
+        self.project_usable_for_planning(actor, inventory, good, quantity, None)
+    }
+
+    fn project_usable_for_planning(
+        &self,
+        actor: PersonId,
+        inventory: InventoryId,
+        good: Good,
+        quantity: u64,
+        resources: Option<&equipment::RankingResources>,
+    ) -> bool {
         self.state.inventories.get(&inventory).is_some_and(|stock| {
             stock.good == good
                 && stock.access.contains(&actor)
                 && self.inventory_area(stock) == self.project_area(actor)
-                && self.unreserved_stock(inventory, actor) >= quantity
+                && (quantity == 0
+                    || self.unreserved_stock_for_planning(inventory, actor, resources) >= quantity)
         })
     }
     pub(crate) fn project_is_known(&self, actor: PersonId, project: ProjectId) -> bool {
@@ -362,6 +374,7 @@ impl Simulation {
         &self,
         actor: PersonId,
         project: ProjectId,
+        resources: Option<&equipment::RankingResources>,
     ) -> Result<game_projects::ConstructionFacts, Error> {
         let world = self.state.projects.as_ref().ok_or(Error::Unavailable)?;
         let plan = world.projects.get(&project).ok_or(Error::Unavailable)?;
@@ -382,17 +395,28 @@ impl Simulation {
                     .and_then(|w| w.plots.get(&plot))
                     .is_some_and(|p| p.access.contains(&actor)),
             },
-            tool_available: self.project_usable(actor, plan.tool, Good::Tool, 1_000)
-                && self.tool_available_for(actor, plan.tool),
-            materials_available: if self.project_usable(actor, plan.materials, Good::Timber, 0) {
-                Quantity(self.unreserved_stock(plan.materials, actor))
+            tool_available: self.project_usable_for_planning(
+                actor,
+                plan.tool,
+                Good::Tool,
+                1_000,
+                resources,
+            ) && self.tool_available_for_planning(actor, plan.tool, resources),
+            materials_available: if self.project_usable_for_planning(
+                actor,
+                plan.materials,
+                Good::Timber,
+                0,
+                resources,
+            ) {
+                Quantity(self.unreserved_stock_for_planning(plan.materials, actor, resources))
             } else {
                 Quantity(0)
             },
         })
     }
     pub(crate) fn construction_possible(&self, actor: PersonId, project: ProjectId) -> bool {
-        self.construction_facts(actor, project)
+        self.construction_facts(actor, project, None)
             .ok()
             .is_some_and(|facts| {
                 self.state
@@ -481,7 +505,7 @@ impl Simulation {
                 )?
             }
             ProjectAction::Work { project } => {
-                let facts = self.construction_facts(actor, *project)?;
+                let facts = self.construction_facts(actor, *project, None)?;
                 self.state
                     .projects
                     .as_ref()
@@ -1440,7 +1464,12 @@ impl Simulation {
         }
         Ok(())
     }
-    fn workshop_procurement(&self, actor: PersonId, mind: &decisions::Mind) -> Option<Command> {
+    fn workshop_procurement(
+        &self,
+        actor: PersonId,
+        mind: &decisions::Mind,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Option<Command> {
         use game_logistics::{
             AcquisitionOffer, Delivery, Destination, OfferYield, Requirement, Step,
         };
@@ -1518,13 +1547,24 @@ impl Simulation {
                 action: Command::Move { destination: *area },
             })
             .collect::<Vec<_>>();
-        match self.plan_delivery_with_offers(actor, &delivery, &destination, Quantity(1), &hints) {
+        match self.plan_delivery_for_planning(
+            actor,
+            &delivery,
+            &destination,
+            Quantity(1),
+            &hints,
+            resources,
+        ) {
             Step::Arrived { .. } | Step::Complete => None,
             step => self.delivery_command(actor, step),
         }
     }
 
-    pub(crate) fn project_opportunities(&self, actor: PersonId) -> Vec<Command> {
+    pub(crate) fn project_opportunities(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Vec<Command> {
         let Some(world) = self.state.projects.as_ref() else {
             return Vec::new();
         };
@@ -1547,27 +1587,37 @@ impl Simulation {
             .filter(|plan| plan.workers.contains(&actor) && self.project_is_known(actor, plan.id))
             .take(8)
         {
-            if self.construction_possible(actor, plan.id) {
+            if self
+                .construction_facts(actor, plan.id, resources)
+                .is_ok_and(|facts| world.prepare_construction(plan.id, facts).is_ok())
+            {
                 opportunities.push(Command::Project {
                     action: ProjectAction::Work { project: plan.id },
                 });
             }
         }
-        if let Some(command) = self.workshop_procurement(actor, mind) {
+        if let Some(command) = self.workshop_procurement(actor, mind, resources) {
             opportunities.push(command);
         }
         for workshop in world.enterprises.values().filter(|workshop| {
             workshop.sponsor == actor && workshop.area == self.project_area(actor).unwrap()
         }) {
             if matches!(workshop.kind, ProjectKind::Farm { .. }) {
-                if let Some(command) = self.autonomous_field_cultivation(actor, workshop.site) {
+                if let Some(command) =
+                    self.autonomous_field_cultivation(actor, workshop.site, resources)
+                {
                     opportunities.push(command);
                 }
                 continue;
             }
             let site = &self.state.physical.as_ref().unwrap().sites[&workshop.site];
-            if self.project_usable(actor, site.input, Good::Timber, site.input_quantity.0)
-                && self.project_usable(actor, site.tool, Good::Tool, 1_000)
+            if self.project_usable_for_planning(
+                actor,
+                site.input,
+                Good::Timber,
+                site.input_quantity.0,
+                resources,
+            ) && self.project_usable_for_planning(actor, site.tool, Good::Tool, 1_000, resources)
                 && self.state.inventories[&site.output].capacity.0
                     - self.state.inventories[&site.output].quantity.0
                     >= site.output_quantity.0
@@ -2203,7 +2253,7 @@ mod farm_tests {
             return;
         }
         let command = sim
-            .project_opportunities(actor)
+            .project_opportunities(actor, None)
             .into_iter()
             .find(|command| {
                 matches!(

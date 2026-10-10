@@ -6,6 +6,12 @@ use game_logistics::{
     OfferYield, Prerequisite, PrerequisitePlacement, Requirement, Step,
 };
 
+struct DeliveryProviders<'a> {
+    source_cargo: &'a BTreeMap<InventoryId, Quantity>,
+    offers: &'a [AcquisitionOffer<Command>],
+    resources: Option<&'a equipment::RankingResources>,
+}
+
 impl Simulation {
     pub(crate) fn plan_delivery(
         &self,
@@ -37,18 +43,22 @@ impl Simulation {
             delivery,
             destination,
             minimum_handoff,
-            source_cargo,
-            &[],
+            DeliveryProviders {
+                source_cargo,
+                offers: &[],
+                resources: None,
+            },
         )
     }
 
-    pub(crate) fn plan_delivery_with_offers(
+    pub(crate) fn plan_delivery_for_planning(
         &self,
         actor: PersonId,
         delivery: &Delivery,
         destination: &KnownDestination,
         minimum_handoff: Quantity,
         offers: &[AcquisitionOffer<Command>],
+        resources: Option<&equipment::RankingResources>,
     ) -> Step<Command> {
         let attributed = self.agreement_delivery_cargo(actor, delivery);
         self.plan_delivery_with_source_cargo_and_offers(
@@ -56,8 +66,11 @@ impl Simulation {
             delivery,
             destination,
             minimum_handoff,
-            &attributed,
-            offers,
+            DeliveryProviders {
+                source_cargo: &attributed,
+                offers,
+                resources,
+            },
         )
     }
 
@@ -67,9 +80,13 @@ impl Simulation {
         delivery: &Delivery,
         destination: &KnownDestination,
         minimum_handoff: Quantity,
-        source_cargo: &BTreeMap<InventoryId, Quantity>,
-        additional_offers: &[AcquisitionOffer<Command>],
+        providers: DeliveryProviders<'_>,
     ) -> Step<Command> {
+        let DeliveryProviders {
+            source_cargo,
+            offers: additional_offers,
+            resources,
+        } = providers;
         let Some(person) = self
             .person_index
             .get(&actor)
@@ -122,8 +139,8 @@ impl Simulation {
                 .as_ref()
                 .is_none_or(|world| !world.participants.contains_key(&actor));
         let capacity = self.delivery_carrying_room(actor);
-        let cargo = self.delivery_cargo(actor, delivery, source_cargo);
-        let stocks = self.delivery_known_stocks(actor);
+        let cargo = self.delivery_cargo(actor, delivery, source_cargo, resources);
+        let stocks = self.delivery_known_stocks(actor, resources);
         let contacts = match delivery.destination {
             game_logistics::Destination::Inventory(_) => BTreeSet::new(),
             game_logistics::Destination::Contact(recipient) => {
@@ -169,6 +186,7 @@ impl Simulation {
                 good,
                 Quantity(quantity.0.min(capacity.0)),
                 capacity,
+                resources,
             );
             owned.extend(self.property_acquisition_offers(actor, good, quantity));
             owned.extend(self.production_acquisition_offers(actor, good));
@@ -325,6 +343,7 @@ impl Simulation {
         actor: PersonId,
         delivery: &Delivery,
         source_cargo: &BTreeMap<InventoryId, Quantity>,
+        resources: Option<&equipment::RankingResources>,
     ) -> Vec<Cargo> {
         self.inventory_index
             .get(&InventoryLocation::Carried(actor))
@@ -335,7 +354,7 @@ impl Simulation {
                 if !self.has_stock_access(actor, stock) {
                     return None;
                 }
-                let quantity = self.unreserved_stock(*id, actor);
+                let quantity = self.unreserved_stock_for_planning(*id, actor, resources);
                 let mut origin = None;
                 let mut origin_quantity = Quantity(0);
                 if let Some(source) = delivery.requirement.source
@@ -360,7 +379,11 @@ impl Simulation {
             })
             .collect()
     }
-    fn delivery_known_stocks(&self, actor: PersonId) -> Vec<KnownStock> {
+    fn delivery_known_stocks(
+        &self,
+        actor: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> Vec<KnownStock> {
         self.state
             .decisions
             .as_ref()
@@ -405,7 +428,13 @@ impl Simulation {
                                 fact.quantity
                             }
                         },
-                        |_| Quantity(self.unreserved_stock(fact.inventory, actor)),
+                        |_| {
+                            Quantity(self.unreserved_stock_for_planning(
+                                fact.inventory,
+                                actor,
+                                resources,
+                            ))
+                        },
                     ),
                     accessible: local
                         .map_or(fact.accessible, |stock| self.has_stock_access(actor, stock)),
@@ -1144,10 +1173,16 @@ mod tests {
         .unwrap();
         // The provider offers the physically possible attempt regardless of traits.
         assert!(
-            sim.ecology_acquisition_offers(actor, Good::Water, Quantity(1_000), Quantity(1_000))
-                .iter()
-                .any(|offer| acquisition_risk(&offer.action)
-                    == game_characters::decisions::Risk::UnconsentedTaking)
+            sim.ecology_acquisition_offers(
+                actor,
+                Good::Water,
+                Quantity(1_000),
+                Quantity(1_000),
+                None
+            )
+            .iter()
+            .any(|offer| acquisition_risk(&offer.action)
+                == game_characters::decisions::Risk::UnconsentedTaking)
         );
         let step = sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000));
         assert!(!matches!(
@@ -1320,7 +1355,7 @@ mod tests {
                 quantity: Quantity(400)
             },
             "cargo after first consolidation: {:?}; source: {:?}",
-            sim.delivery_cargo(actor, &delivery, &BTreeMap::new()),
+            sim.delivery_cargo(actor, &delivery, &BTreeMap::new(), None),
             sim.state.inventories[&second]
         );
         sim.debug_actor_command(actor, sim.delivery_command(actor, step).unwrap())

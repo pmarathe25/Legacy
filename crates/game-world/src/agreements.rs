@@ -1634,10 +1634,18 @@ impl Simulation {
     }
 
     pub(crate) fn preflight_agreements(&self) -> Result<(), Error> {
-        let (demand, _) = self.closing_agreement_demand(self.state.time, &[], &[])?;
+        let events = if self.state.agreements.as_ref().is_some_and(|world| {
+            !world.ledger.obligations.is_empty() || !world.ledger.pending_work.is_empty()
+        }) {
+            self.closing_agreement_demand(self.state.time, &[], &[])?
+                .0
+                .events()?
+        } else {
+            0
+        };
         self.state
             .next_event
-            .checked_add(demand.events()?.checked_add(2).ok_or(Error::Overflow)?)
+            .checked_add(events.checked_add(2).ok_or(Error::Overflow)?)
             .ok_or(Error::Overflow)?;
         Ok(())
     }

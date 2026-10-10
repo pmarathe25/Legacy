@@ -858,35 +858,76 @@ impl Simulation {
         }
     }
 
-    pub(crate) fn unreserved_stock(&self, source: InventoryId, excluding: PersonId) -> u64 {
-        let reserved: u128 = self
-            .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .actors
-            .iter()
-            .filter(|(id, _)| **id != excluding)
-            .map(|(_, a)| {
-                u128::from(match a.activity {
-                    Activity::Eat { source: s, .. } if s == source => {
-                        self.state.physical.as_ref().unwrap().rules.meal_size.0
-                    }
-                    Activity::Care { source: s, .. } if s == source => self
-                        .care_dose(self.state.inventories[&s].good)
-                        .map_or(0, |quantity| quantity.0),
-                    Activity::Load {
-                        source: s,
-                        quantity,
-                        ..
-                    } if s == source => quantity.0,
-                    _ => 0,
+    pub(crate) fn reservation_totals(
+        &self,
+        source: Option<InventoryId>,
+    ) -> Result<game_cargo::ReservationTotals, Error> {
+        let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        let claims = physical.actors.iter().filter_map(|(actor, body)| {
+            let (inventory, quantity) = match body.activity {
+                Activity::Eat { source, .. } => (source, physical.rules.meal_size),
+                Activity::Care { source, .. } => (
+                    source,
+                    self.care_dose(self.state.inventories[&source].good)
+                        .unwrap_or(Quantity(0)),
+                ),
+                Activity::Load {
+                    source, quantity, ..
+                } => (source, quantity),
+                _ => return None,
+            };
+            source
+                .is_none_or(|wanted| inventory == wanted)
+                .then_some(game_cargo::Reservation {
+                    actor: *actor,
+                    source: inventory,
+                    quantity,
                 })
-            })
-            .sum();
-        u128::from(self.state.inventories[&source].quantity.0)
-            .saturating_sub(reserved + u128::from(self.health_reserved_stock(source, excluding)))
-            as u64
+        });
+        let health = self
+            .state
+            .health
+            .as_ref()
+            .into_iter()
+            .flat_map(|world| world.jobs.values())
+            .filter_map(|job| {
+                let (inventory, quantity) = match job.work {
+                    game_health::Work::Drink { source, quantity }
+                    | game_health::Work::Boil {
+                        source, quantity, ..
+                    } => (source, quantity),
+                    _ => return None,
+                };
+                source
+                    .is_none_or(|wanted| inventory == wanted)
+                    .then_some(game_cargo::Reservation {
+                        actor: job.actor,
+                        source: inventory,
+                        quantity,
+                    })
+            });
+        game_cargo::ReservationTotals::prepare(claims.chain(health))
+    }
+
+    pub(crate) fn unreserved_stock(&self, source: InventoryId, excluding: PersonId) -> u64 {
+        self.unreserved_stock_for_planning(source, excluding, None)
+    }
+
+    pub(crate) fn unreserved_stock_for_planning(
+        &self,
+        source: InventoryId,
+        excluding: PersonId,
+        resources: Option<&equipment::RankingResources>,
+    ) -> u64 {
+        let quantity = self.state.inventories[&source].quantity;
+        if let Some(resources) = resources {
+            return resources
+                .reservations
+                .available(source, quantity, excluding)
+                .0;
+        }
+        self.reservation_totals(Some(source))
+            .map_or(0, |totals| totals.available(source, quantity, excluding).0)
     }
 
     pub(crate) fn transfer_capacity(&self, destination: InventoryId, amount: u64) -> bool {

@@ -6,6 +6,11 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod planning_projection;
+pub use planning_projection::{
+    Reservation, ReservationTotals, ToolAllocations, ToolSlots, ToolUse,
+};
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum InventoryLocation {
     Area(AreaId),
