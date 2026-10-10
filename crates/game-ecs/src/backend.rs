@@ -152,19 +152,49 @@ impl Storage {
             .map(|component| &mut component.into_inner().0)
     }
     pub(super) fn insert<C: Component>(&mut self, id: StableId, component: C) -> Result<(), Error> {
+        self.insert_component(id, component, false)
+    }
+    pub(super) fn insert_or_spawn<C: Component>(
+        &mut self,
+        id: StableId,
+        component: C,
+    ) -> Result<(), Error> {
+        self.insert_component(id, component, true)
+    }
+    fn insert_component<C: Component>(
+        &mut self,
+        id: StableId,
+        component: C,
+        create_missing: bool,
+    ) -> Result<(), Error> {
         let registration = self.schema.registration::<C>()?;
         let validate = registration
             .validator
             .downcast_ref::<fn(&C) -> Result<(), Error>>()
             .expect("registered validator type");
         validate(&component)?;
-        let entity = *self.entities.get(&id).ok_or(Error::Unavailable)?;
-        let revision = if self.world.get::<Native<C>>(entity).is_some() {
-            self.structural_revision
-        } else {
-            self.structural_revision
-                .checked_add(1)
-                .ok_or(Error::Overflow)?
+        let existing = self.entities.get(&id).copied();
+        if id.0 == 0 {
+            return Err(Error::InvalidConfiguration("zero stable entity ID".into()));
+        }
+        if existing.is_none() && !create_missing {
+            return Err(Error::Unavailable);
+        }
+        let revision =
+            if existing.is_some_and(|entity| self.world.get::<Native<C>>(entity).is_some()) {
+                self.structural_revision
+            } else {
+                self.structural_revision
+                    .checked_add(1)
+                    .ok_or(Error::Overflow)?
+            };
+        let entity = match existing {
+            Some(entity) => entity,
+            None => {
+                let entity = self.world.spawn(NativeId(id)).id();
+                self.entities.insert(id, entity);
+                entity
+            }
         };
         self.world.entity_mut(entity).insert(Native(component));
         self.structural_revision = revision;

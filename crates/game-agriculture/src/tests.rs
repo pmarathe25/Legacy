@@ -1240,3 +1240,45 @@ fn missing_component_registration_cannot_leave_partial_entities() {
     );
     assert_eq!(store.snapshot().unwrap(), before);
 }
+
+#[test]
+fn stricter_registered_agricultural_validators_cannot_leave_partial_entities() {
+    let fixture = world();
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<Field>("agriculture/field", |_| Err(Error::Unavailable))
+        .unwrap();
+    schema
+        .register::<Crop>("agriculture/crop", |_| Err(Error::Unavailable))
+        .unwrap();
+    schema
+        .register::<Soil>("agriculture/soil", |_| Err(Error::Unavailable))
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        fixture
+            .runtime
+            .insert_field(&mut store, fixture.field(SiteId(1)).unwrap().clone()),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert_eq!(
+        fixture.runtime.insert_crop(
+            &mut store,
+            SiteId(1),
+            fixture.crop(SiteId(1)).unwrap().clone()
+        ),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert_eq!(
+        fixture.runtime.insert_soil(
+            &mut store,
+            SiteId(1),
+            fixture.soil(SiteId(1)).unwrap().clone()
+        ),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}

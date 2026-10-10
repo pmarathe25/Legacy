@@ -142,6 +142,15 @@ impl Store {
     pub fn insert<C: Component>(&mut self, id: StableId, component: C) -> Result<(), Error> {
         self.backend.insert(id, component)
     }
+    /// Validate first, then attach the component, creating its entity if needed.
+    /// A rejected component or invalid ID leaves both data and entity membership unchanged.
+    pub fn insert_or_spawn<C: Component>(
+        &mut self,
+        id: StableId,
+        component: C,
+    ) -> Result<(), Error> {
+        self.backend.insert_or_spawn(id, component)
+    }
     pub fn remove<C: Component>(&mut self, id: StableId) -> Result<Option<C>, Error> {
         self.backend.remove(id)
     }
@@ -413,6 +422,25 @@ mod tests {
                 .is_err()
         );
         assert_eq!(schema.keys().count(), 3);
+    }
+    #[test]
+    fn creating_a_component_entity_validates_before_any_structural_change() {
+        let mut store = fixture(false);
+        let query = store.query2::<Count, Name>();
+        let before = store.snapshot().unwrap();
+        assert_eq!(
+            store.insert_or_spawn(StableId(8), Count(0)),
+            Err(Error::Unavailable)
+        );
+        assert!(store.insert_or_spawn(StableId(0), Count(10)).is_err());
+        assert!(store.insert_or_spawn(StableId(8), StableId(9)).is_err());
+        assert_eq!(store.snapshot().unwrap(), before);
+        assert_eq!(query.iter(&store).unwrap().count(), 1);
+        store.insert_or_spawn(StableId(8), Count(10)).unwrap();
+        assert!(query.iter(&store).is_err());
+        assert_eq!(store.get::<Count>(StableId(8)), Some(&Count(10)));
+        store.insert_or_spawn(StableId(2), Count(80)).unwrap();
+        assert_eq!(store.get::<Count>(StableId(2)), Some(&Count(80)));
     }
     #[test]
     fn snapshot_and_clone_ignore_native_allocation_and_preserve_large_integers() {

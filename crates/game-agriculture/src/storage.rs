@@ -89,13 +89,7 @@ impl Runtime {
         id: SiteId,
         component: T,
     ) -> Result<(), Error> {
-        if !store.schema().is_registered::<T>() {
-            return Err(Error::InvalidConfiguration(
-                "agricultural component is not registered".into(),
-            ));
-        }
-        store.ensure(StableId(id.0))?;
-        store.insert(StableId(id.0), component)
+        store.insert_or_spawn(StableId(id.0), component)
     }
     pub fn insert_field(&self, store: &mut Store, field: Field) -> Result<(), Error> {
         validate_field(&field)?;

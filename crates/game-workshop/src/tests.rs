@@ -555,3 +555,33 @@ fn a_missing_job_schema_cannot_leave_an_empty_entity() {
     assert!(insert_job(&mut store, PersonId(1), start().job).is_err());
     assert_eq!(store.snapshot().unwrap(), before);
 }
+
+#[test]
+fn a_registered_stricter_job_validator_cannot_leave_partial_entities() {
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<Job>("workshop/job", |value| {
+            if value.remaining <= 50 {
+                Ok(())
+            } else {
+                Err(Error::Unavailable)
+            }
+        })
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        insert_job(&mut store, PersonId(1), start().job),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    let mut admitted = start().job;
+    admitted.remaining = 50;
+    insert_job(&mut store, PersonId(1), admitted).unwrap();
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        insert_job(&mut store, PersonId(1), start().job),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}

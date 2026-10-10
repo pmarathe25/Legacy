@@ -32,13 +32,7 @@ pub fn bodies(store: &Store) -> impl Iterator<Item = (PersonId, &Body)> {
 }
 pub fn insert_body(store: &mut Store, actor: PersonId, body: Body) -> Result<(), Error> {
     body.validate()?;
-    if !store.schema().is_registered::<Body>() {
-        return Err(Error::InvalidConfiguration(
-            "body component is not registered".into(),
-        ));
-    }
-    store.ensure(StableId(actor.0))?;
-    store.insert(StableId(actor.0), body)
+    store.insert_or_spawn(StableId(actor.0), body)
 }
 pub fn remove_body(store: &mut Store, actor: PersonId) -> Result<Option<Body>, Error> {
     if !store.contains(StableId(actor.0)) {

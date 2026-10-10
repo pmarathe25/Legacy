@@ -425,4 +425,31 @@ mod tests {
         assert!(insert_body(&mut store, PersonId(9), body(100)).is_err());
         assert_eq!(store.snapshot().unwrap(), before);
     }
+    #[test]
+    fn a_registered_stricter_body_validator_cannot_leave_partial_entities() {
+        let mut schema = game_ecs::Schema::new();
+        schema
+            .register::<Body>("physiology/body", |value| {
+                if value.vitals.health <= 50 {
+                    Ok(())
+                } else {
+                    Err(Error::Unavailable)
+                }
+            })
+            .unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
+        let before = store.snapshot().unwrap();
+        assert_eq!(
+            insert_body(&mut store, PersonId(9), body(100)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
+        insert_body(&mut store, PersonId(9), body(50)).unwrap();
+        let admitted = store.snapshot().unwrap();
+        assert_eq!(
+            insert_body(&mut store, PersonId(9), body(100)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(store.snapshot().unwrap(), admitted);
+    }
 }

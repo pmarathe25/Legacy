@@ -30,13 +30,7 @@ pub fn jobs(store: &Store) -> impl Iterator<Item = (PersonId, &Job)> {
 }
 pub fn insert_job(store: &mut Store, actor: PersonId, job: Job) -> Result<(), Error> {
     job.validate()?;
-    if !store.schema().is_registered::<Job>() {
-        return Err(Error::InvalidConfiguration(
-            "workshop job component is not registered".into(),
-        ));
-    }
-    store.ensure(StableId(actor.0))?;
-    store.insert(StableId(actor.0), job)
+    store.insert_or_spawn(StableId(actor.0), job)
 }
 pub fn remove_job(store: &mut Store, actor: PersonId) -> Result<Option<Job>, Error> {
     if !store.contains(StableId(actor.0)) {
