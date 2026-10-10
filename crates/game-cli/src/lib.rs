@@ -1,5 +1,5 @@
 use game_api::*;
-use game_sim::{Execution, Simulation};
+use game_world::{Execution, Simulation};
 
 /// Text parsing and display only. The same authoritative API serves every client.
 pub fn execute(
@@ -390,11 +390,11 @@ fn parse_game_command(words: &[&str]) -> Result<Option<Command>, Box<dyn std::er
 
 pub enum SessionOutput {
     Text(String),
-    Advancing(game_sim::session::RunHandle),
+    Advancing(game_session::RunHandle),
 }
 
 pub fn execute_session(
-    session: &game_sim::session::Session,
+    session: &game_session::Session,
     line: &str,
 ) -> Result<SessionOutput, Box<dyn std::error::Error>> {
     let words: Vec<_> = line.split_whitespace().collect();

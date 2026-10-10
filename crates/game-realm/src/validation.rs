@@ -1,6 +1,6 @@
 use crate::*;
+use game_agreements::AgreementTerm;
 use game_core::*;
-use game_economy::agreements::AgreementTerm;
 use game_missions::MissionObjective;
 use std::collections::BTreeMap;
 

@@ -34,19 +34,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
+name = "game-agreements"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-agriculture"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-environment",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-api"
 version = "0.1.0"
 dependencies = [
+ "game-agreements",
+ "game-agriculture",
  "game-armies",
  "game-characters",
  "game-conflict",
  "game-core",
- "game-economy",
+ "game-ecology",
  "game-genetics",
  "game-health",
  "game-invocation",
  "game-lineage",
  "game-missions",
+ "game-projects",
  "game-realm",
  "game-society",
  "game-transport",
@@ -77,7 +99,8 @@ name = "game-cli"
 version = "0.1.0"
 dependencies = [
  "game-api",
- "game-sim",
+ "game-session",
+ "game-world",
  "serde_json",
 ]
 
@@ -98,7 +121,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "game-economy"
+name = "game-ecology"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-environment",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-environment"
 version = "0.1.0"
 dependencies = [
  "game-core",
@@ -134,6 +167,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-lineage"
 version = "0.1.0"
 dependencies = [
@@ -146,8 +188,8 @@ dependencies = [
 name = "game-missions"
 version = "0.1.0"
 dependencies = [
+ "game-agreements",
  "game-core",
- "game-economy",
  "serde",
  "serde_json",
 ]
@@ -160,36 +202,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-projects"
+version = "0.1.0"
+dependencies = [
+ "game-agreements",
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-realm"
 version = "0.1.0"
 dependencies = [
+ "game-agreements",
  "game-core",
- "game-economy",
  "game-missions",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "game-sim"
+name = "game-session"
 version = "0.1.0"
 dependencies = [
  "game-api",
- "game-armies",
- "game-characters",
- "game-conflict",
+]
+
+[[package]]
+name = "game-sim"
+version = "0.1.0"
+dependencies = [
  "game-core",
- "game-economy",
- "game-genetics",
- "game-health",
- "game-invocation",
- "game-lineage",
- "game-missions",
- "game-physiology",
- "game-realm",
- "game-skills",
- "game-society",
- "game-transport",
+ "game-environment",
  "rayon",
  "serde",
  "serde_json",
@@ -207,8 +252,8 @@ dependencies = [
 name = "game-society"
 version = "0.1.0"
 dependencies = [
+ "game-agreements",
  "game-core",
- "game-economy",
  "serde",
  "serde_json",
 ]
@@ -218,6 +263,38 @@ name = "game-transport"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-world"
+version = "0.1.0"
+dependencies = [
+ "game-agreements",
+ "game-agriculture",
+ "game-api",
+ "game-armies",
+ "game-characters",
+ "game-conflict",
+ "game-core",
+ "game-ecology",
+ "game-environment",
+ "game-genetics",
+ "game-health",
+ "game-invocation",
+ "game-lifecycle",
+ "game-lineage",
+ "game-missions",
+ "game-physiology",
+ "game-projects",
+ "game-realm",
+ "game-session",
+ "game-sim",
+ "game-skills",
+ "game-society",
+ "game-transport",
+ "rayon",
  "serde",
  "serde_json",
 ]

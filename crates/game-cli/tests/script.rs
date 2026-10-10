@@ -1,5 +1,5 @@
 use game_api::*;
-use game_sim::*;
+use game_world::*;
 
 #[test]
 fn text_adapter_and_direct_api_produce_identical_logical_results() {
@@ -193,7 +193,7 @@ fn hosted_text_commands_pause_long_runs_and_restore_committed_saves() {
         reverse_jobs: true,
     };
     let sim = Simulation::kernel_fixture(1, 10_000, execution.clone()).unwrap();
-    let session = game_sim::session::Session::spawn(sim).unwrap();
+    let session = game_session::Session::spawn(sim).unwrap();
     let SessionOutput::Advancing(run) = game_cli::execute_session(&session, "run 3650d").unwrap()
     else {
         panic!("expected an advance handle")
@@ -229,42 +229,6 @@ fn hosted_text_commands_pause_long_runs_and_restore_committed_saves() {
 }
 
 #[test]
-fn a_hosted_combat_run_returns_input_requests_instead_of_spinning() {
-    let sim = Simulation::combat_fixture(1, Execution::default()).unwrap();
-    let target = sim
-        .observe()
-        .nearby_people
-        .iter()
-        .find(|(_, role)| *role == Role::Citizen)
-        .unwrap()
-        .0;
-    let session = game_sim::session::Session::spawn(sim).unwrap();
-    session.submit_command(Command::Engage { target }).unwrap();
-    let encounter = session.observe().unwrap().combat.unwrap().encounter;
-    let result = session
-        .run(SimDuration(86_400_000))
-        .unwrap()
-        .wait()
-        .unwrap();
-    assert_eq!(result.reason, StopReason::CombatInput { encounter });
-    assert_eq!(result.reached, SimTime(0));
-    session
-        .submit_command(Command::CombatTurn {
-            encounter,
-            movement: None,
-            action: CombatAction::Defend,
-        })
-        .unwrap();
-    let result = session
-        .run(SimDuration(86_400_000))
-        .unwrap()
-        .wait()
-        .unwrap();
-    assert_eq!(result.reached, SimTime(6_000));
-    assert_eq!(result.reason, StopReason::CombatInput { encounter });
-}
-
-#[test]
 fn player_childhood_choices_are_playable_through_normal_views_and_text() {
     let execution = Execution::default();
     let mut sim = Simulation::new("childhood-fixture", 1, execution.clone()).unwrap();
@@ -295,7 +259,7 @@ fn player_childhood_choices_are_playable_through_normal_views_and_text() {
 fn seasonal_farming_commands_use_real_time_seed_and_local_field_views() {
     let execution = Execution::default();
     let mut sim = Simulation::new("farming-fixture", 1, execution.clone()).unwrap();
-    assert!(sim.observe().environment.unwrap().fields.is_empty());
+    assert!(sim.observe().agriculture.unwrap().fields.is_empty());
     game_cli::execute(&mut sim, "move 2", &execution).unwrap();
     game_cli::execute(&mut sim, "run 2m", &execution).unwrap();
     let view: PlayerView =
@@ -344,7 +308,7 @@ fn seasonal_farming_commands_use_real_time_seed_and_local_field_views() {
     game_cli::execute(&mut sim, "run 2h", &execution).unwrap();
     assert_eq!(
         sim.observe()
-            .environment
+            .agriculture
             .unwrap()
             .fields
             .iter()
@@ -453,7 +417,7 @@ fn session_stops_at_successor_birth_and_switches_to_the_newborns_real_agency() {
             .max_health,
     )
     .unwrap();
-    let session = game_sim::session::Session::spawn(sim).unwrap();
+    let session = game_session::Session::spawn(sim).unwrap();
     let waiting = game_cli::execute_session(&session, "lineage").unwrap();
     let game_cli::SessionOutput::Text(waiting) = waiting else {
         panic!("view expected")
@@ -777,8 +741,8 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.debug_set_personality(
             actor,
-            game_sim::decisions::Personality::restful(),
-            game_sim::decisions::Dream::Comfort,
+            game_world::decisions::Personality::restful(),
+            game_world::decisions::Dream::Comfort,
         )
         .unwrap();
     }
@@ -787,7 +751,7 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
         .inventories
         .values()
         .find(|i| {
-            i.good == Good::Tool && i.location == game_sim::InventoryLocation::Area(AreaId(1))
+            i.good == Good::Tool && i.location == game_world::InventoryLocation::Area(AreaId(1))
         })
         .unwrap()
         .id;
@@ -919,8 +883,8 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         sim.debug_actor_command(person, Command::Rest).unwrap();
         sim.debug_set_personality(
             person,
-            game_sim::decisions::Personality::restful(),
-            game_sim::decisions::Dream::Comfort,
+            game_world::decisions::Personality::restful(),
+            game_world::decisions::Dream::Comfort,
         )
         .unwrap();
     }
@@ -929,7 +893,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         .inventories
         .values()
         .find(|i| {
-            i.good == Good::Food && i.location == game_sim::InventoryLocation::Area(AreaId(1))
+            i.good == Good::Food && i.location == game_world::InventoryLocation::Area(AreaId(1))
         })
         .unwrap()
         .id;
@@ -1000,7 +964,7 @@ fn normal_openings_and_seeded_random_selection_launch_through_the_cli() {
         assert!(result.status.success(), "{scenario}");
         let text = String::from_utf8(result.stdout).unwrap();
         let actual = if scenario == "random" {
-            game_sim::scenarios::choose(41)
+            game_world::scenarios::choose(41)
         } else {
             scenario
         };

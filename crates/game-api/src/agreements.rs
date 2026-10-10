@@ -1,5 +1,5 @@
 //! Public agreement protocol owned by the independent economy domain.
-pub use game_economy::agreements::{
+pub use game_agreements::{
     AgreementAction, AgreementStatus, AgreementTerm, AgreementView, AmendmentProcedure,
     AmendmentStatus, AmendmentView, ObligationView,
 };

@@ -1,6 +1,6 @@
 use super::*;
+use game_agreements::AgreementTerm;
 use game_core::*;
-use game_economy::agreements::AgreementTerm;
 use game_missions::{MissionObjective, MissionProposal};
 use std::collections::{BTreeMap, BTreeSet};
 fn witness(observer: PersonId, area: u64, observed_at: u64) -> LocalWitness {

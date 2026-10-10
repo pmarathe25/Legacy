@@ -1,7 +1,7 @@
 //! Executable, bounded social arrangements people can propose and recognize.
 use crate::enforcement::{EnforcementPolicy, EnforcementRemedy};
+use game_agreements::AgreementTerm;
 use game_core::*;
-use game_economy::agreements::AgreementTerm;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 

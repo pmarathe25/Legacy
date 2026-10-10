@@ -16,7 +16,10 @@ game-conflict.workspace = true
 game-invocation.workspace = true
 game-health.workspace = true
 game-characters.workspace = true
-game-economy.workspace = true
+game-agreements.workspace = true
+game-projects.workspace = true
+game-ecology.workspace = true
+game-agriculture.workspace = true
 game-core.workspace = true
 serde.workspace = true
 

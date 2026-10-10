@@ -1,7 +1,7 @@
 use crate::validation::authoritative_actor;
 use crate::*;
+use game_agreements::AgreementTerm;
 use game_core::*;
-use game_economy::agreements::AgreementTerm;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]

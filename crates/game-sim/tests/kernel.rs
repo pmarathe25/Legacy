@@ -1,298 +1,336 @@
-use game_api::*;
+use game_core::{Error, SimDuration, SimTime};
 use game_sim::*;
 
-fn fixture(workers: usize, reverse_jobs: bool) -> Simulation {
-    Simulation::kernel_fixture(
-        1,
-        1_000,
-        Execution {
-            workers,
-            reverse_jobs,
-        },
-    )
-    .unwrap()
+#[derive(Debug, Default, PartialEq, Eq)]
+struct World {
+    time: SimTime,
+    publication: u64,
+    value: u64,
+    stop: Option<u8>,
 }
-fn move_to(sim: &mut Simulation, sequence: u64, area: u64) -> Result<CommandReceipt, Error> {
-    sim.submit(Submission {
-        caller_sequence: sequence,
-        command: Command::Move {
-            destination: AreaId(area),
-        },
+impl ClockWorld for World {
+    fn clock(&self) -> Clock {
+        Clock {
+            time: self.time,
+            revision: self.publication,
+        }
+    }
+    fn publish_clock(&mut self, clock: Clock) {
+        self.time = clock.time;
+        self.publication = clock.revision;
+    }
+}
+struct Prepared {
+    delta: u64,
+    at: SimTime,
+    publications: u64,
+    stop: Option<u8>,
+}
+impl Transaction<World, u8> for Prepared {
+    fn revision_budget(&self) -> u64 {
+        self.publications
+    }
+    fn commit(self, world: &mut World) -> Option<u8> {
+        assert_eq!(world.time, self.at, "closing time is visible to reactions");
+        world.value += self.delta;
+        world.publication += self.publications;
+        self.stop
+    }
+}
+fn prepare(
+    world: &World,
+    interval: Interval,
+    _: &[PhaseKey],
+    _: &Executor,
+) -> Result<Prepared, Error> {
+    let delta = interval.elapsed().0;
+    world.value.checked_add(delta).ok_or(Error::Overflow)?;
+    Ok(Prepared {
+        delta,
+        at: interval.to,
+        publications: 0,
+        stop: None,
     })
 }
-fn contested(sim: &mut Simulation) -> InventoryId {
-    let state = sim.canonical_state();
-    let source = state
-        .inventories
-        .values()
-        .find(|i| matches!(i.location, InventoryLocation::Area(_)))
-        .unwrap()
-        .id;
-    let intentions = state.people[3..5]
-        .iter()
-        .map(|p| TransferIntent {
-            actor: p.id,
-            source,
-            destination: p.inventory,
-            quantity: Quantity(1_000),
-        })
-        .collect();
-    sim.debug_schedule_transfers(SimTime(60_000), intentions)
-        .unwrap();
-    source
-}
-
-#[test]
-fn arrival_consumes_elapsed_time_and_cannot_credit_travel_as_work() {
-    let mut sim = fixture(4, false);
-    move_to(&mut sim, 1, 2).unwrap();
-    sim.advance(SimDuration(119_999)).unwrap();
-    assert!(matches!(
-        sim.observe().location,
-        Location::InTransit {
-            to: AreaId(2),
-            arrives: SimTime(120_000),
-            ..
-        }
-    ));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
-    sim.advance(SimDuration(1)).unwrap();
-    assert_eq!(sim.observe().location, Location::AtArea(AreaId(2)));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
-    sim.advance(MINUTE).unwrap();
-    assert_eq!(sim.canonical_state().people[0].work_units, 1_000);
-    assert!(matches!(
-        sim.canonical_state().events[1],
-        Event {
-            time: SimTime(120_000),
-            kind: EventKind::Arrived {
-                area: AreaId(2),
-                ..
-            },
-            ..
-        }
-    ));
-}
-
-#[test]
-fn invalid_commands_preserve_all_logical_state_and_allocator_even_in_transit() {
-    let mut sim = fixture(1, false);
-    let disconnected = sim.debug_add_disconnected_area("island").unwrap();
-    move_to(&mut sim, 1, 2).unwrap();
-    sim.advance(SimDuration(17)).unwrap();
-    let before = sim.canonical_state().clone();
-    assert_eq!(move_to(&mut sim, 2, 999), Err(Error::UnknownArea));
-    assert_eq!(move_to(&mut sim, 2, disconnected.0), Err(Error::NoRoute));
-    assert_eq!(&before, sim.canonical_state());
-}
-
-#[test]
-fn competing_transfers_conserve_stock_and_carry_it_once() {
-    let mut sim = fixture(4, true);
-    let source = contested(&mut sim);
-    sim.advance(MINUTE).unwrap();
-    let state = sim.canonical_state();
-    assert_eq!(state.inventories[&source].quantity, Quantity(0));
-    assert_eq!(
-        state
-            .inventories
-            .values()
-            .map(|i| i.quantity.0)
-            .sum::<u64>(),
-        1_000
-    );
-    assert_eq!(
-        state.people[3..5]
-            .iter()
-            .filter(|p| state.inventories[&p.inventory].quantity == Quantity(1_000))
-            .count(),
-        1
-    );
-    assert_eq!(
-        state
-            .events
-            .iter()
-            .filter(|e| matches!(e.kind, EventKind::Transferred { .. }))
-            .count(),
-        1
-    );
-    assert_eq!(
-        state.inventories[&source].last_granted,
-        Some(state.people[3].id)
-    );
-}
-
-#[test]
-fn chunking_workers_and_perturbed_completion_preserve_state_and_events() {
-    let mut reference = fixture(1, false);
-    contested(&mut reference);
-    move_to(&mut reference, 1, 2).unwrap();
-    reference.advance(SimDuration(487_123)).unwrap();
-    for workers in [1, 2, 4] {
-        for reverse in [false, true] {
-            let mut sim = fixture(workers, reverse);
-            contested(&mut sim);
-            move_to(&mut sim, 1, 2).unwrap();
-            for delta in [1, 17, 59_981, 4_000, 123_001, 300_123] {
-                sim.advance(SimDuration(delta)).unwrap();
-            }
-            assert_eq!(reference.canonical_state(), sim.canonical_state());
-        }
+fn key(module: u32, phase: u16) -> PhaseKey {
+    PhaseKey {
+        module: ModuleId(module),
+        phase: PhaseId(phase),
     }
 }
-
-#[test]
-fn queries_are_passive_and_normal_views_omit_private_world_state() {
-    let mut sim = fixture(4, false);
-    move_to(&mut sim, 1, 2).unwrap();
-    let before = sim.canonical_state().clone();
-    for _ in 0..100 {
-        let view = sim.observe();
-        assert_eq!(view.time, SimTime(0));
-    }
-    assert_eq!(&before, sim.canonical_state());
-    let json = serde_json::to_string(&sim.observe()).unwrap();
-    assert!(
-        !json.contains("work_units") && !json.contains("inventories") && !json.contains("citizen")
-    );
+fn boundary(_: &World, interval: Interval) -> Result<SimTime, Error> {
+    Ok(SimTime(interval.from.0.checked_add(10).ok_or(Error::Overflow)?).min(interval.to))
+}
+fn stopped(world: &World, _: &Clock) -> Result<Option<u8>, Error> {
+    Ok(world.stop)
 }
 
 #[test]
-fn duplicate_commands_are_idempotent_and_replacement_finishes_current_leg() {
-    let mut sim = fixture(2, false);
-    let receipt = move_to(&mut sim, 42, 2).unwrap();
-    let before = sim.canonical_state().clone();
-    assert_eq!(move_to(&mut sim, 42, 2).unwrap(), receipt);
-    assert_eq!(&before, sim.canonical_state());
-    assert_eq!(move_to(&mut sim, 42, 3), Err(Error::SequenceConflict));
-    sim.advance(SimDuration(10_000)).unwrap();
-    move_to(&mut sim, 43, 3).unwrap();
-    sim.advance(SimDuration(110_000)).unwrap();
-    assert!(matches!(
-        sim.observe().location,
-        Location::InTransit {
-            from: AreaId(2),
-            to: AreaId(1),
-            arrives: SimTime(240_000),
-            ..
+fn dependencies_have_stable_order_and_invalid_registration_is_rejected() {
+    let create = |reverse| {
+        let a = Module::<World, u8>::new(ModuleId(4)).phase(PhaseId(0), [key(2, 1)]);
+        let b = Module::new(ModuleId(2))
+            .phase(PhaseId(1), [key(2, 0)])
+            .phase(PhaseId(0), []);
+        let c = Module::new(ModuleId(1)).phase(PhaseId(0), []);
+        let mut modules = vec![a, b, c];
+        if reverse {
+            modules.reverse();
         }
-    ));
-    sim.advance(SimDuration(300_000)).unwrap();
-    assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
-}
-
-#[test]
-fn save_load_preserves_fractional_progress_pending_transfers_and_idempotency() {
-    let mut original = fixture(1, false);
-    contested(&mut original);
-    move_to(&mut original, 7, 3).unwrap();
-    original.advance(SimDuration(12_345)).unwrap();
-    let mut loaded = Simulation::load(
-        &original.save().unwrap(),
-        Execution {
-            workers: 4,
-            reverse_jobs: true,
-        },
-    )
-    .unwrap();
-    assert_eq!(original.canonical_state(), loaded.canonical_state());
-    original.advance(SimDuration(987_654)).unwrap();
-    loaded.advance(SimDuration(987_654)).unwrap();
-    assert_eq!(original.canonical_state(), loaded.canonical_state());
-    let before = loaded.canonical_state().clone();
-    move_to(&mut loaded, 7, 3).unwrap();
-    assert_eq!(&before, loaded.canonical_state());
-    let mut json: serde_json::Value = serde_json::from_slice(&loaded.save().unwrap()).unwrap();
-    let valid_version = json["version"].clone();
-    json["version"] = 999.into();
-    assert!(Simulation::load(&serde_json::to_vec(&json).unwrap(), Execution::default()).is_err());
-    json["version"] = valid_version;
-    json["state"]["next_id"] = 1.into();
-    assert!(Simulation::load(&serde_json::to_vec(&json).unwrap(), Execution::default()).is_err());
-}
-
-#[test]
-fn overflow_and_bad_configuration_leave_committed_state_intact() {
+        Engine::new(modules, Execution::default()).unwrap()
+    };
+    assert_eq!(
+        create(false).phases(),
+        [key(1, 0), key(2, 0), key(2, 1), key(4, 0)]
+    );
+    assert_eq!(create(false).phases(), create(true).phases());
     assert!(
-        Simulation::kernel_fixture(
-            1,
-            15,
-            Execution {
-                workers: 0,
-                reverse_jobs: false
-            }
+        Engine::<World, u8>::new(
+            [Module::new(ModuleId(1)), Module::new(ModuleId(1))],
+            Execution::default()
         )
         .is_err()
     );
-    let mut sim = fixture(1, false);
-    sim.advance(SimDuration(1)).unwrap();
-    let before = sim.canonical_state().clone();
-    assert_eq!(sim.advance(SimDuration(u64::MAX)), Err(Error::Overflow));
-    assert_eq!(&before, sim.canonical_state());
+    assert!(
+        Engine::<World, u8>::new(
+            [Module::new(ModuleId(1))
+                .phase(PhaseId(0), [])
+                .phase(PhaseId(0), [])],
+            Execution::default()
+        )
+        .is_err()
+    );
+    assert!(
+        Engine::<World, u8>::new(
+            [Module::new(ModuleId(1)).phase(PhaseId(0), [key(9, 0)])],
+            Execution::default()
+        )
+        .is_err()
+    );
+    assert!(
+        Engine::<World, u8>::new(
+            [Module::new(ModuleId(1))
+                .phase(PhaseId(0), [key(1, 1)])
+                .phase(PhaseId(1), [key(1, 0)])],
+            Execution::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn input_stops_and_transaction_stops_preserve_actual_boundary_metadata() {
+    let mut module = Module::new(ModuleId(2));
+    module.boundary = Some(boundary);
+    module.input_stop = Some(stopped);
+    let engine = Engine::new([module], Execution::default()).unwrap();
+    let mut world = World {
+        stop: Some(7),
+        ..World::default()
+    };
+    let result = engine
+        .advance(&mut world, SimDuration(100), prepare)
+        .unwrap();
+    assert_eq!(result.requested, SimTime(100));
+    assert_eq!(result.reached, SimTime(0));
+    assert_eq!(result.input, Some(7));
+    assert_eq!(world.value, 0);
+    world.stop = None;
+    let result = engine
+        .advance(&mut world, SimDuration(100), |_, interval, _, _| {
+            Ok(Prepared {
+                delta: interval.elapsed().0,
+                at: interval.to,
+                publications: 2,
+                stop: Some(9),
+            })
+        })
+        .unwrap();
+    assert_eq!(result.reached, SimTime(10));
+    assert_eq!(result.revision, 3);
+    assert_eq!(result.input, Some(9));
+    assert_eq!(world.value, 10);
+}
+
+#[test]
+fn failed_preparation_and_overflow_publish_no_partial_state_or_clock() {
+    let engine = Engine::<World, u8>::new([], Execution::default()).unwrap();
+    let mut world = World {
+        value: u64::MAX,
+        ..World::default()
+    };
     assert_eq!(
-        compute::progress(compute::ProgressInput {
-            units: u64::MAX,
-            remainder: 0,
-            units_per_minute: 1,
-            elapsed_ms: 60_000
-        }),
+        engine.advance(&mut world, SimDuration(1), prepare),
+        Err(Error::Overflow)
+    );
+    assert_eq!(world.time, SimTime(0));
+    assert_eq!(world.publication, 0);
+    assert_eq!(world.value, u64::MAX);
+    world.value = 0;
+    world.publication = u64::MAX - 1;
+    assert_eq!(
+        engine.advance(&mut world, SimDuration(1), |_, interval, _, _| Ok(
+            Prepared {
+                delta: 1,
+                at: interval.to,
+                publications: 1,
+                stop: None,
+            }
+        )),
+        Err(Error::Overflow)
+    );
+    assert_eq!(world.time, SimTime(0));
+    assert_eq!(world.value, 0);
+    world.time = SimTime(u64::MAX);
+    assert_eq!(
+        engine.advance(&mut world, SimDuration(1), prepare),
         Err(Error::Overflow)
     );
 }
 
 #[test]
-fn host_services_pause_queries_commands_and_save_during_long_advancement() {
-    let sim = Simulation::kernel_fixture(
-        1,
-        10_000,
-        Execution {
-            workers: 4,
-            reverse_jobs: false,
-        },
-    )
-    .unwrap();
-    let session = session::Session::spawn(sim).unwrap();
-    let run = session.run(SimDuration(10 * 365 * 86_400_000)).unwrap();
-    session
-        .submit(Submission {
-            caller_sequence: 1,
-            command: Command::Move {
-                destination: AreaId(2),
-            },
-        })
-        .unwrap();
-    let view = session.observe().unwrap();
-    assert!(view.time.0 < 10 * 365 * 86_400_000);
-    let saved = session.save().unwrap();
-    let loaded = Simulation::load(&saved, Execution::default()).unwrap();
-    assert!(loaded.time() >= view.time);
-    let paused = session.pause().unwrap();
-    let result = run.wait().unwrap();
-    assert_eq!(result.reason, StopReason::Paused);
-    assert_eq!(result.reached, paused.time);
-    assert_eq!(session.observe().unwrap().time, paused.time);
+fn stalled_or_skipped_boundaries_are_rejected_without_a_fake_time_step() {
+    let mut module = Module::<World, u8>::new(ModuleId(1));
+    module.boundary = Some(|_, interval| Ok(interval.from));
+    let engine = Engine::new([module], Execution::default()).unwrap();
+    let mut world = World::default();
+    assert!(engine.advance(&mut world, SimDuration(1), prepare).is_err());
+    assert_eq!(world, World::default());
+    let mut module = Module::<World, u8>::new(ModuleId(1));
+    module.boundary = Some(|_, interval| Ok(SimTime(interval.to.0 + 1)));
+    let engine = Engine::new([module], Execution::default()).unwrap();
+    assert!(engine.advance(&mut world, SimDuration(1), prepare).is_err());
+    assert_eq!(world, World::default());
 }
 
 #[test]
-fn replacing_a_route_with_the_current_leg_endpoint_stops_after_that_leg() {
-    let mut sim = fixture(1, false);
-    move_to(&mut sim, 1, 3).unwrap();
-    sim.advance(SimDuration(50_000)).unwrap();
-    move_to(&mut sim, 2, 2).unwrap();
-    assert!(sim.observe().available_commands.contains(&Command::Move {
-        destination: AreaId(3)
-    }));
-    move_to(&mut sim, 3, 3).unwrap();
-    assert!(matches!(
-        sim.observe().location,
-        Location::InTransit {
-            arrives: SimTime(180_000),
-            ..
+fn keyed_results_and_errors_are_independent_of_workers_and_submission_order() {
+    let rows: Vec<_> = (0..512_u64).rev().map(|key| (key, key)).collect();
+    for workers in [1, 4] {
+        for reverse_jobs in [false, true] {
+            let executor = Executor::new(Execution {
+                workers,
+                reverse_jobs,
+            })
+            .unwrap();
+            let results = executor.map_keyed(&rows, |value| Ok(value * 3)).unwrap();
+            assert_eq!(
+                results,
+                (0..512).map(|key| (key, key * 3)).collect::<Vec<_>>()
+            );
+            let failure = executor.map_keyed(&rows, |value| {
+                if *value == 10 {
+                    Err(Error::Unavailable)
+                } else if *value == 400 {
+                    Err(Error::Overflow)
+                } else {
+                    Ok(*value)
+                }
+            });
+            assert_eq!(failure, Err(Error::Unavailable));
+            assert!(executor.map_keyed(&[(1, ()), (1, ())], |_| Ok(())).is_err());
         }
-    ));
-    sim.advance(SimDuration(130_000)).unwrap();
-    assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
-    assert!(sim.canonical_state().people[0].route.is_empty());
+    }
+}
+
+#[test]
+fn no_module_and_zero_duration_need_no_domain_specific_fallback() {
+    let engine = Engine::<World, u8>::new([], Execution::default()).unwrap();
+    let mut world = World::default();
+    engine.advance(&mut world, SimDuration(0), prepare).unwrap();
+    assert_eq!(world, World::default());
+    engine
+        .advance(&mut world, SimDuration(17), prepare)
+        .unwrap();
+    assert_eq!(world.time, SimTime(17));
+    assert_eq!(world.value, 17);
+}
+
+#[test]
+fn boundaries_receive_the_current_clipped_window_in_stable_module_order() {
+    let create = |reverse| {
+        let mut first = Module::<World, u8>::new(ModuleId(1));
+        first.boundary = Some(|_, interval| Ok(SimTime(interval.from.0 + 7).min(interval.to)));
+        let mut second = Module::new(ModuleId(2));
+        second.boundary = Some(|_, interval| {
+            assert!(
+                interval.elapsed().0 <= 7,
+                "earlier module must clip this predictor"
+            );
+            Ok(SimTime(interval.from.0 + 3).min(interval.to))
+        });
+        let mut modules = vec![first, second];
+        if reverse {
+            modules.reverse();
+        }
+        Engine::new(modules, Execution::default()).unwrap()
+    };
+    let world = World::default();
+    assert_eq!(
+        create(false).next_boundary(&world, SimTime(100)).unwrap(),
+        SimTime(3)
+    );
+    assert_eq!(
+        create(false).next_boundary(&world, SimTime(100)),
+        create(true).next_boundary(&world, SimTime(100))
+    );
+    assert_eq!(
+        create(false).next_boundary(&world, SimTime(0)).unwrap(),
+        SimTime(0)
+    );
+    let mut advanced = World::default();
+    create(true)
+        .advance(&mut advanced, SimDuration(100), prepare)
+        .unwrap();
+    assert_eq!(advanced.time, SimTime(100));
+    assert_eq!(advanced.value, 100);
+    assert_eq!(advanced.publication, 34);
+    let mut larger = Module::<World, u8>::new(ModuleId(2));
+    larger.boundary = Some(|_, _| Ok(SimTime(8)));
+    let mut first = Module::new(ModuleId(1));
+    first.boundary = Some(|_, _| Ok(SimTime(7)));
+    let engine = Engine::new([larger, first], Execution::default()).unwrap();
+    assert!(engine.next_boundary(&world, SimTime(100)).is_err());
+}
+
+#[test]
+fn existing_batches_reuse_the_same_bounded_pool() {
+    let executor = Executor::new(Execution {
+        workers: 3,
+        reverse_jobs: false,
+    })
+    .unwrap();
+    assert_eq!(executor.pool().current_num_threads(), 3);
+    assert_eq!(executor.install(rayon::current_num_threads), 3);
+    assert_eq!(executor.install(|| executor.pool().install(|| 17)), 17);
+}
+
+#[test]
+fn one_interval_driver_commits_one_boundary_and_checks_input_before_any_commit() {
+    let mut module = Module::<World, u8>::new(ModuleId(1));
+    module.boundary = Some(boundary);
+    module.input_stop = Some(stopped);
+    let engine = Engine::new([module], Execution::default()).unwrap();
+    let mut world = World::default();
+    let one = engine
+        .advance_one(&mut world, SimDuration(100), prepare)
+        .unwrap();
+    assert_eq!(one.requested, SimTime(100));
+    assert_eq!(one.reached, SimTime(10));
+    assert_eq!(world.value, 10);
+    assert_eq!(world.publication, 1);
+    world.stop = Some(4);
+    let stopped = engine
+        .advance_one(&mut world, SimDuration(90), prepare)
+        .unwrap();
+    assert_eq!(stopped.input, Some(4));
+    assert_eq!(stopped.reached, SimTime(10));
+    assert_eq!(world.value, 10);
+    world.stop = None;
+    engine
+        .advance(&mut world, SimDuration(90), prepare)
+        .unwrap();
+    assert_eq!(world.time, SimTime(100));
+    assert_eq!(world.value, 100);
+    assert_eq!(world.publication, 10);
 }

@@ -1,4 +1,4 @@
-use game_sim::{Execution, Simulation};
+use game_world::{Execution, Simulation};
 use std::io::{self, BufRead, IsTerminal, Write};
 
 fn main() {
@@ -36,36 +36,43 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             _ => return Err(format!("unknown option {arg}").into()),
         }
     }
-    let sim = if game_sim::scenarios::PLAYABLE.contains(&scenario.as_str()) || scenario == "random"
-    {
-        let mut config: game_sim::scenarios::Config = if let Some(path) = scenario_config {
-            serde_json::from_slice(&std::fs::read(path)?)?
-        } else {
-            game_sim::scenarios::Config::default()
-        };
-        if let Some(path) = environment_config {
-            config.environment = serde_json::from_slice(&std::fs::read(path)?)?;
-        }
-        Simulation::playable_scenario(&scenario, seed, execution.clone(), config)?
-    } else {
-        if scenario_config.is_some() {
-            return Err("scenario configuration requires a playable opening".into());
-        }
-        if let Some(path) = environment_config {
-            if scenario != "farming-fixture" {
-                return Err(
-                    "environment configuration requires a playable opening or farming-fixture"
-                        .into(),
-                );
+    let sim =
+        if game_world::scenarios::PLAYABLE.contains(&scenario.as_str()) || scenario == "random" {
+            let mut config: game_world::scenarios::Config = if let Some(path) = scenario_config {
+                serde_json::from_slice(&std::fs::read(path)?)?
+            } else {
+                game_world::scenarios::Config::default()
+            };
+            if let Some(path) = environment_config {
+                config.environment = serde_json::from_slice(&std::fs::read(path)?)?;
             }
-            let config = serde_json::from_slice(&std::fs::read(path)?)?;
-            Simulation::farming_with_config(seed, execution.clone(), config)?
+            Simulation::playable_scenario(&scenario, seed, execution.clone(), config)?
         } else {
-            Simulation::new(&scenario, seed, execution.clone())?
-        }
-    };
+            if scenario_config.is_some() {
+                return Err("scenario configuration requires a playable opening".into());
+            }
+            if let Some(path) = environment_config {
+                if scenario != "farming-fixture" {
+                    return Err(
+                        "environment configuration requires a playable opening or farming-fixture"
+                            .into(),
+                    );
+                }
+                let config = serde_json::from_slice(&std::fs::read(path)?)?;
+                Simulation::farming_with_config(
+                    seed,
+                    execution.clone(),
+                    game_world::agriculture::FarmingConfig {
+                        environment: config,
+                        ..Default::default()
+                    },
+                )?
+            } else {
+                Simulation::new(&scenario, seed, execution.clone())?
+            }
+        };
     let selected = sim.canonical_state().scenario.clone();
-    let session = game_sim::session::Session::spawn(sim)?;
+    let session = game_session::Session::spawn(sim)?;
     let interactive = script.is_none() && io::stdin().is_terminal();
     let reader: Box<dyn BufRead> = if let Some(path) = script {
         Box::new(io::BufReader::new(std::fs::File::open(path)?))

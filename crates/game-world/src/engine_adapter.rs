@@ -1,0 +1,155 @@
+//! Composition-owned registrations. The engine sees stable IDs and callbacks,
+//! while these adapters connect the actual optional feature state.
+use crate::*;
+use game_sim::{Clock, ClockWorld, Engine, Interval, Module, ModuleId, PhaseId, PhaseKey};
+
+pub(crate) type WorldEngine = Engine<Simulation, StopReason>;
+pub(crate) const PREPARE: PhaseKey = PhaseKey {
+    module: ModuleId(100),
+    phase: PhaseId(0),
+};
+pub(crate) const COMMIT: PhaseKey = PhaseKey {
+    module: ModuleId(100),
+    phase: PhaseId(1),
+};
+impl ClockWorld for Simulation {
+    fn clock(&self) -> Clock {
+        Clock {
+            time: self.state.time,
+            revision: self.revision,
+        }
+    }
+    fn publish_clock(&mut self, clock: Clock) {
+        self.state.time = clock.time;
+        self.revision = clock.revision;
+    }
+}
+fn due(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world
+        .state
+        .due
+        .first_key_value()
+        .map_or(interval.to, |(at, _)| *at)
+        .min(interval.to))
+}
+fn agreements(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(interval
+        .to
+        .min(world.next_agreement_deadline().unwrap_or(interval.to)))
+}
+fn physical(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.physical_boundary(interval.to))
+}
+fn environment(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.environment_boundary(interval.to))
+}
+fn projects(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.project_boundary(interval.to))
+}
+fn invocation(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.invocation_boundary(interval.to))
+}
+fn missions(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.mission_boundary(interval.to))
+}
+fn social(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.social_boundary(interval.to))
+}
+fn health(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    world.health_boundary(interval.to)
+}
+fn realm(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.realm_boundary(interval.to))
+}
+fn armies(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.army_boundary(interval.to))
+}
+fn transport(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    world.transport_boundary(interval.to)
+}
+fn genetics(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world.genetics_boundary(interval.to))
+}
+fn skills(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    world.skill_boundary(interval.to)
+}
+fn bodies(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    world.body_boundary(interval.to)
+}
+
+pub(crate) fn build(execution: &Execution) -> Result<WorldEngine, Error> {
+    let callbacks: [game_sim::Boundary<Simulation>; 15] = [
+        due,
+        agreements,
+        physical,
+        environment,
+        projects,
+        invocation,
+        missions,
+        social,
+        health,
+        realm,
+        armies,
+        transport,
+        genetics,
+        skills,
+        bodies,
+    ];
+    // Preserve the existing clipping dependencies. Every callback is safe when
+    // its state is absent, so later constructor installations need no refresh.
+    let mut modules: Vec<Module<Simulation, StopReason>> = callbacks
+        .into_iter()
+        .enumerate()
+        .map(|(index, boundary)| {
+            let mut module = Module::new(ModuleId(index as u32));
+            module.boundary = Some(boundary);
+            module
+        })
+        .collect();
+    modules[5].input_stop = Some(|world, _| {
+        Ok(world
+            .required_invocation_input()
+            .map(|warning| StopReason::InvocationWarning { warning }))
+    });
+    let mut control = Module::<Simulation, StopReason>::new(ModuleId(15));
+    control.input_stop = Some(|world, _| {
+        Ok(world
+            .awaiting_combat_input()
+            .map(|encounter| StopReason::CombatInput { encounter }))
+    });
+    modules.push(control);
+    modules.push(
+        Module::new(PREPARE.module)
+            .phase(PREPARE.phase, [])
+            .phase(COMMIT.phase, [PREPARE]),
+    );
+    Engine::new(
+        modules,
+        game_sim::Execution {
+            workers: execution.workers,
+            reverse_jobs: execution.reverse_jobs,
+        },
+    )
+}
+
+pub(crate) struct PreparedWorldStep {
+    pub next: SimTime,
+    pub elapsed: u64,
+    pub equipment: BTreeMap<PersonId, bool>,
+    pub output: Vec<compute::ProgressOutput>,
+    pub physical_output: Vec<physical::Outcome>,
+    pub skill_output: Vec<skills::PracticeDelta>,
+    pub project_output: Option<projects::World>,
+    pub invocation_output: invocation::PendingInvocation,
+    pub environment_output: Option<environment::Step>,
+    pub agriculture_output: Option<agriculture::World>,
+    pub ecology_output: Option<ecology::World>,
+    pub health_output: health::PendingHealth,
+    pub due: Vec<Due>,
+    pub lifecycle: Vec<Due>,
+    pub transfers: Vec<TransferIntent>,
+    pub opening_stock: BTreeMap<InventoryId, u64>,
+    pub evaluated_people: usize,
+    pub evaluation_ns: u128,
+    pub arbitration_ns: u128,
+}

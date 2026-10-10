@@ -1,7 +1,7 @@
 //! Chosen enforcement vocabulary; this module performs no physical force.
 use crate::institutions::Subjects;
+use game_agreements::AgreementTerm;
 use game_core::*;
-use game_economy::agreements::AgreementTerm;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

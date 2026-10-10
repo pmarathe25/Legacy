@@ -1,5 +1,5 @@
+use game_agreements::AgreementTerm;
 use game_core::*;
-use game_economy::agreements::AgreementTerm;
 use game_missions::MissionProposal;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

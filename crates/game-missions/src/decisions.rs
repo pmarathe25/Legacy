@@ -1,5 +1,5 @@
+use game_agreements::AgreementTerm;
 use game_core::*;
-use game_economy::agreements::AgreementTerm;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RecruitmentInput {

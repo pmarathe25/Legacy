@@ -4,6 +4,8 @@ pub use game_armies::{ArmyAction, ArmyView};
 pub use game_core::*;
 pub use game_realm::{Action as RealmAction, View as RealmView};
 use serde::{Deserialize, Serialize};
+mod host;
+pub use host::SessionEngine;
 pub mod agreements;
 pub use agreements::*;
 pub mod property;
@@ -182,6 +184,7 @@ pub struct PlayerView {
     pub lineage: Option<LineageView>,
     pub agreements: Vec<AgreementView>,
     pub environment: Option<EnvironmentView>,
+    pub agriculture: Option<AgricultureView>,
     pub revision: u64,
     pub time: SimTime,
     pub ruler: PersonId,
@@ -1017,7 +1020,7 @@ pub struct ScenarioInfo {
     pub debug_fixture: bool,
 }
 
-pub use game_economy::environment::FarmOperation;
+pub use game_agriculture::FarmOperation;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvironmentView {
@@ -1026,6 +1029,9 @@ pub struct EnvironmentView {
     pub season: u8,
     pub temperature_c: i32,
     pub rain: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgricultureView {
     pub fields: Vec<FieldView>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
