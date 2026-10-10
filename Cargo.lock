@@ -52,8 +52,9 @@ dependencies = [
 name = "game-agriculture"
 version = "0.1.0"
 dependencies = [
+ "game-content",
  "game-core",
- "game-environment",
+ "game-sim",
  "serde",
  "serde_json",
 ]
@@ -155,7 +156,6 @@ name = "game-ecology"
 version = "0.1.0"
 dependencies = [
  "game-core",
- "game-environment",
  "serde",
  "serde_json",
 ]

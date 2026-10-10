@@ -2272,7 +2272,12 @@ impl Simulation {
                                 .any(|p| matches!(p.kind,ProjectKind::Farm {plot,..} if plot==site))
                         });
                     let value = if let Some(fertility) = fertility.filter(|_| remembered_plan) {
-                        let crop = &self.state.agriculture.as_ref().unwrap().crop;
+                        let agriculture = self.state.agriculture.as_ref().unwrap();
+                        let crop = agriculture
+                            .catalog
+                            .crops
+                            .get(&agriculture.catalog.default_crop)
+                            .expect("validated default crop");
                         let expected = u128::from(crop.food_yield.0)
                             * u128::from(fertility)
                             * u128::from(numerator)

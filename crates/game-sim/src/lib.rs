@@ -153,6 +153,48 @@ impl Executor {
             .map(|(key, result)| result.map(|output| (key, output)))
             .collect()
     }
+    /// Executes an already sorted, unique batch without building a key index
+    /// or sorting outputs. Indexed parallel collection preserves logical order.
+    pub fn map_ordered<K, I, O>(
+        &self,
+        input: &[(K, I)],
+        evaluate: impl Fn(&I) -> Result<O, Error> + Send + Sync,
+    ) -> Result<Vec<(K, O)>, Error>
+    where
+        K: Ord + Clone + Send + Sync,
+        I: Sync,
+        O: Send,
+    {
+        if input.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err(Error::InvalidConfiguration(
+                "logical job keys must be strictly increasing".into(),
+            ));
+        }
+        let job = |(key, input): &(K, I)| (key.clone(), evaluate(input));
+        let mut results = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.pool.install(|| {
+                if self.execution.workers == 1 || input.len() < 256 {
+                    if self.execution.reverse_jobs {
+                        input.iter().rev().map(job).collect::<Vec<_>>()
+                    } else {
+                        input.iter().map(job).collect::<Vec<_>>()
+                    }
+                } else if self.execution.reverse_jobs {
+                    input.par_iter().rev().map(job).collect::<Vec<_>>()
+                } else {
+                    input.par_iter().map(job).collect::<Vec<_>>()
+                }
+            })
+        }))
+        .map_err(|_| Error::WorkerFailure)?;
+        if self.execution.reverse_jobs {
+            results.reverse();
+        }
+        results
+            .into_iter()
+            .map(|(key, result)| result.map(|output| (key, output)))
+            .collect()
+    }
 }
 
 /// Preparation must check every fallible operation before producing this
@@ -396,5 +438,118 @@ impl<W, S> Engine<W, S> {
             revision: closing.revision,
             input: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod ordered_executor_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn ordered_batches_match_keyed_results_and_first_logical_error() {
+        let inputs: Vec<_> = (0..512_u64).map(|key| (key, key)).collect();
+        for workers in [1, 2, 4] {
+            for reverse_jobs in [false, true] {
+                let executor = Executor::new(Execution {
+                    workers,
+                    reverse_jobs,
+                })
+                .unwrap();
+                assert_eq!(
+                    executor
+                        .map_ordered(&inputs, |value| Ok(value * 3))
+                        .unwrap(),
+                    executor.map_keyed(&inputs, |value| Ok(value * 3)).unwrap()
+                );
+                let evaluate = |value: &u64| {
+                    if *value == 8 {
+                        Err(Error::Unavailable)
+                    } else if *value == 400 {
+                        Err(Error::Overflow)
+                    } else {
+                        Ok(*value)
+                    }
+                };
+                assert_eq!(
+                    executor.map_ordered(&inputs, evaluate),
+                    Err(Error::Unavailable)
+                );
+                assert_eq!(
+                    executor.map_ordered(&inputs, evaluate),
+                    executor.map_keyed(&inputs, evaluate)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn large_ordered_batch_really_uses_parallel_workers() {
+        let executor = Executor::new(Execution {
+            workers: 2,
+            reverse_jobs: false,
+        })
+        .unwrap();
+        let inputs: Vec<_> = (0..512_u64).map(|key| (key, key)).collect();
+        let barrier = Arc::new(Barrier::new(2));
+        let output = executor
+            .map_ordered(&inputs, |value| {
+                if *value == 0 || *value == 256 {
+                    barrier.wait();
+                }
+                Ok((value * 2, rayon::current_thread_index().unwrap()))
+            })
+            .unwrap();
+        assert_ne!(output[0].1.1, output[256].1.1);
+        assert_eq!(
+            output
+                .iter()
+                .map(|(key, (value, _))| (*key, *value))
+                .collect::<Vec<_>>(),
+            inputs
+                .iter()
+                .map(|(key, value)| (*key, value * 2))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unordered_or_duplicate_keys_reject_before_evaluation() {
+        let executor = Executor::new(Execution::default()).unwrap();
+        for inputs in [vec![(1, ()), (1, ())], vec![(2, ()), (1, ())]] {
+            assert!(matches!(
+                executor.map_ordered(&inputs, |_| -> Result<(), Error> {
+                    panic!("invalid keys must not invoke evaluator")
+                }),
+                Err(Error::InvalidConfiguration(_))
+            ));
+        }
+        assert_eq!(
+            executor
+                .map_ordered::<u64, (), ()>(&[], |_| Ok(()))
+                .unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn parallel_panics_become_worker_failure_in_both_submission_orders() {
+        let inputs: Vec<_> = (0..512_u64).map(|key| (key, key)).collect();
+        for reverse_jobs in [false, true] {
+            let executor = Executor::new(Execution {
+                workers: 4,
+                reverse_jobs,
+            })
+            .unwrap();
+            assert_eq!(
+                executor.map_ordered(&inputs, |value| {
+                    if *value == 320 {
+                        panic!("worker test panic");
+                    }
+                    Ok(*value)
+                }),
+                Err(Error::WorkerFailure)
+            );
+        }
     }
 }

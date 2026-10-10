@@ -70,7 +70,7 @@ fn input<'a>(
         thirst_enabled: true,
         resting: true,
         exposure: ExposureInput {
-            temperature_c: 0,
+            temperature_c: Some(0),
             insulation: 0,
             infectious_contacts: contacts,
         },
@@ -145,7 +145,7 @@ fn contact_threshold_and_recovery_are_domain_transitions() {
     let rules = Rules::fixture();
     let state = Clinical::default();
     let mut context = input(&rules, &state, 0, 100_000, [0, 1]);
-    context.exposure.temperature_c = 12;
+    context.exposure.temperature_c = Some(12);
     assert_eq!(
         clinical_boundary(context, SimTime(100_000)).unwrap(),
         SimTime(30_000)
@@ -177,6 +177,79 @@ fn contact_threshold_and_recovery_are_domain_transitions() {
             .doses
             .contains_key(&IllnessKind::Respiratory)
     );
+}
+
+#[test]
+fn absent_local_weather_disables_only_cold_exposure_while_contact_and_care_continue() {
+    let rules = Rules::fixture();
+    let opening = Clinical {
+        thirst: rules.thirst_harm,
+        cold: rules.cold_harm - 1,
+        cold_remainder: 999,
+        treatment: Some(Course {
+            until: SimTime(60_000),
+            healing: 5_000,
+        }),
+        ..Clinical::default()
+    };
+    let mut context = input(&rules, &opening, 0, 30_000, [0, 1]);
+    assert_eq!(
+        clinical_boundary(context, SimTime(30_000)).unwrap(),
+        SimTime(1)
+    );
+    context.exposure.temperature_c = None;
+    assert_eq!(
+        clinical_boundary(context, SimTime(30_000)).unwrap(),
+        SimTime(30_000)
+    );
+    let advanced = advance_clinical(context).unwrap();
+    assert_eq!(
+        (advanced.cold, advanced.cold_remainder),
+        (opening.cold, opening.cold_remainder)
+    );
+    assert_eq!(advanced.thirst, opening.thirst + 30_000);
+    assert_eq!(
+        advanced.doses[&IllnessKind::Respiratory].amount,
+        rules.infection_threshold
+    );
+    assert_eq!(advanced.treatment, opening.treatment);
+    assert_eq!(
+        clinical_contribution(context).unwrap().health_milli,
+        (5_000 - i128::from(rules.thirst_damage)) * 30_000
+    );
+    let reconciled = reconcile_clinical(&advanced, &rules, SimTime(30_000), true).unwrap();
+    assert_eq!(
+        reconciled.state.illnesses[&IllnessKind::Respiratory].onset,
+        SimTime(60_000)
+    );
+    assert_eq!(reconciled.state.treatment, opening.treatment);
+
+    context.next = SimTime(15_000);
+    let early = advance_clinical(context).unwrap();
+    let loaded: Clinical = serde_json::from_slice(&serde_json::to_vec(&early).unwrap()).unwrap();
+    context.state = &loaded;
+    context.now = SimTime(15_000);
+    context.next = SimTime(30_000);
+    assert_eq!(advance_clinical(context).unwrap(), advanced);
+}
+
+#[test]
+fn absence_of_weather_does_not_erase_preexisting_cold_injury() {
+    let rules = Rules::fixture();
+    let opening = Clinical {
+        cold: rules.cold_harm,
+        ..Clinical::default()
+    };
+    let mut context = input(&rules, &opening, 0, 1_000, [0; 2]);
+    context.exposure.temperature_c = None;
+    let state = advance_clinical(context).unwrap();
+    assert_eq!(state.cold, opening.cold);
+    assert_eq!(
+        clinical_contribution(context).unwrap().health_milli,
+        -i128::from(rules.cold_damage) * 1_000
+    );
+    context.exposure.temperature_c = Some(20);
+    assert!(advance_clinical(context).unwrap().cold < opening.cold);
 }
 fn advance_slices(chunks: &[u64]) -> (Clinical, HealthDelta, Vec<(u64, ClinicalEvent)>) {
     advance_slices_with_physiology(chunks, 1_000, 0)
@@ -329,7 +402,7 @@ fn individual_metabolism_changes_deprivation_boundary_damage_and_real_intake_rel
     assert_eq!((slow.thirst_harm, slow.drink_relief), (360_000, 600_000));
     let opening = Clinical::default();
     let mut context = input(&rules, &opening, 0, 400_000, [0; 2]);
-    context.exposure.temperature_c = 20;
+    context.exposure.temperature_c = Some(20);
     context.physiology = fast;
     assert_eq!(
         clinical_boundary(context, SimTime(400_000)).unwrap(),

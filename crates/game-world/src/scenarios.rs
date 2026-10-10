@@ -8,7 +8,7 @@ pub const PLAYABLE: [&str; 3] = ["settlement-founder", "established-ruler", "chi
 pub struct Config {
     pub transport: game_transport::Rules,
     pub environment: environment::Config,
-    pub agriculture: game_agriculture::Config,
+    pub agriculture: game_content::DefinitionSource<game_agriculture::Catalog>,
     pub ecology: game_ecology::EcologyRules,
     pub biology: development::Rules,
     pub skills: skills::Rules,
@@ -32,7 +32,7 @@ impl Default for Config {
         Self {
             transport: game_transport::Rules::default(),
             environment: environment::Config::default(),
-            agriculture: game_agriculture::Config::default(),
+            agriculture: crate::agriculture::default_catalog(),
             ecology: game_ecology::EcologyRules::default(),
             biology: development::Rules::human(),
             skills: skills::Rules {

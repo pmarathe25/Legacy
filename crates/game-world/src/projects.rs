@@ -753,17 +753,19 @@ impl Simulation {
                                     tool,
                                     water,
                                     food,
-                                    phase: agriculture::CropPhase::Fallow,
-                                    soil_fertility: source.fertility,
-                                    soil_water: source.soil_water,
-                                    water_capacity: source.water_capacity,
-                                    preparation_ms: 0,
-                                    planting_ms: 0,
-                                    harvest_ms: 0,
-                                    degree_days_milli: 0,
-                                    stress_days: 0,
-                                    tending: 0,
-                                    contributions: BTreeMap::new(),
+                                },
+                            );
+                            let world = self.state.agriculture.as_mut().unwrap();
+                            world.crops.insert(
+                                site,
+                                agriculture::Crop::new(world.catalog.default_crop.clone()),
+                            );
+                            world.soils.insert(
+                                site,
+                                agriculture::Soil {
+                                    fertility: source.fertility,
+                                    water: source.soil_water,
+                                    capacity: source.water_capacity,
                                 },
                             );
                         }
@@ -1117,8 +1119,7 @@ impl Simulation {
         let enterprise_facts=world.enterprises.values().map(|asset| {
             let (active,crop_failed,output_room,required_input,required_output)=match asset.kind {
                 ProjectKind::Farm {..}=>{
-                    let field=&self.state.agriculture.as_ref().unwrap().fields[&asset.site];
-                    (self.state.agriculture.as_ref().unwrap().jobs.values().any(|j|j.field==asset.site),field.phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
+                    (self.state.agriculture.as_ref().unwrap().jobs.values().any(|j|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crops[&asset.site].phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
                 }
                 ProjectKind::Workshop=>{
                     let site=&self.state.physical.as_ref().unwrap().sites[&asset.site];
@@ -2228,13 +2229,21 @@ mod farm_tests {
         environment.climate.temperature_variation = 0;
         environment.climate.seasonal_rain = [30; 4];
         environment.climate.rainfall_variation = 0;
-        environment.weather = environment.climate.weather(sim.state.seed, 0, 0);
+        environment
+            .reset_epoch(sim.state.time, sim.state.seed)
+            .unwrap();
         let agriculture = sim.state.agriculture.as_mut().unwrap();
-        agriculture.crop.prepare_labor = MINUTE;
-        agriculture.crop.plant_labor = MINUTE;
-        agriculture.crop.tend_labor = MINUTE;
-        agriculture.crop.harvest_labor = MINUTE;
-        agriculture.crop.ripe_degree_days = 3;
+        agriculture.content = None;
+        let crop = agriculture
+            .catalog
+            .crops
+            .get_mut(&agriculture.catalog.default_crop)
+            .unwrap();
+        crop.prepare_labor = MINUTE;
+        crop.plant_labor = MINUTE;
+        crop.tend_labor = MINUTE;
+        crop.harvest_labor = MINUTE;
+        crop.ripe_degree_days = 3;
         sim
     }
 

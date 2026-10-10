@@ -183,10 +183,10 @@ impl Transaction<World, u8> for Prepared {
         for phase in self.phases {
             if phase == key(WEATHER, COMMIT) {
                 let step = self.weather.take().unwrap();
-                if let Some(day) = step.elapsed_day {
+                if let Some(day) = step.elapsed_day.clone() {
                     world.days.push(day.into());
                 }
-                world.environment = Some(step.world);
+                world.environment.as_mut().unwrap().commit(step).unwrap();
             } else if phase == key(EXTRA, COMMIT) {
                 world.rows = self.rows.take().unwrap();
                 // The declared dependency makes closing weather visible here.
@@ -209,10 +209,10 @@ fn reference(
     while at < target {
         let next = environment.boundary(at, target).unwrap();
         let step = environment.advance(at, next, 17).unwrap();
-        if let Some(day) = step.elapsed_day {
+        if let Some(day) = step.elapsed_day.clone() {
             days.push(day.into());
         }
-        environment = step.world;
+        environment.commit(step).unwrap();
         at = next;
     }
     (environment, days)

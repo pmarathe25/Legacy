@@ -1096,6 +1096,7 @@ pub struct AgricultureView {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldView {
+    pub crop: game_agriculture::CropId,
     pub id: SiteId,
     pub phase: String,
     pub soil_fertility: u16,

@@ -549,12 +549,30 @@ impl Simulation {
     }
     pub(crate) fn evaluate_ecology(
         &self,
-        day: Option<&game_environment::DayFacts>,
+        day: Option<&game_environment::LocalDayFacts>,
     ) -> Result<Option<World>, Error> {
         let (Some(world), Some(day)) = (&self.state.ecology, day) else {
             return Ok(None);
         };
-        world.advance(day).map(Some)
+        let day = game_ecology::LocalWeatherDay {
+            day: day.day,
+            day_of_year: day.day_of_year,
+            cells: day
+                .cells
+                .iter()
+                .map(|(id, w)| {
+                    (
+                        *id,
+                        game_ecology::WeatherFacts {
+                            temperature: w.temperature,
+                            rain: w.rain,
+                            evaporation: w.evaporation,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        world.advance(Some(&day)).map(Some)
     }
     pub(crate) fn commit_ecology(&mut self, output: Option<World>) {
         if let Some(output) = output {
@@ -932,12 +950,12 @@ impl Simulation {
             return Ok(());
         };
         let bad = || Error::InvalidSave("invalid ecological deposits, plots or collection".into());
-        let environment = self.state.environment.as_ref().ok_or_else(bad)?;
+        let environment = self.state.environment.as_ref();
         if self.state.physical.is_none() || self.state.decisions.is_none() {
             return Err(bad());
         }
         if world.rules.validate().is_err()
-            || world.day != self.state.time.0 / environment.calendar.day.0
+            || environment.is_some_and(|w| world.day != self.state.time.0 / w.calendar.day.0)
         {
             return Err(bad());
         }
@@ -1320,22 +1338,41 @@ mod tests {
             .get_mut(&spring)
             .unwrap()
             .remaining = Quantity(0);
-        let warm = game_environment::DayFacts {
+        let warm = game_environment::LocalDayFacts {
             day: 1,
             day_of_year: 0,
-            weather: game_environment::Weather {
-                temperature: 20,
-                rain: 50,
-                evaporation: 0,
-            },
+            cells: sim
+                .state
+                .areas
+                .iter()
+                .map(|area| {
+                    (
+                        area.id,
+                        game_environment::Weather {
+                            temperature: 20,
+                            rain: 50,
+                            evaporation: 0,
+                        },
+                    )
+                })
+                .collect(),
         };
         let renewed = sim.evaluate_ecology(Some(&warm)).unwrap().unwrap();
         assert_eq!(renewed.resources[&spring].remaining, Quantity(10_000));
-        let cold = game_environment::DayFacts {
-            weather: game_environment::Weather {
-                temperature: -5,
-                ..warm.weather.clone()
-            },
+        let cold = game_environment::LocalDayFacts {
+            cells: warm
+                .cells
+                .iter()
+                .map(|(id, w)| {
+                    (
+                        *id,
+                        game_environment::Weather {
+                            temperature: -5,
+                            ..w.clone()
+                        },
+                    )
+                })
+                .collect(),
             ..warm
         };
         let frozen = sim.evaluate_ecology(Some(&cold)).unwrap().unwrap();

@@ -854,11 +854,7 @@ impl Simulation {
     }
     fn health_exposure(&self, actor: PersonId) -> ExposureInput {
         ExposureInput {
-            temperature_c: self
-                .state
-                .environment
-                .as_ref()
-                .map_or(12, |w| w.weather.temperature),
+            temperature_c: self.local_weather_for_actor(actor).map(|w| w.temperature),
             insulation: self.effective_shelter(actor).map_or(0, |s| s.insulation),
             // Body contributions use weather/shelter, never contact doses.
             infectious_contacts: [0; 2],
@@ -952,10 +948,8 @@ impl Simulation {
             .map(|person| {
                 let mut exposure = ExposureInput {
                     temperature_c: self
-                        .state
-                        .environment
-                        .as_ref()
-                        .map_or(12, |w| w.weather.temperature),
+                        .local_weather_for_actor(person.id)
+                        .map(|w| w.temperature),
                     insulation: locations
                         .get(&person.id)
                         .and_then(|(_, shelter, _)| *shelter)

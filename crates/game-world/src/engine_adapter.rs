@@ -91,6 +91,15 @@ fn armies(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
 fn transport(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     world.transport_boundary(interval.to)
 }
+fn agriculture(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
+    Ok(world
+        .state
+        .agriculture
+        .as_ref()
+        .map_or(interval.to, |crop| {
+            crop.next_boundary(interval.from, interval.to)
+        }))
+}
 fn genetics(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     Ok(world.traits_boundary(interval.to))
 }
@@ -102,7 +111,7 @@ fn bodies(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
 }
 
 pub(crate) fn build(execution: &Execution) -> Result<WorldEngine, Error> {
-    let callbacks: [game_sim::Boundary<Simulation>; 15] = [
+    let callbacks: [game_sim::Boundary<Simulation>; 16] = [
         due,
         agreements,
         physical,
@@ -118,6 +127,7 @@ pub(crate) fn build(execution: &Execution) -> Result<WorldEngine, Error> {
         genetics,
         skills,
         bodies,
+        agriculture,
     ];
     // Preserve the existing clipping dependencies. Every callback is safe when
     // its state is absent, so later constructor installations need no refresh.
@@ -135,7 +145,7 @@ pub(crate) fn build(execution: &Execution) -> Result<WorldEngine, Error> {
             .required_invocation_input()
             .map(|warning| StopReason::InvocationWarning { warning }))
     });
-    let mut control = Module::<Simulation, StopReason>::new(ModuleId(15));
+    let mut control = Module::<Simulation, StopReason>::new(ModuleId(16));
     control.input_stop = Some(|world, _| {
         Ok(world
             .awaiting_combat_input()
@@ -166,7 +176,7 @@ pub(crate) struct PreparedWorldStep {
     pub project_output: Option<projects::World>,
     pub invocation_output: invocation::PendingInvocation,
     pub environment_output: Option<environment::Step>,
-    pub agriculture_output: Option<agriculture::World>,
+    pub agriculture_output: Option<game_agriculture::PreparedAdvance>,
     pub ecology_output: Option<ecology::World>,
     pub health_output: health::PendingHealth,
     pub due: Vec<Due>,

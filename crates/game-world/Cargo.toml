@@ -13,7 +13,7 @@ game-property.workspace = true
 game-sim.workspace = true
 game-environment = { workspace = true, features = ["content"] }
 game-ecology.workspace = true
-game-agriculture.workspace = true
+game-agriculture = { workspace = true, features = ["content"] }
 game-agreements.workspace = true
 game-projects.workspace = true
 game-lifecycle = { workspace = true, features = ["genetics"] }

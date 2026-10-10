@@ -4,10 +4,20 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+content = ["dep:game-content"]
+
 [dependencies]
 game-core.workspace = true
-game-environment.workspace = true
+game-content = { workspace = true, optional = true }
 serde.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+game-sim.workspace = true
+
+[[bench]]
+name = "components"
+harness = false
+required-features = ["content"]

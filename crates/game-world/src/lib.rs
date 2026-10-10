@@ -1284,7 +1284,7 @@ impl Simulation {
         let environment_output = self.evaluate_environment(next)?;
         let elapsed_day = environment_output
             .as_ref()
-            .and_then(|step| step.elapsed_day.as_ref());
+            .and_then(|step| step.elapsed_local_day.as_ref());
         let agriculture_output = self.evaluate_agriculture(next, elapsed_day)?;
         let ecology_output = self.evaluate_ecology(elapsed_day)?;
         let health_output = self.evaluate_health(next)?;
@@ -1343,8 +1343,16 @@ impl Simulation {
                         ..
                     } = self.state.physical.as_ref().unwrap().actors[actor].activity
                 {
-                    possible_outputs.push((field, Good::Food, agriculture.crop.food_yield));
-                    possible_outputs.push((field, Good::Seed, agriculture.crop.seed_yield));
+                    possible_outputs.push((
+                        field,
+                        Good::Food,
+                        agriculture.rules_for(field)?.food_yield,
+                    ));
+                    possible_outputs.push((
+                        field,
+                        Good::Seed,
+                        agriculture.rules_for(field)?.seed_yield,
+                    ));
                 }
             }
         }
@@ -1520,6 +1528,20 @@ impl Simulation {
             evaluation_ns,
             arbitration_ns,
         } = prepared;
+        if let Some(step) = &environment_output {
+            self.state
+                .environment
+                .as_ref()
+                .ok_or(Error::Unavailable)?
+                .admit(step)?;
+        }
+        if let Some(batch) = &agriculture_output {
+            self.state
+                .agriculture
+                .as_ref()
+                .ok_or(Error::Unavailable)?
+                .validate_advance(batch)?;
+        }
         self.profile.evaluation_ns += evaluation_ns;
         self.profile.arbitration_ns += arbitration_ns;
         let mut continued_journeys = Vec::new();
@@ -1569,9 +1591,9 @@ impl Simulation {
         // Water care and other completed actions then update the progressed
         // state once, rather than being overwritten by an opening snapshot.
         self.commit_health(health_output)?;
+        self.commit_agriculture(agriculture_output)?;
         self.commit_projects(project_output);
         self.commit_environment(environment_output)?;
-        self.commit_agriculture(agriculture_output);
         self.commit_ecology(ecology_output);
         self.state.due.remove(&next);
         for event in due {

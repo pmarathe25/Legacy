@@ -3,6 +3,26 @@ use game_core::Error;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::path::Path;
 
+/// Startup configuration chooses a file or an explicit authored snapshot.
+/// Resolving a source never changes definitions in an already running world.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DefinitionSource<T> {
+    File { path: std::path::PathBuf },
+    Inline { document: Document<T> },
+}
+impl<T: DeserializeOwned + Clone> DefinitionSource<T> {
+    pub fn resolve(&self) -> Result<Document<T>, Error> {
+        match self {
+            Self::File { path } => read(path),
+            Self::Inline { document } => {
+                document.validate_header()?;
+                Ok(document.clone())
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Document<T> {

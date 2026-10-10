@@ -10,15 +10,27 @@ impl Simulation {
         &mut self,
         document: game_content::Document<Config>,
     ) -> Result<(), Error> {
-        let current = self.state.environment.as_ref().ok_or(Error::Unavailable)?;
-        if current.calendar != document.data.calendar || current.climate != document.data.climate {
-            return Err(Error::InvalidConfiguration(
-                "environment content differs from constructed world".into(),
-            ));
-        }
-        let world = World::from_content(document, self.state.time, self.state.seed)?;
-        self.state.environment = Some(world);
+        self.state
+            .environment
+            .as_mut()
+            .ok_or(Error::Unavailable)?
+            .attach_content(document)?;
         Ok(())
+    }
+    pub(crate) fn register_weather_cells(&mut self) -> Result<(), Error> {
+        let Some(world) = self.state.environment.as_mut() else {
+            return Ok(());
+        };
+        for area in &self.state.areas {
+            if !world.cells.contains_key(&area.id) {
+                world.register_cell(area.id, game_environment::LocalClimate::default())?;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn local_weather_for_actor(&self, actor: PersonId) -> Option<&Weather> {
+        let area = self.resolved_location(actor).cell()?;
+        self.state.environment.as_ref()?.local_weather(area)
     }
     pub(crate) fn environment_boundary(&self, requested: SimTime) -> Result<SimTime, Error> {
         self.state
@@ -49,10 +61,10 @@ impl Simulation {
         if !body.vitals.alive {
             return None;
         }
-        let Location::AtArea(_) = self.resolved_location(actor) else {
+        let Location::AtArea(area) = self.resolved_location(actor) else {
             return None;
         };
-        let facts = world.observe();
+        let facts = world.observe_cell(area)?;
         Some(EnvironmentView {
             day: facts.day,
             day_of_year: facts.day_of_year,
@@ -63,6 +75,13 @@ impl Simulation {
     }
     pub(crate) fn validate_environment(&self) -> Result<(), Error> {
         if let Some(world) = &self.state.environment {
+            if world
+                .cells
+                .keys()
+                .any(|id| !self.state.areas.iter().any(|area| area.id == *id))
+            {
+                return Err(Error::InvalidSave("unknown weather cell area".into()));
+            }
             world
                 .validate(self.state.time, self.state.seed)
                 .map_err(|_| Error::InvalidSave("invalid calendar or climate".into()))?;

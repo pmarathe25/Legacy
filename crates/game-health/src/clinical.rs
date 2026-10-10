@@ -47,7 +47,9 @@ pub fn validate_rules(r: &Rules) -> Result<(), Error> {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExposureInput {
-    pub temperature_c: i32,
+    /// No local weather capability means no new cold exposure or weather-driven
+    /// recovery. Existing injury, thirst, infection and treatment remain active.
+    pub temperature_c: Option<i32>,
     pub insulation: u16,
     pub infectious_contacts: [u64; 2],
 }
@@ -186,14 +188,19 @@ pub fn advance_clinical(input: ClinicalInput<'_>) -> Result<Clinical, Error> {
     }
     let cold = i128::from(state.cold) * 1_000
         + i128::from(state.cold_remainder)
-        + cold_rate(
-            input.rules,
-            input.exposure.temperature_c,
-            input.exposure.insulation,
-            input.physiology.cold_tolerance_centi,
-        )
-        .checked_mul(i128::from(elapsed))
-        .ok_or(Error::Overflow)?;
+        + input
+            .exposure
+            .temperature_c
+            .map_or(0, |temperature| {
+                cold_rate(
+                    input.rules,
+                    temperature,
+                    input.exposure.insulation,
+                    input.physiology.cold_tolerance_centi,
+                )
+            })
+            .checked_mul(i128::from(elapsed))
+            .ok_or(Error::Overflow)?;
     let cold = cold.max(0);
     state.cold = u64::try_from(cold / 1_000).map_err(|_| Error::Overflow)?;
     state.cold_remainder = (cold % 1_000) as u16;
@@ -371,12 +378,14 @@ pub fn clinical_boundary(input: ClinicalInput<'_>, limit: SimTime) -> Result<Sim
     {
         boundary = boundary.min(next);
     }
-    let rate = cold_rate(
-        rules,
-        input.exposure.temperature_c,
-        input.exposure.insulation,
-        input.physiology.cold_tolerance_centi,
-    );
+    let rate = input.exposure.temperature_c.map_or(0, |temperature| {
+        cold_rate(
+            rules,
+            temperature,
+            input.exposure.insulation,
+            input.physiology.cold_tolerance_centi,
+        )
+    });
     let current = u128::from(state.cold) * 1_000 + u128::from(state.cold_remainder);
     let threshold = u128::from(rules.cold_harm) * 1_000;
     if rate > 0

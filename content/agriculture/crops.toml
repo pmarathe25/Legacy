@@ -1,0 +1,27 @@
+id = "legacy/agriculture/crops"
+version = 1
+
+[data]
+default_crop = "grain"
+
+# Durations use simulation milliseconds; quantities use native stock units.
+[data.crops.grain]
+planting_first_day = 0
+planting_last_day = 91
+prepare_labor = 14400000
+plant_labor = 7200000
+tend_labor = 3600000
+irrigation_labor = 3600000
+harvest_labor = 14400000
+fallow_labor = 3600000
+seed_input = 1000
+irrigation_input = 1000
+irrigation_water = 30
+base_temperature = 5
+ripe_degree_days = 1200
+optimal_water = 50
+failure_stress_days = 12
+food_yield = 6000000
+seed_yield = 2000
+soil_depletion = 20
+soil_recovery = 1

@@ -756,7 +756,18 @@ mod tests {
     #[test]
     fn cultivation_and_work_cannot_allocate_the_same_toolkit() {
         let mut sim = Simulation::farming_fixture(1, Execution::default()).unwrap();
-        sim.state.agriculture.as_mut().unwrap().crop.prepare_labor = MINUTE;
+        // Replace fixture work durations only after canceling its opening jobs.
+        for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+            sim.interrupt_actor_activity(actor);
+        }
+        let agriculture = sim.state.agriculture.as_mut().unwrap();
+        agriculture.content = None;
+        agriculture
+            .catalog
+            .crops
+            .get_mut(&agriculture.catalog.default_crop)
+            .unwrap()
+            .prepare_labor = MINUTE;
         let farmer = sim.state.ruler;
         let worker = sim.state.people[3].id;
         let field = sim
@@ -787,7 +798,7 @@ mod tests {
             .agriculture
             .as_mut()
             .unwrap()
-            .fields
+            .crops
             .get_mut(&field.id)
             .unwrap();
         land.preparation_ms = 0;
@@ -872,7 +883,7 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state.agriculture.as_ref().unwrap().fields[&field.id].phase,
+            sim.state.agriculture.as_ref().unwrap().crops[&field.id].phase,
             agriculture::CropPhase::Prepared
         );
         assert_eq!(sim.state.inventories[&output].quantity, Quantity(0));

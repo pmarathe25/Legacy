@@ -1,5 +1,9 @@
 # Agriculture
 
-`game-agriculture` models fields, crop rules, cultivation jobs, and harvests. A field moves through fallow, prepared, planting, growing, ripe, or failed phases. Preparation and planting require labor; growth accumulates weather-adjusted degree days and tracks water stress, tending, and soil fertility. Weather arrives as elapsed-day facts from `game-environment`.
+`game-agriculture` owns crop phases, soil, cultivation labor, and harvest output. `Field`, `Crop`, and `Soil` are separate components keyed by site. Crop definitions live in `content/agriculture/crops.toml`; a crop refers to a stable definition ID.
 
-Beginning work checks explicit facts for worker capability, tool and field availability, area, seed or water stocks, and output access and room. It returns prepared field and job changes plus any seed or irrigation input consumption; completion returns field changes and harvest output. The coordinating assembly applies stock effects to inventories.
+The daily growth system joins crops with their soil and area-local weather facts. Missing components or weather skip growth. Cultivation work advances at its own completion deadlines; tending, irrigation, fallow, and harvest work without climate. Starting preparation and planting needs temperature or calendar facts.
+
+Systems return prepared component changes and material effects. They never write another feature's inventories. The optional `content` feature reads TOML at startup; saved worlds retain their definitions and content stamp.
+
+Interval preparation retains only active labor rows and matched daily growth rows. A supplied executor can evaluate independent growth inputs in parallel. Commit checks the rows and local positions it read before publishing; an idle interval prepares no component writes and never runs daily growth.

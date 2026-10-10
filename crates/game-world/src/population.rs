@@ -1,6 +1,5 @@
 //! Initial people are authored existing residents. Once this snapshot is
 //! published, population growth uses ordinary conception and birth exclusively.
-use crate::agriculture::CropPhase;
 use crate::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -515,9 +514,10 @@ impl Simulation {
     ) -> Result<(Self, Vec<Settlement>), Error> {
         plan.validate()?;
         config.environment.validate()?;
-        config
-            .agriculture
-            .validate(config.environment.calendar.year_days())?;
+        let crop_document = config.agriculture.resolve()?;
+        crop_document
+            .data
+            .validate(Some(config.environment.calendar.year_days()))?;
         config.ecology.validate()?;
         if !config.biology.valid() {
             return Err(Error::InvalidConfiguration(
@@ -715,12 +715,11 @@ impl Simulation {
             sim.state.time,
             seed,
         )?);
-        sim.state.agriculture = Some(game_agriculture::World {
-            crop: config.agriculture.crop.clone(),
-            day: weather_day,
-            fields: BTreeMap::new(),
-            jobs: BTreeMap::new(),
-        });
+        sim.register_weather_cells()?;
+        sim.state.agriculture = Some(game_agriculture::World::from_content(
+            crop_document,
+            weather_day,
+        )?);
         let first_food = *sim.state.inventories.keys().next_back().unwrap();
         let work_concept = sim.state.decisions.as_ref().unwrap().work_concept;
         for (index, settlement) in settlements.iter().enumerate() {
@@ -856,17 +855,19 @@ impl Simulation {
                         tool: field_tool,
                         water,
                         food: farm_food,
-                        phase: CropPhase::Fallow,
-                        soil_fertility: 900,
-                        soil_water: 75,
-                        water_capacity: 120,
-                        preparation_ms: 0,
-                        planting_ms: 0,
-                        harvest_ms: 0,
-                        degree_days_milli: 0,
-                        stress_days: 0,
-                        tending: 0,
-                        contributions: BTreeMap::new(),
+                    },
+                );
+                let world = sim.state.agriculture.as_mut().unwrap();
+                world.crops.insert(
+                    id,
+                    agriculture::Crop::new(world.catalog.default_crop.clone()),
+                );
+                world.soils.insert(
+                    id,
+                    agriculture::Soil {
+                        fertility: 900,
+                        water: 75,
+                        capacity: 120,
                     },
                 );
             }

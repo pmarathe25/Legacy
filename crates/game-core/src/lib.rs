@@ -102,6 +102,52 @@ pub enum Location {
     },
 }
 
+impl Location {
+    /// Shared coarse spatial membership. A road segment stays in its departure
+    /// cell until arrival. Resolve carrier relationships before asking for a cell.
+    pub fn cell(&self) -> Option<AreaId> {
+        match *self {
+            Self::AtArea(area) => Some(area),
+            Self::InTransit { from, .. } | Self::StoppedOnRoad { from, .. } => Some(from),
+            Self::Carried { .. } => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod spatial_tests {
+    use super::*;
+    #[test]
+    fn coarse_cell_is_shared_and_changes_at_arrival_without_unscheduled_midpoints() {
+        let location = Location::InTransit {
+            from: AreaId(1),
+            to: AreaId(2),
+            departed: SimTime(0),
+            arrives: SimTime(100),
+            road_start: None,
+        };
+        assert_eq!(location.cell(), Some(AreaId(1)));
+        assert_eq!(
+            Location::StoppedOnRoad {
+                from: AreaId(1),
+                to: AreaId(2),
+                progress: SimDuration(99),
+                duration: SimDuration(100)
+            }
+            .cell(),
+            Some(AreaId(1))
+        );
+        assert_eq!(Location::AtArea(AreaId(2)).cell(), Some(AreaId(2)));
+        assert_eq!(
+            Location::Carried {
+                carrier: PersonId(3)
+            }
+            .cell(),
+            None
+        );
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Good {
     Herb,

@@ -1,5 +1,4 @@
 use super::*;
-use game_environment::Weather;
 
 fn world(kind: ResourceKind, remaining: u64) -> World {
     let source = Resource {
@@ -44,15 +43,18 @@ fn world(kind: ResourceKind, remaining: u64) -> World {
         next_request: BTreeMap::new(),
     }
 }
-fn day(number: u64, temp: i32) -> DayFacts {
-    DayFacts {
+fn day(number: u64, temp: i32) -> LocalWeatherDay {
+    LocalWeatherDay {
         day: number,
         day_of_year: number - 1,
-        weather: Weather {
-            temperature: temp,
-            rain: 30,
-            evaporation: 0,
-        },
+        cells: BTreeMap::from([(
+            AreaId(2),
+            WeatherFacts {
+                temperature: temp,
+                rain: 30,
+                evaporation: 0,
+            },
+        )]),
     }
 }
 fn facts() -> GatherFacts {
@@ -78,7 +80,7 @@ fn closing(now: SimTime) -> CollectionFacts {
 fn renewal_is_finite_and_changes_no_custody_permissions_or_personal_knowledge() {
     let world = world(ResourceKind::Coppice, 0);
     let before = world.clone();
-    let next = world.advance(&day(1, 20)).unwrap();
+    let next = world.advance(Some(&day(1, 20))).unwrap();
     assert_eq!(next.resources[&ResourceId(1)].remaining, Quantity(250));
     assert_eq!(next.plots[&SiteId(9)].fertility, 901);
     assert_eq!(
@@ -87,10 +89,10 @@ fn renewal_is_finite_and_changes_no_custody_permissions_or_personal_knowledge() 
     );
     assert!(next.known.is_empty());
     assert_eq!(world, before);
-    let cold = world.advance(&day(1, -5)).unwrap();
+    let cold = world.advance(Some(&day(1, -5))).unwrap();
     assert_eq!(cold.resources[&ResourceId(1)].remaining, Quantity(0));
     assert_eq!(cold.plots[&SiteId(9)].fertility, 900);
-    assert_eq!(next.advance(&day(1, 20)).unwrap(), next);
+    assert_eq!(next.advance(Some(&day(1, 20))).unwrap(), next);
 }
 #[test]
 fn land_recovery_configuration_is_independent_of_crop_rules() {
@@ -100,10 +102,156 @@ fn land_recovery_configuration_is_independent_of_crop_rules() {
         soil_recovery: 7,
         ..EcologyRules::default()
     };
-    let cool = world.advance(&day(1, 20)).unwrap();
+    let cool = world.advance(Some(&day(1, 20))).unwrap();
     assert_eq!(cool.plots[&SiteId(9)].fertility, 900);
-    let warm = world.advance(&day(1, 40)).unwrap();
+    let warm = world.advance(Some(&day(1, 40))).unwrap();
     assert_eq!(warm.plots[&SiteId(9)].fertility, 907);
+}
+
+#[test]
+fn renewal_and_soil_match_local_weather_without_a_global_fallback() {
+    let mut world = world(ResourceKind::Berries, 1_000);
+    let mut cold_source = world.resources[&ResourceId(1)].clone();
+    cold_source.id = ResourceId(2);
+    cold_source.area = AreaId(3);
+    let mut missing_source = cold_source.clone();
+    missing_source.id = ResourceId(3);
+    missing_source.area = AreaId(4);
+    missing_source.decay_permille = 500;
+    missing_source.growth_remainder = 125_000;
+    world.resources.insert(cold_source.id, cold_source);
+    world
+        .resources
+        .insert(missing_source.id, missing_source.clone());
+    let mut cold_plot = world.plots[&SiteId(9)].clone();
+    cold_plot.id = SiteId(10);
+    cold_plot.area = AreaId(3);
+    let mut missing_plot = cold_plot.clone();
+    missing_plot.id = SiteId(11);
+    missing_plot.area = AreaId(4);
+    world.plots.insert(cold_plot.id, cold_plot);
+    world.plots.insert(missing_plot.id, missing_plot.clone());
+
+    let mut local = day(1, 20);
+    local.cells.insert(
+        AreaId(3),
+        WeatherFacts {
+            temperature: -10,
+            rain: 0,
+            evaporation: 5,
+        },
+    );
+    let next = world.advance(Some(&local)).unwrap();
+    assert_eq!(next.resources[&ResourceId(1)].remaining, Quantity(1_250));
+    assert_eq!(next.resources[&ResourceId(2)].remaining, Quantity(1_000));
+    assert_eq!(next.resources[&ResourceId(2)].soil_water, 70);
+    assert_eq!(next.plots[&SiteId(9)].fertility, 901);
+    assert_eq!(next.plots[&SiteId(10)].fertility, 900);
+    assert_eq!(next.plots[&SiteId(10)].soil_water, 70);
+    assert_eq!(next.resources[&ResourceId(3)], missing_source);
+    assert_eq!(next.plots[&SiteId(11)], missing_plot);
+    assert_eq!(next.day, 1);
+}
+
+#[test]
+fn missing_weather_preserves_land_and_finite_gathering_still_completes() {
+    let mut world = world(ResourceKind::Spring, 2_000);
+    world
+        .resources
+        .get_mut(&ResourceId(1))
+        .unwrap()
+        .contamination = 250;
+    let plan = world
+        .prepare_gather(PersonId(3), ResourceId(1), Quantity(500), false, facts())
+        .unwrap();
+    world.jobs.insert(PersonId(3), plan.job(InventoryId(7)));
+    assert_eq!(world.advance(None).unwrap(), world);
+    let no_cells = LocalWeatherDay {
+        cells: BTreeMap::new(),
+        ..day(1, 20)
+    };
+    let next = world.advance(Some(&no_cells)).unwrap();
+    assert_eq!(next.day, 1);
+    assert_eq!(next.resources, world.resources);
+    assert_eq!(next.plots, world.plots);
+    assert_eq!(next.jobs, world.jobs);
+    let effect = prepare_collection(
+        &next.resources[&ResourceId(1)],
+        PersonId(3),
+        &next.jobs[&PersonId(3)],
+        closing(plan.completes),
+    )
+    .unwrap();
+    assert_eq!(effect.quantity, Quantity(500));
+    assert_eq!(effect.remaining, Quantity(1_500));
+    assert_eq!(effect.contamination, Some(250));
+    assert_eq!(next.advance(Some(&day(2, 20))).unwrap().day, 2);
+}
+
+#[test]
+fn invalid_local_cell_rejects_the_whole_day_without_stock_or_soil_changes() {
+    let world = world(ResourceKind::Berries, 1_000);
+    let before = world.clone();
+    let mut local = day(1, 20);
+    local.cells.insert(
+        AreaId(999),
+        WeatherFacts {
+            temperature: i32::MAX,
+            rain: 0,
+            evaporation: 0,
+        },
+    );
+    assert!(world.advance(Some(&local)).is_err());
+    assert_eq!(world, before);
+    local.cells.get_mut(&AreaId(999)).unwrap().temperature = 20;
+    local.cells.get_mut(&AreaId(999)).unwrap().rain = u64::MAX;
+    assert!(world.advance(Some(&local)).is_err());
+    assert_eq!(world, before);
+}
+
+#[test]
+fn independent_entity_updates_equal_a_batch_regardless_of_insertion_order() {
+    let first = world(ResourceKind::Berries, 1_000);
+    let mut second = world(ResourceKind::Herbs, 500);
+    let mut source = second.resources.remove(&ResourceId(1)).unwrap();
+    source.id = ResourceId(2);
+    source.area = AreaId(3);
+    second.resources.insert(source.id, source);
+    let mut plot = second.plots.remove(&SiteId(9)).unwrap();
+    plot.id = SiteId(10);
+    plot.area = AreaId(3);
+    second.plots.insert(plot.id, plot);
+    let mut local = day(1, 20);
+    local.cells.insert(
+        AreaId(3),
+        WeatherFacts {
+            temperature: 10,
+            rain: 5,
+            evaporation: 12,
+        },
+    );
+    let mut combined = first.clone();
+    combined.resources.extend(second.resources.clone());
+    combined.plots.extend(second.plots.clone());
+    let mut reversed = combined.clone();
+    reversed.resources = combined.resources.clone().into_iter().rev().collect();
+    reversed.plots = combined.plots.clone().into_iter().rev().collect();
+    let mut reversed_local = local.clone();
+    reversed_local.cells = local.cells.clone().into_iter().rev().collect();
+    let batch = combined.advance(Some(&local)).unwrap();
+    assert_eq!(reversed.advance(Some(&reversed_local)).unwrap(), batch);
+    let first_result = first.advance(Some(&local)).unwrap();
+    let second_result = second.advance(Some(&local)).unwrap();
+    assert_eq!(
+        batch.resources[&ResourceId(1)],
+        first_result.resources[&ResourceId(1)]
+    );
+    assert_eq!(
+        batch.resources[&ResourceId(2)],
+        second_result.resources[&ResourceId(2)]
+    );
+    assert_eq!(batch.plots[&SiteId(9)], first_result.plots[&SiteId(9)]);
+    assert_eq!(batch.plots[&SiteId(10)], second_result.plots[&SiteId(10)]);
 }
 #[test]
 fn actual_reservations_worker_slots_and_cargo_limits_bound_collection_plans() {
@@ -249,7 +397,7 @@ fn water_quality_effect_uses_committed_renewed_source_without_owning_health_lots
     let source = world.resources.get_mut(&ResourceId(1)).unwrap();
     source.contamination = 1_000;
     source.daily_growth = Quantity(1_000);
-    let renewed = world.advance(&day(1, 20)).unwrap();
+    let renewed = world.advance(Some(&day(1, 20))).unwrap();
     assert_eq!(renewed.resources[&ResourceId(1)].remaining, Quantity(2_000));
     assert_eq!(renewed.resources[&ResourceId(1)].contamination, 500);
     let plan = renewed
@@ -276,20 +424,23 @@ fn current_restore_pending_jobs_and_fractional_renewal_continue_without_rerollin
         .unwrap();
     world.jobs.insert(PersonId(3), plan.job(InventoryId(7)));
     let first = world
-        .advance(&DayFacts {
-            weather: Weather {
-                temperature: 10,
-                rain: 0,
-                evaporation: 0,
-            },
+        .advance(Some(&LocalWeatherDay {
+            cells: BTreeMap::from([(
+                AreaId(2),
+                WeatherFacts {
+                    temperature: 10,
+                    rain: 0,
+                    evaporation: 0,
+                },
+            )]),
             ..day(1, 10)
-        })
+        }))
         .unwrap();
     assert!(first.resources[&ResourceId(1)].growth_remainder > 0);
     let loaded: World = serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
     assert_eq!(
-        first.advance(&day(2, 20)).unwrap(),
-        loaded.advance(&day(2, 20)).unwrap()
+        first.advance(Some(&day(2, 20))).unwrap(),
+        loaded.advance(Some(&day(2, 20))).unwrap()
     );
     assert_eq!(
         prepare_collection(
@@ -312,14 +463,14 @@ fn current_restore_pending_jobs_and_fractional_renewal_continue_without_rerollin
 fn malformed_or_overflowing_inputs_fail_without_partial_renewal_or_reservation() {
     let mut world = world(ResourceKind::Spring, 2_000);
     let before = world.clone();
-    assert!(world.advance(&day(2, 20)).is_err());
+    assert!(world.advance(Some(&day(2, 20))).is_err());
     assert_eq!(world, before);
     world
         .resources
         .get_mut(&ResourceId(1))
         .unwrap()
         .optimal_water = 0;
-    assert!(world.advance(&day(1, 20)).is_err());
+    assert!(world.advance(Some(&day(1, 20))).is_err());
     let source = world.resources.get_mut(&ResourceId(1)).unwrap();
     source.optimal_water = 50;
     source.capacity = Quantity(u64::MAX);

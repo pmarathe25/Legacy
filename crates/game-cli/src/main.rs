@@ -50,6 +50,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 game_world::scenarios::Config::default()
             };
+            if !explicit_config {
+                config.agriculture = game_world::agriculture::catalog_source(
+                    content_root.join("agriculture/crops.toml"),
+                );
+            }
             if let Some(genetics) = &mut config.genetics {
                 genetics.content_dir = content_root.join("human");
             }

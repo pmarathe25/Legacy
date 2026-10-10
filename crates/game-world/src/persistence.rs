@@ -61,8 +61,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         s.scenario.id.as_str(),
         "ecology-fixture" | "farm-enterprise-fixture"
     );
-    if (s.agriculture.is_some() && s.environment.is_none())
-        || (playable && (s.realm.is_none() || s.armies.is_none() || s.agriculture.is_none()))
+    if (playable && (s.realm.is_none() || s.armies.is_none() || s.agriculture.is_none()))
         || (s.scenario.id == "realm-fixture" && s.realm.is_none())
         || (s.scenario.id == "transport-fixture" && s.transport.is_none())
         || (s.scenario.id == "genetics-fixture" && s.genetics.is_none())

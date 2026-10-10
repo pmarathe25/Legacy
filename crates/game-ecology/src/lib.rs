@@ -1,8 +1,37 @@
 //! Natural deposits, personally observed opportunities and physical collection.
 use game_core::*;
-use game_environment::DayFacts;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Daily forcing for one local cell, independent of its weather provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeatherFacts {
+    pub temperature: i32,
+    pub rain: u64,
+    pub evaporation: u64,
+}
+impl WeatherFacts {
+    pub fn validate(&self) -> Result<(), Error> {
+        if !(-200..=200).contains(&self.temperature)
+            || self.rain > 1_000_100
+            || self.evaporation > 1_000_000
+        {
+            return Err(Error::InvalidConfiguration(
+                "invalid local ecology weather".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// An explicit calendar boundary and the cells whose weather is available.
+/// Missing cells do not receive inferred global weather.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalWeatherDay {
+    pub day: u64,
+    pub day_of_year: u64,
+    pub cells: BTreeMap<AreaId, WeatherFacts>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ResourceKind {
     Coppice,
@@ -311,9 +340,17 @@ impl World {
             .map(|target| (target, inspected))
             .collect()
     }
-    pub fn advance(&self, input: &DayFacts) -> Result<Self, Error> {
+    /// Prepare daily changes by matching each resource or plot to its local
+    /// weather cell. Without a day provider, finite gathering remains usable
+    /// and the calendar cursor stays unchanged. An empty cell map advances the
+    /// cursor without changing land, stock, or fractional growth.
+    pub fn advance(&self, input: Option<&LocalWeatherDay>) -> Result<Self, Error> {
         self.rules.validate()?;
-        input.weather.validate()?;
+        if let Some(input) = input {
+            for weather in input.cells.values() {
+                weather.validate()?;
+            }
+        }
         for resource in self.resources.values() {
             resource.validate()?;
         }
@@ -321,6 +358,9 @@ impl World {
             plot.validate()?;
         }
         let mut world = self.clone();
+        let Some(input) = input else {
+            return Ok(world);
+        };
         let day = input.day;
         if day == world.day {
             return Ok(world);
@@ -329,12 +369,15 @@ impl World {
             return Err(Error::InvalidSave("ecology skipped a calendar day".into()));
         }
         for source in world.resources.values_mut() {
+            let Some(weather) = input.cells.get(&source.area) else {
+                continue;
+            };
             source.soil_water = source
                 .soil_water
-                .saturating_add(input.weather.rain)
+                .saturating_add(weather.rain)
                 .min(source.water_capacity)
-                .saturating_sub(input.weather.evaporation);
-            let warmth = i64::from(input.weather.temperature - source.minimum_temperature)
+                .saturating_sub(weather.evaporation);
+            let warmth = i64::from(weather.temperature - source.minimum_temperature)
                 .max(0)
                 .min(i64::from(
                     source.optimum_temperature - source.minimum_temperature,
@@ -367,16 +410,19 @@ impl World {
             }
         }
         for plot in world.plots.values_mut() {
+            let Some(weather) = input.cells.get(&plot.area) else {
+                continue;
+            };
             plot.soil_water = plot
                 .soil_water
-                .saturating_add(if input.weather.temperature > 0 {
-                    input.weather.rain
+                .saturating_add(if weather.temperature > 0 {
+                    weather.rain
                 } else {
                     0
                 })
                 .min(plot.water_capacity)
-                .saturating_sub(input.weather.evaporation);
-            if input.weather.temperature > world.rules.base_temperature && plot.soil_water > 0 {
+                .saturating_sub(weather.evaporation);
+            if weather.temperature > world.rules.base_temperature && plot.soil_water > 0 {
                 plot.fertility = plot
                     .fertility
                     .saturating_add(world.rules.soil_recovery)

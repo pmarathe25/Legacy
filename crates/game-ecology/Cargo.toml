@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 game-core.workspace = true
-game-environment.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
