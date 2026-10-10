@@ -155,6 +155,14 @@ impl Store {
             backend: backend::Query3::new(&mut self.backend),
         }
     }
+    /// Match both required components, retaining rows without the optional one.
+    pub fn query2_optional<A: Component, B: Component, C: Component>(
+        &mut self,
+    ) -> Query2Optional<A, B, C> {
+        Query2Optional {
+            backend: backend::Query2Optional::new(&mut self.backend),
+        }
+    }
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
         self.backend.snapshot()
     }
@@ -218,6 +226,23 @@ impl<A: Component, B: Component, C: Component> Query3<A, B, C> {
     }
 }
 
+/// A cached join with two required components and one optional component.
+/// Structural changes require refresh; row order is unspecified.
+pub struct Query2Optional<A: Component, B: Component, C: Component> {
+    backend: backend::Query2Optional<A, B, C>,
+}
+impl<A: Component, B: Component, C: Component> Query2Optional<A, B, C> {
+    pub fn refresh(&mut self, store: &Store) -> Result<(), Error> {
+        self.backend.refresh(&store.backend)
+    }
+    pub fn iter<'a>(
+        &'a self,
+        store: &'a Store,
+    ) -> Result<impl Iterator<Item = (StableId, &'a A, &'a B, Option<&'a C>)> + 'a, Error> {
+        self.backend.iter(&store.backend)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +293,50 @@ mod tests {
         assert_eq!(rows, vec![(StableId(2), u64::MAX - 2, "Ada".into(), 55)]);
         let query2 = store.query2::<Count, Name>();
         assert_eq!(query2.iter(&store).unwrap().count(), 1);
+    }
+    #[test]
+    fn optional_join_keeps_required_rows_and_tracks_optional_presence() {
+        let mut store = fixture(true);
+        store.insert(StableId(1), Name("Bo".into())).unwrap();
+        let mut query = store.query2_optional::<Count, Name, Wide>();
+        let rows = |query: &Query2Optional<Count, Name, Wide>, store: &Store| {
+            let mut rows: Vec<_> = query
+                .iter(store)
+                .unwrap()
+                .map(|(id, _, name, wide)| (id, name.0.clone(), wide.map(|v| v.0)))
+                .collect();
+            rows.sort_by_key(|row| row.0);
+            rows
+        };
+        assert_eq!(
+            rows(&query, &store),
+            vec![
+                (StableId(1), "Bo".into(), None),
+                (StableId(2), "Ada".into(), Some(55))
+            ]
+        );
+        store.insert(StableId(1), Wide(90)).unwrap();
+        assert!(query.iter(&store).is_err());
+        query.refresh(&store).unwrap();
+        assert_eq!(rows(&query, &store)[0].2, Some(90));
+        store.insert(StableId(1), Wide(91)).unwrap();
+        assert_eq!(rows(&query, &store)[0].2, Some(91));
+        store.remove::<Wide>(StableId(2)).unwrap();
+        assert!(query.iter(&store).is_err());
+        query.refresh(&store).unwrap();
+        assert_eq!(rows(&query, &store)[1].2, None);
+        store.remove::<Name>(StableId(1)).unwrap();
+        assert!(query.iter(&store).is_err());
+        query.refresh(&store).unwrap();
+        assert_eq!(
+            rows(&query, &store),
+            vec![(StableId(2), "Ada".into(), None)]
+        );
+        let mut restored = Store::restore(schema(), store.snapshot().unwrap()).unwrap();
+        assert!(query.iter(&restored).is_err());
+        assert!(query.refresh(&restored).is_err());
+        let rebound = restored.query2_optional::<Count, Name, Wide>();
+        assert_eq!(rows(&rebound, &restored), rows(&query, &store));
     }
     #[test]
     fn cached_queries_reject_structural_changes_until_explicit_refresh() {

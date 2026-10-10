@@ -310,3 +310,44 @@ macro_rules! queries {
 }
 queries!(Query2; A a, B b);
 queries!(Query3; A a, B b, C c);
+
+type OptionalState<A, B, C> = QueryState<(
+    &'static NativeId,
+    &'static Native<A>,
+    &'static Native<B>,
+    Option<&'static Native<C>>,
+)>;
+pub(super) struct Query2Optional<A: Component, B: Component, C: Component> {
+    state: OptionalState<A, B, C>,
+    world: WorldId,
+    revision: u64,
+}
+impl<A: Component, B: Component, C: Component> Query2Optional<A, B, C> {
+    pub(super) fn new(store: &mut Storage) -> Self {
+        Self {
+            state: store.world.query(),
+            world: store.world.id(),
+            revision: store.structural_revision,
+        }
+    }
+    pub(super) fn refresh(&mut self, store: &Storage) -> Result<(), Error> {
+        if self.world != store.world.id() {
+            return Err(cache_error());
+        }
+        self.state.update_archetypes(&store.world);
+        self.revision = store.structural_revision;
+        Ok(())
+    }
+    pub(super) fn iter<'a>(
+        &'a self,
+        store: &'a Storage,
+    ) -> Result<impl Iterator<Item = (StableId, &'a A, &'a B, Option<&'a C>)> + 'a, Error> {
+        if self.world != store.world.id() || self.revision != store.structural_revision {
+            return Err(cache_error());
+        }
+        Ok(self
+            .state
+            .iter_manual(&store.world)
+            .map(|(id, a, b, c)| (id.0, &a.0, &b.0, c.map(|component| &component.0))))
+    }
+}
