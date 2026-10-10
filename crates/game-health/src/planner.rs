@@ -75,6 +75,37 @@ impl World {
             && (safety.is_some_and(|safety| safety.suspected_unsafe)
                 || input.values.risk_tolerance < 500)
     }
+    /// A physically available preparation, independent of thirst and personal
+    /// risk preference. The host revalidates body and toolkit allocation.
+    pub fn boiling_action(
+        &self,
+        actor: PersonId,
+        source: InventoryId,
+        input: &HealthPlanning<'_>,
+    ) -> Option<HealthAction> {
+        if !self.ready_for_need(actor) {
+            return None;
+        }
+        let water = input.stocks.iter().find(|stock| {
+            stock.fact.inventory == source
+                && stock.fact.good == Good::Water
+                && stock.fact.accessible
+                && stock.here
+                && stock.fact.quantity >= self.rules.drink_quantity
+                && stock.fact.observed_at <= input.now
+                && stock.fact.learned_at <= input.now
+        })?;
+        if water.fact.quantity > self.rules.drink_quantity && !water.held {
+            return None;
+        }
+        let fuel = self.present_supply(input, Good::Timber, self.rules.boiling_fuel)?;
+        let tool = self.present_supply(input, Good::Tool, Quantity(1_000))?;
+        Some(HealthAction::Boil {
+            source,
+            fuel: fuel.fact.inventory,
+            tool: tool.fact.inventory,
+        })
+    }
     pub fn consume_supply(
         &self,
         actor: PersonId,
@@ -96,22 +127,21 @@ impl World {
                         && stock.fact.observed_at <= input.now
                         && stock.fact.learned_at <= input.now
                 })?;
-                if self.water_requires_preparation(actor, source, input)
-                    && let (Some(fuel), Some(tool)) = (
-                        self.present_supply(input, Good::Timber, self.rules.boiling_fuel),
-                        self.present_supply(input, Good::Tool, Quantity(1_000)),
-                    )
-                {
-                    // Preparation of an area stock uses a separate serving;
-                    // generic fulfilment performs that actual acquisition.
-                    if stock.fact.quantity > self.rules.drink_quantity && !stock.held {
+                if self.water_requires_preparation(actor, source, input) {
+                    if let Some(action) = self.boiling_action(actor, source, input) {
+                        return Some(action);
+                    }
+                    if stock.fact.quantity > self.rules.drink_quantity
+                        && !stock.held
+                        && self
+                            .present_supply(input, Good::Timber, self.rules.boiling_fuel)
+                            .is_some()
+                        && self
+                            .present_supply(input, Good::Tool, Quantity(1_000))
+                            .is_some()
+                    {
                         return None;
                     }
-                    return Some(HealthAction::Boil {
-                        source,
-                        fuel: fuel.fact.inventory,
-                        tool: tool.fact.inventory,
-                    });
                 }
                 Some(HealthAction::Drink { source })
             }

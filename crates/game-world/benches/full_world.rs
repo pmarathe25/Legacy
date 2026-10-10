@@ -51,10 +51,77 @@ fn player_input(view: &PlayerView, config: &Config) -> Option<Command> {
             return Some(command.clone());
         }
         if health.thirst >= config.health.drink_relief / 2 {
+            if let Some(command) = offered.iter().find(|command| {
+                matches!(
+                    command,
+                    Command::Health {
+                        action: HealthAction::Boil { .. }
+                    }
+                )
+            }) {
+                return Some(command.clone());
+            }
+            let supplies_here = [
+                (Good::Timber, config.health.boiling_fuel),
+                (Good::Tool, Quantity(1_000)),
+            ]
+            .into_iter()
+            .all(|(good, quantity)| {
+                body.local_stocks.iter().any(|stock| {
+                    stock.good == good && stock.can_access && stock.quantity >= quantity
+                })
+            });
+            let held_water = body
+                .local_stocks
+                .iter()
+                .filter(|stock| {
+                    stock.good == Good::Water
+                        && stock.position == StockPosition::Carried(view.ruler)
+                })
+                .map(|stock| u128::from(stock.quantity.0))
+                .sum::<u128>();
+            if supplies_here
+                && held_water < u128::from(config.health.drink_quantity.0)
+                && let Some(command) = offered.iter().find(|command| {
+                    matches!(command,
+                    Command::Load { source, destination, .. }
+                        if body.local_stocks.iter().any(|stock| stock.id == *source
+                            && stock.good == Good::Water
+                            && stock.position != StockPosition::Carried(view.ruler))
+                        && body.local_stocks.iter().any(|stock| stock.id == *destination
+                            && stock.good == Good::Water
+                            && stock.position == StockPosition::Carried(view.ruler)))
+                })
+            {
+                return Some(command.clone());
+            }
             if let Some(command) = offered.iter().find(|command| matches!(command,
                 Command::Ecology { action: EcologyAction::Gather { resource, unauthorized: false, .. } }
                     if view.ecology.resources.iter().any(|source| source.id == *resource
                         && source.kind == ResourceKind::Spring && source.accessible && source.contamination == 0))) {
+                return Some(command.clone());
+            }
+            if supplies_here && held_water < u128::from(config.health.drink_quantity.0)
+                && let Some(command) = offered.iter().find(|command| matches!(command,
+                    Command::Ecology { action: EcologyAction::Gather { resource, unauthorized: false, .. } }
+                        if view.ecology.resources.iter().any(|source| source.id == *resource
+                            && source.kind == ResourceKind::Spring && source.accessible
+                            && source.available >= config.health.drink_quantity)))
+            {
+                return Some(command.clone());
+            }
+            // If preparation is unavailable, the actor may choose the real
+            // illness risk of drinking over imminent dehydration.
+            if health.thirst >= config.health.thirst_harm / 2
+                && let Some(command) = offered.iter().find(|command| {
+                    matches!(
+                        command,
+                        Command::Health {
+                            action: HealthAction::Drink { .. }
+                        }
+                    )
+                })
+            {
                 return Some(command.clone());
             }
             if let Some(command) = offered.iter().find(|command| matches!(command,

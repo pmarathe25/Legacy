@@ -192,3 +192,47 @@ fn exposure_pressure_tracks_physical_thresholds_without_selecting_a_provider() {
     assert_eq!(exposure_urgency(999, 1_000), 3_000);
     assert_eq!(exposure_urgency(1_000, 1_000), 20_000);
 }
+
+#[test]
+fn boiling_is_an_available_physical_option_without_thirst_or_personality_policy() {
+    let world = World::default();
+    let stocks = [
+        stock(10, Good::Water, 1_000, true, false),
+        stock(11, Good::Timber, 1_000, true, false),
+        stock(12, Good::Tool, 1_000, true, false),
+    ];
+    let expected = Some(HealthAction::Boil {
+        source: InventoryId(10),
+        fuel: InventoryId(11),
+        tool: InventoryId(12),
+    });
+    for risk_tolerance in [0, 1_000] {
+        let mut input = planning(&stocks);
+        input.values.risk_tolerance = risk_tolerance;
+        assert_eq!(
+            world.boiling_action(PersonId(1), InventoryId(10), &input),
+            expected
+        );
+    }
+    let bulk = [
+        stock(10, Good::Water, 2_000, true, false),
+        stock(11, Good::Timber, 1_000, true, false),
+        stock(12, Good::Tool, 1_000, true, false),
+    ];
+    assert!(
+        world
+            .boiling_action(PersonId(1), InventoryId(10), &planning(&bulk))
+            .is_none()
+    );
+    let absent_tool = [
+        stock(10, Good::Water, 1_000, true, false),
+        stock(11, Good::Timber, 1_000, true, false),
+        stock(12, Good::Tool, 1_000, false, false),
+    ];
+    assert!(
+        world
+            .boiling_action(PersonId(1), InventoryId(10), &planning(&absent_tool))
+            .is_none()
+    );
+    assert!(world.clinical.is_empty());
+}

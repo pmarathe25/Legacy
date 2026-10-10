@@ -1652,6 +1652,29 @@ impl Simulation {
                     });
                 }
             }
+            if let Some(planning) = self.health_planning_data(actor) {
+                let input = planning.input(self.state.time);
+                for stock in &planning.stocks {
+                    let Some(action) = w.boiling_action(actor, stock.fact.inventory, &input) else {
+                        continue;
+                    };
+                    let HealthAction::Boil { source, fuel, tool } = action else {
+                        continue;
+                    };
+                    let facts = self.health_stock_facts(actor, source).and_then(|water| {
+                        self.health_stock_facts(actor, fuel).and_then(|fuel| {
+                            self.health_stock_facts(actor, tool)
+                                .map(|tool| game_health::ActionFacts::Boil { water, fuel, tool })
+                        })
+                    });
+                    if facts.is_ok_and(|facts| {
+                        w.prepare_action(self.health_actor_facts(actor), &action, facts)
+                            .is_ok()
+                    }) {
+                        actions.push(action);
+                    }
+                }
+            }
             for shelter in w
                 .known
                 .get(&actor)
@@ -1720,7 +1743,14 @@ impl Simulation {
             values: game_health::IntakeValues {
                 risk_tolerance: traits.risk_tolerance,
             },
-            stocks: self.remembered_health_stocks(actor),
+            stocks: self
+                .remembered_health_stocks(actor)
+                .into_iter()
+                .filter(|stock| {
+                    stock.fact.good != Good::Tool
+                        || self.tool_available_for(actor, stock.fact.inventory)
+                })
+                .collect(),
         })
     }
     pub(crate) fn health_candidate(&self, actor: PersonId) -> Option<Command> {
