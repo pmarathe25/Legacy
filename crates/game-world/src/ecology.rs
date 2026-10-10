@@ -636,7 +636,47 @@ impl Simulation {
         }
     }
     pub(crate) fn available_ecology_commands(&self, actor: PersonId) -> Vec<Command> {
+        let mut commands = Vec::new();
+        for opportunity in self.ecology_quantity_opportunities(actor) {
+            commands.extend(
+                opportunity
+                    .suggested
+                    .iter()
+                    .map(|quantity| opportunity.action.command(*quantity)),
+            );
+        }
+        commands.extend(self.available_ecology_access_commands(actor));
+        commands
+    }
+    pub(crate) fn available_ecology_access_commands(&self, actor: PersonId) -> Vec<Command> {
         if !self.ecology_able(actor) {
+            return Vec::new();
+        }
+        let area = self.ecology_area(actor).unwrap();
+        let Some(world) = &self.state.ecology else {
+            return Vec::new();
+        };
+        let mut commands = Vec::new();
+        for source in world.resources.values().filter(|s| s.area == area).take(16) {
+            if !source.access.contains(&actor)
+                && source
+                    .custodian
+                    .is_some_and(|c| c != actor && self.ecology_area(c) == Some(area))
+            {
+                commands.push(Command::Ecology {
+                    action: EcologyAction::RequestAccess {
+                        resource: source.id,
+                    },
+                });
+            }
+        }
+        commands
+    }
+    pub(crate) fn ecology_quantity_opportunities(
+        &self,
+        actor: PersonId,
+    ) -> Vec<QuantityOpportunity> {
+        if !self.ecology_able(actor) || self.past_life_controls_actor(actor) {
             return Vec::new();
         }
         let area = self.ecology_area(actor).unwrap();
@@ -663,39 +703,46 @@ impl Simulation {
             ),
             tool: self.ecology_tool(actor),
         };
-        let mut commands = Vec::new();
-        for source in world.resources.values().filter(|s| s.area == area).take(16) {
-            if world
-                .prepare_gather(
+        let mut opportunities = Vec::new();
+        for source in world
+            .resources
+            .values()
+            .filter(|source| source.area == area)
+            .take(16)
+        {
+            let Ok(upper_bound) = world.gather_upper_bound(actor, source.id, facts) else {
+                continue;
+            };
+            let unauthorized = !source.access.contains(&actor);
+            let suggested = self
+                .quantity_suggestions(
                     actor,
-                    source.id,
-                    Quantity(1_000),
-                    !source.access.contains(&actor),
-                    facts,
+                    source.kind.good(),
+                    upper_bound,
+                    Quantity(1),
+                    None,
+                    None,
                 )
-                .is_ok()
-            {
-                commands.push(Command::Ecology {
-                    action: EcologyAction::Gather {
+                .into_iter()
+                .filter(|quantity| {
+                    world
+                        .prepare_gather(actor, source.id, *quantity, unauthorized, facts)
+                        .is_ok()
+                })
+                .collect::<Vec<_>>();
+            if !suggested.is_empty() {
+                opportunities.push(QuantityOpportunity {
+                    action: QuantityAction::Gather {
                         resource: source.id,
-                        quantity: Quantity(1_000),
-                        unauthorized: !source.access.contains(&actor),
+                        unauthorized,
                     },
-                });
-            }
-            if !source.access.contains(&actor)
-                && source
-                    .custodian
-                    .is_some_and(|c| c != actor && self.ecology_area(c) == Some(area))
-            {
-                commands.push(Command::Ecology {
-                    action: EcologyAction::RequestAccess {
-                        resource: source.id,
-                    },
+                    upper_bound,
+                    increment: Quantity(1),
+                    suggested,
                 });
             }
         }
-        commands
+        opportunities
     }
     pub(crate) fn ecology_acquisition_offers(
         &self,

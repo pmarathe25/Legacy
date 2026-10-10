@@ -642,3 +642,71 @@ fn source_offers_preserve_permission_and_unauthorized_alternatives_for_personal_
         }
     );
 }
+
+#[test]
+fn gathering_ceiling_uses_actual_other_reservations_body_room_and_child_limit() {
+    let mut world = world(ResourceKind::Spring, 750);
+    let job = world
+        .prepare_gather(PersonId(3), ResourceId(1), Quantity(250), false, facts())
+        .unwrap()
+        .job(InventoryId(10));
+    world.jobs.insert(PersonId(3), job);
+    assert_eq!(
+        world
+            .gather_upper_bound(PersonId(4), ResourceId(1), facts())
+            .unwrap(),
+        Quantity(500)
+    );
+    assert_eq!(
+        world
+            .gather_upper_bound(PersonId(3), ResourceId(1), facts())
+            .unwrap(),
+        Quantity(750)
+    );
+    let small = GatherFacts {
+        carrying_room: Quantity(100),
+        ..facts()
+    };
+    assert_eq!(
+        world
+            .gather_upper_bound(PersonId(4), ResourceId(1), small)
+            .unwrap(),
+        Quantity(100)
+    );
+    let world = self::world(ResourceKind::Spring, 5000);
+    let child = GatherFacts {
+        adult: false,
+        ..facts()
+    };
+    assert_eq!(
+        world
+            .gather_upper_bound(PersonId(4), ResourceId(1), child)
+            .unwrap(),
+        Quantity(1000)
+    );
+}
+
+#[test]
+fn gathering_physical_ceiling_is_not_gear_or_deadline_admission() {
+    let world = world(ResourceKind::Coppice, 250);
+    let no_tool = GatherFacts {
+        tool: None,
+        ..facts()
+    };
+    let limit = world
+        .gather_upper_bound(PersonId(4), ResourceId(1), no_tool)
+        .unwrap();
+    assert_eq!(limit, Quantity(250));
+    assert_eq!(
+        world.prepare_gather(PersonId(4), ResourceId(1), limit, false, no_tool),
+        Err(Error::Unavailable)
+    );
+    let too_late = GatherFacts {
+        now: SimTime(u64::MAX - 100),
+        ..facts()
+    };
+    assert_eq!(
+        world.prepare_gather(PersonId(4), ResourceId(1), limit, false, too_late),
+        Err(Error::Overflow)
+    );
+}

@@ -2143,6 +2143,20 @@ impl Simulation {
         }
         Ok(())
     }
+    pub(crate) fn record_quantity_increment(&self, source: InventoryId) -> Quantity {
+        Quantity(
+            if self
+                .state
+                .inventories
+                .get(&source)
+                .is_some_and(|stock| stock.good == Good::Record)
+            {
+                1_000
+            } else {
+                1
+            },
+        )
+    }
     pub(crate) fn record_transfer_allowed(&self, source: InventoryId, quantity: Quantity) -> bool {
         let Some(stock) = self.state.inventories.get(&source) else {
             return false;
@@ -2153,13 +2167,14 @@ impl Simulation {
         let Some(w) = &self.state.invocation else {
             return false;
         };
+        let increment = self.record_quantity_increment(source).0;
         quantity.0 > 0
-            && quantity.0.is_multiple_of(1_000)
+            && quantity.0.is_multiple_of(increment)
             && w.records
                 .values()
                 .filter(|record| record.intact && record.inventory == source)
                 .count() as u64
-                >= quantity.0 / 1_000
+                >= quantity.0 / increment
     }
     pub(crate) fn relocate_record_transfer(
         &mut self,

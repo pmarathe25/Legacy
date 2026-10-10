@@ -77,6 +77,7 @@ impl SessionEngine for FakeEngine {
             location: Location::AtArea(AreaId(7)),
             known_areas: Vec::new(),
             available_commands: vec![Command::Rest],
+            quantity_opportunities: Vec::new(),
             physical: None,
             known_stocks: Vec::new(),
             nearby_people: Vec::new(),

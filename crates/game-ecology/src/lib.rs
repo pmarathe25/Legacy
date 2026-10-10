@@ -387,16 +387,30 @@ impl World {
         Ok(world)
     }
 
-    pub fn gathering_conditions(
+    /// A source/body ceiling. Access, work spaces, gear and the chosen amount's
+    /// deadline are validated separately by prepare_gather.
+    pub fn gather_upper_bound(
         &self,
         actor: PersonId,
         resource: ResourceId,
-        quantity: Quantity,
-        unauthorized: bool,
         facts: GatherFacts,
-    ) -> Result<GatheringConditions, Error> {
+    ) -> Result<Quantity, Error> {
         let source = self.resources.get(&resource).ok_or(Error::Unavailable)?;
         source.validate()?;
+        let (reserved, _) = self.gathering_reservations(actor, resource)?;
+        let available = u128::from(source.remaining.0).saturating_sub(reserved) as u64;
+        Ok(Quantity(
+            available
+                .min(facts.carrying_room.0)
+                .min(if facts.adult { u64::MAX } else { 1_000 }),
+        ))
+    }
+
+    fn gathering_reservations(
+        &self,
+        actor: PersonId,
+        resource: ResourceId,
+    ) -> Result<(u128, usize), Error> {
         let mut reserved = 0u128;
         let mut working = 0usize;
         for (person, job) in &self.jobs {
@@ -407,6 +421,20 @@ impl World {
                 working = working.checked_add(1).ok_or(Error::Overflow)?;
             }
         }
+        Ok((reserved, working))
+    }
+
+    pub fn gathering_conditions(
+        &self,
+        actor: PersonId,
+        resource: ResourceId,
+        quantity: Quantity,
+        unauthorized: bool,
+        facts: GatherFacts,
+    ) -> Result<GatheringConditions, Error> {
+        let source = self.resources.get(&resource).ok_or(Error::Unavailable)?;
+        source.validate()?;
+        let (reserved, working) = self.gathering_reservations(actor, resource)?;
         if quantity.0 == 0
             || !facts.capable
             || source.area != facts.area

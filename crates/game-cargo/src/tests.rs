@@ -418,3 +418,63 @@ fn deadlines_are_checked_before_returning_a_proposed_slot_and_jobs_roundtrip() {
         Err(Error::Unavailable)
     );
 }
+
+#[test]
+fn quantity_ceiling_respects_stock_room_but_does_not_claim_permission() {
+    let from = stock(10, InventoryLocation::Area(AreaId(2)), 250);
+    let mut to = stock(20, InventoryLocation::Carried(ACTOR), 0);
+    to.capacity = Quantity(100);
+    let denied = ReceiverFacts {
+        accessible: false,
+        accepted: false,
+        ..receiver()
+    };
+    assert_eq!(
+        load_upper_bound(&from, &to, supply(), denied).unwrap(),
+        Quantity(100)
+    );
+    assert_eq!(
+        prepare_load(
+            actor(),
+            &from,
+            &to,
+            Quantity(100),
+            supply(),
+            denied,
+            SimTime(0),
+            SimDuration(1)
+        ),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(
+        pickup_upper_bound(&from, supply(), Quantity(75), Quantity(1000)).unwrap(),
+        Quantity(75)
+    );
+}
+
+#[test]
+fn quantity_ceiling_preserves_consolidation_at_full_body_load() {
+    let from = stock(10, InventoryLocation::Carried(ACTOR), 600);
+    let mut to = stock(20, InventoryLocation::Carried(ACTOR), 400);
+    to.capacity = Quantity(1000);
+    let full = ReceiverFacts {
+        body_room: Quantity(0),
+        transport_allows: false,
+        ..receiver()
+    };
+    let limit = load_upper_bound(&from, &to, supply(), full).unwrap();
+    assert_eq!(limit, Quantity(600));
+    assert!(
+        prepare_load(
+            actor(),
+            &from,
+            &to,
+            limit,
+            supply(),
+            full,
+            SimTime(0),
+            SimDuration(1)
+        )
+        .is_ok()
+    );
+}

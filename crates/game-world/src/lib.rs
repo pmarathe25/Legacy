@@ -29,6 +29,7 @@ pub mod physical;
 pub mod population;
 pub mod projects;
 pub mod property;
+mod quantities;
 pub mod realm;
 pub mod scenarios;
 pub mod skills;
@@ -696,25 +697,6 @@ impl Simulation {
                                 .map(|s| Command::Eat { source: s.id }),
                         );
                     }
-                    for source in &view.local_stocks {
-                        for destination in &view.local_stocks {
-                            let carried = InventoryLocation::Carried(ruler.id);
-                            if source.id != destination.id
-                                && source.good == destination.good
-                                && source.can_access
-                                && destination.can_access
-                                && source.quantity.0 >= 1_000
-                                && (self.state.inventories[&source.id].location == carried
-                                    || self.state.inventories[&destination.id].location == carried)
-                            {
-                                available_commands.push(Command::Load {
-                                    source: source.id,
-                                    destination: destination.id,
-                                    quantity: Quantity(1_000),
-                                });
-                            }
-                        }
-                    }
                     if let Some(development) = &self.state.development {
                         let children = development.lives.iter().filter_map(|(id, life)| {
                             (self.dependent_signal_visible(ruler.id, *id)
@@ -855,15 +837,27 @@ impl Simulation {
         available_commands.extend(self.available_social_commands(ruler.id));
         available_commands.extend(self.available_enforcement_commands(ruler.id));
         available_commands.extend(self.available_health_commands(ruler.id));
-        available_commands.extend(self.available_ecology_commands(ruler.id));
+        available_commands.extend(self.available_ecology_access_commands(ruler.id));
         available_commands.extend(self.available_force_commands(ruler.id));
         available_commands.extend(self.available_mission_commands(ruler.id));
+        let mut quantity_opportunities = self.cargo_quantity_opportunities(ruler.id);
+        quantity_opportunities.extend(self.ecology_quantity_opportunities(ruler.id));
+        for opportunity in &quantity_opportunities {
+            for quantity in &opportunity.suggested {
+                let command = opportunity.action.command(*quantity);
+                if !available_commands.contains(&command) {
+                    available_commands.push(command);
+                }
+            }
+        }
         if !self.independent(ruler.id) {
+            quantity_opportunities.clear();
             available_commands
                 .retain(|command| matches!(command, Command::Signal { .. } | Command::Cancel));
         }
         if self.past_life_controls_actor(ruler.id) {
             available_commands.clear();
+            quantity_opportunities.clear();
         }
         PlayerView {
             armies: self.army_view(ruler.id),
@@ -901,6 +895,7 @@ impl Simulation {
                 })
                 .collect(),
             available_commands,
+            quantity_opportunities,
             physical: self.physical_view(),
             known_stocks: self.state.decisions.as_ref().map_or_else(Vec::new, |w| {
                 w.minds[&ruler.id].knowledge.values().cloned().collect()

@@ -31,6 +31,45 @@ impl Inventory {
             .ok_or(Error::Unavailable)
     }
 }
+
+/// A stock/capacity ceiling only. Rights, accepted duties, record units and
+/// transport constraints still require native admission at the chosen amount.
+pub fn load_upper_bound(
+    source: &Inventory,
+    destination: &Inventory,
+    supply: SourceFacts,
+    receiver: ReceiverFacts,
+) -> Result<Quantity, Error> {
+    source.room()?;
+    let mut bound = source
+        .quantity
+        .0
+        .min(supply.unreserved.0)
+        .min(destination.room()?.0);
+    if source.location != destination.location {
+        bound = bound.min(receiver.body_room.0);
+    }
+    Ok(Quantity(bound))
+}
+
+/// Pickup can allocate a matching compartment; actual compartment selection
+/// and all admission constraints remain in prepare_carry.
+pub fn pickup_upper_bound(
+    source: &Inventory,
+    supply: SourceFacts,
+    body_room: Quantity,
+    compartment_capacity: Quantity,
+) -> Result<Quantity, Error> {
+    source.room()?;
+    Ok(Quantity(
+        source
+            .quantity
+            .0
+            .min(supply.unreserved.0)
+            .min(body_room.0)
+            .min(compartment_capacity.0),
+    ))
+}
 #[derive(Clone, Copy, Debug)]
 pub struct ActorFacts {
     pub actor: PersonId,

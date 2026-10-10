@@ -191,6 +191,7 @@ pub struct PlayerView {
     pub location: Location,
     pub known_areas: Vec<AreaView>,
     pub available_commands: Vec<Command>,
+    pub quantity_opportunities: Vec<QuantityOpportunity>,
     pub physical: Option<PhysicalView>,
     pub known_stocks: Vec<StockKnowledge>,
     pub nearby_people: Vec<(PersonId, Role)>,
@@ -199,6 +200,59 @@ pub struct PlayerView {
     pub interests: Vec<(ChildhoodInterest, u64)>,
     pub life_stage: Option<LifeStage>,
     pub preference: Option<ChildhoodInterest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuantityAction {
+    Carry {
+        source: InventoryId,
+    },
+    Load {
+        source: InventoryId,
+        destination: InventoryId,
+    },
+    Gather {
+        resource: ResourceId,
+        unauthorized: bool,
+    },
+}
+impl QuantityAction {
+    pub fn command(&self, quantity: Quantity) -> Command {
+        match *self {
+            Self::Carry { source } => Command::Carry { source, quantity },
+            Self::Load {
+                source,
+                destination,
+            } => Command::Load {
+                source,
+                destination,
+                quantity,
+            },
+            Self::Gather {
+                resource,
+                unauthorized,
+            } => Command::Ecology {
+                action: EcologyAction::Gather {
+                    resource,
+                    quantity,
+                    unauthorized,
+                },
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuantityOpportunity {
+    pub action: QuantityAction,
+    /// A current stock/capacity ceiling, not a promise that every smaller
+    /// quantity is admitted. Permission, acceptance and execution may constrain it.
+    pub upper_bound: Quantity,
+    /// Whole-object quantities, such as records, have a larger increment.
+    pub increment: Quantity,
+    /// Each suggestion passed native admission when this view was produced.
+    /// Submission remains authoritative, including after time or facts change.
+    pub suggested: Vec<Quantity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

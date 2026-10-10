@@ -18,7 +18,7 @@ impl Simulation {
         self.apply_carried_compartment(plan)
     }
 
-    fn prepare_carried_compartment(
+    pub(crate) fn prepare_carried_compartment(
         &self,
         actor: PersonId,
         source: InventoryId,
