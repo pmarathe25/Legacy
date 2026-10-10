@@ -12,79 +12,109 @@ impl Simulation {
         recipient: PersonId,
         quantity: Quantity,
     ) -> Result<(), Error> {
+        self.preflight_agreements()?;
+        self.preflight_institutions()?;
+        let plan = self.prepare_carried_compartment(actor, source, recipient, quantity, true)?;
+        self.apply_carried_compartment(plan)
+    }
+
+    fn prepare_carried_compartment(
+        &self,
+        actor: PersonId,
+        source: InventoryId,
+        recipient: PersonId,
+        quantity: Quantity,
+        handoff: bool,
+    ) -> Result<game_cargo::PreparedCarry, Error> {
+        let actor_facts = self.cargo_actor_facts(actor)?;
         let stock = self
             .state
             .inventories
             .get(&source)
             .ok_or(Error::Unavailable)?;
-        if quantity.0 == 0
-            || stock.location != InventoryLocation::Carried(actor)
-            || !self.can_use(actor, stock)
-            || self.unreserved_stock(source, actor) < quantity.0
-            || !self.transport_same_place(actor, recipient)
-            || !self
-                .state
-                .physical
-                .as_ref()
-                .and_then(|w| w.actors.get(&recipient))
-                .is_some_and(|body| body.vitals.alive)
-        {
+        let recipient_alive = self
+            .state
+            .physical
+            .as_ref()
+            .and_then(|world| world.actors.get(&recipient))
+            .is_some_and(|body| body.vitals.alive);
+        if !self.person_index.contains_key(&recipient) {
             return Err(Error::Unavailable);
         }
-        let good = stock.good;
         let capacity = self.body_rules(recipient).carrying_capacity;
-        let existing = self
+        let proposed = Inventory {
+            id: InventoryId(self.state.next_id),
+            location: InventoryLocation::Carried(recipient),
+            good: stock.good,
+            quantity: Quantity(0),
+            capacity,
+            access: BTreeSet::from([recipient]),
+            last_granted: None,
+            spoils_at: None,
+        };
+        let candidates: Vec<_> = self
             .inventory_index
             .get(&InventoryLocation::Carried(recipient))
             .into_iter()
             .flatten()
-            .copied()
-            .find(|id| {
-                let destination = &self.state.inventories[id];
-                destination.good == good
-                    && *id != source
-                    && destination.capacity.0 - destination.quantity.0 >= quantity.0
-            });
-        if existing.is_none() && quantity > capacity {
-            return Err(Error::Unavailable);
-        }
-        self.ensure_event_capacity(2)?;
-        let original_next_id = self.state.next_id;
-        let destination = if let Some(id) = existing {
-            id
-        } else {
-            self.add_inventory(
-                good,
-                InventoryLocation::Carried(recipient),
-                Quantity(0),
-                capacity,
-                BTreeSet::from([recipient]),
-            )?
+            .map(|id| game_cargo::Compartment {
+                stock: &self.state.inventories[id],
+                receiver: self.cargo_receiver_facts(
+                    actor,
+                    source,
+                    &self.state.inventories[id],
+                    quantity,
+                ),
+            })
+            .collect();
+        let allocation = game_cargo::NewCompartment {
+            id: proposed.id,
+            holder: recipient,
+            alive: recipient_alive,
+            capacity,
+            receiver: self.cargo_receiver_facts(actor, source, &proposed, quantity),
         };
-        let result = self.debug_actor_command(
-            actor,
-            Command::Load {
-                source,
-                destination,
+        let source_facts = self.cargo_source_facts(actor, stock, quantity);
+        if handoff {
+            game_cargo::prepare_handoff(
+                actor_facts,
+                stock,
                 quantity,
-            },
-        );
-        if result.is_err() && existing.is_none() {
-            // The transfer's admission checks precede action mutation. A failed
-            // admission must not leave an empty compartment or consume its ID.
-            self.state.inventories.remove(&destination);
-            if let Some(index) = self
-                .inventory_index
-                .get_mut(&InventoryLocation::Carried(recipient))
-            {
-                index.retain(|id| *id != destination);
-            }
-            if let Some(property) = &mut self.state.property {
-                property.portions.remove(&destination);
-            }
-            self.state.next_id = original_next_id;
+                source_facts,
+                &candidates,
+                allocation,
+                self.state.time,
+                self.body_rules(actor).loading_time,
+            )
+        } else {
+            game_cargo::prepare_carry(
+                actor_facts,
+                stock,
+                quantity,
+                source_facts,
+                &candidates,
+                allocation,
+                self.state.time,
+                self.body_rules(actor).loading_time,
+            )
         }
-        result
+    }
+    /// All native-load facts and global allocation/event capacity are validated
+    /// before allocating the sole actual compartment or interrupting its actor.
+    fn apply_carried_compartment(&mut self, plan: game_cargo::PreparedCarry) -> Result<(), Error> {
+        self.ensure_event_capacity(3)?;
+        if let game_cargo::Selection::Proposed(stock) = &plan.selection {
+            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+            let id = self.add_inventory(
+                stock.good,
+                stock.location.clone(),
+                stock.quantity,
+                stock.capacity,
+                stock.access.clone(),
+            )?;
+            debug_assert_eq!(id, stock.id);
+        }
+        self.apply_cargo_load(plan.job)
     }
     fn tool_users(&self) -> BTreeMap<InventoryId, Vec<PersonId>> {
         let Some(physical) = &self.state.physical else {
@@ -327,107 +357,8 @@ impl Simulation {
     ) -> Result<(), Error> {
         self.preflight_agreements()?;
         self.preflight_institutions()?;
-        let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
-        let body = physical.actors.get(&actor).ok_or(Error::Unavailable)?;
-        let limits = self.body_rules(actor);
-        let person =
-            &self.state.people[*self.person_index.get(&actor).ok_or(Error::Unavailable)?];
-        if !matches!(
-            self.resolved_location(person.id),
-            Location::AtArea(_) | Location::StoppedOnRoad { .. }
-        ) {
-            return Err(Error::Unavailable);
-        }
-        let stock = self
-            .state
-            .inventories
-            .get(&source)
-            .ok_or(Error::Unavailable)?;
-        if quantity.0 == 0
-            || !body.vitals.alive
-            || body.vitals.health == 0
-            || !self.independent(actor)
-            || self.in_combat(actor)
-            || self.combat_restricts(actor)
-            || self.care_index.contains_key(&actor)
-            || body.vitals.fatigue >= limits.fatigue_limit
-            || stock.location == InventoryLocation::Carried(actor)
-            || !self.can_use(actor, stock)
-            || self.unreserved_stock(source, actor) < quantity.0
-        {
-            return Err(Error::Unavailable);
-        }
-        let carried: u128 = self
-            .inventory_index
-            .get(&InventoryLocation::Carried(actor))
-            .into_iter()
-            .flatten()
-            .map(|id| u128::from(self.state.inventories[id].quantity.0))
-            .sum();
-        if carried + u128::from(quantity.0) > u128::from(limits.carrying_capacity.0)
-            || !self.transport_transfer_capacity(actor, quantity.0)
-        {
-            return Err(Error::Unavailable);
-        }
-        self.state
-            .time
-            .0
-            .checked_add(limits.loading_time.0)
-            .ok_or(Error::Overflow)?;
-        self.ensure_event_capacity(2)?;
-        let good = stock.good;
-        let capacity = limits.carrying_capacity;
-        let existing = self
-            .inventory_index
-            .get(&InventoryLocation::Carried(actor))
-            .into_iter()
-            .flatten()
-            .copied()
-            .find(|id| {
-                let destination = &self.state.inventories[id];
-                destination.good == good
-                    && self.has_stock_access(actor, destination)
-                    && destination.capacity.0 - destination.quantity.0 >= quantity.0
-            });
-        let original_next_id = self.state.next_id;
-        let destination = if let Some(existing) = existing {
-            existing
-        } else {
-            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-            self.add_inventory(
-                good,
-                InventoryLocation::Carried(actor),
-                Quantity(0),
-                capacity,
-                BTreeSet::from([actor]),
-            )?
-        };
-        match self.debug_actor_command(
-            actor,
-            Command::Load {
-                source,
-                destination,
-                quantity,
-            },
-        ) {
-            Ok(()) => {
-                self.update_property_events()?;
-                Ok(())
-            }
-            Err(error) => {
-                // Load validates before changing actions or goods. This fallback
-                // preserves that atomic contract if another prerequisite changes.
-                if existing.is_none() {
-                    self.state.inventories.remove(&destination);
-                    self.inventory_index
-                        .get_mut(&InventoryLocation::Carried(actor))
-                        .unwrap()
-                        .retain(|id| *id != destination);
-                    self.state.next_id = original_next_id;
-                }
-                Err(error)
-            }
-        }
+        let plan = self.prepare_carried_compartment(actor, source, actor, quantity, false)?;
+        self.apply_carried_compartment(plan)
     }
 }
 
@@ -879,5 +810,104 @@ mod tests {
                 .sum::<u64>(),
             1_000
         );
+    }
+    #[test]
+    fn denied_native_record_or_contact_load_preserves_job_inventory_and_ids() {
+        let mut sim = sim();
+        let actor = sim.state.ruler;
+        let site = local_site(&sim);
+        sim.debug_actor_command(actor, Command::Work { site })
+            .unwrap();
+        let records = sim
+            .debug_add_inventory(
+                Good::Record,
+                InventoryLocation::Area(AreaId(1)),
+                Quantity(1000),
+                Quantity(1000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let before = sim.state.clone();
+        assert_eq!(
+            sim.carry_good(actor, records, Quantity(1000)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(sim.state, before);
+        let held = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Carried(actor),
+                Quantity(1000),
+                Quantity(10000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let recipient = sim.state.people[1].id;
+        let before = sim.state.clone();
+        assert_eq!(
+            sim.start_contact_delivery(actor, held, recipient, Quantity(1000)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(sim.state, before);
+    }
+
+    #[test]
+    fn native_carry_and_unload_conserve_goods_and_replay_pending_allocation_once() {
+        let mut sim = sim();
+        let actor = sim.state.ruler;
+        let source = sim.state.physical.as_ref().unwrap().sites[&local_site(&sim)].tool;
+        let opening = sim.state.inventories[&source].quantity;
+        let carry = Submission {
+            caller_sequence: sim.next_caller_sequence().unwrap(),
+            command: Command::Carry {
+                source,
+                quantity: Quantity(1000),
+            },
+        };
+        let receipt = sim.submit(carry.clone()).unwrap();
+        let pending = sim.state.clone();
+        assert_eq!(sim.submit(carry).unwrap(), receipt);
+        assert_eq!(sim.state, pending);
+        let destination = match sim.state.physical.as_ref().unwrap().actors[&actor].activity {
+            Activity::Load { destination, .. } => destination,
+            _ => panic!("actual timed load"),
+        };
+        assert_eq!(sim.state.inventories[&source].quantity, opening);
+        assert_eq!(sim.state.inventories[&destination].quantity, Quantity(0));
+        let mut saved = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(MINUTE).unwrap();
+        saved.advance(SimDuration(17000)).unwrap();
+        saved.advance(SimDuration(43000)).unwrap();
+        assert_eq!(sim.state, saved.state);
+        assert_eq!(
+            sim.state.inventories[&source].quantity.0
+                + sim.state.inventories[&destination].quantity.0,
+            opening.0
+        );
+        let unload = Submission {
+            caller_sequence: sim.next_caller_sequence().unwrap(),
+            command: Command::Load {
+                source: destination,
+                destination: source,
+                quantity: Quantity(1000),
+            },
+        };
+        let receipt = sim.submit(unload.clone()).unwrap();
+        let pending = sim.state.clone();
+        assert_eq!(sim.submit(unload).unwrap(), receipt);
+        assert_eq!(sim.state, pending);
+        sim.advance(MINUTE).unwrap();
+        assert_eq!(sim.state.inventories[&source].quantity, opening);
+        assert_eq!(sim.state.inventories[&destination].quantity, Quantity(0));
+        assert_eq!(sim.state.events.iter().filter(|event| matches!(event.kind,
+            EventKind::Transferred { actor: who, source: from, destination: to, .. }
+                if who == actor && (from == source && to == destination || from == destination && to == source))).count(), 2);
     }
 }

@@ -374,6 +374,20 @@ impl Simulation {
         quantity: Quantity,
     ) -> bool {
         self.state
+            .inventories
+            .get(&destination)
+            .is_some_and(|stock| self.guardian_accepts_cargo(actor, source, stock, quantity))
+    }
+    /// Evaluate the same accepted receipt against a hypothetical empty slot,
+    /// before allocation. This does not grant access to any other stock.
+    pub(crate) fn guardian_accepts_cargo(
+        &self,
+        actor: PersonId,
+        source: InventoryId,
+        destination: &Inventory,
+        quantity: Quantity,
+    ) -> bool {
+        self.state
             .lineage
             .as_ref()
             .and_then(|w| w.guardians.get(&actor))
@@ -389,10 +403,8 @@ impl Simulation {
                         i.good == request.delivery.requirement.good
                             && i.location == InventoryLocation::Carried(actor)
                     })
-                    && self.state.inventories.get(&destination).is_some_and(|i| {
-                        i.good == request.delivery.requirement.good
-                            && i.location == InventoryLocation::Carried(requester)
-                    })
+                    && destination.good == request.delivery.requirement.good
+                    && destination.location == InventoryLocation::Carried(requester)
                     && self
                         .state
                         .physical

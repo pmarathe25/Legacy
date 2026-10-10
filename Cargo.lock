@@ -87,6 +87,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-cargo"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-characters"
 version = "0.1.0"
 dependencies = [
@@ -296,6 +305,7 @@ dependencies = [
  "game-agriculture",
  "game-api",
  "game-armies",
+ "game-cargo",
  "game-characters",
  "game-conflict",
  "game-core",

@@ -568,52 +568,8 @@ impl Simulation {
                 destination,
                 quantity,
             } => {
-                let source_inventory = self
-                    .state
-                    .inventories
-                    .get(&source)
-                    .ok_or(Error::Unavailable)?;
-                let destination_inventory = self
-                    .state
-                    .inventories
-                    .get(&destination)
-                    .ok_or(Error::Unavailable)?;
-                if source == destination
-                    || !self.record_transfer_allowed(source, quantity)
-                    || quantity.0 == 0
-                    || source_inventory.good != destination_inventory.good
-                    || (source_inventory.location != InventoryLocation::Carried(actor)
-                        && destination_inventory.location != InventoryLocation::Carried(actor))
-                    || !self.can_use(actor, source_inventory)
-                    || !(self.can_use(actor, destination_inventory)
-                        || self.agreement_accepts_delivery(actor, destination, quantity)
-                        || self.guardian_accepts_delivery(actor, source, destination, quantity))
-                    || self.unreserved_stock(source, actor) < quantity.0
-                    || destination_inventory.capacity.0 - destination_inventory.quantity.0
-                        < quantity.0
-                    || (source_inventory.location != destination_inventory.location
-                        && !self.transfer_capacity(destination, quantity.0))
-                    || a.vitals.fatigue >= rules.fatigue_limit
-                {
-                    return Err(Error::Unavailable);
-                }
-                let completes = SimTime(
-                    self.state
-                        .time
-                        .0
-                        .checked_add(rules.loading_time.0)
-                        .ok_or(Error::Overflow)?,
-                );
-                (
-                    Activity::Load {
-                        source,
-                        destination,
-                        quantity,
-                        completes,
-                    },
-                    None,
-                    None,
-                )
+                let job = self.prepare_cargo_load(actor, source, destination, quantity)?;
+                (Self::cargo_load_activity(&job), None, None)
             }
             Command::Work { site } => {
                 if self.state.development.as_ref().is_some_and(|w| {
@@ -669,6 +625,19 @@ impl Simulation {
         };
         self.ensure_event_capacity(3)?;
         self.commit_project_input(project_input)?;
+        self.apply_prepared_physical_action(actor, command, activity, new_job, consume)
+    }
+
+    /// Mutation bridge for an already admitted action. Cargo allocation invokes
+    /// this only after its owner checks every proposed-slot load requirement.
+    fn apply_prepared_physical_action(
+        &mut self,
+        actor: PersonId,
+        command: Command,
+        activity: Activity,
+        new_job: Option<Job>,
+        consume: Option<(InventoryId, Quantity)>,
+    ) -> Result<(), Error> {
         let phase_started = Instant::now();
         self.interrupt_actor_activity(actor);
         self.profile
@@ -759,6 +728,131 @@ impl Simulation {
             .record_phase("physical.reconcile_institutions", phase_started);
         self.revision += 1;
         Ok(())
+    }
+
+    pub(crate) fn cargo_actor_facts(
+        &self,
+        actor: PersonId,
+    ) -> Result<game_cargo::ActorFacts, Error> {
+        let body = self
+            .state
+            .physical
+            .as_ref()
+            .and_then(|world| world.actors.get(&actor))
+            .ok_or(Error::Unavailable)?;
+        Ok(game_cargo::ActorFacts {
+            actor,
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            independent: self.independent(actor),
+            confined: self.combat_restricts(actor),
+            in_combat: self.in_combat(actor),
+            receiving_care: self.care_index.contains_key(&actor),
+            stationary: matches!(
+                self.resolved_location(actor),
+                Location::AtArea(_) | Location::StoppedOnRoad { .. }
+            ),
+            fatigue: body.vitals.fatigue,
+            fatigue_limit: self.body_rules(actor).fatigue_limit,
+        })
+    }
+    pub(crate) fn cargo_source_facts(
+        &self,
+        actor: PersonId,
+        stock: &Inventory,
+        quantity: Quantity,
+    ) -> game_cargo::SourceFacts {
+        game_cargo::SourceFacts {
+            contact: self.stock_here(actor, stock),
+            accessible: self.has_stock_access(actor, stock),
+            unreserved: Quantity(self.unreserved_stock(stock.id, actor)),
+            record_permission: self.record_transfer_allowed(stock.id, quantity),
+        }
+    }
+    pub(crate) fn cargo_receiver_facts(
+        &self,
+        actor: PersonId,
+        source: InventoryId,
+        stock: &Inventory,
+        quantity: Quantity,
+    ) -> game_cargo::ReceiverFacts {
+        let (body_room, transport_allows) = match stock.location {
+            InventoryLocation::Carried(holder) => {
+                let held: u128 = self
+                    .inventory_index
+                    .get(&InventoryLocation::Carried(holder))
+                    .into_iter()
+                    .flatten()
+                    .map(|id| u128::from(self.state.inventories[id].quantity.0))
+                    .sum();
+                (
+                    Quantity(
+                        u128::from(self.body_rules(holder).carrying_capacity.0).saturating_sub(held)
+                            as u64,
+                    ),
+                    self.transport_transfer_capacity(holder, quantity.0),
+                )
+            }
+            InventoryLocation::Area(_) => (Quantity(u64::MAX), true),
+        };
+        game_cargo::ReceiverFacts {
+            contact: self.stock_here(actor, stock),
+            accessible: self.has_stock_access(actor, stock),
+            accepted: self.agreement_accepts_delivery(actor, stock.id, quantity)
+                || self.guardian_accepts_cargo(actor, source, stock, quantity),
+            body_room,
+            transport_allows,
+        }
+    }
+    pub(crate) fn prepare_cargo_load(
+        &self,
+        actor: PersonId,
+        source: InventoryId,
+        destination: InventoryId,
+        quantity: Quantity,
+    ) -> Result<game_cargo::LoadJob, Error> {
+        let from = self
+            .state
+            .inventories
+            .get(&source)
+            .ok_or(Error::Unavailable)?;
+        let to = self
+            .state
+            .inventories
+            .get(&destination)
+            .ok_or(Error::Unavailable)?;
+        game_cargo::prepare_load(
+            self.cargo_actor_facts(actor)?,
+            from,
+            to,
+            quantity,
+            self.cargo_source_facts(actor, from, quantity),
+            self.cargo_receiver_facts(actor, source, to, quantity),
+            self.state.time,
+            self.body_rules(actor).loading_time,
+        )
+    }
+    fn cargo_load_activity(job: &game_cargo::LoadJob) -> Activity {
+        Activity::Load {
+            source: job.source,
+            destination: job.destination,
+            quantity: job.quantity,
+            completes: job.completes,
+        }
+    }
+    pub(crate) fn apply_cargo_load(&mut self, job: game_cargo::LoadJob) -> Result<(), Error> {
+        let command = Command::Load {
+            source: job.source,
+            destination: job.destination,
+            quantity: job.quantity,
+        };
+        self.apply_prepared_physical_action(
+            job.actor,
+            command,
+            Self::cargo_load_activity(&job),
+            None,
+            None,
+        )
     }
 
     pub(crate) fn can_use(&self, actor: PersonId, inventory: &Inventory) -> bool {

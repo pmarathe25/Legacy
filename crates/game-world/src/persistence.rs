@@ -2096,6 +2096,7 @@ fn validate_physical(
                 Activity::Idle
                     | Activity::Rest
                     | Activity::Eat { .. }
+                    | Activity::Load { .. }
                     | Activity::Care { .. }
                     | Activity::Comfort { .. }
                     | Activity::Express { .. }
@@ -2174,16 +2175,19 @@ fn validate_physical(
                 source,
                 destination,
                 quantity,
-                ..
+                completes,
             } => {
-                if quantity.0 == 0
-                    || source == destination
-                    || !s.inventories.contains_key(&source)
-                    || !s.inventories.contains_key(&destination)
-                    || s.inventories[&source].good != s.inventories[&destination].good
-                {
-                    return Err(fail());
+                let source_stock = s.inventories.get(&source).ok_or_else(fail)?;
+                let destination_stock = s.inventories.get(&destination).ok_or_else(fail)?;
+                game_cargo::LoadJob {
+                    actor: *id,
+                    source,
+                    destination,
+                    quantity,
+                    completes,
                 }
+                .validate(s.time, source_stock, destination_stock)
+                .map_err(|_| fail())?;
             }
             Activity::Work { site } => {
                 if !actor

@@ -100,23 +100,7 @@ pub struct Person {
     pub hunger_exempt: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum InventoryLocation {
-    Area(AreaId),
-    Carried(PersonId),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Inventory {
-    pub id: InventoryId,
-    pub location: InventoryLocation,
-    pub quantity: Quantity,
-    pub capacity: Quantity,
-    pub access: BTreeSet<PersonId>,
-    pub last_granted: Option<PersonId>,
-    pub good: Good,
-    pub spoils_at: Option<SimTime>,
-}
+pub use game_cargo::{Inventory, InventoryLocation};
 
 /// Explicit fixture intentions, not an interface for commanding citizens in play.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
