@@ -10,7 +10,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     };
     let fail = || Error::InvalidSave("invalid invocation state".into());
     let lineage = s.lineage.as_ref().ok_or_else(fail)?;
-    let physical = s.physical.as_ref().ok_or_else(fail)?;
+    s.physical.as_ref().ok_or_else(fail)?;
     if s.decisions.is_none() || s.skills.is_none() {
         return Err(fail());
     }
@@ -50,7 +50,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 .iter()
                 .any(|life| life.person == *id && life.died_at == Some(past.died_at))
             || past.died_at > s.time
-            || physical.actors[id].vitals.alive
+            || s.components.body(*id).unwrap().vitals.alive
             || past
                 .mind
                 .knowledge
@@ -212,11 +212,11 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             || !people.contains(actor)
             || !areas.contains(&action.area)
             || action.completes <= s.time
-            || !physical.actors[actor].vitals.alive
+            || !s.components.body(*actor).unwrap().vitals.alive
         {
             return Err(fail());
         }
-        let activity = &physical.actors[actor].activity;
+        let activity = s.components.activity(*actor).unwrap();
         let valid = match &action.work {
             MemoryWork::Write {
                 content,
@@ -252,7 +252,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     && people.contains(recipient)
                     && recipient != actor
                     && matches!(activity,Activity::TeachingMemory {completes}if *completes==action.completes)
-                    && matches!(physical.actors[recipient].activity,Activity::TeachingMemory {completes}if completes==action.completes)
+                    && matches!(*s.components.activity(*recipient).unwrap(),Activity::TeachingMemory {completes}if completes==action.completes)
             }
         };
         if !valid {
@@ -432,7 +432,7 @@ impl Simulation {
             .keys()
             .copied()
             .chain(self.invocation_control_actor())
-            .filter(|p| !self.state.physical.as_ref().unwrap().actors[p].vitals.alive)
+            .filter(|p| !self.state.components.body(*p).unwrap().vitals.alive)
             .collect();
         let prepared = self
             .state
@@ -454,7 +454,7 @@ impl Simulation {
     }
     fn invocation_admission(&self, actor: PersonId) -> game_invocation::AdmissionFacts {
         let lineage = self.state.lineage.as_ref().unwrap();
-        let body = &self.state.physical.as_ref().unwrap().actors[&actor];
+        let body = self.state.components.body(actor).unwrap();
         game_invocation::AdmissionFacts {
             actor,
             now: self.state.time,
@@ -486,11 +486,8 @@ impl Simulation {
             .lineage
             .as_ref()
             .is_some_and(|lineage| lineage.current() == Some(actor))
-            && self
-                .state
-                .physical
-                .as_ref()
-                .is_some_and(|w| w.actors.contains_key(&actor))
+            && self.state.physical.is_some()
+            && self.state.components.body(actor).is_some()
             && self
                 .state
                 .invocation
@@ -504,11 +501,12 @@ impl Simulation {
             .as_ref()
             .and_then(|w| w.control.active.as_ref())
             .and_then(|a| a.episode.as_ref());
-        let alive = self
-            .state
-            .physical
-            .as_ref()
-            .is_some_and(|w| w.actors.get(&actor).is_some_and(|body| body.vitals.alive));
+        let alive = self.state.physical.is_some()
+            && self
+                .state
+                .components
+                .body(actor)
+                .is_some_and(|body| body.vitals.alive);
         game_invocation::controls_actor(episode, actor, self.state.time, alive)
     }
     pub(crate) fn required_invocation_input(&self) -> Option<WarningId> {
@@ -552,14 +550,7 @@ impl Simulation {
         };
         if let Some(action) = control {
             let w = self.state.invocation.as_ref().ok_or(Error::Unavailable)?;
-            if !self
-                .state
-                .physical
-                .as_ref()
-                .unwrap()
-                .actors
-                .contains_key(&actor)
-            {
+            if !self.state.components.body(actor).is_some() {
                 return Err(Error::Unavailable);
             }
             let facts = self.invocation_admission(actor);
@@ -574,11 +565,8 @@ impl Simulation {
             if self.past_life_controls_actor(actor)
                 || !self
                     .state
-                    .physical
-                    .as_ref()
-                    .unwrap()
-                    .actors
-                    .get(&actor)
+                    .components
+                    .body(actor)
                     .is_some_and(|b| b.vitals.alive && b.vitals.health > 0)
             {
                 return Err(Error::Unavailable);
@@ -643,9 +631,7 @@ impl Simulation {
         )?;
         for effect in &prepared.effects {
             if let ControlEffect::DeathCleanup { actor } = effect
-                && self.state.physical.as_ref().unwrap().actors[actor]
-                    .vitals
-                    .alive
+                && self.state.components.body(*actor).unwrap().vitals.alive
             {
                 return Err(Error::Unavailable);
             }
@@ -654,11 +640,8 @@ impl Simulation {
             if let ControlEffect::FatigueCharge { actor, quantity } = effect {
                 let body = self
                     .state
-                    .physical
-                    .as_ref()
-                    .unwrap()
-                    .actors
-                    .get(actor)
+                    .components
+                    .body(*actor)
                     .ok_or(Error::Unavailable)?;
                 if body
                     .vitals
@@ -686,11 +669,8 @@ impl Simulation {
                 }
                 ControlEffect::FatigueCharge { actor, quantity } => {
                     self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
+                        .components
+                        .body_mut(actor)
                         .unwrap()
                         .vitals
                         .fatigue += quantity
@@ -738,10 +718,7 @@ impl Simulation {
                 } => {
                     // The lifespan owner may already have ended this body.
                     // Death preempts a controller handoff, without undoing costs.
-                    if self.state.physical.as_ref().unwrap().actors[&actor]
-                        .vitals
-                        .alive
-                    {
+                    if self.state.components.body(actor).unwrap().vitals.alive {
                         self.emit(EventKind::InvocationControlChanged {
                             actor,
                             controlled,
@@ -758,11 +735,10 @@ impl Simulation {
         if lost_control {
             self.review_invocation()?;
         }
-        if self.invocation_control_actor().is_some_and(|actor| {
-            !self.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .alive
-        }) {
+        if self
+            .invocation_control_actor()
+            .is_some_and(|actor| !self.state.components.body(actor).unwrap().vitals.alive)
+        {
             self.observe_invocation_deaths()?;
         }
         Ok(())
@@ -815,9 +791,7 @@ impl Simulation {
             .as_ref()
             .filter(|a| a.actor == actor)
             .map(Self::cost_input);
-        let alive = self.state.physical.as_ref().unwrap().actors[&actor]
-            .vitals
-            .alive;
+        let alive = self.state.components.body(actor).unwrap().vitals.alive;
         let rates = game_invocation::body_rates(
             &w.control.rules,
             &before,
@@ -843,10 +817,7 @@ impl Simulation {
         };
         let mut updates = Vec::new();
         for (actor, before) in &w.control.people {
-            if !self.state.physical.as_ref().unwrap().actors[actor]
-                .vitals
-                .alive
-            {
+            if !self.state.components.body(*actor).unwrap().vitals.alive {
                 continue;
             }
             let active = w
@@ -957,7 +928,7 @@ impl Simulation {
             .people
             .keys()
             .copied()
-            .filter(|p| self.state.physical.as_ref().unwrap().actors[p].vitals.alive)
+            .filter(|p| self.state.components.body(*p).unwrap().vitals.alive)
             .collect();
         let mut next = w.control.boundary(self.state.time, limit, &alive);
         for action in w.actions.values() {
@@ -1135,9 +1106,7 @@ impl Simulation {
         else {
             return Ok(());
         };
-        let alive = self.state.physical.as_ref().unwrap().actors[&actor]
-            .vitals
-            .alive;
+        let alive = self.state.components.body(actor).unwrap().vitals.alive;
         let Some(prepared) = self
             .state
             .invocation
@@ -1182,11 +1151,11 @@ impl Simulation {
             }
             return Ok(());
         }
-        let body = &self.state.physical.as_ref().unwrap().actors[&a.actor];
+        let body = self.state.components.body(a.actor).unwrap();
         let traits = self.invocation_personality(a.actor).unwrap();
         if !changed
             && matches!(
-                body.activity,
+                *self.state.components.activity(a.actor).unwrap(),
                 Activity::Eat { .. }
                     | Activity::Load { .. }
                     | Activity::Care { .. }
@@ -1260,9 +1229,7 @@ impl Simulation {
                 .filter(|p| {
                     p.id != a.actor
                         && p.location == Location::AtArea(area)
-                        && self.state.physical.as_ref().unwrap().actors[&p.id]
-                            .vitals
-                            .alive
+                        && self.state.components.body(p.id).unwrap().vitals.alive
                 })
                 .filter(|p| mind.relationships.get(&p.id).is_some_and(|r| r.trust < 0))
                 .take(64)
@@ -1319,7 +1286,7 @@ impl Simulation {
                 .unwrap_or(Command::Rest)
         };
         if !changed
-            && matches!((&body.activity,&command),(Activity::Work {site:a},Command::Work {site:b})if a==b)
+            && matches!((self.state.components.activity(a.actor).unwrap(),&command),(Activity::Work {site:a},Command::Work {site:b})if a==b)
         {
             return Ok(());
         }
@@ -1447,9 +1414,7 @@ impl Simulation {
             permanent_identity: b.permanent_identity,
             lifespan_loss: SimDuration(b.lifespan_loss),
             player_control: !self.past_life_controls_actor(actor)
-                && self.state.physical.as_ref().unwrap().actors[&actor]
-                    .vitals
-                    .alive,
+                && self.state.components.body(actor).unwrap().vitals.alive,
             loss_ends: active.and_then(|a| a.episode.as_ref()).map(|e| e.ends),
             warning: w.control.warning.as_ref().map(|p| p.view.clone()),
             preview,
@@ -1567,11 +1532,8 @@ impl Simulation {
             return false;
         };
         self.state
-            .physical
-            .as_ref()
-            .unwrap()
-            .actors
-            .get(&actor)
+            .components
+            .body(actor)
             .is_some_and(|a| a.vitals.alive && a.vitals.health > 0)
             && self
                 .memory_area(actor)
@@ -1733,11 +1695,9 @@ impl Simulation {
                 let content = self.recalled_stock(actor, *life, *inventory)?;
                 if *recipient == actor
                     || self.memory_area(*recipient).ok() != Some(area)
-                    || !self.state.physical.as_ref().unwrap().actors[recipient]
-                        .vitals
-                        .alive
+                    || !self.state.components.body(*recipient).unwrap().vitals.alive
                     || !matches!(
-                        self.state.physical.as_ref().unwrap().actors[recipient].activity,
+                        *self.state.components.activity(*recipient).unwrap(),
                         Activity::Idle | Activity::Rest
                     )
                 {
@@ -1746,7 +1706,11 @@ impl Simulation {
                 let mind = &self.state.decisions.as_ref().unwrap().minds[recipient];
                 let trust = mind.relationships.get(&actor).map_or(0, |r| r.trust);
                 if i64::from(mind.personality.sociability) + i64::from(trust) < 200
-                    || self.state.physical.as_ref().unwrap().actors[recipient]
+                    || self
+                        .state
+                        .components
+                        .body(*recipient)
+                        .unwrap()
                         .vitals
                         .hunger
                         >= self.state.physical.as_ref().unwrap().rules.meal_relief
@@ -1786,14 +1750,8 @@ impl Simulation {
         }
         if let MemoryWork::Teach { recipient, .. } = work {
             self.interrupt_actor_activity(recipient);
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&recipient)
-                .unwrap()
-                .activity = Activity::TeachingMemory { completes };
+            *self.state.components.activity_mut(recipient).unwrap() =
+                Activity::TeachingMemory { completes };
         }
         let activity = match work {
             MemoryWork::Write { .. } => Activity::WritingMemory { completes },
@@ -1801,14 +1759,7 @@ impl Simulation {
             MemoryWork::Move { .. } => Activity::MovingRecord { completes },
             MemoryWork::Teach { .. } => Activity::TeachingMemory { completes },
         };
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = activity;
+        *self.state.components.activity_mut(actor).unwrap() = activity;
         self.state.invocation.as_mut().unwrap().actions.insert(
             actor,
             MemoryAction {
@@ -1845,16 +1796,16 @@ impl Simulation {
                 actors.push(recipient);
             }
             for id in actors {
-                if let Some(body) = self.state.physical.as_mut().unwrap().actors.get_mut(&id)
+                if let Some(activity) = self.state.components.activity_mut(id)
                     && matches!(
-                        body.activity,
+                        *activity,
                         Activity::WritingMemory { .. }
                             | Activity::ReadingMemory { .. }
                             | Activity::TeachingMemory { .. }
                             | Activity::MovingRecord { .. }
                     )
                 {
-                    body.activity = Activity::Idle;
+                    *activity = Activity::Idle;
                 }
             }
         }
@@ -1937,9 +1888,7 @@ impl Simulation {
         for action in actions {
             let actor = action.actor;
             if self.memory_area(actor).ok() != Some(action.area)
-                || !self.state.physical.as_ref().unwrap().actors[&actor]
-                    .vitals
-                    .alive
+                || !self.state.components.body(actor).unwrap().vitals.alive
             {
                 self.cancel_invocation_action(actor);
                 continue;
@@ -2042,7 +1991,7 @@ impl Simulation {
                         .as_ref()
                         .is_some_and(|a| a.actor == actor && a.lives.contains(&life))
                         && self.memory_area(*recipient).ok() == Some(action.area)
-                        && matches!(self.state.physical.as_ref().unwrap().actors[recipient].activity,Activity::TeachingMemory {completes}if completes==action.completes)
+                        && matches!(*self.state.components.activity(*recipient).unwrap(),Activity::TeachingMemory {completes}if completes==action.completes)
                     {
                         self.install_recorded_memory(
                             *recipient,
@@ -2251,7 +2200,7 @@ mod tests {
                     .start_lesson(actor, teacher, LessonTopic::Invocation)
                     .is_ok()
                     && matches!(
-                        sim.state.physical.as_ref().unwrap().actors[&actor].activity,
+                        *sim.state.components.activity(actor).unwrap(),
                         Activity::Lesson { .. }
                     )
                 {
@@ -2378,9 +2327,7 @@ mod tests {
         let mut sim = ready(1);
         let actor = sim.state.ruler;
         let life = past(&sim);
-        let fatigue = sim.state.physical.as_ref().unwrap().actors[&actor]
-            .vitals
-            .fatigue;
+        let fatigue = sim.state.components.body(actor).unwrap().vitals.fatigue;
         act(
             &mut sim,
             InvocationAction::Activate {
@@ -2420,9 +2367,7 @@ mod tests {
         assert!(sim.borrowed_skill_level(actor, Skill::Craft) > 0);
         let burden = sim.state.invocation.as_ref().unwrap().control.people[&actor].burden;
         assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .fatigue,
+            sim.state.components.body(actor).unwrap().vitals.fatigue,
             fatigue + warning.instant_fatigue
         );
         act(&mut sim, InvocationAction::Dismiss).unwrap();
@@ -2450,16 +2395,12 @@ mod tests {
         // using its single toolkit under the fixture's ordinary autonomy.
         let other_workers: Vec<_> = borrowed
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .actors
-            .iter()
-            .filter(|(id, body)| {
-                **id != actor
-                    && matches!(body.activity,Activity::Work {site:working}if working==site)
+            .components
+            .activities()
+            .filter(|(id, activity)| {
+                *id != actor && matches!(**activity,Activity::Work {site:working}if working==site)
             })
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id)
             .collect();
         for other in other_workers {
             borrowed.debug_actor_command(other, Command::Rest).unwrap();
@@ -2471,16 +2412,8 @@ mod tests {
             submit(sim, Command::Work { site }).unwrap();
             sim.advance(SimDuration(30_000)).unwrap();
         }
-        let a = borrowed.state.physical.as_ref().unwrap().actors[&actor]
-            .job
-            .as_ref()
-            .unwrap()
-            .remaining;
-        let b = baseline.state.physical.as_ref().unwrap().actors[&actor]
-            .job
-            .as_ref()
-            .unwrap()
-            .remaining;
+        let a = borrowed.state.components.job(actor).unwrap().remaining;
+        let b = baseline.state.components.job(actor).unwrap().remaining;
         assert!(a < b);
         assert_eq!(
             borrowed.own_skill_level(actor, Skill::Craft),
@@ -2489,11 +2422,7 @@ mod tests {
         act(&mut borrowed, InvocationAction::Dismiss).unwrap();
         borrowed.advance(SimDuration(10_000)).unwrap();
         assert_eq!(
-            borrowed.state.physical.as_ref().unwrap().actors[&actor]
-                .job
-                .as_ref()
-                .unwrap()
-                .remaining,
+            borrowed.state.components.job(actor).unwrap().remaining,
             a - 10_000
         );
     }
@@ -2698,11 +2627,7 @@ mod tests {
                 .active
                 .is_none()
         );
-        assert!(
-            !sim.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .alive
-        );
+        assert!(!sim.state.components.body(actor).unwrap().vitals.alive);
         let before = sim.state.time;
         for _ in 0..20 {
             sim.advance(MINUTE).unwrap();

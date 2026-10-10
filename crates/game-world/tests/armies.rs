@@ -51,7 +51,10 @@ fn advance_until(sim: &mut Simulation, mut ready: impl FnMut(&CanonicalState) ->
                     p.person,
                     p.status,
                     &p.directive,
-                    &sim.canonical_state().physical.as_ref().unwrap().actors[&p.person].activity
+                    sim.canonical_state()
+                        .components
+                        .activity(p.person)
+                        .expect("body exists")
                 ))
                 .collect::<Vec<_>>())
             .collect::<Vec<_>>()
@@ -397,7 +400,14 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
         s.combat.as_ref().unwrap().captivity.contains_key(&enemy)
     });
     let state = sim.canonical_state();
-    assert!(!state.physical.as_ref().unwrap().actors[&lost].vitals.alive);
+    assert!(
+        !state
+            .components
+            .body(lost)
+            .expect("body exists")
+            .vitals
+            .alive
+    );
     assert!(
         state
             .events

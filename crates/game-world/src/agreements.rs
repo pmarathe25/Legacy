@@ -159,7 +159,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     };
     let fail = || Error::InvalidSave("invalid agreement state".into());
     let people: BTreeSet<_> = s.people.iter().map(|p| p.id).collect();
-    let physical = s.physical.as_ref().ok_or_else(fail)?;
+    s.physical.as_ref().ok_or_else(fail)?;
     if s.decisions.is_none()
         || w.last_event >= s.next_event
         || w.last_observation_event >= s.next_event
@@ -371,8 +371,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    for body in physical.actors.values() {
-        if let Activity::ReportAgreement { ref snapshot, .. } = body.activity
+    for (_, activity) in s.components.activities() {
+        if let Activity::ReportAgreement { snapshot, .. } = activity
             && !valid_knowledge(s, snapshot)
         {
             return Err(fail());
@@ -913,10 +913,18 @@ impl Simulation {
             .map(|(actor, _)| *actor)
             .collect();
         for actor in actors {
-            if !self.state.physical.as_ref().unwrap().actors[&actor]
+            if !self
+                .state
+                .components
+                .body(actor)
+                .expect("body exists")
                 .vitals
                 .alive
-                || self.state.physical.as_ref().unwrap().actors[&actor]
+                || self
+                    .state
+                    .components
+                    .body(actor)
+                    .expect("body exists")
                     .vitals
                     .health
                     == 0
@@ -995,10 +1003,17 @@ impl Simulation {
                     .then_some(*actor)
             })
             .filter(|actor| {
-                self.state.physical.as_ref().unwrap().actors[actor]
+                self.state
+                    .components
+                    .body(*actor)
+                    .expect("body exists")
                     .vitals
                     .alive
-                    && self.state.physical.as_ref().unwrap().actors[actor]
+                    && self
+                        .state
+                        .components
+                        .body(*actor)
+                        .expect("body exists")
                         .vitals
                         .health
                         > 0
@@ -1051,7 +1066,11 @@ impl Simulation {
             || self.agreement_actor_area(recipient)? != area
             || self.care_index.contains_key(&sender)
             || !matches!(
-                self.state.physical.as_ref().unwrap().actors[&recipient].activity,
+                *self
+                    .state
+                    .components
+                    .activity(recipient)
+                    .expect("body exists"),
                 Activity::Idle | Activity::Rest
             )
         {
@@ -1074,14 +1093,7 @@ impl Simulation {
         );
         self.ensure_event_capacity(1)?;
         self.interrupt_actor_activity(sender);
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&sender)
-            .unwrap()
-            .activity = Activity::ReportAgreement {
+        *self.state.components.activity_mut(sender).unwrap() = Activity::ReportAgreement {
             recipient,
             snapshot: Box::new(snapshot),
             completes,
@@ -1100,8 +1112,11 @@ impl Simulation {
             recipient,
             snapshot,
             ..
-        } = self.state.physical.as_ref().unwrap().actors[&sender]
-            .activity
+        } = self
+            .state
+            .components
+            .activity(sender)
+            .expect("body exists")
             .clone()
         else {
             return;
@@ -1109,7 +1124,11 @@ impl Simulation {
         if self.agreement_actor_area(sender).ok() == self.agreement_actor_area(recipient).ok()
             && self.agreement_actor_area(sender).is_ok()
             && matches!(
-                self.state.physical.as_ref().unwrap().actors[&recipient].activity,
+                *self
+                    .state
+                    .components
+                    .activity(recipient)
+                    .expect("body exists"),
                 Activity::Idle | Activity::Rest
             )
         {
@@ -1123,14 +1142,7 @@ impl Simulation {
         } else {
             self.emit(EventKind::Interrupted { actor: sender });
         }
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&sender)
-            .unwrap()
-            .activity = Activity::Idle;
+        *self.state.components.activity_mut(sender).unwrap() = Activity::Idle;
     }
 
     fn receive_agreement_report(
@@ -1573,7 +1585,7 @@ impl Simulation {
             let transfers = match event {
                 Due::Transfers(transfers) => transfers.clone(),
                 Due::Physical(actor) => {
-                    match self.state.physical.as_ref().unwrap().actors[actor].activity {
+                    match *self.state.components.activity(*actor).expect("body exists") {
                         Activity::Load {
                             source,
                             destination,
@@ -1608,12 +1620,18 @@ impl Simulation {
             .physical
             .as_ref()
             .into_iter()
-            .flat_map(|physical| physical.actors.iter())
+            .flat_map(|_| self.state.components.bodies())
             .filter_map(|(actor, body)| {
+                let actor = &actor;
+                let activity = self
+                    .state
+                    .components
+                    .activity(*actor)
+                    .expect("activity exists");
                 if at <= self.state.time || !body.vitals.alive || body.vitals.health == 0 {
                     return None;
                 }
-                let target = match body.activity {
+                let target = match *activity {
                     Activity::Work { site } => game_agreements::WorkTarget::Site(site),
                     Activity::Cultivate { field, .. } => game_agreements::WorkTarget::Site(field),
                     Activity::Construct { project, .. } => {
@@ -1656,15 +1674,22 @@ impl Simulation {
             .get(&actor)
             .map(|i| &self.state.people[*i])
             .ok_or(Error::Unavailable)?;
-        let alive = self
-            .state
-            .physical
-            .as_ref()
-            .is_some_and(|w| w.actors[&actor].vitals.alive);
+        let alive = self.state.physical.as_ref().is_some_and(|_| {
+            self.state
+                .components
+                .body(actor)
+                .expect("body exists")
+                .vitals
+                .alive
+        });
         if !alive
             || !self.independent(actor)
             || self.in_combat(actor)
-            || self.state.physical.as_ref().unwrap().actors[&actor]
+            || self
+                .state
+                .components
+                .body(actor)
+                .expect("body exists")
                 .vitals
                 .health
                 == 0
@@ -2382,7 +2407,11 @@ impl Simulation {
                 } if grantee == actor => {
                     if let Some(k) = mind.knowledge.get(&inventory) {
                         let utility = if k.good == Good::Food
-                            && self.state.physical.as_ref().unwrap().actors[&actor]
+                            && self
+                                .state
+                                .components
+                                .body(actor)
+                                .expect("body exists")
                                 .vitals
                                 .hunger
                                 > 120_000
@@ -2442,7 +2471,11 @@ impl Simulation {
             let Ok(area) = self.agreement_actor_area(*actor) else {
                 continue;
             };
-            if self.state.physical.as_ref().unwrap().actors[actor]
+            if self
+                .state
+                .components
+                .body(*actor)
+                .expect("body exists")
                 .vitals
                 .hunger
                 < 180_000
@@ -2547,11 +2580,17 @@ impl Simulation {
             let Ok(area) = self.agreement_actor_area(debtor) else {
                 continue;
             };
-            let body = &self.state.physical.as_ref().unwrap().actors[&debtor];
+            let body = &self.state.components.body(debtor).expect("body exists");
             let mind = &self.state.decisions.as_ref().unwrap().minds[&debtor];
             let rules = &self.state.physical.as_ref().unwrap().rules;
-            if !matches!(body.activity, Activity::Idle | Activity::Rest)
-                || body.vitals.hunger >= rules.meal_relief
+            if !matches!(
+                *self
+                    .state
+                    .components
+                    .activity(debtor)
+                    .expect("activity exists"),
+                Activity::Idle | Activity::Rest
+            ) || body.vitals.hunger >= rules.meal_relief
                 || body.vitals.fatigue >= rules.fatigue_limit / 2
                 || (mind.personality.discipline < 500 && mind.personality.honesty < 500)
             {

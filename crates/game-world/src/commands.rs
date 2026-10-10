@@ -11,21 +11,26 @@ enum ActivityOwner {
 
 impl Simulation {
     pub(crate) fn conversation_actor_available(&self, actor: PersonId) -> bool {
-        self.state.physical.as_ref().is_some_and(|w| {
-            w.actors
-                .get(&actor)
-                .is_some_and(|body| matches!(body.activity, Activity::Idle | Activity::Rest))
-        }) && self.state.armies.as_ref().is_none_or(|w| {
-            !w.talks
-                .values()
-                .any(|t| t.speaker == actor || t.listener == actor)
-        }) && self.state.missions.as_ref().is_none_or(|w| {
-            !w.talks
-                .values()
-                .any(|t| t.speaker == actor || t.listener == actor)
-        }) && self.state.realm.as_ref().is_none_or(|w| {
-            !w.talks.contains_key(&actor) && !w.talks.values().any(|t| t.recipient == actor)
-        }) && !self.property_actor_talking(actor)
+        (self.state.physical.is_some()
+            && self
+                .state
+                .components
+                .activity(actor)
+                .is_some_and(|activity| matches!(activity, Activity::Idle | Activity::Rest)))
+            && self.state.armies.as_ref().is_none_or(|w| {
+                !w.talks
+                    .values()
+                    .any(|t| t.speaker == actor || t.listener == actor)
+            })
+            && self.state.missions.as_ref().is_none_or(|w| {
+                !w.talks
+                    .values()
+                    .any(|t| t.speaker == actor || t.listener == actor)
+            })
+            && self.state.realm.as_ref().is_none_or(|w| {
+                !w.talks.contains_key(&actor) && !w.talks.values().any(|t| t.recipient == actor)
+            })
+            && !self.property_actor_talking(actor)
             && self
                 .state
                 .social
@@ -200,12 +205,20 @@ impl Simulation {
         }
         self.interrupt_cultivation(actor);
         self.invalidate_pregnancies(actor, false);
-        if let Some(world) = &mut self.state.physical {
-            let a = world.actors.get_mut(&actor).unwrap();
-            if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = a.activity {
+        if self.state.physical.is_some() {
+            if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = *self
+                .state
+                .components
+                .activity(actor)
+                .expect("activity exists")
+            {
                 self.care_index.remove(&child);
             }
-            a.activity = Activity::Idle;
+            *self
+                .state
+                .components
+                .activity_mut(actor)
+                .expect("activity exists") = Activity::Idle;
             for due in self.state.due.values_mut() {
                 due.retain(|d| !matches!(d, Due::Physical(id) if *id == actor));
             }

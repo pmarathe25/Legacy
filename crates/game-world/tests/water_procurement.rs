@@ -31,7 +31,11 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         .collect();
     for person in sim.canonical_state().people.clone() {
         if person.id != child
-            && sim.canonical_state().physical.as_ref().unwrap().actors[&person.id]
+            && sim
+                .canonical_state()
+                .components
+                .body(person.id)
+                .unwrap()
                 .vitals
                 .alive
         {
@@ -132,7 +136,10 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         EventKind::Cared { caregiver, child: target, .. }
             if caregiver == collector && target == child)));
     assert!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&child]
+        sim.canonical_state()
+            .components
+            .body(child)
+            .unwrap()
             .vitals
             .alive
     );
@@ -433,12 +440,9 @@ fn normal_population_uses_the_renewable_spring_after_consuming_its_authored_stoc
         EventKind::Drank {source,..} if state.inventories[&source].location != game_world::InventoryLocation::Area(state.areas[0].id))));
     assert!(
         state
-            .physical
-            .as_ref()
-            .unwrap()
-            .actors
-            .values()
-            .filter(|b| b.vitals.alive)
+            .components
+            .bodies()
+            .filter(|(_, body)| body.vitals.alive)
             .count()
             > 90
     );

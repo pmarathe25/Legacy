@@ -510,7 +510,10 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
                 .unwrap();
             sim.debug_injure(target, 120_000).unwrap();
             assert!(
-                sim.canonical_state().physical.as_ref().unwrap().actors[&target]
+                sim.canonical_state()
+                    .components
+                    .body(target)
+                    .expect("body exists")
                     .vitals
                     .health
                     > sim

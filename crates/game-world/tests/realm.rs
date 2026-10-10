@@ -561,7 +561,10 @@ fn a_completed_report_survives_minute_review_but_a_moving_listener_cancels_it() 
             .is_empty()
     );
     assert_eq!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&ruler].activity,
+        *sim.canonical_state()
+            .components
+            .activity(ruler)
+            .expect("body exists"),
         Activity::Idle
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();

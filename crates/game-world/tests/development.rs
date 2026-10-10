@@ -206,7 +206,10 @@ fn interrupting_conception_cancels_both_primary_actions_and_creates_no_child() {
     sim.debug_actor_command(p.gestator, Command::Cancel)
         .unwrap();
     assert_eq!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&p.partner].activity,
+        *sim.canonical_state()
+            .components
+            .activity(p.partner)
+            .expect("body exists"),
         Activity::Idle
     );
     assert_eq!(
@@ -299,7 +302,10 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
     assert!(life.caregivers.contains(&caregiver));
     assert!(!life.parents.contains(&caregiver));
     assert_eq!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&child]
+        sim.canonical_state()
+            .components
+            .body(child)
+            .expect("body exists")
             .vitals
             .hunger,
         0
@@ -336,7 +342,11 @@ fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
         let view = sim.observe();
         assert!(view.available_commands.contains(&command));
         let before_thirst = sim.canonical_state().health.as_ref().unwrap().clinical[&child].thirst;
-        let before_hunger = sim.canonical_state().physical.as_ref().unwrap().actors[&child]
+        let before_hunger = sim
+            .canonical_state()
+            .components
+            .body(child)
+            .expect("body exists")
             .vitals
             .hunger;
         let duration = sim
@@ -376,7 +386,10 @@ fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
             (before_thirst + duration.0).saturating_sub(relief)
         );
         assert_eq!(
-            sim.canonical_state().physical.as_ref().unwrap().actors[&child]
+            sim.canonical_state()
+                .components
+                .body(child)
+                .expect("body exists")
                 .vitals
                 .hunger,
             before_hunger + duration.0
@@ -423,7 +436,10 @@ fn mortals_age_and_die_without_deleting_goods_while_guardians_remain() {
     }
     let ruler = sim.canonical_state().ruler;
     assert!(
-        !sim.canonical_state().physical.as_ref().unwrap().actors[&ruler]
+        !sim.canonical_state()
+            .components
+            .body(ruler)
+            .expect("body exists")
             .vitals
             .alive
     );
@@ -441,7 +457,10 @@ fn mortals_age_and_die_without_deleting_goods_while_guardians_remain() {
         .filter(|p| p.role == Role::Guardian)
     {
         assert!(
-            sim.canonical_state().physical.as_ref().unwrap().actors[&guardian.id]
+            sim.canonical_state()
+                .components
+                .body(guardian.id)
+                .expect("body exists")
                 .vitals
                 .alive
         );

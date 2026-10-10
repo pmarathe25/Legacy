@@ -178,7 +178,7 @@ impl Simulation {
         Ok(id)
     }
     fn ecology_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
@@ -395,7 +395,14 @@ impl Simulation {
                     now: self.state.time,
                     area: self.ecology_area(actor).ok_or(Error::Unavailable)?,
                     capable: self.ecology_able(actor)
-                        && physical.actors[&actor].vitals.fatigue < physical.rules.fatigue_limit,
+                        && self
+                            .state
+                            .components
+                            .body(actor)
+                            .expect("body exists")
+                            .vitals
+                            .fatigue
+                            < physical.rules.fatigue_limit,
                     adult,
                     carrying_room: Quantity(
                         u128::from(carrying_capacity.0).saturating_sub(held) as u64
@@ -440,14 +447,7 @@ impl Simulation {
             .unwrap()
             .jobs
             .insert(actor, plan.job(destination));
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Gather {
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Gather {
             resource,
             destination,
             quantity,
@@ -538,14 +538,7 @@ impl Simulation {
         } else {
             self.emit(EventKind::Interrupted { actor });
         }
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Idle;
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
     }
     pub(crate) fn evaluate_ecology(
         &self,
@@ -738,7 +731,14 @@ impl Simulation {
         let facts = game_ecology::GatherFacts {
             now: self.state.time,
             area,
-            capable: physical.actors[&actor].vitals.fatigue < physical.rules.fatigue_limit,
+            capable: self
+                .state
+                .components
+                .body(actor)
+                .expect("body exists")
+                .vitals
+                .fatigue
+                < physical.rules.fatigue_limit,
             adult: self.state.development.as_ref().is_none_or(|w| {
                 matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)
             }),
@@ -817,7 +817,7 @@ impl Simulation {
         let local = world.known.get(&actor).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
             let q = Quantity(quantity.0.min(room.0).min(known.available.0));
             let facts = game_ecology::GatherFacts { now: self.state.time, area,
-                capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|w| w.actors[&actor].vitals.fatigue < self.body_rules(actor).fatigue_limit),
+                capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|_| self.state.components.body(actor).expect("body exists").vitals.fatigue < self.body_rules(actor).fatigue_limit),
                 adult: self.state.development.as_ref().is_none_or(|w| matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)),
                 carrying_room: room, tool: self.ecology_tool_for_planning(actor, resources) };
             game_ecology::LocalAcquisition { resource: known.id,
@@ -1009,7 +1009,7 @@ impl Simulation {
                     })
                 })
                 || (source.kind == ResourceKind::Coppice) != job.tool.is_some()
-                || !matches!(self.state.physical.as_ref().unwrap().actors[actor].activity,
+                || !matches!(*self.state.components.activity(*actor).expect("body exists"),
                     Activity::Gather {resource,destination,quantity,completes} if resource==job.resource && destination==job.destination && quantity==job.quantity && completes==job.completes)
                 || !self
                     .state

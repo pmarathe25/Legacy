@@ -98,7 +98,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|w| w.actors.get(&actor))
+            .and_then(|_| self.state.components.body(actor))
         else {
             return Step::Blocked(game_logistics::BlockReason::CannotTravel);
         };
@@ -119,7 +119,11 @@ impl Simulation {
             && !self.care_index.contains_key(&actor);
         let free = usable
             && matches!(
-                body.activity,
+                *self
+                    .state
+                    .components
+                    .activity(actor)
+                    .expect("activity exists"),
                 Activity::Idle | Activity::Rest | Activity::Work { .. }
             )
             && !matches!(person.location, Location::Carried { .. })
@@ -148,7 +152,7 @@ impl Simulation {
                     .state
                     .physical
                     .as_ref()
-                    .and_then(|world| world.actors.get(&recipient))
+                    .and_then(|_| self.state.components.body(recipient))
                     .is_some_and(|body| body.vitals.alive)
                     && self.transport_same_place(actor, recipient)
                 {

@@ -36,12 +36,18 @@ impl Simulation {
             .0
             .checked_sub(self.state.time.0)
             .ok_or(Error::Overflow)?;
-        let (Some(skills), Some(physical)) = (&self.state.skills, &self.state.physical) else {
+        let (Some(skills), Some(_)) = (&self.state.skills, &self.state.physical) else {
             return Ok(Vec::new());
         };
         let equipment = self.equipment_availability();
         let mut pending = Vec::new();
-        for (actor, body) in &physical.actors {
+        for (actor, body) in self.state.components.bodies() {
+            let actor = &actor;
+            let activity = self
+                .state
+                .components
+                .activity(*actor)
+                .expect("activity exists");
             if elapsed == 0
                 || !body.vitals.alive
                 || body.vitals.health == 0
@@ -52,7 +58,7 @@ impl Simulation {
             {
                 continue;
             }
-            let (skill, cap) = match body.activity {
+            let (skill, cap) = match *activity {
                 Activity::Gather { .. } | Activity::Cultivate { .. }
                     if equipment.get(actor).copied().unwrap_or(false) =>
                 {
@@ -341,7 +347,7 @@ mod tests {
             .unwrap();
         sim.advance(SimDuration(duration - 1)).unwrap();
         assert!(matches!(
-            sim.state.physical.as_ref().unwrap().actors[&actor].activity,
+            *sim.state.components.activity(actor).expect("body exists"),
             Activity::Work { .. }
         ));
         sim.advance(SimDuration(1)).unwrap();
@@ -362,7 +368,7 @@ mod tests {
         sim.advance(SimDuration(now_faster - remaining_to_level))
             .unwrap();
         assert!(matches!(
-            sim.state.physical.as_ref().unwrap().actors[&actor].activity,
+            *sim.state.components.activity(actor).expect("body exists"),
             Activity::Work { .. }
         ));
         sim.advance(SimDuration(duration - now_faster)).unwrap();

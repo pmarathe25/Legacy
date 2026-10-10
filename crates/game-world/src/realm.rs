@@ -223,7 +223,7 @@ impl Simulation {
         Ok(())
     }
     fn realm_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -478,14 +478,7 @@ impl Simulation {
                         stocks,
                     },
                 );
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&actor)
-                    .unwrap()
-                    .activity = Activity::RealmTalk {
+                *self.state.components.activity_mut(actor).unwrap() = Activity::RealmTalk {
                     commitment: *commitment,
                     recipient: *recipient,
                     completes,
@@ -544,7 +537,11 @@ impl Simulation {
             && self.realm_area(talk.recipient) == Some(talk.area)
             && self.transport_same_place(actor, talk.recipient)
             && matches!(
-                self.state.physical.as_ref().unwrap().actors[&talk.recipient].activity,
+                *self
+                    .state
+                    .components
+                    .activity(talk.recipient)
+                    .expect("body exists"),
                 Activity::Idle | Activity::Rest
             )
         {
@@ -611,14 +608,7 @@ impl Simulation {
         } else {
             self.emit(EventKind::Interrupted { actor });
         }
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Idle;
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
     }
     pub(crate) fn realm_actor_busy(&self, actor: PersonId) -> bool {
         self.state.realm.as_ref().is_some_and(|w| {
@@ -638,17 +628,14 @@ impl Simulation {
         for speaker in speakers {
             self.state.realm.as_mut().unwrap().talks.remove(&speaker);
             if matches!(
-                self.state.physical.as_ref().unwrap().actors[&speaker].activity,
+                *self
+                    .state
+                    .components
+                    .activity(speaker)
+                    .expect("body exists"),
                 Activity::RealmTalk { .. }
             ) {
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&speaker)
-                    .unwrap()
-                    .activity = Activity::Idle;
+                *self.state.components.activity_mut(speaker).unwrap() = Activity::Idle;
                 for due in self.state.due.values_mut() {
                     due.retain(|d| *d != Due::Physical(speaker));
                 }
@@ -1052,7 +1039,11 @@ impl Simulation {
         let rules = self.body_rules(actor);
         let context = Context {
             affiliations: &affiliations,
-            hunger: self.state.physical.as_ref().unwrap().actors[&actor]
+            hunger: self
+                .state
+                .components
+                .body(actor)
+                .expect("body exists")
                 .vitals
                 .hunger,
             hunger_exempt: self.state.people[self.person_index[&actor]].hunger_exempt,
@@ -1506,7 +1497,7 @@ impl Simulation {
                     *p != actor
                         && self.realm_area(*p) == Some(area)
                         && matches!(
-                            self.state.physical.as_ref().unwrap().actors[p].activity,
+                            *self.state.components.activity(*p).expect("body exists"),
                             Activity::Idle | Activity::Rest
                         )
                 })
@@ -1558,7 +1549,7 @@ impl Simulation {
             if self.past_life_controls_actor(actor)
                 || self.realm_area(actor).is_none()
                 || !matches!(
-                    self.state.physical.as_ref().unwrap().actors[&actor].activity,
+                    *self.state.components.activity(actor).expect("body exists"),
                     Activity::Idle | Activity::Rest
                 )
                 || self
@@ -1704,7 +1695,7 @@ impl Simulation {
                 || !refs.people.contains(&talk.recipient)
                 || !refs.areas.contains(&talk.area)
                 || talk.completes <= self.state.time
-                || !matches!(self.state.physical.as_ref().unwrap().actors[actor].activity,Activity::RealmTalk {commitment,recipient,completes} if commitment==talk.report.commitment && recipient==talk.recipient && completes==talk.completes)
+                || !matches!(*self.state.components.activity(*actor).expect("body exists"),Activity::RealmTalk {commitment,recipient,completes} if commitment==talk.report.commitment && recipient==talk.recipient && completes==talk.completes)
                 || !self
                     .state
                     .due

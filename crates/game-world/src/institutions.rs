@@ -65,11 +65,12 @@ impl Simulation {
             .ok_or(Error::Unavailable)?;
         if !self.independent(actor)
             || self.combat_restricts(actor)
-            || !self
-                .state
-                .physical
-                .as_ref()
-                .is_some_and(|w| w.actors[&actor].vitals.alive)
+            || !self.state.physical.as_ref().is_some_and(|_| {
+                self.state
+                    .components
+                    .body(actor)
+                    .is_some_and(|body| body.vitals.alive)
+            })
         {
             return Err(Error::Unavailable);
         }
@@ -385,7 +386,7 @@ impl Simulation {
                     self.state
                         .physical
                         .as_ref()
-                        .and_then(|w| w.actors.get(id))
+                        .and_then(|_| self.state.components.body(*id))
                         .is_some_and(|body| body.vitals.alive)
                 })
                 .collect(),
@@ -573,7 +574,7 @@ impl Simulation {
                     self.state
                         .physical
                         .as_ref()
-                        .and_then(|world| world.actors.get(id))
+                        .and_then(|_| self.state.components.body(**id))
                         .is_some_and(|body| body.vitals.alive)
                 })
                 .copied()
@@ -846,7 +847,11 @@ impl Simulation {
                         subject: actor,
                         subject_local: self.social_area(actor).ok()
                             == Some(institution.charter.jurisdiction),
-                        own_hunger: self.state.physical.as_ref().unwrap().actors[&office.holder]
+                        own_hunger: self
+                            .state
+                            .components
+                            .body(office.holder)
+                            .expect("body exists")
                             .vitals
                             .hunger,
                         known_stocks: &self.state.decisions.as_ref().unwrap().minds[&office.holder]
@@ -917,7 +922,11 @@ impl Simulation {
             .filter(|p| {
                 p.location == Location::AtArea(case.area)
                     && self.independent(p.id)
-                    && self.state.physical.as_ref().unwrap().actors[&p.id]
+                    && self
+                        .state
+                        .components
+                        .body(p.id)
+                        .expect("body exists")
                         .vitals
                         .alive
                     && (public || p.id == case.subject || p.id == case.counterpart)
@@ -950,7 +959,11 @@ impl Simulation {
     }
 
     fn case_need_band(&self, actor: PersonId) -> u8 {
-        let hunger = self.state.physical.as_ref().unwrap().actors[&actor]
+        let hunger = self
+            .state
+            .components
+            .body(actor)
+            .expect("body exists")
             .vitals
             .hunger;
         if hunger >= 540_000 {
@@ -1626,10 +1639,16 @@ impl Simulation {
                     continue;
                 };
                 let mind = &self.state.decisions.as_ref().unwrap().minds[&debtor];
-                let body = &self.state.physical.as_ref().unwrap().actors[&debtor];
+                let body = self.state.components.body(debtor).expect("body exists");
                 let rules = &self.state.physical.as_ref().unwrap().rules;
-                if !matches!(body.activity, Activity::Idle | Activity::Rest)
-                    || body.vitals.fatigue >= rules.fatigue_limit
+                if !matches!(
+                    *self
+                        .state
+                        .components
+                        .activity(debtor)
+                        .expect("activity exists"),
+                    Activity::Idle | Activity::Rest
+                ) || body.vitals.fatigue >= rules.fatigue_limit
                     || body
                         .vitals
                         .hunger

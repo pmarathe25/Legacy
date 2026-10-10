@@ -977,7 +977,7 @@ mod tests {
         let sim = world(1);
         assert_eq!(sim.state.people.len(), 45);
         assert_eq!(sim.state.areas.len(), 9);
-        assert_eq!(sim.state.physical.as_ref().unwrap().actors.len(), 45);
+        assert_eq!(sim.state.components.bodies().count(), 45);
         assert_eq!(sim.state.development.as_ref().unwrap().lives.len(), 45);
         assert_eq!(sim.state.decisions.as_ref().unwrap().minds.len(), 45);
         assert!(sim.state.armies.is_some() && sim.state.realm.is_some());
@@ -1027,12 +1027,9 @@ mod tests {
             )));
         assert!(
             one.state
-                .physical
-                .as_ref()
-                .unwrap()
-                .actors
-                .values()
-                .all(|body| body.vitals.alive)
+                .components
+                .bodies()
+                .all(|(_, body)| body.vitals.alive)
         );
         let loaded = Simulation::load(&one.save().unwrap(), Execution::default()).unwrap();
         assert_eq!(one.canonical_state(), loaded.canonical_state());

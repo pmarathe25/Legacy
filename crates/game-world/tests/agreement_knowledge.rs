@@ -1,3 +1,4 @@
+mod support;
 use game_api::*;
 use game_world::{
     decisions::{Aspiration, Personality},
@@ -474,7 +475,7 @@ fn stale_report_and_its_saved_snapshot_cannot_undo_a_later_known_amendment() {
     )
     .unwrap();
     let mut invalid: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-    invalid["state"]["physical"]["actors"][debtor.0.to_string()]["activity"]["ReportAgreement"]["snapshot"]
+    support::component(&mut invalid, "coordination/activity", debtor)["ReportAgreement"]["snapshot"]
         ["source"] = serde_json::json!({"Recorded": 999});
     assert!(
         Simulation::load(&serde_json::to_vec(&invalid).unwrap(), Execution::default()).is_err()

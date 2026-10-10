@@ -162,14 +162,7 @@ impl Simulation {
             .collect::<Vec<_>>()
         {
             self.interrupt_actor_activity(actor);
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&actor)
-                .unwrap()
-                .job = None;
+            self.state.components.set_job(actor, None)?;
         }
         self.state.development.as_mut().unwrap().rules = config.biology.clone();
         for person in &mut self.state.people {
@@ -1130,9 +1123,16 @@ impl Simulation {
         // command or a promise that the simulation will create another birth.
         self.state.time = death_at;
         self.state.due.clear();
-        for body in self.state.physical.as_mut().unwrap().actors.values_mut() {
-            body.activity = Activity::Idle;
-            body.job = None;
+        let actors: Vec<_> = self
+            .state
+            .components
+            .bodies()
+            .map(|(actor, _)| actor)
+            .collect();
+        for actor in actors {
+            *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
+            self.state.components.set_job(actor, None)?;
+            let body = self.state.components.body_mut(actor).unwrap();
             body.vitals.hunger = 0;
             body.vitals.fatigue = 0;
         }
@@ -1284,7 +1284,10 @@ impl Simulation {
             .people
             .iter()
             .filter(|person| {
-                self.state.physical.as_ref().unwrap().actors[&person.id]
+                self.state
+                    .components
+                    .body(person.id)
+                    .expect("body exists")
                     .vitals
                     .alive
             })

@@ -35,7 +35,10 @@ fn turn(
     })
 }
 fn hp(sim: &Simulation, actor: PersonId) -> u64 {
-    sim.canonical_state().physical.as_ref().unwrap().actors[&actor]
+    sim.canonical_state()
+        .components
+        .body(actor)
+        .expect("body exists")
         .vitals
         .health
 }

@@ -41,7 +41,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|world| world.actors.get(&recipient))
+            .and_then(|_| self.state.components.body(recipient))
             .is_some_and(|body| body.vitals.alive);
         if !self.person_index.contains_key(&recipient) {
             return Err(Error::Unavailable);
@@ -134,12 +134,18 @@ impl Simulation {
     ) -> Result<game_cargo::ToolAllocations, Error> {
         let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let mut uses = Vec::new();
-        for (actor, body) in &physical.actors {
+        for (actor, body) in self.state.components.bodies() {
+            let actor = &actor;
+            let activity = self
+                .state
+                .components
+                .activity(*actor)
+                .expect("activity exists");
             if !body.vitals.alive || body.vitals.health == 0 {
                 continue;
             }
-            let selected = match body.activity {
-                Activity::Work { site } => body.job.as_ref().and_then(|job| {
+            let selected = match *activity {
+                Activity::Work { site } => self.state.components.job(*actor).and_then(|job| {
                     physical
                         .sites
                         .get(&site)
@@ -206,15 +212,16 @@ impl Simulation {
     /// Compute once for an interval or closing commit, before any workers finish.
     /// Released tools cannot fund another worker's already elapsed interval.
     pub(crate) fn equipment_availability(&self) -> BTreeMap<PersonId, bool> {
-        let Some(physical) = &self.state.physical else {
+        let Some(_) = &self.state.physical else {
             return BTreeMap::new();
         };
-        let mut available: BTreeMap<_, _> = physical
-            .actors
-            .iter()
-            .filter(|(_, body)| {
+        let mut available: BTreeMap<_, _> = self
+            .state
+            .components
+            .activities()
+            .filter(|(_, activity)| {
                 matches!(
-                    body.activity,
+                    **activity,
                     Activity::Work { .. }
                         | Activity::Instruction { .. }
                         | Activity::Practice { .. }
@@ -225,11 +232,11 @@ impl Simulation {
                         | Activity::WritingMemory { .. }
                 )
             })
-            .map(|(actor, body)| {
+            .map(|(actor, activity)| {
                 (
-                    *actor,
-                    matches!(body.activity, Activity::Gather { .. })
-                        && self.ecology_job_tool(*actor).is_none(),
+                    actor,
+                    matches!(*activity, Activity::Gather { .. })
+                        && self.ecology_job_tool(actor).is_none(),
                 )
             })
             .collect();
@@ -263,7 +270,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|world| world.actors.get(&actor))
+            .and_then(|_| self.state.components.body(actor))
             .is_some_and(|body| body.vitals.alive && body.vitals.health > 0)
         {
             return false;
@@ -286,7 +293,7 @@ impl Simulation {
 
     pub(crate) fn select_work_tool(&self, actor: PersonId, site: SiteId) -> Option<InventoryId> {
         let physical = self.state.physical.as_ref()?;
-        let body = physical.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
@@ -298,7 +305,11 @@ impl Simulation {
         if area != site.area {
             return None;
         }
-        let resumed = body.job.as_ref().filter(|job| job.site == site.id);
+        let resumed = self
+            .state
+            .components
+            .job(actor)
+            .filter(|job| job.site == site.id);
         let allocations = self.prepare_tool_allocations(None).ok()?;
         let mut candidates = Vec::new();
         if let Some(tool) = resumed.and_then(|job| job.tool) {
@@ -354,33 +365,35 @@ impl Simulation {
         let Some(physical) = &self.state.physical else {
             return false;
         };
-        let Some(body) = physical.actors.get(&actor) else {
+        if self.state.components.body(actor).is_none() {
+            return false;
+        }
+        let Some(Activity::Work { site }) = self.state.components.activity(actor) else {
             return false;
         };
-        let Activity::Work { site } = body.activity else {
+        let Some(job) = self.state.components.job(actor) else {
             return false;
         };
-        let Some(job) = &body.job else { return false };
-        let Some(site) = physical.sites.get(&site) else {
+        let Some(site) = physical.sites.get(site) else {
             return false;
         };
         self.tool_available_for(actor, job.tool.unwrap_or(site.tool))
     }
 
     pub(crate) fn cultivation_equipment_available(&self, actor: PersonId) -> bool {
-        let Some(physical) = &self.state.physical else {
+        let Some(_) = &self.state.physical else {
             return false;
         };
-        let Some(body) = physical.actors.get(&actor) else {
+        if self.state.components.body(actor).is_none() {
             return false;
-        };
-        let Activity::Cultivate { field, .. } = body.activity else {
+        }
+        let Some(Activity::Cultivate { field, .. }) = self.state.components.activity(actor) else {
             return false;
         };
         self.state
             .agriculture
             .as_ref()
-            .and_then(|world| world.field(&self.state.components, field))
+            .and_then(|world| world.field(&self.state.components, *field))
             .is_some_and(|field| self.tool_available_for(actor, field.tool))
     }
 
@@ -531,17 +544,16 @@ mod tests {
             .unwrap();
         let food = sim.state.people[sim.person_index[&actors[0]]].inventory;
         let completes = SimTime(sim.state.time.0 + MINUTE.0);
-        let body = sim.state.physical.as_mut().unwrap();
-        body.actors.get_mut(&actors[0]).unwrap().activity = Activity::Eat {
+        *sim.state.components.activity_mut(actors[0]).unwrap() = Activity::Eat {
             source: food,
             completes,
         };
-        body.actors.get_mut(&actors[1]).unwrap().activity = Activity::Care {
+        *sim.state.components.activity_mut(actors[1]).unwrap() = Activity::Care {
             child: actors[0],
             source: water,
             completes,
         };
-        body.actors.get_mut(&actors[2]).unwrap().activity = Activity::Load {
+        *sim.state.components.activity_mut(actors[2]).unwrap() = Activity::Load {
             source: water,
             destination: food,
             quantity: Quantity(277),
@@ -637,7 +649,11 @@ mod tests {
         dead.debug_injure(worker, dead.body_rules(worker).max_health)
             .unwrap();
         assert!(
-            !dead.state.physical.as_ref().unwrap().actors[&worker]
+            !dead
+                .state
+                .components
+                .body(worker)
+                .expect("body exists")
                 .vitals
                 .alive
         );
@@ -647,7 +663,7 @@ mod tests {
 
         sim.carry_good(carrier, tool, Quantity(1_000)).unwrap();
         compare_resource_queries(&sim);
-        let carried = match sim.state.physical.as_ref().unwrap().actors[&carrier].activity {
+        let carried = match *sim.state.components.activity(carrier).expect("body exists") {
             Activity::Load { destination, .. } => destination,
             _ => panic!("actual carry schedules loading"),
         };
@@ -747,9 +763,14 @@ mod tests {
                 .count(),
             1
         );
-        let second_body = &sim.state.physical.as_ref().unwrap().actors[&second];
-        assert_eq!(second_body.activity, Activity::Idle);
-        assert_eq!(second_body.job.as_ref().unwrap().remaining, 0);
+        assert_eq!(
+            *sim.state
+                .components
+                .activity(second)
+                .expect("activity exists"),
+            Activity::Idle
+        );
+        assert_eq!(sim.state.components.job(second).unwrap().remaining, 0);
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
 
@@ -893,11 +914,7 @@ mod tests {
         );
         assert_eq!(sim.state.inventories[&output].quantity, Quantity(0));
         assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&worker]
-                .job
-                .as_ref()
-                .unwrap()
-                .remaining,
+            sim.state.components.job(worker).as_ref().unwrap().remaining,
             0
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -923,29 +940,26 @@ mod tests {
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&worker]
-                .job
-                .as_ref()
-                .unwrap()
-                .tool,
+            sim.state.components.job(worker).as_ref().unwrap().tool,
             Some(recipe.tool)
         );
         let input_after_start = sim.state.inventories[&recipe.input].quantity;
         sim.carry_good(carrier, recipe.tool, Quantity(1_000))
             .unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
-        let body = &sim.state.physical.as_ref().unwrap().actors[&worker];
-        assert_eq!(body.activity, Activity::Idle);
-        assert_eq!(body.job.as_ref().unwrap().remaining, 30_000);
+        assert_eq!(
+            *sim.state
+                .components
+                .activity(worker)
+                .expect("activity exists"),
+            Activity::Idle
+        );
+        assert_eq!(sim.state.components.job(worker).unwrap().remaining, 30_000);
         assert_eq!(sim.state.inventories[&recipe.tool].quantity, Quantity(0));
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&worker]
-                .job
-                .as_ref()
-                .unwrap()
-                .tool,
+            sim.state.components.job(worker).as_ref().unwrap().tool,
             Some(alternate)
         );
         assert_eq!(
@@ -977,9 +991,14 @@ mod tests {
             .unwrap();
         sim.carry_good(carrier, tool, Quantity(1_000)).unwrap();
         sim.advance(MINUTE).unwrap();
-        let body = &sim.state.physical.as_ref().unwrap().actors[&worker];
-        assert_eq!(body.activity, Activity::Idle);
-        assert_eq!(body.job.as_ref().unwrap().remaining, 0);
+        assert_eq!(
+            *sim.state
+                .components
+                .activity(worker)
+                .expect("activity exists"),
+            Activity::Idle
+        );
+        assert_eq!(sim.state.components.job(worker).unwrap().remaining, 0);
         assert!(!sim.state.events.iter().any(
             |event| matches!(event.kind, EventKind::Produced { actor, .. } if actor == worker)
         ));
@@ -1026,7 +1045,7 @@ mod tests {
             assert_eq!(sim.state, opening);
         }
         sim.carry_good(actor, tools, Quantity(1_000)).unwrap();
-        let destination = match sim.state.physical.as_ref().unwrap().actors[&actor].activity {
+        let destination = match *sim.state.components.activity(actor).expect("body exists") {
             Activity::Load { destination, .. } => destination,
             _ => panic!("carry must schedule loading"),
         };
@@ -1176,7 +1195,7 @@ mod tests {
         let pending = sim.state.clone();
         assert_eq!(sim.submit(carry).unwrap(), receipt);
         assert_eq!(sim.state, pending);
-        let destination = match sim.state.physical.as_ref().unwrap().actors[&actor].activity {
+        let destination = match *sim.state.components.activity(actor).expect("body exists") {
             Activity::Load { destination, .. } => destination,
             _ => panic!("actual timed load"),
         };

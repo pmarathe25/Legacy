@@ -32,12 +32,20 @@ fn personality_changes_autonomous_choices_with_the_same_physical_opportunities()
     sim.debug_set_personality(worker, Personality::industrious(), Aspiration::Independence)
         .unwrap();
     sim.advance(MINUTE).unwrap();
-    let physical = sim.canonical_state().physical.as_ref().unwrap();
     assert!(matches!(
-        physical.actors[&worker].activity,
+        *sim.canonical_state()
+            .components
+            .activity(worker)
+            .expect("body exists"),
         Activity::Work { .. }
     ));
-    assert_eq!(physical.actors[&resting].activity, Activity::Rest);
+    assert_eq!(
+        *sim.canonical_state()
+            .components
+            .activity(resting)
+            .expect("body exists"),
+        Activity::Rest
+    );
     let mind = &sim.canonical_state().decisions.as_ref().unwrap().minds[&worker];
     assert_eq!(mind.goal, decisions::Goal::Practice);
     assert!(mind.explanation.benefit > 0);
@@ -94,23 +102,19 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
     reference.advance(SimDuration(180_000)).unwrap();
     without_learning.advance(SimDuration(180_000)).unwrap();
     assert!(matches!(
-        reference
+        *reference
             .canonical_state()
-            .physical
-            .as_ref()
-            .unwrap()
-            .actors[&actor]
-            .activity,
+            .components
+            .activity(actor)
+            .expect("body exists"),
         Activity::Work { .. }
     ));
     assert_eq!(
-        without_learning
+        *without_learning
             .canonical_state()
-            .physical
-            .as_ref()
-            .unwrap()
-            .actors[&actor]
-            .activity,
+            .components
+            .activity(actor)
+            .expect("body exists"),
         Activity::Rest
     );
 }

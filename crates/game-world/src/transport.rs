@@ -102,11 +102,12 @@ impl Simulation {
         matches!(
             self.state.people[self.person_index[&actor]].location,
             Location::InTransit { .. }
-        ) || self
-            .state
-            .physical
-            .as_ref()
-            .is_some_and(|w| matches!(w.actors[&actor].activity, Activity::Lift { .. }))
+        ) || self.state.physical.as_ref().is_some_and(|_| {
+            matches!(
+                self.state.components.activity(actor).unwrap(),
+                Activity::Lift { .. }
+            )
+        })
     }
     fn transport_bodies_at(&self, now: SimTime) -> Result<BTreeMap<PersonId, Body>, Error> {
         self.transport_body_facts_at(self.state.people.iter(), now)
@@ -124,12 +125,12 @@ impl Simulation {
             .rules;
         people
             .map(|person| {
-                let body = &self
+                self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+                let body = self
                     .state
-                    .physical
-                    .as_ref()
-                    .ok_or(Error::Unavailable)?
-                    .actors[&person.id];
+                    .components
+                    .body(person.id)
+                    .ok_or(Error::Unavailable)?;
                 let limits = self.body_rules(person.id);
                 let mass = if let Some(w) = &self.state.development {
                     game_transport::body_mass(
@@ -157,7 +158,7 @@ impl Simulation {
                     && !matches!(person.location, Location::Carried { .. });
                 let can_bear = can_walk
                     && matches!(
-                        body.activity,
+                        *self.state.components.activity(person.id).unwrap(),
                         Activity::Idle | Activity::Rest | Activity::Lift { .. }
                     );
                 Ok((
@@ -549,10 +550,10 @@ impl Simulation {
         {
             return None;
         }
-        let body = &self.state.physical.as_ref()?.actors[&guardian];
-        if !matches!(body.activity, Activity::Idle | Activity::Rest)
-            || self.combat_restricts(guardian)
-        {
+        self.state.physical.as_ref()?;
+        let body = self.state.components.body(guardian)?;
+        let activity = self.state.components.activity(guardian)?;
+        if !matches!(activity, Activity::Idle | Activity::Rest) || self.combat_restricts(guardian) {
             return None;
         }
         if matches!(
@@ -599,7 +600,7 @@ impl Simulation {
             }
         }
         if !self.independent(target)
-            || self.state.physical.as_ref()?.actors[&target].vitals.health == 0
+            || self.state.components.body(target).unwrap().vitals.health == 0
         {
             let bodies = self.transport_bodies().ok()?;
             let needs_support = world.groups.get(&target).is_none_or(|group| {
@@ -679,7 +680,10 @@ impl Simulation {
             .keys()
             .filter_map(|id| {
                 if let Location::AtArea(area) = self.resolved_location(*id) {
-                    self.state.physical.as_ref().unwrap().actors[id]
+                    self.state
+                        .components
+                        .body(*id)
+                        .unwrap()
                         .vitals
                         .alive
                         .then_some((*id, area))
@@ -698,7 +702,7 @@ impl Simulation {
         bearers: &BTreeSet<PersonId>,
         accepted: bool,
     ) -> Permission {
-        let body = &self.state.physical.as_ref().unwrap().actors[&passenger];
+        let body = self.state.components.body(passenger).unwrap();
         let incapacitated = !body.vitals.alive
             || body.vitals.health == 0
             || self
@@ -753,21 +757,14 @@ impl Simulation {
             self.interrupt_actor_activity(*bearer);
         }
         if !matches!(
-            self.state.physical.as_ref().unwrap().actors[&passenger].activity,
+            *self.state.components.activity(passenger).unwrap(),
             Activity::Escape { .. }
         ) {
             self.interrupt_actor_activity(passenger);
         }
         self.state.transport = Some(candidate);
         for bearer in &lift.bearers {
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(bearer)
-                .unwrap()
-                .activity = Activity::Lift {
+            *self.state.components.activity_mut(*bearer).unwrap() = Activity::Lift {
                 passenger,
                 completes: lift.completes,
             };
@@ -808,7 +805,7 @@ impl Simulation {
                     self.interrupt_actor_activity(*bearer);
                 }
                 if !matches!(
-                    self.state.physical.as_ref().unwrap().actors[&group.passenger].activity,
+                    *self.state.components.activity(group.passenger).unwrap(),
                     Activity::Escape { .. }
                 ) {
                     self.interrupt_actor_activity(group.passenger);
@@ -835,16 +832,9 @@ impl Simulation {
         let lifts = w.cancel_lifts(actor);
         for lift in lifts {
             for bearer in lift.bearers {
-                if matches!(self.state.physical.as_ref().unwrap().actors[&bearer].activity,Activity::Lift {passenger,..} if passenger==lift.passenger)
+                if matches!(*self.state.components.activity(bearer).unwrap(),Activity::Lift {passenger,..} if passenger==lift.passenger)
                 {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&bearer)
-                        .unwrap()
-                        .activity = Activity::Idle;
+                    *self.state.components.activity_mut(bearer).unwrap() = Activity::Idle;
                     for due in self.state.due.values_mut() {
                         due.retain(|d| !matches!(d,Due::Physical(id) if *id==bearer));
                     }
@@ -1010,9 +1000,7 @@ impl Simulation {
                 let set: BTreeSet<_> = bearers.iter().copied().collect();
                 if set.len() != bearers.len()
                     || !self.independent(actor)
-                    || !self.state.physical.as_ref().unwrap().actors[&actor]
-                        .vitals
-                        .alive
+                    || !self.state.components.body(actor).unwrap().vitals.alive
                     || self.combat_restricts(actor)
                 {
                     return Err(Error::Unavailable);
@@ -1121,9 +1109,7 @@ impl Simulation {
             }
             Action::Stop => {
                 if !self.independent(actor)
-                    || !self.state.physical.as_ref().unwrap().actors[&actor]
-                        .vitals
-                        .alive
+                    || !self.state.components.body(actor).unwrap().vitals.alive
                     || !matches!(
                         self.state.people[self.person_index[&actor]].location,
                         Location::InTransit { .. }
@@ -1307,9 +1293,7 @@ impl Simulation {
         for passenger in recipients {
             if passenger == self.state.ruler
                 || !self.independent(passenger)
-                || !self.state.physical.as_ref().unwrap().actors[&passenger]
-                    .vitals
-                    .alive
+                || !self.state.components.body(passenger).unwrap().vitals.alive
                 || self.combat_restricts(passenger)
                 || self.state.transport.as_ref().unwrap().busy(passenger)
             {
@@ -1356,13 +1340,16 @@ impl Simulation {
                     trust: 0,
                     affection: 0,
                 });
-            let body = &self.state.physical.as_ref().unwrap().actors[&passenger];
+            let body = self.state.components.body(passenger).unwrap();
             let rules = self.body_rules(passenger);
             let (kind, reason) = game_transport::judge_offer(game_transport::OfferChoice {
                 need_help: body.vitals.health < rules.max_health
                     || body.vitals.fatigue >= rules.fatigue_limit / 3,
                 urgent_own_need: body.vitals.hunger >= rules.hunger_harm,
-                busy: !matches!(body.activity, Activity::Idle | Activity::Rest),
+                busy: !matches!(
+                    self.state.components.activity(passenger).unwrap(),
+                    Activity::Idle | Activity::Rest
+                ),
                 trust: relation.trust,
                 affection: relation.affection,
                 independence_goal: mind.dream == decisions::Aspiration::Independence,
@@ -1457,7 +1444,7 @@ impl Simulation {
                 continue;
             }
             let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
-            let body = &self.state.physical.as_ref().unwrap().actors[&actor];
+            let body = self.state.components.body(actor).unwrap();
             let rules = self.body_rules(actor);
             let relation = mind
                 .relationships
@@ -1474,8 +1461,10 @@ impl Simulation {
                 affection: relation.affection,
                 own_need: body.vitals.hunger >= rules.meal_relief
                     || body.vitals.fatigue >= rules.fatigue_limit / 2,
-                busy: !matches!(body.activity, Activity::Idle | Activity::Rest)
-                    || self.lineage_handles(actor)
+                busy: !matches!(
+                    self.state.components.activity(actor).unwrap(),
+                    Activity::Idle | Activity::Rest
+                ) || self.lineage_handles(actor)
                     || self.health_actor_busy(actor)
                     || self.mission_actor_busy(actor),
                 has_capacity: physical
@@ -1624,7 +1613,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     let mut bodies = BTreeMap::new();
     for p in &state.people {
-        let body = physical.actors.get(&p.id).ok_or_else(fail)?;
+        let body = state.components.body(p.id).ok_or_else(fail)?;
         let mass = if let Some(lives) = &state.development {
             game_transport::body_mass(
                 &w.rules,
@@ -1673,21 +1662,21 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     game_transport::validate(w, &bodies, state.time)?;
     for (id, lift) in &w.lifts {
         for bearer in &lift.bearers {
-            if !matches!(physical.actors[bearer].activity,Activity::Lift {passenger,completes} if passenger==*id&&completes==lift.completes)
+            if !matches!(*state.components.activity(*bearer).unwrap(),Activity::Lift {passenger,completes} if passenger==*id&&completes==lift.completes)
             {
                 return Err(fail());
             }
         }
     }
-    for (id, body) in &physical.actors {
+    for (id, activity) in state.components.activities() {
         if let Activity::Lift {
             passenger,
             completes,
-        } = body.activity
+        } = *activity
             && !w
                 .lifts
                 .get(&passenger)
-                .is_some_and(|l| l.bearers.contains(id) && l.completes == completes)
+                .is_some_and(|l| l.bearers.contains(&id) && l.completes == completes)
         {
             return Err(fail());
         }
@@ -1908,12 +1897,7 @@ mod connected_tests {
                 .flatten()
                 .all(|d| !matches!(d,Due::Arrive(id) if *id==child))
         );
-        assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&child]
-                .vitals
-                .fatigue,
-            0
-        );
+        assert_eq!(sim.state.components.body(child).unwrap().vitals.fatigue, 0);
         sim.advance(SimDuration(150_000)).unwrap();
         assert!(matches!(
             sim.resolved_location(child),
@@ -1924,12 +1908,7 @@ mod connected_tests {
                 ..
             }
         ));
-        assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&child]
-                .vitals
-                .fatigue,
-            0
-        );
+        assert_eq!(sim.state.components.body(child).unwrap().vitals.fatigue, 0);
         let loaded = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         assert_eq!(loaded.state, sim.state);
     }
@@ -1946,22 +1925,11 @@ mod connected_tests {
             )
             .unwrap();
         let hunger_harm = sim.body_rules(mother).hunger_harm;
-        let body = sim
-            .state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&mother)
-            .unwrap();
+        let body = sim.state.components.body_mut(mother).unwrap();
         body.vitals.hunger = hunger_harm;
         body.vitals.health = 10_000;
         sim.advance(SimDuration(10_000)).unwrap();
-        assert!(
-            !sim.state.physical.as_ref().unwrap().actors[&mother]
-                .vitals
-                .alive
-        );
+        assert!(!sim.state.components.body(mother).unwrap().vitals.alive);
         let stopped = Location::StoppedOnRoad {
             from: AreaId(1),
             to: AreaId(3),
@@ -2078,11 +2046,11 @@ mod connected_tests {
         sim.advance(SimDuration(6_000)).unwrap();
         assert!(
             matches!(
-                sim.state.physical.as_ref().unwrap().actors[&child].activity,
+                *sim.state.components.activity(child).unwrap(),
                 Activity::Idle | Activity::Rest
             ),
             "child primary action {:?}",
-            sim.state.physical.as_ref().unwrap().actors[&child].activity
+            *sim.state.components.activity(child).unwrap()
         );
         assert!(sim.transport_same_place(mother, child));
         assert!(sim.has_stock_access(mother, &sim.state.inventories[&source]));
@@ -2091,12 +2059,7 @@ mod connected_tests {
             .unwrap();
         sim.advance(SimDuration(60_000)).unwrap();
         assert_eq!(sim.state.inventories[&source].quantity, Quantity(1_000));
-        assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&child]
-                .vitals
-                .hunger,
-            0
-        );
+        assert_eq!(sim.state.components.body(child).unwrap().vitals.hunger, 0);
         assert!(matches!(
             sim.resolved_location(child),
             Location::StoppedOnRoad { .. }
@@ -2215,15 +2178,7 @@ mod connected_tests {
         traits.empathy = 900;
         sim.debug_set_personality(mother, traits, decisions::Aspiration::Comfort)
             .unwrap();
-        sim.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&mother)
-            .unwrap()
-            .vitals
-            .hunger = 0;
+        sim.state.components.body_mut(mother).unwrap().vitals.hunger = 0;
         sim.review_decisions().unwrap();
         let mind = &sim.state.decisions.as_ref().unwrap().minds[&mother];
         assert!(!mind.knowledge.contains_key(&endpoint));
@@ -2233,7 +2188,7 @@ mod connected_tests {
             Location::StoppedOnRoad { .. }
         ));
         assert!(
-            matches!(sim.state.physical.as_ref().unwrap().actors[&mother].activity,Activity::Care {child:target,source,..} if target==child&&source==carried)
+            matches!(*sim.state.components.activity(mother).unwrap(),Activity::Care {child:target,source,..} if target==child&&source==carried)
         );
         sim.advance(SimDuration(60_000)).unwrap();
         assert_eq!(sim.state.inventories[&carried].quantity, Quantity(1_000));
@@ -2243,15 +2198,7 @@ mod connected_tests {
     fn a_carried_child_in_battle_requires_the_anchors_actual_tactical_reach() {
         let (mut sim, mother, child) = traveling_birth(1);
         sim.state.people[sim.person_index[&mother]].route.clear();
-        sim.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&mother)
-            .unwrap()
-            .vitals
-            .hunger = 0;
+        sim.state.components.body_mut(mother).unwrap().vitals.hunger = 0;
         sim.advance(SimDuration(120_000)).unwrap();
         let enemy = sim.state.people[8].id;
         let outsider = sim.state.people[9].id;

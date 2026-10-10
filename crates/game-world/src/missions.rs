@@ -105,12 +105,12 @@ impl Simulation {
     }
     fn mission_area(&self, actor: PersonId) -> Result<AreaId, Error> {
         let index = self.person_index.get(&actor).ok_or(Error::Unavailable)?;
-        let body = &self
+        self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        let body = self
             .state
-            .physical
-            .as_ref()
-            .ok_or(Error::Unavailable)?
-            .actors[&actor];
+            .components
+            .body(actor)
+            .ok_or(Error::Unavailable)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -448,7 +448,7 @@ impl Simulation {
         if self.guardian_mission_duty(actor, id) {
             return false;
         }
-        let body = &self.state.physical.as_ref().unwrap().actors[&actor];
+        let body = &self.state.components.body(actor).expect("body exists");
         body.vitals.alive
             && body.vitals.health > self.state.physical.as_ref().unwrap().rules.max_health / 2
             && body.vitals.hunger < self.state.physical.as_ref().unwrap().rules.meal_relief
@@ -480,14 +480,7 @@ impl Simulation {
                 .ok_or(Error::Overflow)?,
         );
         self.interrupt_actor_activity(speaker);
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&speaker)
-            .unwrap()
-            .activity = Activity::MissionTalk { completes };
+        *self.state.components.activity_mut(speaker).unwrap() = Activity::MissionTalk { completes };
         self.state.missions.as_mut().unwrap().talks.insert(
             speaker,
             PendingTalk {
@@ -518,16 +511,9 @@ impl Simulation {
                 .talks
                 .remove(&talk.speaker);
             for actor in [talk.speaker] {
-                if matches!(self.state.physical.as_ref().unwrap().actors[&actor].activity,Activity::MissionTalk {completes}if completes==talk.completes)
+                if matches!(*self.state.components.activity(actor).expect("body exists"),Activity::MissionTalk {completes}if completes==talk.completes)
                 {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap()
-                        .activity = Activity::Idle;
+                    *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
                 }
             }
         }
@@ -677,7 +663,7 @@ impl Simulation {
     }
     fn recruitment_input(&self, actor: PersonId, m: &Mission) -> game_missions::RecruitmentInput {
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
-        let body = &self.state.physical.as_ref().unwrap().actors[&actor];
+        let body = &self.state.components.body(actor).expect("body exists");
         let social_disruption = if self
             .mission_area(actor)
             .ok()
@@ -747,14 +733,14 @@ impl Simulation {
             );
             return;
         }
-        let body = &self.state.physical.as_ref().unwrap().actors[&actor];
+        let body = &self.state.components.body(actor).expect("body exists");
         let rules = &self.state.physical.as_ref().unwrap().rules;
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
         if self.army_actor_talking(actor) || self.realm_actor_busy(actor) {
             return;
         }
         if matches!(
-            body.activity,
+            *self.state.components.activity(actor).unwrap(),
             Activity::MissionTalk { .. }
                 | Activity::ArmyTalk { .. }
                 | Activity::ArmyApproach { .. }
@@ -923,7 +909,12 @@ impl Simulation {
                     && person != self.state.ruler
                 {
                     let released = &self.state.decisions.as_ref().unwrap().minds[&person];
-                    let v = &self.state.physical.as_ref().unwrap().actors[&person].vitals;
+                    let v = &self
+                        .state
+                        .components
+                        .body(person)
+                        .expect("body exists")
+                        .vitals;
                     let trusts = released.relationships.get(&actor).map_or(0, |r| r.trust) >= 0;
                     if trusts
                         && released.personality.empathy >= 300
@@ -945,7 +936,11 @@ impl Simulation {
                 MissionObjective::Defeat { person } => {
                     if self.state.people[self.person_index[&person]].location
                         == Location::AtArea(area)
-                        && self.state.physical.as_ref().unwrap().actors[&person]
+                        && self
+                            .state
+                            .components
+                            .body(person)
+                            .expect("body exists")
                             .vitals
                             .alive
                         && self.can_fight(person)
@@ -976,7 +971,11 @@ impl Simulation {
                             }
                         }
                     } else if self.state.time < until
-                        && self.state.physical.as_ref().unwrap().actors[&person]
+                        && self
+                            .state
+                            .components
+                            .body(person)
+                            .expect("body exists")
                             .vitals
                             .alive
                         && self.start_restraint(actor, person).is_err()
@@ -1074,7 +1073,7 @@ impl Simulation {
         let Location::AtArea(area) = self.resolved_location(target) else {
             return None;
         };
-        let body = &self.state.physical.as_ref()?.actors[&target];
+        let body = &self.state.components.body(target).expect("body exists");
         let captivity = self
             .state
             .combat
@@ -1452,7 +1451,11 @@ impl Simulation {
         for talk in talks {
             let valid = self.mission_area(talk.speaker).ok() == Some(talk.area)
                 && self.mission_area(talk.listener).ok() == Some(talk.area)
-                && self.state.physical.as_ref().unwrap().actors[&talk.speaker].activity
+                && *self
+                    .state
+                    .components
+                    .activity(talk.speaker)
+                    .expect("body exists")
                     == Activity::MissionTalk {
                         completes: talk.completes,
                     };
@@ -1462,16 +1465,9 @@ impl Simulation {
                 .unwrap()
                 .talks
                 .remove(&talk.speaker);
-            if matches!(self.state.physical.as_ref().unwrap().actors[&talk.speaker].activity,Activity::MissionTalk { completes } if completes == talk.completes)
+            if matches!(*self.state.components.activity(talk.speaker).expect("body exists"),Activity::MissionTalk { completes } if completes == talk.completes)
             {
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&talk.speaker)
-                    .unwrap()
-                    .activity = Activity::Idle;
+                *self.state.components.activity_mut(talk.speaker).unwrap() = Activity::Idle;
             }
             if !valid {
                 continue;
@@ -1562,7 +1558,7 @@ impl Simulation {
             .members
             .keys()
             .map(|p| {
-                let body = &self.state.physical.as_ref().unwrap().actors[p];
+                let body = &self.state.components.body(*p).expect("body exists");
                 (
                     *p,
                     game_missions::MemberBody {
@@ -1962,7 +1958,7 @@ impl Simulation {
         let f = e.fighters.get(&actor)?;
         let map = w.map(e.map)?;
         let mind = &self.state.decisions.as_ref()?.minds[&actor];
-        let body = &self.state.physical.as_ref()?.actors[&actor];
+        let body = &self.state.components.body(actor).expect("body exists");
         let known_status = self
             .state
             .missions
@@ -2424,7 +2420,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         if !occupied.insert(talk.speaker)
-            || physical.actors[&talk.speaker].activity
+            || *s.components.activity(talk.speaker).expect("body exists")
                 != (Activity::MissionTalk {
                     completes: talk.completes,
                 })
@@ -2469,8 +2465,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    for (actor, body) in &physical.actors {
-        if matches!(body.activity, Activity::MissionTalk { .. }) != occupied.contains(actor) {
+    for (actor, activity) in s.components.activities() {
+        if matches!(activity, Activity::MissionTalk { .. }) != occupied.contains(&actor) {
             return Err(fail());
         }
     }
@@ -2615,7 +2611,7 @@ mod tests {
         assert_eq!(sim.state.inventories[&carried].quantity, Quantity(0));
         sim.advance(MINUTE).unwrap();
         assert!(matches!(
-            sim.state.physical.as_ref().unwrap().actors[&leader].activity,
+            *sim.state.components.activity(leader).expect("body exists"),
             Activity::Load { .. }
         ));
         assert_eq!(sim.state.inventories[&carried].quantity, Quantity(0));
@@ -2684,7 +2680,7 @@ mod tests {
         accept(&mut sim, id, actor);
         sim.advance(MINUTE).unwrap();
         assert!(
-            matches!(sim.state.physical.as_ref().unwrap().actors[&actor].activity, Activity::Load { source: from, .. } if from == source)
+            matches!(*sim.state.components.activity(actor).expect("body exists"), Activity::Load { source: from, .. } if from == source)
         );
         assert_eq!(sim.state.inventories[&source].quantity, opening);
         assert!(
@@ -3328,14 +3324,7 @@ mod tests {
         accept(&mut sim, id, leader);
         sim.mission_command(ruler, &MissionAction::Depart { mission: id })
             .unwrap();
-        let body = sim
-            .state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&leader)
-            .unwrap();
+        let body = sim.state.components.body_mut(leader).unwrap();
         body.vitals.health = 70_000;
         sim.state
             .decisions
@@ -3654,7 +3643,11 @@ mod tests {
             .unwrap()
             .obstacles
             .clear();
-        let current = sim.state.physical.as_ref().unwrap().actors[&target]
+        let current = sim
+            .state
+            .components
+            .body(target)
+            .expect("body exists")
             .vitals
             .health;
         let incap = sim.state.combat.as_ref().unwrap().rules.incapacitation;

@@ -194,6 +194,7 @@ pub struct Simulation {
     care_index: BTreeMap<PersonId, PersonId>,
     dependent_index: BTreeMap<AreaId, BTreeSet<PersonId>>,
     agriculture_queries: game_agriculture::Queries,
+    physical_query: game_ecs::Query2Optional<game_physiology::Body, Activity, game_workshop::Job>,
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
@@ -586,20 +587,17 @@ impl Simulation {
                 .map(|p| (p.gestator, p.id))
                 .collect()
         });
-        let care_index = state.physical.as_ref().map_or_else(BTreeMap::new, |w| {
-            w.actors
-                .iter()
-                .filter_map(|(id, a)| {
-                    if let Activity::Care { child, .. } | Activity::Comfort { child, .. } =
-                        a.activity
-                    {
-                        Some((child, *id))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        });
+        let care_index = state
+            .components
+            .activities()
+            .filter_map(|(id, activity)| {
+                if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = *activity {
+                    Some((child, id))
+                } else {
+                    None
+                }
+            })
+            .collect();
         let mut dependent_index = BTreeMap::<AreaId, BTreeSet<PersonId>>::new();
         if let Some(world) = &state.development {
             for p in &state.people {
@@ -608,13 +606,21 @@ impl Simulation {
                         world.lives[&p.id].stage,
                         LifeStage::Infant | LifeStage::Child
                     )
-                    && state.physical.as_ref().unwrap().actors[&p.id].vitals.alive
+                    && state
+                        .components
+                        .body(p.id)
+                        .expect("body exists")
+                        .vitals
+                        .alive
                 {
                     dependent_index.entry(area).or_default().insert(p.id);
                 }
             }
         }
         let agriculture_queries = game_agriculture::Runtime::bind(&mut state.components);
+        let physical_query = state
+            .components
+            .query2_optional::<game_physiology::Body, Activity, game_workshop::Job>();
         let sim = Self {
             state,
             engine,
@@ -627,6 +633,7 @@ impl Simulation {
             care_index,
             dependent_index,
             agriculture_queries,
+            physical_query,
         };
         sim.validate_environment()?;
         sim.validate_agriculture()?;
@@ -686,7 +693,7 @@ impl Simulation {
             .map(|a| Command::Move { destination: a.id })
             .collect();
         if let Some(world) = &self.state.physical {
-            let actor = &world.actors[&ruler.id];
+            let actor = &self.state.components.body(ruler.id).expect("body exists");
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 available_commands.clear();
             } else if matches!(
@@ -741,7 +748,11 @@ impl Simulation {
             let stage = world.lives[&ruler.id].stage;
             if stage == LifeStage::Infant {
                 available_commands.clear();
-                if self.state.physical.as_ref().unwrap().actors[&ruler.id]
+                if self
+                    .state
+                    .components
+                    .body(ruler.id)
+                    .expect("body exists")
                     .vitals
                     .alive
                 {
@@ -751,10 +762,18 @@ impl Simulation {
                 available_commands.retain(|c| !matches!(c, Command::Work { .. }));
             }
             if matches!(stage, LifeStage::Infant | LifeStage::Child)
-                && self.state.physical.as_ref().unwrap().actors[&ruler.id]
+                && self
+                    .state
+                    .components
+                    .body(ruler.id)
+                    .expect("body exists")
                     .vitals
                     .alive
-                && self.state.physical.as_ref().unwrap().actors[&ruler.id]
+                && self
+                    .state
+                    .components
+                    .body(ruler.id)
+                    .expect("body exists")
                     .vitals
                     .health
                     > 0
@@ -994,12 +1013,15 @@ impl Simulation {
 
     pub fn nearby_people(&self, offset: usize, limit: usize) -> Vec<(PersonId, Role)> {
         let ruler = &self.state.people[self.person_index[&self.state.ruler]];
-        if self
-            .state
-            .physical
-            .as_ref()
-            .is_some_and(|w| !w.actors[&ruler.id].vitals.alive)
-        {
+        if self.state.physical.as_ref().is_some_and(|_| {
+            !self
+                .state
+                .components
+                .body(ruler.id)
+                .expect("body exists")
+                .vitals
+                .alive
+        }) {
             return Vec::new();
         }
         self.state.people.iter().filter(|p| p.id != ruler.id && matches!((&p.location, &ruler.location), (Location::AtArea(a), Location::AtArea(b)) if a == b))
@@ -1064,9 +1086,29 @@ impl Simulation {
         }
         if !self.independent(actor)
             || self.state.physical.as_ref().is_some_and(|w| {
-                !w.actors[&actor].vitals.alive
-                    || w.actors[&actor].vitals.health == 0
-                    || w.actors[&actor].vitals.fatigue >= w.rules.fatigue_limit
+                !self
+                    .state
+                    .components
+                    .body(actor)
+                    .expect("body exists")
+                    .vitals
+                    .alive
+                    || self
+                        .state
+                        .components
+                        .body(actor)
+                        .expect("body exists")
+                        .vitals
+                        .health
+                        == 0
+                    || self
+                        .state
+                        .components
+                        .body(actor)
+                        .expect("body exists")
+                        .vitals
+                        .fatigue
+                        >= w.rules.fatigue_limit
             })
         {
             return Err(Error::Unavailable);
@@ -1198,6 +1240,7 @@ impl Simulation {
         );
         while self.state.time < requested {
             self.agriculture_queries.refresh(&self.state.components)?;
+            self.physical_query.refresh(&self.state.components)?;
             if let Some(warning) = self.required_invocation_input() {
                 return Ok(AdvanceResult {
                     requested,
@@ -1349,7 +1392,7 @@ impl Simulation {
                         field,
                         operation: FarmOperation::Harvest,
                         ..
-                    } = self.state.physical.as_ref().unwrap().actors[actor].activity
+                    } = *self.state.components.activity(*actor).expect("body exists")
                 {
                     possible_outputs.push((
                         field,
@@ -1539,6 +1582,7 @@ impl Simulation {
             evaluation_ns,
             arbitration_ns,
         } = prepared;
+        self.validate_physical_output(&physical_output)?;
         if let Some(step) = &environment_output {
             self.state
                 .environment
@@ -1564,22 +1608,23 @@ impl Simulation {
             p.work_remainder = out.remainder;
         }
         self.state.time = next;
-        let actual_work: Vec<_> = self.state.physical.as_ref().map_or_else(Vec::new, |w| {
-            w.actors
-                .iter()
-                .filter_map(|(actor, body)| {
-                    if let Activity::Work { site } = body.activity {
+        let actual_work: Vec<_> = self.state.physical.as_ref().map_or_else(Vec::new, |_| {
+            self.state
+                .components
+                .activities()
+                .filter_map(|(actor, activity)| {
+                    if let Activity::Work { site } = *activity {
                         equipment
-                            .get(actor)
+                            .get(&actor)
                             .copied()
                             .unwrap_or(false)
-                            .then_some((*actor, site))
-                    } else if let Activity::Cultivate { field, .. } = body.activity {
+                            .then_some((actor, site))
+                    } else if let Activity::Cultivate { field, .. } = *activity {
                         equipment
-                            .get(actor)
+                            .get(&actor)
                             .copied()
                             .unwrap_or(false)
-                            .then_some((*actor, field))
+                            .then_some((actor, field))
                     } else {
                         None
                     }
@@ -1635,18 +1680,18 @@ impl Simulation {
                 Due::Transfers(_) => {}
                 Due::Age(_) | Due::Birth(_) | Due::CombatRound(_) => {}
                 Due::Physical(actor) => {
-                    if self.state.physical.as_ref().is_some_and(|w| {
+                    if self.state.physical.as_ref().is_some_and(|_| {
                         matches!(
-                            w.actors[&actor].activity,
+                            *self.state.components.activity(actor).expect("body exists"),
                             Activity::Gather { .. }
                                 | Activity::Cultivate { .. }
                                 | Activity::Construct { .. }
                         )
                     }) {
                         production_completions.push(actor);
-                    } else if self.state.physical.as_ref().is_some_and(|w| {
+                    } else if self.state.physical.as_ref().is_some_and(|_| {
                         matches!(
-                            w.actors[&actor].activity,
+                            *self.state.components.activity(actor).expect("body exists"),
                             Activity::Escape { .. }
                                 | Activity::Restrain { .. }
                                 | Activity::Lift { .. }
@@ -1708,9 +1753,9 @@ impl Simulation {
             .record_phase("commit.commit_physical", phase_started);
         self.reconcile_transport();
         for actor in force_completions {
-            if self.state.physical.as_ref().is_some_and(|w| {
+            if self.state.physical.as_ref().is_some_and(|_| {
                 matches!(
-                    w.actors[&actor].activity,
+                    *self.state.components.activity(actor).expect("body exists"),
                     Activity::Escape { .. }
                         | Activity::Restrain { .. }
                         | Activity::Lift { .. }
@@ -1740,7 +1785,7 @@ impl Simulation {
         // or incapacity at that same timestamp has been committed.
         for (actor, origin, destination) in continued_journeys {
             let ready = self.state.physical.as_ref().is_none_or(|world| {
-                let body = &world.actors[&actor];
+                let body = &self.state.components.body(actor).expect("body exists");
                 body.vitals.alive
                     && body.vitals.health > 0
                     && body.vitals.fatigue < world.rules.fatigue_limit
@@ -1851,7 +1896,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|w| w.actors.get(&intent.actor));
+            .and_then(|_| self.state.components.body(intent.actor));
         game_cargo::ClosingFacts {
             alive: self.state.physical.is_none() || body.is_some_and(|body| body.vitals.alive),
             health: if self.state.physical.is_none() {

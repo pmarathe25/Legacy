@@ -74,11 +74,14 @@ impl Simulation {
                 .state
                 .physical
                 .as_ref()
-                .and_then(|w| w.actors.get(&actor))
+                .and_then(|_| self.state.components.body(actor))
                 .is_some_and(|body| {
                     body.vitals.alive
                         && body.vitals.health > 0
-                        && matches!(body.activity, Activity::Idle | Activity::Rest)
+                        && matches!(
+                            self.state.components.activity(actor),
+                            Some(Activity::Idle | Activity::Rest)
+                        )
                 })
             && !self.care_index.contains_key(&actor)
             && self.conversation_actor_available(actor)
@@ -108,7 +111,7 @@ impl Simulation {
     ) -> bool {
         let mind = &self.state.decisions.as_ref().unwrap().minds[&recipient];
         let relation = self.relationship(recipient, sender);
-        let body = &self.state.physical.as_ref().unwrap().actors[&recipient];
+        let body = self.state.components.body(recipient).expect("body exists");
         let physical = self.body_rules(recipient);
         game_characters::social::conversation_willing(
             topic,
@@ -189,13 +192,14 @@ impl Simulation {
             })
     }
     pub(crate) fn social_practical_actor(&self, actor: PersonId) -> bool {
-        let Some(world) = &self.state.physical else {
+        if self.state.physical.is_none() {
             return false;
-        };
+        }
         !self.combat_restricts(actor)
-            && world
-                .actors
-                .get(&actor)
+            && self
+                .state
+                .components
+                .body(actor)
                 .is_some_and(|body| body.vitals.fatigue < self.body_rules(actor).fatigue_limit)
     }
     fn social_material(
@@ -470,14 +474,7 @@ impl Simulation {
                     completes,
                 },
             };
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(id)
-                .unwrap()
-                .activity = activity;
+            *self.state.components.activity_mut(*id).unwrap() = activity;
             self.state
                 .due
                 .entry(completes)
@@ -537,10 +534,18 @@ impl Simulation {
     fn social_interaction_valid(&self, interaction: &Interaction) -> bool {
         let actors = interaction.actors();
         if actors.iter().any(|actor| {
-            !self.state.physical.as_ref().unwrap().actors[actor]
+            !self
+                .state
+                .components
+                .body(*actor)
+                .expect("body exists")
                 .vitals
                 .alive
-                || self.state.physical.as_ref().unwrap().actors[actor]
+                || self
+                    .state
+                    .components
+                    .body(*actor)
+                    .expect("body exists")
                     .vitals
                     .health
                     == 0
@@ -643,19 +648,15 @@ impl Simulation {
             world.participants.remove(id);
         }
         for id in actors {
-            let body = self
-                .state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&id)
-                .unwrap();
             if matches!(
-                body.activity,
+                *self.state.components.activity(id).expect("activity exists"),
                 Activity::Social { .. } | Activity::Instruction { .. } | Activity::Practice { .. }
             ) {
-                body.activity = Activity::Idle;
+                *self
+                    .state
+                    .components
+                    .activity_mut(id)
+                    .expect("activity exists") = Activity::Idle;
             }
             for due in self.state.due.values_mut() {
                 due.retain(|due| !matches!(due,Due::Physical(actor)if *actor==id));
@@ -820,7 +821,11 @@ impl Simulation {
                     .filter(|person| {
                         person.id != child
                             && person.location == location
-                            && self.state.physical.as_ref().unwrap().actors[&person.id]
+                            && self
+                                .state
+                                .components
+                                .body(person.id)
+                                .expect("body exists")
                                 .vitals
                                 .alive
                     })
@@ -928,7 +933,12 @@ impl Simulation {
                     &social.development[&actor],
                     control,
                     independent,
-                    &self.state.physical.as_ref().unwrap().actors[&actor].vitals,
+                    &self
+                        .state
+                        .components
+                        .body(actor)
+                        .expect("body exists")
+                        .vitals,
                     social.rules.aspiration_margin,
                 );
         }
@@ -1176,7 +1186,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     };
     game_characters::social::validate_local(world, state.time)?;
     let fail = || Error::InvalidSave("inconsistent social development".into());
-    let physical = state.physical.as_ref().ok_or_else(fail)?;
+    state.physical.as_ref().ok_or_else(fail)?;
     let decisions = state.decisions.as_ref().ok_or_else(fail)?;
     let people: BTreeMap<_, _> = state
         .people
@@ -1204,7 +1214,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         let actors = interaction.actors();
         for actor in &actors {
             let person = people.get(actor).ok_or_else(fail)?;
-            let body = physical.actors.get(actor).ok_or_else(fail)?;
+            let body = state.components.body(*actor).ok_or_else(fail)?;
             if !body.vitals.alive
                 || !matches!(person.location, Location::AtArea(_))
                 || person.location != people[&actors[0]].location
@@ -1245,7 +1255,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     completes,
                 },
             };
-            if body.activity != activity
+            if state.components.activity(*actor).ok_or_else(fail)? != &activity
                 || !state
                     .due
                     .get(&interaction.completes())
@@ -1304,11 +1314,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             _ => {}
         }
     }
-    for (actor, body) in &physical.actors {
+    for (actor, activity) in state.components.activities() {
         if matches!(
-            body.activity,
+            activity,
             Activity::Social { .. } | Activity::Instruction { .. } | Activity::Practice { .. }
-        ) && !participants.contains_key(actor)
+        ) && !participants.contains_key(&actor)
         {
             return Err(fail());
         }
@@ -1525,7 +1535,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            sim.state.physical.as_ref().unwrap().actors[&teacher].activity,
+            *sim.state.components.activity(teacher).expect("body exists"),
             Activity::Instruction { .. }
         ));
         let frozen = sim.state.decisions.as_ref().unwrap().minds[&teacher]
@@ -1695,7 +1705,10 @@ mod tests {
         assert!(!sim.social_family_intent(actor, recipient));
         assert!(sim.state.events.iter().any(|event|matches!(event.kind,EventKind::SocialRefused{actor:a,recipient:r,..}if a==actor&&r==recipient)));
         assert!(matches!(
-            sim.state.physical.as_ref().unwrap().actors[&recipient].activity,
+            *sim.state
+                .components
+                .activity(recipient)
+                .expect("body exists"),
             Activity::Idle | Activity::Rest
         ));
     }
@@ -2006,7 +2019,7 @@ mod generations {
                 "child {child:?} at {:?}: {:?}, body {:?}",
                 sim.state.time,
                 sim.state.social.as_ref().unwrap().development[child],
-                sim.state.physical.as_ref().unwrap().actors[child].activity,
+                *sim.state.components.activity(*child).expect("body exists"),
             );
             // Institutional rights may emerge independently; personal access
             // permissions are not copied from either parent.

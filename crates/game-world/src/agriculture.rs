@@ -62,21 +62,20 @@ impl Simulation {
         rules.meal_relief = day;
         rules.fatigue_limit = 16 * 3_600_000;
         rules.max_health = 2 * day;
-        for body in sim.state.physical.as_mut().unwrap().actors.values_mut() {
-            body.vitals.health = 2 * day;
+        let actors: Vec<_> = sim
+            .state
+            .components
+            .bodies()
+            .map(|(actor, _)| actor)
+            .collect();
+        for actor in actors {
+            sim.state.components.body_mut(actor).unwrap().vitals.health = 2 * day;
         }
         // Authoring an initial shared field is fixture data, not a government mode.
         // Remove the earlier timber-to-food recipe from this seasonal scenario.
         for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
             sim.interrupt_actor_activity(actor);
-            sim.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&actor)
-                .unwrap()
-                .job = None;
+            sim.state.components.set_job(actor, None)?;
         }
         sim.state.physical.as_mut().unwrap().sites.clear();
         for mind in sim.state.decisions.as_mut().unwrap().minds.values_mut() {
@@ -332,7 +331,11 @@ impl Simulation {
             .field(&self.state.components, field)
             .ok_or(Error::Unavailable)?;
         let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
-        let body = physical.actors.get(&actor).ok_or(Error::Unavailable)?;
+        let body = self
+            .state
+            .components
+            .body(actor)
+            .ok_or(Error::Unavailable)?;
         let environment = self.state.environment.as_ref();
         let area = match self.state.people
             [*self.person_index.get(&actor).ok_or(Error::Unavailable)?]
@@ -448,14 +451,7 @@ impl Simulation {
             .insert_crop(&mut self.state.components, field, plan.crop)
             .expect("validated component insertion");
         world.jobs.insert(actor, plan.job);
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Cultivate {
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Cultivate {
             field,
             operation,
             completes,
@@ -489,7 +485,11 @@ impl Simulation {
         else {
             return;
         };
-        let valid = self.state.physical.as_ref().unwrap().actors[&actor]
+        let valid = self
+            .state
+            .components
+            .body(actor)
+            .expect("body exists")
             .vitals
             .alive;
         if !valid {
@@ -553,14 +553,7 @@ impl Simulation {
         world
             .insert_soil(&mut self.state.components, job.field, plan.soil)
             .expect("validated component insertion");
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Idle;
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
         self.emit(EventKind::Cultivated {
             actor,
             field: job.field,
@@ -579,7 +572,7 @@ impl Simulation {
 
     pub(crate) fn agriculture_view(&self, actor: PersonId) -> Option<AgricultureView> {
         let world = self.state.agriculture.as_ref()?;
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive {
             return None;
         }
@@ -741,15 +734,13 @@ impl Simulation {
                     .state
                     .physical
                     .as_ref()
-                    .and_then(|w| w.actors.get(actor))
-                    .is_none_or(|body| {
-                        !body.vitals.alive
-                            || body.activity
-                                != (Activity::Cultivate {
-                                    field: job.field,
-                                    operation: job.operation,
-                                    completes: job.completes,
-                                })
+                    .and_then(|_| self.state.components.body(*actor))
+                    .is_none_or(|body| !body.vitals.alive)
+                || self.state.components.activity(*actor)
+                    != Some(&Activity::Cultivate {
+                        field: job.field,
+                        operation: job.operation,
+                        completes: job.completes,
                     })
                 || !self.state.due.get(&job.completes).is_some_and(|events| {
                     events

@@ -280,7 +280,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|w| w.actors.get(&actor))
+            .and_then(|_| self.state.components.body(actor))
             .ok_or(Error::Unavailable)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return Err(Error::Unavailable);
@@ -767,14 +767,7 @@ impl Simulation {
             .get_mut(&speaker)
             .unwrap()
             .pop_front();
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&speaker)
-            .unwrap()
-            .activity = Activity::ArmyTalk {
+        *self.state.components.activity_mut(speaker).unwrap() = Activity::ArmyTalk {
             army: message.message.army(),
             listener: message.listener,
             completes,
@@ -809,16 +802,9 @@ impl Simulation {
                 .unwrap()
                 .talks
                 .remove(&talk.speaker);
-            if matches!(self.state.physical.as_ref().unwrap().actors[&talk.speaker].activity,Activity::ArmyTalk {completes,..} if completes==talk.completes)
+            if matches!(*self.state.components.activity(talk.speaker).expect("body exists"),Activity::ArmyTalk {completes,..} if completes==talk.completes)
             {
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&talk.speaker)
-                    .unwrap()
-                    .activity = Activity::Idle;
+                *self.state.components.activity_mut(talk.speaker).unwrap() = Activity::Idle;
             }
         }
         if self
@@ -830,18 +816,11 @@ impl Simulation {
             .remove(&actor)
             .is_some()
             && matches!(
-                self.state.physical.as_ref().unwrap().actors[&actor].activity,
+                *self.state.components.activity(actor).expect("body exists"),
                 Activity::ArmyApproach { .. }
             )
         {
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&actor)
-                .unwrap()
-                .activity = Activity::Idle;
+            *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
         }
         // Interrupted speech is not received or silently retried.
     }
@@ -1013,14 +992,7 @@ impl Simulation {
         };
         self.validate_army_approach(&approach, false)?;
         self.interrupt_actor_activity(actor);
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::ArmyApproach {
+        *self.state.components.activity_mut(actor).unwrap() = Activity::ArmyApproach {
             mission,
             encounter,
             completes,
@@ -1065,7 +1037,11 @@ impl Simulation {
             || e.fighters.contains_key(&a.actor)
             || self.army_area(a.actor).ok() != Some(a.area)
             || !self.can_fight(a.actor)
-            || self.state.physical.as_ref().unwrap().actors[&a.actor]
+            || self
+                .state
+                .components
+                .body(a.actor)
+                .expect("body exists")
                 .vitals
                 .fatigue
                 >= self.body_rules(a.actor).fatigue_limit
@@ -1080,7 +1056,11 @@ impl Simulation {
             || e.fighters
                 .get(&a.target)
                 .is_none_or(|f| f.withdrawn || f.surrendered)
-            || !self.state.physical.as_ref().unwrap().actors[&a.target]
+            || !self
+                .state
+                .components
+                .body(a.target)
+                .expect("body exists")
                 .vitals
                 .alive
             || (completed && a.completes != self.state.time)
@@ -1161,7 +1141,11 @@ impl Simulation {
         for talk in talks {
             let valid = self.army_area(talk.speaker).ok() == Some(talk.area)
                 && self.army_area(talk.listener).ok() == Some(talk.area)
-                && self.state.physical.as_ref().unwrap().actors[&talk.speaker].activity
+                && *self
+                    .state
+                    .components
+                    .activity(talk.speaker)
+                    .expect("body exists")
                     == Activity::ArmyTalk {
                         army: talk.message.army(),
                         listener: talk.listener,
@@ -1173,16 +1157,9 @@ impl Simulation {
                 .unwrap()
                 .talks
                 .remove(&talk.speaker);
-            if matches!(self.state.physical.as_ref().unwrap().actors[&talk.speaker].activity,Activity::ArmyTalk {completes,..} if completes==talk.completes)
+            if matches!(*self.state.components.activity(talk.speaker).expect("body exists"),Activity::ArmyTalk {completes,..} if completes==talk.completes)
             {
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(&talk.speaker)
-                    .unwrap()
-                    .activity = Activity::Idle;
+                *self.state.components.activity_mut(talk.speaker).unwrap() = Activity::Idle;
             }
             if !valid {
                 continue;
@@ -1582,7 +1559,11 @@ impl Simulation {
                 || t.started.0.checked_add(w.rules.talk_time.0) != Some(t.completes.0)
                 || self.army_area(*speaker).ok() != Some(t.area)
                 || self.army_area(t.listener).ok() != Some(t.area)
-                || self.state.physical.as_ref().unwrap().actors[speaker].activity
+                || *self
+                    .state
+                    .components
+                    .activity(*speaker)
+                    .expect("body exists")
                     != (Activity::ArmyTalk {
                         army: t.message.army(),
                         listener: t.listener,
@@ -1616,7 +1597,7 @@ impl Simulation {
                     .0
                     .checked_add(self.state.combat.as_ref().unwrap().rules.round.0)
                     != Some(a.completes.0)
-                || self.state.physical.as_ref().unwrap().actors[actor].activity
+                || *self.state.components.activity(*actor).expect("body exists")
                     != (Activity::ArmyApproach {
                         mission: a.mission,
                         encounter: a.encounter,
@@ -1627,12 +1608,12 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        for (actor, b) in &self.state.physical.as_ref().unwrap().actors {
-            if matches!(b.activity, Activity::ArmyTalk { .. }) != w.talks.contains_key(actor) {
+        for (actor, activity) in self.state.components.activities() {
+            if matches!(activity, Activity::ArmyTalk { .. }) != w.talks.contains_key(&actor) {
                 return Err(bad());
             }
-            if matches!(b.activity, Activity::ArmyApproach { .. })
-                != w.approaches.contains_key(actor)
+            if matches!(activity, Activity::ArmyApproach { .. })
+                != w.approaches.contains_key(&actor)
             {
                 return Err(bad());
             }

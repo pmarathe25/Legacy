@@ -780,7 +780,10 @@ mod tests {
             500
         );
         assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&child]
+            sim.state
+                .components
+                .body(child)
+                .expect("body exists")
                 .vitals
                 .health,
             sim.body_rules(child).max_health
@@ -900,14 +903,8 @@ mod tests {
         strong
             .debug_actor_command(actor, Command::Work { site })
             .unwrap();
-        let weak_job = weak.state.physical.as_ref().unwrap().actors[&actor]
-            .job
-            .as_ref()
-            .unwrap();
-        let strong_job = strong.state.physical.as_ref().unwrap().actors[&actor]
-            .job
-            .as_ref()
-            .unwrap();
+        let weak_job = weak.state.components.job(actor).unwrap();
+        let strong_job = strong.state.components.job(actor).unwrap();
         let weak_duration = skills::work_duration(weak_job.remaining, weak_job.rate, 0).unwrap();
         let strong_duration =
             skills::work_duration(strong_job.remaining, strong_job.rate, 0).unwrap();

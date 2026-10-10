@@ -1,3 +1,4 @@
+mod support;
 use game_api::*;
 use game_world::{
     decisions::{Aspiration, Personality, Relationship},
@@ -117,7 +118,10 @@ fn guided_childhood_learning_takes_two_real_primary_actions_and_does_not_grant_r
     );
     for actor in [child, teacher] {
         assert!(matches!(
-            sim.canonical_state().physical.as_ref().unwrap().actors[&actor].activity,
+            *sim.canonical_state()
+                .components
+                .activity(actor)
+                .expect("activity exists"),
             Activity::Lesson { .. }
         ));
     }
@@ -180,11 +184,17 @@ fn interrupting_either_lesson_participant_discards_unfinished_learning() {
             );
         }
         assert!(!matches!(
-            sim.canonical_state().physical.as_ref().unwrap().actors[&teacher].activity,
+            *sim.canonical_state()
+                .components
+                .activity(teacher)
+                .expect("activity exists"),
             Activity::Lesson { .. }
         ));
         assert!(!matches!(
-            sim.canonical_state().physical.as_ref().unwrap().actors[&child].activity,
+            *sim.canonical_state()
+                .components
+                .activity(child)
+                .expect("activity exists"),
             Activity::Lesson { .. }
         ));
         sim.advance(SimDuration(90_000)).unwrap();
@@ -324,7 +334,10 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
         },
     );
     assert!(matches!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&guardian].activity,
+        *sim.canonical_state()
+            .components
+            .activity(guardian)
+            .expect("activity exists"),
         Activity::Work { .. }
     ));
     sim.advance(MINUTE).unwrap();
@@ -442,7 +455,7 @@ fn pending_coupled_lessons_preserve_exactly_once_learning_across_workers_saves_a
     a.advance(SimDuration(30_000)).unwrap();
     let saved = a.save().unwrap();
     let mut invalid: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-    invalid["state"]["physical"]["actors"][child.0.to_string()]["activity"]["Lesson"]["topic"] =
+    support::component(&mut invalid, "coordination/activity", child)["Lesson"]["topic"] =
         serde_json::json!("Travel");
     assert!(
         Simulation::load(&serde_json::to_vec(&invalid).unwrap(), Execution::default()).is_err()
@@ -646,7 +659,10 @@ fn a_confined_guardian_senses_the_newborn_but_regeneration_does_not_free_them() 
         custody
     );
     assert_eq!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&guardian]
+        sim.canonical_state()
+            .components
+            .body(guardian)
+            .expect("body exists")
             .vitals
             .health,
         180_000
@@ -885,12 +901,19 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
         .max_health;
     sim.debug_injure(guardian, health).unwrap();
     assert!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&guardian]
+        sim.canonical_state()
+            .components
+            .body(guardian)
+            .expect("body exists")
             .vitals
             .alive
     );
     sim.advance(SimDuration(60_000)).unwrap();
-    let body = &sim.canonical_state().physical.as_ref().unwrap().actors[&guardian];
+    let body = &sim
+        .canonical_state()
+        .components
+        .body(guardian)
+        .expect("body exists");
     assert_eq!(body.vitals.health, 60_000);
     assert_eq!(
         sim.canonical_state()
@@ -907,7 +930,10 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
     );
     sim.advance(SimDuration(120_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&guardian]
+        sim.canonical_state()
+            .components
+            .body(guardian)
+            .expect("body exists")
             .vitals
             .health,
         health

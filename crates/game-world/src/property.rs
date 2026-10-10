@@ -123,7 +123,7 @@ impl Simulation {
     }
 
     fn property_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive {
             return None;
         }
@@ -163,7 +163,11 @@ impl Simulation {
             && self.independent(actor)
             && !self.combat_restricts(actor)
             && !self.care_index.contains_key(&actor)
-            && self.state.physical.as_ref().unwrap().actors[&actor]
+            && self
+                .state
+                .components
+                .body(actor)
+                .expect("body exists")
                 .vitals
                 .health
                 > 0
@@ -179,8 +183,9 @@ impl Simulation {
                 .physical
                 .as_ref()
                 .and_then(|w| {
-                    w.actors
-                        .get(&actor)
+                    self.state
+                        .components
+                        .body(actor)
                         .map(|body| body.vitals.fatigue < w.rules.fatigue_limit)
                 })
                 .unwrap_or(false),
@@ -448,16 +453,9 @@ impl Simulation {
             match effect {
                 Effect::Interrupt { actor } => self.interrupt_actor_activity_except_property(actor),
                 Effect::ClearTaking { actor } => {
-                    let body = self
-                        .state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap();
-                    if matches!(body.activity, Activity::Take { .. }) {
-                        body.activity = Activity::Idle;
+                    let activity = self.state.components.activity_mut(actor).unwrap();
+                    if matches!(activity, Activity::Take { .. }) {
+                        *activity = Activity::Idle;
                     }
                     for due in self.state.due.values_mut() {
                         due.retain(|d| !matches!(d,Due::Physical(id) if *id==actor));
@@ -469,17 +467,10 @@ impl Simulation {
                     completes,
                     interrupted,
                 } => {
-                    let body = self
-                        .state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&sender)
-                        .unwrap();
-                    if matches!(body.activity,Activity::ReportIncident {completes:at,..} if at==completes)
+                    let activity = self.state.components.activity_mut(sender).unwrap();
+                    if matches!(*activity,Activity::ReportIncident {completes:at,..} if at==completes)
                     {
-                        body.activity = Activity::Idle;
+                        *activity = Activity::Idle;
                     }
                     if let Some(due) = self.state.due.get_mut(&completes) {
                         due.retain(|d| !matches!(d,Due::Physical(id) if *id==sender));
@@ -571,14 +562,7 @@ impl Simulation {
                     quantity,
                     completes,
                 } => {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap()
-                        .activity = Activity::Take {
+                    *self.state.components.activity_mut(actor).unwrap() = Activity::Take {
                         source,
                         destination,
                         quantity,
@@ -650,18 +634,12 @@ impl Simulation {
                     incident,
                     completes,
                 } => {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&sender)
-                        .unwrap()
-                        .activity = Activity::ReportIncident {
-                        recipient,
-                        incident,
-                        completes,
-                    };
+                    *self.state.components.activity_mut(sender).unwrap() =
+                        Activity::ReportIncident {
+                            recipient,
+                            incident,
+                            completes,
+                        };
                     self.state
                         .due
                         .entry(completes)
@@ -787,8 +765,8 @@ impl Simulation {
                 .state
                 .physical
                 .as_ref()
-                .and_then(|w| w.actors.get(&report.recipient))
-                .is_some_and(|body| matches!(body.activity, Activity::Idle | Activity::Rest));
+                .and_then(|_| self.state.components.activity(report.recipient))
+                .is_some_and(|activity| matches!(activity, Activity::Idle | Activity::Rest));
             world.prepare_finish_report(
                 self.property_actor_facts(actor),
                 recipient,
@@ -1203,7 +1181,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         .iter()
         .map(|person| (person.id, person))
         .collect();
-    let physical = state.physical.as_ref().ok_or_else(fail)?;
+    state.physical.as_ref().ok_or_else(fail)?;
     if state.decisions.is_none()
         || state.agreements.is_none()
         || state.combat.is_none()
@@ -1275,12 +1253,12 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     for (actor, id) in &world.pending {
         let incident = &world.incidents[id];
-        let body = physical.actors.get(actor).ok_or_else(fail)?;
+        let body = state.components.body(*actor).ok_or_else(fail)?;
         if !body.vitals.alive
             || people
                 .get(actor)
                 .is_none_or(|person| person.location != Location::AtArea(incident.area))
-            || !matches!(body.activity, Activity::Take { source, destination, quantity, completes }
+            || !matches!(*state.components.activity(*actor).ok_or_else(fail)?, Activity::Take { source, destination, quantity, completes }
                 if source == incident.source && destination == incident.destination && quantity == incident.quantity && completes == incident.completes)
             || !state.due.get(&incident.completes).is_some_and(|due| {
                 due.iter()
@@ -1293,22 +1271,24 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     for (sender, report) in &world.reports {
         if !known_sender(&report.snapshot)
             || [*sender, report.recipient].iter().any(|actor| people.get(actor).is_none_or(|person| person.location != Location::AtArea(report.area)))
-            || !physical.actors.get(&report.recipient).is_some_and(|body| body.vitals.alive && matches!(body.activity, Activity::Idle | Activity::Rest))
-            || !physical.actors.get(sender).is_some_and(|body| body.vitals.alive && matches!(body.activity, Activity::ReportIncident { recipient, incident, completes }
+            || !state.components.body(report.recipient).is_some_and(|body| body.vitals.alive)
+            || !state.components.activity(report.recipient).is_some_and(|activity| matches!(activity, Activity::Idle | Activity::Rest))
+            || !state.components.body(*sender).is_some_and(|body| body.vitals.alive)
+            || !state.components.activity(*sender).is_some_and(|activity| matches!(*activity, Activity::ReportIncident { recipient, incident, completes }
                 if recipient == report.recipient && incident == report.snapshot.incident.id && completes == report.completes))
             || !state.due.get(&report.completes).is_some_and(|due| due.iter().any(|event| matches!(event, Due::Physical(id) if id == sender)))
         {
             return Err(fail());
         }
     }
-    for (actor, body) in &physical.actors {
-        match body.activity {
-            Activity::Take { .. } if !world.pending.contains_key(actor) => return Err(fail()),
+    for (actor, activity) in state.components.activities() {
+        match *activity {
+            Activity::Take { .. } if !world.pending.contains_key(&actor) => return Err(fail()),
             Activity::ReportIncident {
                 recipient,
                 incident,
                 completes,
-            } if !world.reports.get(actor).is_some_and(|report| {
+            } if !world.reports.get(&actor).is_some_and(|report| {
                 report.recipient == recipient
                     && report.snapshot.incident.id == incident
                     && report.completes == completes

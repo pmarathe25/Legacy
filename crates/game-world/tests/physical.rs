@@ -62,13 +62,19 @@ fn reachable_food_requires_consumption_while_guardians_have_no_hunger_need() {
     assert_eq!(food_total(&sim), before - 21_000);
     let state = sim.canonical_state();
     assert_eq!(
-        state.physical.as_ref().unwrap().actors[&guardian]
+        state
+            .components
+            .body(guardian)
+            .expect("body exists")
             .vitals
             .hunger,
         0
     );
     assert!(
-        state.physical.as_ref().unwrap().actors[&guardian]
+        state
+            .components
+            .body(guardian)
+            .expect("body exists")
             .vitals
             .alive
     );
@@ -332,10 +338,9 @@ fn guardian_injury_recovers_and_mortal_rest_preserves_chunking() {
     assert_eq!(reference.canonical_state(), split.canonical_state());
     let vitals = &reference
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .actors[&guardian]
+        .components
+        .body(guardian)
+        .expect("body exists")
         .vitals;
     assert_eq!(vitals.health, 180_000);
     assert_eq!(vitals.hunger, 0);
@@ -524,7 +529,7 @@ fn arriving_at_a_body_limit(exhaustion: bool) -> (Simulation, PersonId) {
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let mut state: CanonicalState = serde_json::from_value(envelope["state"].take()).unwrap();
     let physical = state.physical.as_mut().unwrap();
-    let body = physical.actors.get_mut(&ruler).unwrap();
+    let body = state.components.body_mut(ruler).unwrap();
     body.vitals.fatigue = if exhaustion {
         physical.rules.fatigue_limit - 120_000
     } else {
@@ -555,7 +560,14 @@ fn death_at_an_intermediate_arrival_does_not_publish_a_phantom_next_leg() {
     let (mut sim, ruler) = arriving_at_a_body_limit(false);
     sim.advance(SimDuration(120_000)).unwrap();
     let state = sim.canonical_state();
-    assert!(!state.physical.as_ref().unwrap().actors[&ruler].vitals.alive);
+    assert!(
+        !state
+            .components
+            .body(ruler)
+            .expect("body exists")
+            .vitals
+            .alive
+    );
     assert_eq!(state.people[0].location, Location::AtArea(AreaId(1)));
     assert!(state.people[0].route.is_empty());
     assert!(
@@ -587,7 +599,10 @@ fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
         Err(Error::Unavailable)
     );
     assert!(
-        sim.canonical_state().physical.as_ref().unwrap().actors[&ruler]
+        sim.canonical_state()
+            .components
+            .body(ruler)
+            .expect("body exists")
             .vitals
             .alive
     );

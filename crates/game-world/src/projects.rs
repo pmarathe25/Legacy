@@ -147,11 +147,8 @@ impl Simulation {
         for person in &people {
             sim.debug_actor_command(*person, Command::Cancel)?;
             sim.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(person)
+                .components
+                .body_mut(*person)
                 .unwrap()
                 .vitals
                 .health = 48 * hour;
@@ -298,7 +295,7 @@ impl Simulation {
         Ok(sim)
     }
     fn project_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
@@ -380,9 +377,10 @@ impl Simulation {
         let plan = world.projects.get(&project).ok_or(Error::Unavailable)?;
         let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let mut facts = self.project_actor_facts(actor, Some(project));
-        facts.capable &= physical
-            .actors
-            .get(&actor)
+        facts.capable &= self
+            .state
+            .components
+            .body(actor)
             .is_some_and(|body| body.vitals.fatigue < physical.rules.fatigue_limit);
         Ok(game_projects::ConstructionFacts {
             actor: facts,
@@ -626,8 +624,8 @@ impl Simulation {
                         .state
                         .physical
                         .as_ref()
-                        .and_then(|w| w.actors.get(actor))
-                        .is_some_and(|body| matches!(body.activity, Activity::Construct { .. }))
+                        .and_then(|_| self.state.components.activity(*actor))
+                        .is_some_and(|activity| matches!(activity, Activity::Construct { .. }))
                     {
                         0
                     } else {
@@ -686,14 +684,8 @@ impl Simulation {
                     actor,
                     completes,
                 } => {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap()
-                        .activity = Activity::Construct { project, completes };
+                    *self.state.components.activity_mut(actor).unwrap() =
+                        Activity::Construct { project, completes };
                     self.state
                         .due
                         .entry(completes)
@@ -781,14 +773,7 @@ impl Simulation {
                                 .expect("validated component insertion");
                         }
                     }
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap()
-                        .activity = Activity::Idle;
+                    *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
                     self.emit(EventKind::ProjectCompleted {
                         project,
                         enterprise,
@@ -836,17 +821,14 @@ impl Simulation {
             .physical
             .as_ref()
             .into_iter()
-            .flat_map(|w| w.actors.iter())
+            .flat_map(|_| self.state.components.bodies())
             .filter_map(|(actor, body)| {
                 if let Activity::Work { site } | Activity::Cultivate { field: site, .. } =
-                    body.activity
+                    self.state.components.activity(actor)?
                     && body.vitals.alive
                     && body.vitals.health > 0
                 {
-                    Some(game_projects::EnterpriseWork {
-                        actor: *actor,
-                        site,
-                    })
+                    Some(game_projects::EnterpriseWork { actor, site: *site })
                 } else {
                     None
                 }
@@ -1135,7 +1117,7 @@ impl Simulation {
                 ProjectKind::Workshop=>{
                     let site=&self.state.physical.as_ref().unwrap().sites[&asset.site];
                     let output=&self.state.inventories[&site.output];
-                    (self.state.physical.as_ref().unwrap().actors.values().any(|body|matches!(body.activity,Activity::Work {site:id} if id==site.id)),false,
+                    (self.state.components.activities().any(|(_,activity)|matches!(activity,Activity::Work {site:id} if *id==site.id)),false,
                         Quantity(output.capacity.0.saturating_sub(output.quantity.0)),site.input_quantity,site.output_quantity)
                 }
             };
@@ -2036,10 +2018,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         let plan = world.projects.get(&job.project).ok_or_else(fail)?;
         if !people.contains_key(actor)
             || people[actor].location != Location::AtArea(plan.area)
-            || physical.actors.get(actor).is_none_or(|body| {
+            || state.components.body(*actor).is_none_or(|body| {
                 !body.vitals.alive
-                    || body.activity
-                        != (Activity::Construct {
+                    || state.components.activity(*actor)
+                        != Some(&Activity::Construct {
                             project: job.project,
                             completes: job.completes,
                         })
@@ -2053,8 +2035,8 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
-    for (actor, body) in &physical.actors {
-        if matches!(body.activity, Activity::Construct { .. }) && !world.jobs.contains_key(actor) {
+    for (actor, activity) in state.components.activities() {
+        if matches!(activity, Activity::Construct { .. }) && !world.jobs.contains_key(&actor) {
             return Err(fail());
         }
     }
@@ -2342,7 +2324,10 @@ mod farm_tests {
         // decisions and physical production continue at their configured rates.
         sim.advance(MINUTE).unwrap();
         assert!(
-            sim.state.physical.as_ref().unwrap().actors[&farmer]
+            sim.state
+                .components
+                .body(farmer)
+                .expect("body exists")
                 .vitals
                 .alive
         );

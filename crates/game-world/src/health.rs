@@ -142,7 +142,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let Some(world) = &state.health else {
         return Ok(());
     };
-    let physical = state
+    state
         .physical
         .as_ref()
         .ok_or_else(|| Error::InvalidSave("health requires physical bodies".into()))?;
@@ -151,10 +151,13 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         .people
         .iter()
         .map(|person| {
-            let body = physical.actors.get(&person.id).ok_or_else(|| {
+            let body = state.components.body(person.id).ok_or_else(|| {
                 Error::InvalidSave("health requires a body for each person".into())
             })?;
-            let health_work = match body.activity {
+            let activity = state.components.activity(person.id).ok_or_else(|| {
+                Error::InvalidSave("health requires an activity for each person".into())
+            })?;
+            let health_work = match *activity {
                 Activity::HealthWork { kind, completes } => {
                     Some(HealthWorkLink { kind, completes })
                 }
@@ -226,7 +229,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|w| w.actors.get(&actor))
+            .and_then(|_| self.state.components.body(actor))
             .ok_or(Error::Unavailable)?;
         if !body.vitals.alive
             || self.in_combat(actor)
@@ -285,7 +288,7 @@ impl Simulation {
         {
             anchor = carrier;
         }
-        match self.state.physical.as_ref()?.actors[&anchor].activity {
+        match *self.state.components.activity(anchor).unwrap() {
             Activity::Combat { encounter } => Some((encounter, anchor)),
             _ => None,
         }
@@ -468,8 +471,8 @@ impl Simulation {
                 .state
                 .physical
                 .as_ref()
-                .and_then(|w| w.actors.get(&patient))
-                .is_some_and(|body| body.activity == Activity::Rest),
+                .and_then(|_| self.state.components.activity(patient))
+                .is_some_and(|activity| *activity == Activity::Rest),
             physiology,
         }
     }
@@ -508,7 +511,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .is_some_and(|world| world.actors[&passenger].vitals.alive);
+            .is_some_and(|_| self.state.components.body(passenger).unwrap().vitals.alive);
         let Some(world) = &mut self.state.health else {
             return;
         };
@@ -638,10 +641,8 @@ impl Simulation {
                             .state
                             .physical
                             .as_ref()
-                            .and_then(|w| w.actors.get(actor))
-                            .is_some_and(|body| {
-                                matches!(body.activity, Activity::HealthWork { .. })
-                            })
+                            .and_then(|_| self.state.components.activity(*actor))
+                            .is_some_and(|activity| matches!(activity, Activity::HealthWork { .. }))
                         {
                             0
                         } else {
@@ -672,17 +673,9 @@ impl Simulation {
                     self.interrupt_actor_activity_except_health(actor)
                 }
                 HealthEffect::ClearWork { actor, completes } => {
-                    let body = self
-                        .state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap();
-                    if matches!(body.activity,Activity::HealthWork {completes:at,..} if at==completes)
-                    {
-                        body.activity = Activity::Idle;
+                    let activity = self.state.components.activity_mut(actor).unwrap();
+                    if matches!(*activity,Activity::HealthWork {completes:at,..} if at==completes) {
+                        *activity = Activity::Idle;
                     }
                 }
                 HealthEffect::Start {
@@ -690,24 +683,11 @@ impl Simulation {
                     kind,
                     completes,
                 } => {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap()
-                        .activity = Activity::HealthWork { kind, completes };
+                    *self.state.components.activity_mut(actor).unwrap() =
+                        Activity::HealthWork { kind, completes };
                 }
                 HealthEffect::Rest { actor } => {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&actor)
-                        .unwrap()
-                        .activity = Activity::Rest;
+                    *self.state.components.activity_mut(actor).unwrap() = Activity::Rest;
                 }
                 HealthEffect::Consume {
                     actor,
@@ -775,21 +755,19 @@ impl Simulation {
         {
             return self
                 .state
-                .physical
-                .as_ref()?
-                .actors
-                .get(&actor)?
+                .components
+                .body(actor)?
                 .vitals
                 .alive
                 .then(|| self.effective_shelter(carrier))
                 .flatten();
         }
         let shelter = w.shelters.get(w.occupancy.get(&actor)?)?;
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive
             || self.resolved_location(actor) != Location::AtArea(shelter.area)
             || matches!(
-                body.activity,
+                *self.state.components.activity(actor)?,
                 Activity::Combat { .. }
                     | Activity::Cultivate { .. }
                     | Activity::Gather { .. }
@@ -829,9 +807,8 @@ impl Simulation {
         if sa != sb {
             return false;
         }
-        let physical = self.state.physical.as_ref().unwrap();
         for (giver, receiver) in [(a, b), (b, a)] {
-            match physical.actors[&giver].activity {
+            match *self.state.components.activity(giver).unwrap() {
                 Activity::Care { child, .. } | Activity::Comfort { child, .. }
                     if child == receiver =>
                 {
@@ -886,10 +863,7 @@ impl Simulation {
                 }
             };
             for carried in chain.into_iter().rev() {
-                if !self.state.physical.as_ref().unwrap().actors[&carried]
-                    .vitals
-                    .alive
-                {
+                if !self.state.components.body(carried).unwrap().vitals.alive {
                     shelter = None;
                 }
                 shelters.insert(carried, shelter);
@@ -993,15 +967,15 @@ impl Simulation {
                 add_pair(job.actor, patient, true);
             }
         }
-        for (actor, body) in &self.state.physical.as_ref().unwrap().actors {
-            match body.activity {
+        for (actor, activity) in self.state.components.activities() {
+            match *activity {
                 Activity::Care { child, .. } | Activity::Comfort { child, .. } => {
-                    add_pair(*actor, child, false)
+                    add_pair(actor, child, false)
                 }
                 Activity::Tell { recipient, .. } | Activity::RealmTalk { recipient, .. } => {
-                    add_pair(*actor, recipient, false)
+                    add_pair(actor, recipient, false)
                 }
-                Activity::ArmyTalk { listener, .. } => add_pair(*actor, listener, false),
+                Activity::ArmyTalk { listener, .. } => add_pair(actor, listener, false),
                 _ => {}
             }
         }
@@ -1041,12 +1015,9 @@ impl Simulation {
             state,
             now: self.state.time,
             next,
-            alive: self.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .alive,
+            alive: self.state.components.body(actor).unwrap().vitals.alive,
             thirst_enabled: !self.state.people[self.person_index[&actor]].hunger_exempt,
-            resting: self.state.physical.as_ref().unwrap().actors[&actor].activity
-                == Activity::Rest,
+            resting: *self.state.components.activity(actor).unwrap() == Activity::Rest,
             exposure,
             physiology: self.health_physiology(actor),
         }
@@ -1118,10 +1089,7 @@ impl Simulation {
         let exposures = self.indexed_health_exposures();
         let mut jobs = BTreeMap::new();
         for person in &self.state.people {
-            if !self.state.physical.as_ref().unwrap().actors[&person.id]
-                .vitals
-                .alive
-            {
+            if !self.state.components.body(person.id).unwrap().vitals.alive {
                 continue;
             }
             let empty = Clinical::default();
@@ -1183,23 +1151,14 @@ impl Simulation {
             .into_iter()
             .filter(|(actor, _)| {
                 live_jobs.contains(actor)
-                    && self.state.physical.as_ref().unwrap().actors[actor]
-                        .vitals
-                        .alive
+                    && self.state.components.body(*actor).unwrap().vitals.alive
             })
             .collect();
         for (actor, job) in &w.jobs {
             if let Activity::HealthWork { kind, .. } =
-                self.state.physical.as_ref().unwrap().actors[actor].activity
+                *self.state.components.activity(*actor).unwrap()
             {
-                self.state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(actor)
-                    .unwrap()
-                    .activity = Activity::HealthWork {
+                *self.state.components.activity_mut(*actor).unwrap() = Activity::HealthWork {
                     kind,
                     completes: job.completes,
                 };
@@ -1217,10 +1176,7 @@ impl Simulation {
         self.ensure_event_capacity(w.clinical.len() * 5 + w.jobs.len() * 5 + 2)?;
         let ids: Vec<_> = w.clinical.keys().copied().collect();
         for actor in ids {
-            if !self.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .alive
-            {
+            if !self.state.components.body(actor).unwrap().vitals.alive {
                 self.cancel_health_activity(actor);
                 continue;
             }
@@ -1262,7 +1218,7 @@ impl Simulation {
             let valid = self.health_area(job.actor, true).ok() == Some(job.area)
                 && (!matches!(job.work, Work::Boil { .. } | Work::Shelter { .. })
                     || closing_equipment.get(&job.actor).copied().unwrap_or(false))
-                && matches!(self.state.physical.as_ref().unwrap().actors[&job.actor].activity,Activity::HealthWork {completes,..} if completes==job.completes);
+                && matches!(*self.state.components.activity(job.actor).unwrap(),Activity::HealthWork {completes,..} if completes==job.completes);
             let facts = match job.work {
                 Work::Drink { source, .. } => game_health::FinishFacts::Drink {
                     water: self.health_stock_facts(job.actor, source)?,
@@ -1414,9 +1370,7 @@ impl Simulation {
             nausea: has(IllnessKind::Enteric),
             cough: has(IllnessKind::Respiratory),
             shivering: state.is_some_and(|c| c.cold >= rules.cold_harm / 2),
-            wounded: self.state.physical.as_ref().unwrap().actors[&person]
-                .vitals
-                .health
+            wounded: self.state.components.body(person).unwrap().vitals.health
                 < self.body_rules(person).max_health / 2,
             observed_at: self.state.time,
         }
@@ -1487,9 +1441,7 @@ impl Simulation {
             .people
             .iter()
             .filter(|person| {
-                self.state.physical.as_ref().unwrap().actors[&person.id]
-                    .vitals
-                    .alive
+                self.state.components.body(person.id).unwrap().vitals.alive
                     && !self.transport_is_moving(person.id)
                     && locations.contains_key(&person.id)
             })
@@ -1836,7 +1788,7 @@ impl Simulation {
             if job.actor == self.state.ruler && !self.past_life_controls_actor(job.actor) {
                 continue;
             }
-            let body = &self.state.physical.as_ref().unwrap().actors[&job.actor];
+            let body = self.state.components.body(job.actor).unwrap();
             let physical = self.body_rules(job.actor);
             if game_health::should_pause_work(
                 &job.work,
@@ -1916,7 +1868,7 @@ impl Simulation {
             .collect();
         for caregiver in healers {
             let mind = &self.state.decisions.as_ref().unwrap().minds[&caregiver];
-            let body = &self.state.physical.as_ref().unwrap().actors[&caregiver];
+            let body = self.state.components.body(caregiver).unwrap();
             let rules = &self.state.health.as_ref().unwrap().rules;
             let physical = self.body_rules(caregiver);
             let stocks = self.remembered_health_stocks(caregiver, None);
@@ -2055,7 +2007,7 @@ impl Simulation {
         let Some(physical) = &self.state.physical else {
             return false;
         };
-        let Some(body) = physical.actors.get(&job.actor) else {
+        let Some(body) = self.state.components.body(job.actor) else {
             return false;
         };
         let patient = job
@@ -2250,7 +2202,7 @@ impl Simulation {
         patient: PersonId,
     ) -> Option<(InventoryId, InventoryId)> {
         let mind = self.state.decisions.as_ref()?.minds.get(&giver)?;
-        let body = self.state.physical.as_ref()?.actors.get(&giver)?;
+        let body = self.state.components.body(giver)?;
         let rules = &self.state.health.as_ref()?.rules;
         let physical = self.body_rules(giver);
         let stocks = self.remembered_health_stocks(giver, None);
@@ -2357,9 +2309,7 @@ mod integration_tests {
         }
         assert_eq!(whole.canonical_state(), sliced.canonical_state());
         assert!(
-            whole.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .health
+            whole.state.components.body(actor).unwrap().vitals.health
                 < whole.body_rules(actor).max_health
         );
         assert_eq!(whole.state.health.as_ref().unwrap().rules, rules);
@@ -2485,15 +2435,7 @@ mod integration_tests {
                 );
         }
         assert!(sim.willing_health_supplies(actor, actor).is_some());
-        sim.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .vitals
-            .hunger = 250_000;
+        sim.state.components.body_mut(actor).unwrap().vitals.hunger = 250_000;
         assert!(250_000 < sim.state.physical.as_ref().unwrap().rules.meal_relief);
         assert!(250_000 > sim.body_rules(actor).meal_relief);
         assert!(sim.willing_health_supplies(actor, actor).is_none());
@@ -2605,16 +2547,9 @@ mod integration_tests {
                             kind: IllnessKind::Enteric
                         }))
         );
-        let before = sim.state.physical.as_ref().unwrap().actors[&actor]
-            .vitals
-            .health;
+        let before = sim.state.components.body(actor).unwrap().vitals.health;
         sim.advance(SimDuration(1_000)).unwrap();
-        assert!(
-            sim.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .health
-                < before
-        );
+        assert!(sim.state.components.body(actor).unwrap().vitals.health < before);
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
     #[test]
@@ -2646,9 +2581,7 @@ mod integration_tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let current = whole.state.physical.as_ref().unwrap().actors[&actor]
-            .vitals
-            .health;
+        let current = whole.state.components.body(actor).unwrap().vitals.health;
         let threshold = whole.state.combat.as_ref().unwrap().rules.incapacitation;
         whole
             .debug_injure(actor, current - (threshold + 5_000))
@@ -3210,18 +3143,27 @@ mod index_tests {
     fn population_fixture(population: usize) -> Simulation {
         let sample = Simulation::health_fixture(71, Execution::default()).unwrap();
         let sample_world = sample.state.physical.as_ref().unwrap();
-        let template = sample_world.actors[&sample.state.ruler].clone();
+        let template = sample
+            .state
+            .components
+            .body(sample.state.ruler)
+            .unwrap()
+            .clone();
+        let activity = sample
+            .state
+            .components
+            .activity(sample.state.ruler)
+            .unwrap()
+            .clone();
+        let job = sample.state.components.job(sample.state.ruler).cloned();
         let mut sim = Simulation::kernel_fixture(71, population, Execution::default()).unwrap();
-        sim.state.physical = Some(physical::World {
-            rules: sample_world.rules.clone(),
-            actors: sim
-                .state
-                .people
-                .iter()
-                .map(|p| (p.id, template.clone()))
-                .collect(),
-            sites: BTreeMap::new(),
-        });
+        sim.initialize_physical_people(sample_world.rules.clone())
+            .unwrap();
+        for person in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+            *sim.state.components.body_mut(person).unwrap() = template.clone();
+            *sim.state.components.activity_mut(person).unwrap() = activity.clone();
+            sim.state.components.set_job(person, job.clone()).unwrap();
+        }
         sim.initialize_health(Rules::fixture()).unwrap();
         sim
     }
@@ -3260,11 +3202,12 @@ mod index_tests {
     fn exhaustive_observations(sim: &Simulation) -> BTreeMap<PersonId, Knowledge> {
         let world = sim.state.health.as_ref().unwrap();
         let mut known = world.known.clone();
-        for observer in sim.state.people.iter().filter(|p| {
-            sim.state.physical.as_ref().unwrap().actors[&p.id]
-                .vitals
-                .alive
-        }) {
+        for observer in sim
+            .state
+            .people
+            .iter()
+            .filter(|p| sim.state.components.body(p.id).unwrap().vitals.alive)
+        {
             let Location::AtArea(area) = observer.location else {
                 continue;
             };
@@ -3370,17 +3313,12 @@ mod index_tests {
                         .occupancy
                         .insert(*actor, shelters[(index + phase) % 2]);
                 }
-                let body = sim
-                    .state
-                    .physical
-                    .as_mut()
-                    .unwrap()
-                    .actors
-                    .get_mut(actor)
-                    .unwrap();
+                let max_health = sim.body_rules(*actor).max_health;
+                let body = sim.state.components.body_mut(*actor).unwrap();
                 body.vitals.alive = (index + phase) % 13 != 0;
+                body.vitals.health = if body.vitals.alive { max_health } else { 0 };
                 let recipient = people[(index + 1) % people.len()];
-                body.activity = match (index + phase) % 6 {
+                *sim.state.components.activity_mut(*actor).unwrap() = match (index + phase) % 6 {
                     0 => Activity::Care {
                         child: recipient,
                         source: InventoryId(1),
@@ -3491,11 +3429,8 @@ mod index_tests {
             sim.cancel_health_activity(people[0]);
             sim.state.missions.as_mut().unwrap().talks.clear();
             sim.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&people[1])
+                .components
+                .body_mut(people[1])
                 .unwrap()
                 .vitals
                 .alive = false;
@@ -3784,9 +3719,7 @@ mod supply_composition_tests {
             .find(|person| {
                 person.id != child
                     && sim.independent(person.id)
-                    && sim.state.physical.as_ref().unwrap().actors[&person.id]
-                        .vitals
-                        .alive
+                    && sim.state.components.body(person.id).unwrap().vitals.alive
             })
             .unwrap()
             .id;
@@ -3795,11 +3728,7 @@ mod supply_composition_tests {
             .people
             .clone()
             .into_iter()
-            .filter(|person| {
-                sim.state.physical.as_ref().unwrap().actors[&person.id]
-                    .vitals
-                    .alive
-            })
+            .filter(|person| sim.state.components.body(person.id).unwrap().vitals.alive)
             .map(|person| person.id)
             .collect::<Vec<_>>()
         {
@@ -3832,15 +3761,7 @@ mod supply_composition_tests {
             .unwrap();
         sim.set_initial_shelter_occupancy(child, shelter).unwrap();
         let hunger = sim.body_rules(child).hunger_harm;
-        sim.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&child)
-            .unwrap()
-            .vitals
-            .hunger = hunger;
+        sim.state.components.body_mut(child).unwrap().vitals.hunger = hunger;
         let thirst = sim.state.health.as_ref().unwrap().rules.thirst_harm;
         sim.state
             .health

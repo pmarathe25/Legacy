@@ -596,15 +596,7 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
     let (mut sim, field) = compact(1);
     perform(&mut sim, field, FarmOperation::Prepare);
     let ruler = sim.state.ruler;
-    sim.state
-        .physical
-        .as_mut()
-        .unwrap()
-        .actors
-        .get_mut(&ruler)
-        .unwrap()
-        .vitals
-        .fatigue = 0;
+    sim.state.components.body_mut(ruler).unwrap().vitals.fatigue = 0;
     sim.state.physical.as_mut().unwrap().rules.fatigue_limit = 7_000;
     sim.debug_actor_command(
         ruler,
@@ -631,7 +623,7 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
         7_000
     );
     assert_eq!(
-        sim.state.physical.as_ref().unwrap().actors[&ruler].activity,
+        *sim.state.components.activity(ruler).unwrap(),
         Activity::Idle
     );
     assert!(sim.state.agriculture.as_ref().unwrap().jobs.is_empty());

@@ -79,27 +79,32 @@ impl Simulation {
         Ok(sim)
     }
     pub(crate) fn in_combat(&self, actor: PersonId) -> bool {
-        self.state.physical.as_ref().is_some_and(|w| {
-            matches!(
-                w.actors.get(&actor).map(|a| &a.activity),
+        self.state.physical.is_some()
+            && matches!(
+                self.state.components.activity(actor),
                 Some(Activity::Combat { .. })
             )
-        })
     }
     pub(crate) fn combat_restricts(&self, actor: PersonId) -> bool {
         self.in_combat(actor)
             || self.state.combat.as_ref().is_some_and(|w| {
                 w.captivity.contains_key(&actor)
-                    || self.state.physical.as_ref().is_some_and(|b| {
-                        b.actors
-                            .get(&actor)
+                    || self.state.physical.as_ref().is_some_and(|_| {
+                        self.state
+                            .components
+                            .body(actor)
                             .is_some_and(|a| a.vitals.health <= w.rules.incapacitation)
                     })
             })
     }
     pub(crate) fn can_fight(&self, actor: PersonId) -> bool {
         let w = self.state.combat.as_ref().unwrap();
-        let v = &self.state.physical.as_ref().unwrap().actors[&actor].vitals;
+        let v = &self
+            .state
+            .components
+            .body(actor)
+            .expect("body exists")
+            .vitals;
         w.rules.can_fight(
             game_conflict::TargetBody {
                 alive: v.alive,
@@ -185,7 +190,11 @@ impl Simulation {
                 .approaches
                 .get(&approach.actor)
                 != Some(approach)
-            || self.state.physical.as_ref().unwrap().actors[&approach.actor].activity
+            || *self
+                .state
+                .components
+                .activity(approach.actor)
+                .expect("body exists")
                 != (Activity::ArmyApproach {
                     mission: approach.mission,
                     encounter: approach.encounter,
@@ -213,14 +222,7 @@ impl Simulation {
     ) -> Result<(), Error> {
         self.ensure_event_capacity(1)?;
         self.interrupt_actor_activity(actor);
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Combat { encounter: id };
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Combat { encounter: id };
         self.state
             .combat
             .as_mut()
@@ -284,7 +286,11 @@ impl Simulation {
                 .ok()
                 .map(|p| p.key())
             || e.fighters[&self.state.ruler].withdrawn
-            || !self.state.physical.as_ref().unwrap().actors[&self.state.ruler]
+            || !self
+                .state
+                .components
+                .body(self.state.ruler)
+                .expect("body exists")
                 .vitals
                 .alive
         {
@@ -499,14 +505,8 @@ impl Simulation {
         let mut fighters = BTreeMap::new();
         for (i, (actor, team)) in participants.into_iter().enumerate() {
             self.interrupt_actor_activity(actor);
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&actor)
-                .unwrap()
-                .activity = Activity::Combat { encounter: id };
+            *self.state.components.activity_mut(actor).unwrap() =
+                Activity::Combat { encounter: id };
             let position = positions[i];
             fighters.insert(
                 actor,
@@ -728,7 +728,10 @@ impl Simulation {
             .map(|fighter| {
                 (
                     fighter.actor,
-                    self.state.physical.as_ref().unwrap().actors[&fighter.actor]
+                    self.state
+                        .components
+                        .body(fighter.actor)
+                        .expect("body exists")
                         .vitals
                         .fatigue,
                 )
@@ -764,7 +767,11 @@ impl Simulation {
                     o.actor,
                     o.position,
                     !o.withdrawn
-                        && self.state.physical.as_ref().unwrap().actors[&o.actor]
+                        && self
+                            .state
+                            .components
+                            .body(o.actor)
+                            .expect("body exists")
                             .vitals
                             .alive,
                 )
@@ -857,7 +864,11 @@ impl Simulation {
             CombatAction::Attack { target } => {
                 if target == actor
                     || !reachable(target)
-                    || !self.state.physical.as_ref().unwrap().actors[&target]
+                    || !self
+                        .state
+                        .components
+                        .body(target)
+                        .expect("body exists")
                         .vitals
                         .alive
                 {
@@ -867,11 +878,8 @@ impl Simulation {
             CombatAction::Capture { target } => {
                 let body = &self
                     .state
-                    .physical
-                    .as_ref()
-                    .unwrap()
-                    .actors
-                    .get(&target)
+                    .components
+                    .body(target)
                     .ok_or(Error::Unavailable)?
                     .vitals;
                 if !w.capture_possible(
@@ -1155,14 +1163,7 @@ impl Simulation {
         Ok(())
     }
     fn damage_from_combat(&mut self, actor: PersonId, damage: u64) {
-        let body = self
-            .state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap();
+        let body = self.state.components.body_mut(actor).unwrap();
         body.vitals.health = body.vitals.health.saturating_sub(damage);
         if body.vitals.health == 0 && !self.state.people[self.person_index[&actor]].hunger_exempt {
             self.end_life(actor);
@@ -1235,7 +1236,11 @@ impl Simulation {
                         && map.clear(from, destination)
                         && distance(from, e.fighters[&target].position)
                             <= u128::from(w.rules.reach).pow(2);
-                    let health = self.state.physical.as_ref().unwrap().actors[&actor]
+                    let health = self
+                        .state
+                        .components
+                        .body(actor)
+                        .expect("body exists")
                         .vitals
                         .health;
                     let borrowed = self.invocation_personality(actor);
@@ -1386,14 +1391,7 @@ impl Simulation {
             ) {
                 continue;
             }
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&f.actor)
-                .unwrap()
-                .activity = Activity::Idle;
+            *self.state.components.activity_mut(f.actor).unwrap() = Activity::Idle;
             if matches!(e.location, Location::StoppedOnRoad { .. }) {
                 self.transport_retreat(f.actor, f.retreat.unwrap())?;
             } else {
@@ -1418,14 +1416,7 @@ impl Simulation {
                     Location::Carried { .. }
                 )
         }) {
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&f.actor)
-                .unwrap()
-                .activity = Activity::Idle;
+            *self.state.components.activity_mut(f.actor).unwrap() = Activity::Idle;
             self.state
                 .combat
                 .as_mut()
@@ -1447,7 +1438,11 @@ impl Simulation {
             .values()
             .filter(|f| {
                 !f.withdrawn
-                    && self.state.physical.as_ref().unwrap().actors[&f.actor]
+                    && self
+                        .state
+                        .components
+                        .body(f.actor)
+                        .expect("body exists")
                         .vitals
                         .alive
                     && (!self
@@ -1472,17 +1467,10 @@ impl Simulation {
                 .active = false;
             for actor in e.fighters.keys() {
                 if matches!(
-                    self.state.physical.as_ref().unwrap().actors[actor].activity,
+                    *self.state.components.activity(*actor).expect("body exists"),
                     Activity::Combat { .. }
                 ) {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(actor)
-                        .unwrap()
-                        .activity = Activity::Idle;
+                    *self.state.components.activity_mut(*actor).unwrap() = Activity::Idle;
                 }
             }
             self.emit(EventKind::EncounterEnded { encounter: id });
@@ -1726,9 +1714,9 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             if e.active
                 && (!f.withdrawn || f.retreat.is_some())
-                && s.physical.as_ref().unwrap().actors[actor].vitals.alive
+                && s.components.body(*actor).expect("body exists").vitals.alive
                 && (!active.insert(*actor)
-                    || s.physical.as_ref().unwrap().actors[actor].activity
+                    || *s.components.activity(*actor).expect("body exists")
                         != (Activity::Combat { encounter: *id })
                     || transport::location_position(&locations[actor], s.time)?.key() != place)
             {
@@ -1738,7 +1726,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     for p in &s.people {
         if matches!(
-            s.physical.as_ref().unwrap().actors[&p.id].activity,
+            *s.components.activity(p.id).expect("body exists"),
             Activity::Combat { .. }
         ) != active.contains(&p.id)
         {

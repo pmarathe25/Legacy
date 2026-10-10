@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 26;
+const SAVE_VERSION: u32 = 27;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -471,12 +471,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     }
                 }
                 Due::Physical(id) => {
-                    let actor = s
+                    let activity = s
                         .physical
                         .as_ref()
-                        .and_then(|w| w.actors.get(id))
+                        .and_then(|_| s.components.activity(*id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::RealmTalk { completes, .. } | Activity::Lift { completes, .. } | Activity::Social { completes, .. } | Activity::Instruction { completes, .. } | Activity::Practice { completes, .. } | Activity::EnforcementTalk { completes, .. } | Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(*activity, Activity::RealmTalk { completes, .. } | Activity::Lift { completes, .. } | Activity::Social { completes, .. } | Activity::Instruction { completes, .. } | Activity::Practice { completes, .. } | Activity::EnforcementTalk { completes, .. } | Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -531,7 +531,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 let dead = s
                     .physical
                     .as_ref()
-                    .is_some_and(|w| w.actors.get(&p.id).is_some_and(|a| !a.vitals.alive));
+                    .is_some_and(|_| s.components.body(p.id).is_some_and(|a| !a.vitals.alive));
                 if departed > s.time
                     || arrived_duration(departed, arrives)
                         != Some(match road_start {
@@ -1706,6 +1706,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     if let Some(world) = &s.physical {
         validate_physical(s, world, &people, &areas, &physical_deadlines)?;
+    } else if s.components.bodies().next().is_some()
+        || s.components.activities().next().is_some()
+        || s.components.jobs().next().is_some()
+    {
+        return Err(fail());
     }
     if let Some(world) = &s.decisions {
         if world.minds.len() != people.len()
@@ -1969,7 +1974,13 @@ fn validate_physical(
 ) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent physical state".into());
     let rules = &world.rules;
-    if world.actors.len() != people.len()
+    if s.components.bodies().count() != people.len()
+        || s.components
+            .activities()
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>()
+            != people.keys().copied().collect()
+        || s.components.jobs().any(|(id, _)| !people.contains_key(&id))
         || rules.hunger_harm == 0
         || rules.fatigue_limit == 0
         || rules.max_health == 0
@@ -2011,7 +2022,10 @@ fn validate_physical(
     }
     let locations = crate::transport::resolved_locations_for(s)?;
     let mut care_targets = BTreeSet::new();
-    for (id, actor) in &world.actors {
+    for (id, actor) in s.components.bodies() {
+        let id = &id;
+        let activity = s.components.activity(*id).ok_or_else(fail)?;
+        let job = s.components.job(*id);
         let p = people.get(id).ok_or_else(fail)?;
         let carried = cargo.get(id).copied().unwrap_or(0);
         if actor.health_remainder >= 1_000
@@ -2025,10 +2039,10 @@ fn validate_physical(
         {
             return Err(fail());
         }
-        if !actor.vitals.alive && (actor.activity != Activity::Idle || actor.job.is_some()) {
+        if !actor.vitals.alive && (*activity != Activity::Idle || job.is_some()) {
             return Err(fail());
         }
-        if let Some(job) = &actor.job
+        if let Some(job) = job
             && (job.tool.is_some_and(|tool| {
                 !s.inventories
                     .get(&tool)
@@ -2061,7 +2075,7 @@ fn validate_physical(
             return Err(fail());
         }
         let timed = matches!(
-            actor.activity,
+            *activity,
             Activity::RealmTalk { .. }
                 | Activity::Lift { .. }
                 | Activity::Social { .. }
@@ -2094,7 +2108,7 @@ fn validate_physical(
         let allowed = match location {
             Location::AtArea(_) => true,
             Location::StoppedOnRoad { .. } => matches!(
-                actor.activity,
+                *activity,
                 Activity::Idle
                     | Activity::Rest
                     | Activity::Eat { .. }
@@ -2110,7 +2124,7 @@ fn validate_physical(
                     | Activity::Combat { .. }
             ),
             Location::InTransit { .. } => matches!(
-                actor.activity,
+                *activity,
                 Activity::Idle | Activity::Express { .. } | Activity::Escape { .. }
             ),
             Location::Carried { .. } => false,
@@ -2118,7 +2132,7 @@ fn validate_physical(
         if !allowed {
             return Err(fail());
         }
-        match actor.activity {
+        match *activity {
             Activity::ReportAgreement { recipient, .. } if !people.contains_key(&recipient) => {
                 return Err(fail());
             }
@@ -2140,7 +2154,7 @@ fn validate_physical(
                     .as_ref()
                     .and_then(|w| w.lives.get(id))
                     .ok_or_else(fail)?;
-                let duration = if matches!(actor.activity, Activity::Play { .. }) {
+                let duration = if matches!(*activity, Activity::Play { .. }) {
                     MINUTE.0
                 } else {
                     6_000
@@ -2153,7 +2167,7 @@ fn validate_physical(
                 let rules = &s.development.as_ref().unwrap().rules;
                 if started > s.time.0
                     || age >= rules.adulthood.0
-                    || matches!(actor.activity, Activity::Play { .. }) && age < rules.infancy.0
+                    || matches!(*activity, Activity::Play { .. }) && age < rules.infancy.0
                 {
                     return Err(fail());
                 }
@@ -2192,11 +2206,7 @@ fn validate_physical(
                 .map_err(|_| fail())?;
             }
             Activity::Work { site } => {
-                if !actor
-                    .job
-                    .as_ref()
-                    .is_some_and(|j| j.site == site && j.remaining > 0)
-                {
+                if !job.is_some_and(|j| j.site == site && j.remaining > 0) {
                     return Err(fail());
                 }
             }

@@ -131,7 +131,11 @@ impl Simulation {
                     w.lives[&person.id].stage,
                     LifeStage::Infant | LifeStage::Child
                 )
-            }) && self.state.physical.as_ref().unwrap().actors[&person.id]
+            }) && self
+                .state
+                .components
+                .body(person.id)
+                .expect("body exists")
                 .vitals
                 .alive
                 && let Some(position) = self.transport_position(person.id)
@@ -161,7 +165,7 @@ impl Simulation {
                 Location::AtArea(_) | Location::StoppedOnRoad { .. }
             );
             let at_area = matches!(location, Location::AtArea(_));
-            let actor = &self.state.physical.as_ref().unwrap().actors[&p.id];
+            let actor = &self.state.components.body(p.id).expect("body exists");
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 continue;
             }
@@ -275,7 +279,12 @@ impl Simulation {
             mind.child_signals
                 .retain(|_, signal| signal.location != *location);
             for child in &visible_children {
-                let vitals = &self.state.physical.as_ref().unwrap().actors[child].vitals;
+                let vitals = &self
+                    .state
+                    .components
+                    .body(*child)
+                    .expect("body exists")
+                    .vitals;
                 let rules = &signal_rules[child];
                 let mut urgency = if vitals.hunger >= rules.hunger_harm {
                     20_000
@@ -481,7 +490,7 @@ impl Simulation {
         resources: Option<&equipment::RankingResources>,
     ) -> Intention {
         let p = &self.state.people[self.person_index[&id]];
-        let actor = &self.state.physical.as_ref().unwrap().actors[&id];
+        let actor = &self.state.components.body(id).expect("body exists");
         let rules = self.body_rules(id);
         let place = match self.resolved_location(id) {
             Location::AtArea(area) => Place::Area(area),
@@ -522,7 +531,7 @@ impl Simulation {
                     .as_ref()
                     .map_or(Quantity(u64::MAX), |world| world.rules.drink_quantity),
             },
-            activity: match actor.activity {
+            activity: match *self.state.components.activity(id).expect("activity exists") {
                 Activity::Idle => PersonalActivity::Idle,
                 Activity::Rest => PersonalActivity::Rest,
                 Activity::Work { .. } => PersonalActivity::Working,

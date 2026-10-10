@@ -8,7 +8,7 @@ impl Simulation {
         self.state
             .physical
             .as_ref()
-            .and_then(|w| w.actors.get(&actor))
+            .and_then(|_| self.state.components.body(actor))
             .is_some_and(|body| {
                 body.vitals.alive
                     && body.vitals.health
@@ -64,12 +64,28 @@ impl Simulation {
                         .any(|area| decisions::known_path(&mind.routes, *area, k.area).is_ok()),
                     _ => false,
                 });
-        let physical = self.state.physical.as_ref().unwrap();
-        let requester_available = physical.actors[&requester].vitals.alive
-            && physical.actors[&requester].vitals.health > 0
+        let requester_available = self
+            .state
+            .components
+            .body(requester)
+            .expect("body exists")
+            .vitals
+            .alive
+            && self
+                .state
+                .components
+                .body(requester)
+                .expect("body exists")
+                .vitals
+                .health
+                > 0
             && !self.in_combat(requester)
             && matches!(
-                physical.actors[&requester].activity,
+                *self
+                    .state
+                    .components
+                    .activity(requester)
+                    .expect("body exists"),
                 Activity::Idle | Activity::Rest
             );
         let facts = game_lineage::SupplyFacts {
@@ -320,7 +336,11 @@ impl Simulation {
         }
         let step = self.requested_delivery_step(guardian, &request);
         if matches!(step, Step::Continue) {
-            let available = self.state.physical.as_ref().unwrap().actors[&guardian]
+            let available = self
+                .state
+                .components
+                .body(guardian)
+                .expect("body exists")
                 .vitals
                 .alive
                 && self.independent(guardian)
@@ -405,11 +425,14 @@ impl Simulation {
                     })
                     && destination.good == request.delivery.requirement.good
                     && destination.location == InventoryLocation::Carried(requester)
-                    && self
-                        .state
-                        .physical
-                        .as_ref()
-                        .is_some_and(|w| w.actors[&requester].vitals.alive)
+                    && self.state.physical.as_ref().is_some_and(|_| {
+                        self.state
+                            .components
+                            .body(requester)
+                            .expect("body exists")
+                            .vitals
+                            .alive
+                    })
                     && self.transport_same_place(actor, requester)
             })
     }

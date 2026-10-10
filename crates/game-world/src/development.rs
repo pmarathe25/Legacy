@@ -135,7 +135,7 @@ impl Simulation {
         let Some(mind) = self.state.decisions.as_ref().and_then(|w| w.minds.get(&id)) else {
             return false;
         };
-        let body = &self.state.physical.as_ref().unwrap().actors[&id];
+        let body = &self.state.components.body(id).expect("body exists");
         let Some(life) = self
             .state
             .development
@@ -151,7 +151,10 @@ impl Simulation {
             health: body.vitals.health,
             hunger: body.vitals.hunger,
             meal_relief: self.body_rules(id).meal_relief,
-            available: matches!(body.activity, Activity::Idle | Activity::Rest),
+            available: matches!(
+                *self.state.components.activity(id).expect("activity exists"),
+                Activity::Idle | Activity::Rest
+            ),
             wants_parenthood: mind.dream == decisions::Aspiration::Parenthood,
             partner_affection: relationship.map_or(0, |relation| relation.affection),
             partner_trust: relationship.map_or(0, |relation| relation.trust),
@@ -172,7 +175,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|world| world.actors.get(&actor))
+            .and_then(|_| self.state.components.body(actor))
             .ok_or(Error::Unavailable)?;
         Ok(BodyFacts {
             actor,
@@ -180,7 +183,12 @@ impl Simulation {
             health: body.vitals.health,
             position: person.location.clone(),
             action_restricted: self.combat_restricts(actor),
-            attempt: match body.activity {
+            attempt: match *self
+                .state
+                .components
+                .activity(actor)
+                .ok_or(Error::Unavailable)?
+            {
                 Activity::Conceive {
                     pregnancy,
                     completes,
@@ -235,14 +243,7 @@ impl Simulation {
             {
                 self.pregnancy_index.insert(parents[0], pregnancy);
                 for person in [actor, partner] {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&person)
-                        .unwrap()
-                        .activity = Activity::Conceive {
+                    *self.state.components.activity_mut(person).unwrap() = Activity::Conceive {
                         pregnancy,
                         completes,
                     };
@@ -342,7 +343,7 @@ impl Simulation {
         };
         let deadlines = due.iter().filter_map(|event| match event {
             Due::Physical(actor) => {
-                match self.state.physical.as_ref().unwrap().actors[actor].activity {
+                match *self.state.components.activity(*actor).expect("body exists") {
                     Activity::Conceive { pregnancy, .. } => {
                         Some(game_lifecycle::Deadline::Conception(pregnancy))
                     }
@@ -371,7 +372,11 @@ impl Simulation {
     pub(crate) fn complete_development(&mut self, due: Due) {
         match due {
             Due::Age(id) => {
-                let alive = self.state.physical.as_ref().unwrap().actors[&id]
+                let alive = self
+                    .state
+                    .components
+                    .body(id)
+                    .expect("body exists")
                     .vitals
                     .alive;
                 let prepared = self
@@ -511,9 +516,10 @@ impl Simulation {
             },
         );
         let max_health = self.state.physical.as_ref().unwrap().rules.max_health;
-        self.state.physical.as_mut().unwrap().actors.insert(
+        game_physiology::insert_body(
+            &mut self.state.components,
             child,
-            physical::Actor {
+            game_physiology::Body {
                 fatigue_remainder: 0,
                 health_remainder: 0,
                 vitals: Vitals {
@@ -522,10 +528,13 @@ impl Simulation {
                     health: max_health,
                     alive: true,
                 },
-                activity: Activity::Idle,
-                job: None,
             },
-        );
+        )
+        .expect("validated newborn body");
+        self.state
+            .components
+            .set_activity(child, Activity::Idle)
+            .expect("newborn entity exists");
         let mut mind = self.state.decisions.as_ref().unwrap().minds[&pregnancy.gestator].clone();
         mind.interests.clear();
         mind.routes.clear();
@@ -609,7 +618,11 @@ impl Simulation {
 
     pub(crate) fn schedule_age(&mut self, id: PersonId) {
         if self.state.people[self.person_index[&id]].role == Role::Guardian
-            || !self.state.physical.as_ref().unwrap().actors[&id]
+            || !self
+                .state
+                .components
+                .body(id)
+                .expect("body exists")
                 .vitals
                 .alive
         {
@@ -630,20 +643,16 @@ impl Simulation {
     }
 
     pub(crate) fn end_life(&mut self, id: PersonId) {
-        let a = self
-            .state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&id)
-            .unwrap();
+        let a = self.state.components.body_mut(id).unwrap();
         if !a.vitals.alive {
             return;
         }
         a.vitals.alive = false;
         a.vitals.health = 0;
-        a.job = None;
+        self.state
+            .components
+            .set_job(id, None)
+            .expect("actor exists");
         self.transport_death(id);
         self.interrupt_actor_activity(id);
         self.state.people[self.person_index[&id]].route.clear();
@@ -668,7 +677,7 @@ impl Simulation {
         // whenever any person changes a physical activity.
         let mut ids = BTreeSet::new();
         if let Activity::Conceive { pregnancy, .. } =
-            self.state.physical.as_ref().unwrap().actors[&actor].activity
+            *self.state.components.activity(actor).expect("body exists")
         {
             ids.insert(pregnancy);
         }
@@ -694,14 +703,7 @@ impl Simulation {
             self.pregnancy_index.remove(&pair[0]);
             if was_conceiving {
                 for person in pair {
-                    self.state
-                        .physical
-                        .as_mut()
-                        .unwrap()
-                        .actors
-                        .get_mut(&person)
-                        .unwrap()
-                        .activity = Activity::Idle;
+                    *self.state.components.activity_mut(person).unwrap() = Activity::Idle;
                     for due in self.state.due.values_mut() {
                         due.retain(|d| !matches!(d, Due::Physical(p) if *p == person));
                     }
@@ -743,11 +745,15 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         return Ok(());
     };
     let fail = || Error::InvalidSave("inconsistent development bindings".into());
-    let physical = state.physical.as_ref().ok_or_else(fail)?;
+    state.physical.as_ref().ok_or_else(fail)?;
     let mut bodies = BTreeMap::new();
     for person in &state.people {
-        let body = physical.actors.get(&person.id).ok_or_else(fail)?;
-        let attempt = match body.activity {
+        let body = state.components.body(person.id).ok_or_else(fail)?;
+        let attempt = match *state
+            .components
+            .activity(person.id)
+            .expect("activity exists")
+        {
             Activity::Conceive {
                 pregnancy,
                 completes,

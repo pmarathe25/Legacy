@@ -350,7 +350,11 @@ fn reporting_listener_occupancy_and_actual_departure_cancel_the_frozen_conversat
                 .is_empty()
         );
         assert_eq!(
-            world.canonical_state().physical.as_ref().unwrap().actors[&witness].activity,
+            *world
+                .canonical_state()
+                .components
+                .activity(witness)
+                .expect("body exists"),
             Activity::Idle
         );
         world.advance(MINUTE).unwrap();

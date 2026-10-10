@@ -55,10 +55,7 @@ impl Simulation {
         let Some(current) = self.state.lineage.as_ref().and_then(World::current) else {
             return;
         };
-        if self.state.physical.as_ref().unwrap().actors[&current]
-            .vitals
-            .alive
-        {
+        if self.state.components.body(current).unwrap().vitals.alive {
             return;
         }
         let constraints: BTreeMap<_, _> = self
@@ -104,9 +101,7 @@ impl Simulation {
             born: life.born,
             initial_age: life.initial_age,
             parent_count: life.parents.len(),
-            alive: self.state.physical.as_ref().unwrap().actors[&child]
-                .vitals
-                .alive,
+            alive: self.state.components.body(child).unwrap().vitals.alive,
             location: self.state.people[self.person_index[&child]]
                 .location
                 .clone(),
@@ -147,10 +142,7 @@ impl Simulation {
                 .combat
                 .as_ref()
                 .is_some_and(|w| w.captivity.contains_key(&id)),
-            self.state.physical.as_ref().unwrap().actors[&id]
-                .vitals
-                .health
-                == 0,
+            self.state.components.body(id).unwrap().vitals.health == 0,
             self.combat_restricts(id),
         )
     }
@@ -195,10 +187,7 @@ impl Simulation {
             .copied()
             .filter(|id| {
                 self.state.people[self.person_index[id]].location == Location::AtArea(area)
-                    && self.state.physical.as_ref().unwrap().actors[id]
-                        .vitals
-                        .health
-                        > 0
+                    && self.state.components.body(*id).unwrap().vitals.health > 0
             })
             .collect();
         for guardian in observers {
@@ -271,11 +260,14 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        let bodies = &self.state.physical.as_ref().unwrap().actors;
         if [student, teacher].into_iter().any(|id| {
-            !bodies[&id].vitals.alive
-                || bodies[&id].vitals.health == 0
-                || !matches!(bodies[&id].activity, Activity::Idle | Activity::Rest)
+            let body = self.state.components.body(id).unwrap();
+            !body.vitals.alive
+                || body.vitals.health == 0
+                || !matches!(
+                    self.state.components.activity(id).unwrap(),
+                    Activity::Idle | Activity::Rest
+                )
         }) {
             return Err(Error::Unavailable);
         }
@@ -338,14 +330,7 @@ impl Simulation {
         self.state.lineage.as_mut().unwrap().guardians.get_mut(&teacher).unwrap().explanation =
             "The guided lesson is underway; both pupil and teacher are occupied until it completes or is interrupted".into();
         for actor in [student, teacher] {
-            self.state
-                .physical
-                .as_mut()
-                .unwrap()
-                .actors
-                .get_mut(&actor)
-                .unwrap()
-                .activity = Activity::Lesson {
+            *self.state.components.activity_mut(actor).unwrap() = Activity::Lesson {
                 teacher,
                 student,
                 topic,
@@ -373,23 +358,24 @@ impl Simulation {
         {
             return Vec::new();
         }
-        let body = &self.state.physical.as_ref().unwrap().actors[&student];
+        let body = self.state.components.body(student).unwrap();
+        let activity = self.state.components.activity(student).unwrap();
         let location = &self.state.people[self.person_index[&student]].location;
         if !body.vitals.alive
             || body.vitals.health == 0
-            || !matches!(body.activity, Activity::Idle | Activity::Rest)
+            || !matches!(*activity, Activity::Idle | Activity::Rest)
             || !matches!(location, Location::AtArea(_))
         {
             return Vec::new();
         }
         let mut commands = Vec::new();
         for (teacher, guard) in &world.guardians {
-            let teacher_body = &self.state.physical.as_ref().unwrap().actors[teacher];
+            let teacher_activity = self.state.components.activity(*teacher).unwrap();
             if &self.state.people[self.person_index[teacher]].location != location
                 || self.in_combat(*teacher)
                 || self.combat_restricts(*teacher)
                 || self.care_index.contains_key(teacher)
-                || !matches!(teacher_body.activity, Activity::Idle | Activity::Rest)
+                || !matches!(*teacher_activity, Activity::Idle | Activity::Rest)
             {
                 continue;
             }
@@ -492,20 +478,15 @@ impl Simulation {
     pub(crate) fn interrupt_lesson(&mut self, actor: PersonId) {
         let Some(Activity::Lesson {
             teacher, student, ..
-        }) = self
-            .state
-            .physical
-            .as_ref()
-            .and_then(|w| w.actors.get(&actor))
-            .map(|a| a.activity.clone())
+        }) = self.state.components.activity(actor).cloned()
         else {
             return;
         };
         for id in [teacher, student] {
-            if let Some(body) = self.state.physical.as_mut().unwrap().actors.get_mut(&id)
-                && matches!(body.activity, Activity::Lesson { .. })
+            if let Some(activity) = self.state.components.activity_mut(id)
+                && matches!(*activity, Activity::Lesson { .. })
             {
-                body.activity = Activity::Idle;
+                *activity = Activity::Idle;
             }
             for due in self.state.due.values_mut() {
                 due.retain(|event| !matches!(event, Due::Physical(person) if *person == id));
@@ -520,21 +501,19 @@ impl Simulation {
             student,
             topic,
             completes,
-        } = self.state.physical.as_ref().unwrap().actors[&actor].activity
+        } = *self.state.components.activity(actor).unwrap()
         else {
             return;
         };
-        let paired = self.state.physical.as_ref().unwrap().actors[&teacher].activity
-            == self.state.physical.as_ref().unwrap().actors[&student].activity;
+        let paired = *self.state.components.activity(teacher).unwrap()
+            == *self.state.components.activity(student).unwrap();
         if !paired
             || completes != self.state.time
             || self.state.people[self.person_index[&teacher]].location
                 != self.state.people[self.person_index[&student]].location
-            || [teacher, student].into_iter().any(|id| {
-                !self.state.physical.as_ref().unwrap().actors[&id]
-                    .vitals
-                    .alive
-            })
+            || [teacher, student]
+                .into_iter()
+                .any(|id| !self.state.components.body(id).unwrap().vitals.alive)
         {
             self.interrupt_lesson(actor);
             return;
@@ -632,12 +611,10 @@ impl Simulation {
             || self.in_combat(requester)
             || self.care_index.contains_key(&requester)
             || !matches!(
-                self.state.physical.as_ref().unwrap().actors[&requester].activity,
+                *self.state.components.activity(requester).unwrap(),
                 Activity::Idle | Activity::Rest
             )
-            || !self.state.physical.as_ref().unwrap().actors[&requester]
-                .vitals
-                .alive
+            || !self.state.components.body(requester).unwrap().vitals.alive
             || self.state.people[self.person_index[&requester]].location
                 != self.state.people[self.person_index[&guardian]].location
             || !matches!(
@@ -649,7 +626,7 @@ impl Simulation {
         }
         let guard = &world.guardians[&guardian];
         let ready = guard.assessments.get(&requester).is_some_and(|a| a.ready);
-        let body = &self.state.physical.as_ref().unwrap().actors[&guardian];
+        let activity = self.state.components.activity(guardian).unwrap();
         let command = match request {
             GuardianRequest::Move { destination } => Command::Move { destination },
             GuardianRequest::Rest => Command::Rest,
@@ -661,7 +638,7 @@ impl Simulation {
             RequestInput {
                 constrained: self.guardian_constraint(guardian).is_some(),
                 in_combat: self.in_combat(guardian),
-                physical_duty_pending: !matches!(body.activity, Activity::Idle | Activity::Rest),
+                physical_duty_pending: !matches!(*activity, Activity::Idle | Activity::Rest),
                 ready,
                 known_distress: self.state.decisions.as_ref().unwrap().minds[&guardian]
                     .child_signals
@@ -744,10 +721,7 @@ impl Simulation {
                         self.state.people[self.person_index[&id]].location,
                         Location::AtArea(_)
                     )
-                    && self.state.physical.as_ref().unwrap().actors[&id]
-                        .vitals
-                        .health
-                        > 0;
+                    && self.state.components.body(id).unwrap().vitals.health > 0;
                 if same_place {
                     let personality = self.state.decisions.as_ref().unwrap().minds[&id]
                         .personality
@@ -778,7 +752,8 @@ impl Simulation {
                 continue;
             }
             let sensed = current.map(|person| self.resolved_location(person));
-            let body = &self.state.physical.as_ref().unwrap().actors[&id];
+            let body = self.state.components.body(id).unwrap();
+            let activity = self.state.components.activity(id).unwrap();
             let own_location = self.resolved_location(id);
             let pending = self.state.lineage.as_ref().unwrap().guardians[&id]
                 .assignment
@@ -789,7 +764,7 @@ impl Simulation {
                             || matches!(own_location, Location::AtArea(area) if area != destination)
                     }
                     GuardianRequest::Work { site } => {
-                        matches!(body.activity, Activity::Work { site: active } if active == site)
+                        matches!(*activity, Activity::Work { site: active } if active == site)
                     }
                     GuardianRequest::Rest => self.state.time <= assignment.accepted_at,
                     GuardianRequest::Supply { .. } => false,
@@ -837,7 +812,7 @@ impl Simulation {
                 (
                     GuardianGoal::Waiting,
                     "No living incarnation; other people and births continue normally".into(),
-                    matches!(body.activity, Activity::Idle | Activity::Work { .. })
+                    matches!(*activity, Activity::Idle | Activity::Work { .. })
                         .then_some(Command::Rest),
                 )
             };
@@ -885,7 +860,7 @@ impl Simulation {
         own_location: &Location,
         target_location: &Location,
     ) -> (GuardianGoal, String, Option<Command>) {
-        let body = &self.state.physical.as_ref().unwrap().actors[&guardian];
+        let activity = self.state.components.activity(guardian).unwrap();
         if let Some(command) = self.transport_guardian_rescue(guardian, target) {
             return (
                 GuardianGoal::Searching,
@@ -912,10 +887,10 @@ impl Simulation {
                 preference: signal.preference,
             });
         let can_reconsider = matches!(
-            body.activity,
+            *activity,
             Activity::Idle | Activity::Rest | Activity::Work { .. }
         );
-        let should_rest = matches!(body.activity, Activity::Idle | Activity::Work { .. });
+        let should_rest = matches!(*activity, Activity::Idle | Activity::Work { .. });
         let doses = game_lineage::CareDoses {
             food: self.body_rules(guardian).meal_size,
             water: self.care_dose(Good::Water).unwrap_or(Quantity(0)),
@@ -1043,26 +1018,27 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         || world
             .invocation_learning
             .iter()
-            .any(|(id, value)| !physical.actors.contains_key(id) || *value > 1_000)
+            .any(|(id, value)| state.components.body(*id).is_none() || *value > 1_000)
     {
         return Err(fail());
     }
-    for (actor, body) in &physical.actors {
+    for (actor, activity) in state.components.activities() {
         if let Activity::Lesson {
             teacher,
             student,
             topic,
             completes,
-        } = body.activity
+        } = *activity
         {
-            if ![*actor, teacher, student]
+            if ![actor, teacher, student]
                 .into_iter()
-                .all(|id| physical.actors.contains_key(&id))
-                || ![teacher, student].contains(actor)
+                .all(|id| state.components.body(id).is_some())
+                || ![teacher, student].contains(&actor)
                 || teacher == student
                 || !world.guardians.contains_key(&teacher)
                 || world.current() != Some(student)
-                || physical.actors[&teacher].activity != physical.actors[&student].activity
+                || *state.components.activity(teacher).unwrap()
+                    != *state.components.activity(student).unwrap()
                 || state
                     .people
                     .iter()
@@ -1106,7 +1082,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             .lives
             .get(&incarnation.person)
             .ok_or_else(fail)?;
-        let body = physical.actors.get(&incarnation.person).ok_or_else(fail)?;
+        let body = state.components.body(incarnation.person).ok_or_else(fail)?;
         if !seen.insert(incarnation.person)
             || incarnation.bound_at > state.time
             || incarnation

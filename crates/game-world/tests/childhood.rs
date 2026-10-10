@@ -1,3 +1,4 @@
+mod support;
 use game_api::*;
 use game_world::*;
 
@@ -222,8 +223,8 @@ fn play_interrupts_at_fatigue_limit_and_pending_child_actions_can_cross_maturity
     sim.advance(SimDuration(300_000)).unwrap();
     let ruler = sim.observe().ruler;
     let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    let key = ruler.0.to_string();
-    saved["state"]["physical"]["actors"][&key]["vitals"]["fatigue"] = serde_json::json!(299_999);
+    support::component(&mut saved, "physiology/body", ruler)["vitals"]["fatigue"] =
+        serde_json::json!(299_999);
     let mut sim =
         Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()).unwrap();
     submit(

@@ -75,8 +75,14 @@ impl Simulation {
         // This opening supplies a court and watch rather than the autonomy
         // fixture's recipe jobs. Old private plans must not pull witnesses away.
         sim.state.physical.as_mut().unwrap().sites.clear();
-        for body in sim.state.physical.as_mut().unwrap().actors.values_mut() {
-            body.job = None;
+        let workers: Vec<_> = sim
+            .state
+            .components
+            .jobs()
+            .map(|(actor, _)| actor)
+            .collect();
+        for actor in workers {
+            sim.state.components.set_job(actor, None)?;
         }
         for mind in sim.state.decisions.as_mut().unwrap().minds.values_mut() {
             mind.sites.clear();
@@ -318,7 +324,7 @@ impl Simulation {
     }
     fn enforcement_area(&self, actor: PersonId) -> Option<AreaId> {
         let person = self.state.people.get(*self.person_index.get(&actor)?)?;
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -1077,14 +1083,7 @@ impl Simulation {
         Ok(())
     }
     fn start_enforcement_talk(&mut self, actor: PersonId, talk: Talk) {
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::EnforcementTalk {
+        *self.state.components.activity_mut(actor).unwrap() = Activity::EnforcementTalk {
             case: talk.case,
             recipient: talk.recipient,
             completes: talk.completes,
@@ -1239,13 +1238,10 @@ impl Simulation {
             case.changed_at = self.state.time;
             case.explanation = "The officer could no longer hear the complaint".into();
         }
-        if let Some(body) = self
-            .state
-            .physical
-            .as_mut()
-            .and_then(|w| w.actors.get_mut(&actor))
+        if self.state.physical.is_some()
+            && let Some(activity) = self.state.components.activity_mut(actor)
         {
-            body.activity = Activity::Idle;
+            *activity = Activity::Idle;
         }
     }
     fn local_enforcement_listeners(&self, area: AreaId) -> Vec<PersonId> {
@@ -1254,8 +1250,21 @@ impl Simulation {
             .filter(|(_, index)| {
                 let p = &self.state.people[**index];
                 p.location == Location::AtArea(area)
-                    && self.state.physical.as_ref().is_some_and(|w| {
-                        w.actors[&p.id].vitals.alive && w.actors[&p.id].vitals.health > 0
+                    && self.state.physical.as_ref().is_some_and(|_| {
+                        self.state
+                            .components
+                            .body(p.id)
+                            .expect("body exists")
+                            .vitals
+                            .alive
+                            && self
+                                .state
+                                .components
+                                .body(p.id)
+                                .expect("body exists")
+                                .vitals
+                                .health
+                                > 0
                     })
             })
             .map(|(id, _)| *id)
@@ -1485,8 +1494,21 @@ impl Simulation {
         let mut by_area = BTreeMap::<AreaId, Vec<PersonId>>::new();
         for person in &self.state.people {
             if let Location::AtArea(area) = person.location
-                && self.state.physical.as_ref().is_some_and(|w| {
-                    w.actors[&person.id].vitals.alive && w.actors[&person.id].vitals.health > 0
+                && self.state.physical.as_ref().is_some_and(|_| {
+                    self.state
+                        .components
+                        .body(person.id)
+                        .expect("body exists")
+                        .vitals
+                        .alive
+                        && self
+                            .state
+                            .components
+                            .body(person.id)
+                            .expect("body exists")
+                            .vitals
+                            .health
+                            > 0
                 })
             {
                 by_area.entry(area).or_default().push(person.id);
@@ -1865,8 +1887,14 @@ impl Simulation {
             {
                 continue;
             }
-            let body = &self.state.physical.as_ref().unwrap().actors[&actor];
-            if !matches!(body.activity, Activity::Idle | Activity::Rest) {
+            if !matches!(
+                *self
+                    .state
+                    .components
+                    .activity(actor)
+                    .expect("activity exists"),
+                Activity::Idle | Activity::Rest
+            ) {
                 continue;
             }
             let commands = self.available_enforcement_commands(actor);
@@ -2305,7 +2333,7 @@ impl Simulation {
             )
         };
         let institutions = self.state.institutions.as_ref().ok_or_else(bad)?;
-        let physical = self.state.physical.as_ref().ok_or_else(bad)?;
+        self.state.physical.as_ref().ok_or_else(bad)?;
         if world.last_event >= self.state.next_event {
             return Err(bad());
         }
@@ -2413,7 +2441,7 @@ impl Simulation {
                 || !world.cases.contains_key(&talk.case)
                 || !area(talk.area)
                 || talk.completes <= self.state.time
-                || !matches!(physical.actors[actor].activity,Activity::EnforcementTalk {case,recipient,completes} if case==talk.case && recipient==talk.recipient && completes==talk.completes)
+                || !matches!(*self.state.components.activity(*actor).expect("body exists"),Activity::EnforcementTalk {case,recipient,completes} if case==talk.case && recipient==talk.recipient && completes==talk.completes)
                 || !self
                     .state
                     .due

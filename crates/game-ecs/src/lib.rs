@@ -6,10 +6,7 @@ use serde_json::value::RawValue;
 use std::{collections::BTreeMap, fmt};
 
 /// Plain feature-owned data; no engine derive or vendor trait is required.
-pub trait Component:
-    Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static
-{
-}
+pub trait Component: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static {}
 impl<T: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static> Component for T {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StableId(pub u64);

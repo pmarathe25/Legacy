@@ -401,14 +401,14 @@ fn main() {
             reported_day = day;
             let state = sim.canonical_state();
             let living = state
-                .physical
-                .as_ref()
-                .unwrap()
-                .actors
-                .values()
-                .filter(|body| body.vitals.alive)
+                .components
+                .bodies()
+                .filter(|(_, body)| body.vitals.alive)
                 .count();
-            let player_alive = state.physical.as_ref().unwrap().actors[&state.ruler]
+            let player_alive = state
+                .components
+                .body(state.ruler)
+                .expect("body exists")
                 .vitals
                 .alive;
             eprintln!(
@@ -448,12 +448,9 @@ fn main() {
     assert_eq!(sim.canonical_state(), loaded.canonical_state());
     let alive = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .actors
-        .values()
-        .filter(|a| a.vitals.alive)
+        .components
+        .bodies()
+        .filter(|(_, body)| body.vitals.alive)
         .count();
     let mut journeys = 0;
     let mut transfers = 0;
@@ -548,13 +545,17 @@ fn main() {
         );
     }
 
-    let player_alive = sim.canonical_state().physical.as_ref().unwrap().actors
-        [&sim.canonical_state().ruler]
+    let player_alive = sim
+        .canonical_state()
+        .components
+        .body(sim.canonical_state().ruler)
+        .expect("body exists")
         .vitals
         .alive;
     if alive < population * 9 / 10 || !player_alive {
         let state = sim.canonical_state();
-        for (actor, body) in &state.physical.as_ref().unwrap().actors {
+        for (actor, body) in state.components.bodies() {
+            let actor = &actor;
             if !body.vitals.alive {
                 let clinical = &state.health.as_ref().unwrap().clinical[actor];
                 eprintln!(
@@ -569,7 +570,7 @@ fn main() {
                     state.development.as_ref().unwrap().lives[actor]
                         .age_at(state.time)
                         .unwrap(),
-                    body.activity,
+                    state.components.activity(*actor).expect("activity exists"),
                 );
             }
         }

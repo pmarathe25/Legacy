@@ -83,10 +83,7 @@ impl Simulation {
             || self.in_combat(actor)
             || self.force_area(actor).is_none()
             || !self.transport_same_place(actor, captor)
-            || self.state.physical.as_ref().unwrap().actors[&actor]
-                .vitals
-                .health
-                == 0
+            || self.state.components.body(actor).unwrap().vitals.health == 0
             || self.state.combat.is_none()
         {
             return Err(Error::Unavailable);
@@ -144,7 +141,7 @@ impl Simulation {
         );
     }
     fn force_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.physical.as_ref()?.actors.get(&actor)?;
+        let body = self.state.components.body(actor)?;
         if !body.vitals.alive {
             return None;
         }
@@ -165,9 +162,7 @@ impl Simulation {
         self.force_area(actor).is_some()
             && self.independent(actor)
             && self.state.combat.as_ref().is_some_and(|world| {
-                self.state.physical.as_ref().unwrap().actors[&actor]
-                    .vitals
-                    .health
+                self.state.components.body(actor).unwrap().vitals.health
                     > world.rules.incapacitation
             })
     }
@@ -195,9 +190,7 @@ impl Simulation {
         self.force_area(target).is_some()
             && self.state.combat.as_ref().is_some_and(|world| {
                 !world.captivity.contains_key(&target)
-                    && (self.state.physical.as_ref().unwrap().actors[&target]
-                        .vitals
-                        .health
+                    && (self.state.components.body(target).unwrap().vitals.health
                         <= world.rules.incapacitation
                         || self
                             .state
@@ -272,14 +265,7 @@ impl Simulation {
                 completes,
             },
         );
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Restrain {
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Restrain {
             target,
             binding,
             completes,
@@ -334,14 +320,7 @@ impl Simulation {
                 contested: false,
             },
         );
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Escape { tool, completes };
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Escape { tool, completes };
         self.state
             .due
             .entry(completes)
@@ -411,12 +390,8 @@ impl Simulation {
                     && person.id != target
                     && self.transport_same_place(person.id, target)
                     && self.independent(person.id)
-                    && self.state.physical.as_ref().unwrap().actors[&person.id]
-                        .vitals
-                        .alive
-                    && self.state.physical.as_ref().unwrap().actors[&person.id]
-                        .vitals
-                        .health
+                    && self.state.components.body(person.id).unwrap().vitals.alive
+                    && self.state.components.body(person.id).unwrap().vitals.health
                         > self.state.combat.as_ref().unwrap().rules.incapacitation
                     && !self.combat_restricts(person.id)
             })
@@ -519,9 +494,17 @@ impl Simulation {
         admitted: Option<&Location>,
     ) -> Result<game_conflict::ConfinementFacts, Error> {
         let combat = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
-        let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
-        let actor = physical.actors.get(&captor).ok_or(Error::Unavailable)?;
-        let victim = physical.actors.get(&target).ok_or(Error::Unavailable)?;
+        self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        let actor = self
+            .state
+            .components
+            .body(captor)
+            .ok_or(Error::Unavailable)?;
+        let victim = self
+            .state
+            .components
+            .body(target)
+            .ok_or(Error::Unavailable)?;
         Ok(game_conflict::ConfinementFacts {
             captor,
             target,
@@ -631,9 +614,7 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn complete_force(&mut self, actor: PersonId) {
-        let activity = self.state.physical.as_ref().unwrap().actors[&actor]
-            .activity
-            .clone();
+        let activity = self.state.components.activity(actor).unwrap().clone();
         match activity {
             Activity::Escape { tool, .. } => {
                 let successful = self.force_body_ready(actor)
@@ -719,14 +700,7 @@ impl Simulation {
             }
             _ => return,
         }
-        self.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&actor)
-            .unwrap()
-            .activity = Activity::Idle;
+        *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
     }
     pub(crate) fn force_guardian_rescue(
         &self,
@@ -759,7 +733,7 @@ impl Simulation {
     pub(crate) fn force_candidate(&self, actor: PersonId) -> Option<Command> {
         if !self.force_body_ready(actor)
             || !matches!(
-                self.state.physical.as_ref().unwrap().actors[&actor].activity,
+                *self.state.components.activity(actor).unwrap(),
                 Activity::Idle | Activity::Rest
             )
             || self.in_combat(actor)
@@ -972,12 +946,13 @@ impl Simulation {
         self.transport_same_place(observer, target)
     }
     pub(crate) fn force_view(&self, actor: PersonId) -> ForceView {
-        if self.state.physical.as_ref().is_none_or(|world| {
-            world
-                .actors
-                .get(&actor)
+        if self.state.physical.is_none()
+            || self
+                .state
+                .components
+                .body(actor)
                 .is_none_or(|body| !body.vitals.alive)
-        }) {
+        {
             return ForceView::default();
         }
         let Some(combat) = &self.state.combat else {
@@ -1013,7 +988,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         return Ok(());
     };
     let fail = || Error::InvalidSave("invalid confinement attempt or food supply".into());
-    let physical = state.physical.as_ref().ok_or_else(fail)?;
+    state.physical.as_ref().ok_or_else(fail)?;
     let combat = state.combat.as_ref().ok_or_else(fail)?;
     let people = state
         .people
@@ -1042,7 +1017,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     let locations = transport::resolved_locations_for(state)?;
     for (actor, attempt) in &world.restraints {
-        let body = physical.actors.get(actor).ok_or_else(fail)?;
+        let body = state.components.body(*actor).ok_or_else(fail)?;
         if !people.contains_key(actor)
             || !people.contains_key(&attempt.target)
             || actor == &attempt.target
@@ -1053,7 +1028,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             || state.inventories.get(&attempt.binding).is_none_or(|stock| {
                 stock.good != Good::Binding || stock.location != InventoryLocation::Carried(*actor)
             })
-            || body.activity
+            || *state.components.activity(*actor).ok_or_else(fail)?
                 != (Activity::Restrain {
                     target: attempt.target,
                     binding: attempt.binding,
@@ -1098,24 +1073,24 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             if attempt.completes <= state.time {
                 return Err(fail());
             }
-            let body = physical.actors.get(&attempt.actor).ok_or_else(fail)?;
-            if !matches!(body.activity,Activity::Escape {completes,..}|Activity::Unbind {completes,..} if completes==attempt.completes)
+            let activity = state.components.activity(attempt.actor).ok_or_else(fail)?;
+            if !matches!(*activity,Activity::Escape {completes,..}|Activity::Unbind {completes,..} if completes==attempt.completes)
             {
                 return Err(fail());
             }
         }
     }
-    for (actor, body) in &physical.actors {
-        match body.activity {
+    for (actor, activity) in state.components.activities() {
+        match *activity {
             Activity::Escape { .. }
                 if !world
                     .escapes
-                    .get(actor)
-                    .is_some_and(|attempt| attempt.actor == *actor && !attempt.contested) =>
+                    .get(&actor)
+                    .is_some_and(|attempt| attempt.actor == actor && !attempt.contested) =>
             {
                 return Err(fail());
             }
-            Activity::Restrain { .. } if !world.restraints.contains_key(actor) => {
+            Activity::Restrain { .. } if !world.restraints.contains_key(&actor) => {
                 return Err(fail());
             }
             _ => {}
@@ -1269,9 +1244,7 @@ mod tests {
         let confinement = sim.state.combat.as_ref().unwrap().captivity[&guardian].clone();
         sim.advance(SimDuration(180_000)).unwrap();
         assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&guardian]
-                .vitals
-                .health,
+            sim.state.components.body(guardian).unwrap().vitals.health,
             max
         );
         assert_eq!(
@@ -1313,9 +1286,7 @@ mod tests {
                 .contains_key(&captive)
         );
         assert!(
-            sim.state.physical.as_ref().unwrap().actors[&captive]
-                .vitals
-                .health
+            sim.state.components.body(captive).unwrap().vitals.health
                 <= sim.state.combat.as_ref().unwrap().rules.incapacitation
         );
         sim.advance(SimDuration(6_000)).unwrap();
@@ -1371,9 +1342,7 @@ mod tests {
         sim.start_restraint(captor, guardian).unwrap();
         sim.advance(SimDuration(6_000)).unwrap();
         assert_eq!(
-            sim.state.physical.as_ref().unwrap().actors[&guardian]
-                .vitals
-                .health,
+            sim.state.components.body(guardian).unwrap().vitals.health,
             50_000
         );
         assert!(
@@ -1391,22 +1360,13 @@ mod tests {
             .unwrap();
         weak.advance(MINUTE).unwrap();
         capture_by_yield(&mut weak, captor, target);
-        let body = weak
-            .state
-            .physical
-            .as_mut()
-            .unwrap()
-            .actors
-            .get_mut(&target)
-            .unwrap();
+        let body = weak.state.components.body_mut(target).unwrap();
         body.vitals.health = 50_000;
         body.vitals.hunger = 700_000;
         weak.start_escape(target).unwrap();
         weak.advance(SimDuration(6_000)).unwrap();
         assert_eq!(
-            weak.state.physical.as_ref().unwrap().actors[&target]
-                .vitals
-                .health,
+            weak.state.components.body(target).unwrap().vitals.health,
             44_000
         );
         assert!(
