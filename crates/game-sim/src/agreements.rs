@@ -966,8 +966,9 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .knowledge
-            .keys()
-            .copied()
+            .iter()
+            .filter(|(_, known)| !known.is_empty())
+            .map(|(actor, _)| *actor)
             .collect();
         for actor in actors {
             if !self.state.physical.as_ref().unwrap().actors[&actor]
