@@ -1486,9 +1486,9 @@ impl Simulation {
                 .as_ref()
                 .and_then(|w| w.minds.get(&actor))
                 .is_some_and(|m| {
-                    m.child_signals
-                        .values()
-                        .any(|signal| signal.area == area && signal.urgency >= 1_000)
+                    m.child_signals.values().any(|signal| {
+                        signal.location == Location::AtArea(area) && signal.urgency >= 1_000
+                    })
                 });
             if !needy {
                 continue;

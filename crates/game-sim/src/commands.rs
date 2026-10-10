@@ -38,6 +38,11 @@ impl Simulation {
             self.revision += 1;
             return Ok(());
         }
+        if let Command::Transport { ref action } = command {
+            self.transport_command(actor, action)?;
+            self.revision += 1;
+            return Ok(());
+        }
         if let Command::Health { ref action } = command {
             self.health_command(actor, action)?;
             self.revision += 1;
@@ -108,6 +113,7 @@ impl Simulation {
         self.start_physical_action(actor, command)
     }
     pub(crate) fn interrupt_actor_activity(&mut self, actor: PersonId) {
+        self.interrupt_transport_lift(actor);
         self.interrupt_social(actor);
         self.interrupt_enforcement(actor);
         self.cancel_health_activity(actor);

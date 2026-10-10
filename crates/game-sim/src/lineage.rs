@@ -177,7 +177,9 @@ impl Simulation {
             departure.or_else(
                 || match self.state.people[self.person_index[&actor]].location {
                     Location::AtArea(area) => Some(area),
-                    Location::InTransit { .. } => None,
+                    Location::InTransit { .. }
+                    | Location::StoppedOnRoad { .. }
+                    | Location::Carried { .. } => None,
                 },
             );
         let Some(area) = area else { return };
@@ -763,13 +765,9 @@ impl Simulation {
                     );
                 }
             }
-            let sensed = current.map(|person| {
-                self.state.people[self.person_index[&person]]
-                    .location
-                    .clone()
-            });
+            let sensed = current.map(|person| self.resolved_location(person));
             let body = &self.state.physical.as_ref().unwrap().actors[&id];
-            let own_location = self.state.people[self.person_index[&id]].location.clone();
+            let own_location = self.resolved_location(id);
             let pending = self.state.lineage.as_ref().unwrap().guardians[&id]
                 .assignment
                 .as_ref()
@@ -882,6 +880,13 @@ impl Simulation {
         target_location: &Location,
     ) -> (GuardianGoal, String, Option<Command>) {
         let body = &self.state.physical.as_ref().unwrap().actors[&guardian];
+        if let Some(command) = self.transport_guardian_rescue(guardian, target) {
+            return (
+                GuardianGoal::Searching,
+                "Providing physical support to the incarnation on the road".into(),
+                Some(command),
+            );
+        }
         if let Some(command) = self.force_guardian_rescue(guardian, target) {
             return (
                 GuardianGoal::Searching,
@@ -895,7 +900,7 @@ impl Simulation {
             .child_signals
             .get(&target)
             .map(|signal| NeedObservation {
-                area: signal.area,
+                location: signal.location.clone(),
                 observed_at: signal.observed_at,
                 urgency: signal.urgency,
                 preference: signal.preference,
@@ -919,6 +924,19 @@ impl Simulation {
             meal_size: self.state.physical.as_ref().unwrap().rules.meal_size,
         });
         let command = intent.action.map(|action| match action {
+            GuardianAction::ApproachRoad {
+                from,
+                to,
+                progress,
+                duration,
+            } => Command::Transport {
+                action: TransportAction::ApproachRoad {
+                    from,
+                    to,
+                    progress,
+                    duration,
+                },
+            },
             GuardianAction::Move { destination } => Command::Move { destination },
             GuardianAction::Care { child, source } => Command::Care { child, source },
             GuardianAction::Comfort { child } => Command::Comfort { child },
@@ -1127,6 +1145,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     to,
                     departed,
                     arrives,
+                    ..
                 } if !known_area(*from)
                     || !known_area(*to)
                     || departed >= arrives

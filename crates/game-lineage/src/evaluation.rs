@@ -260,14 +260,14 @@ pub fn bind_actual_birth(
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NeedObservation {
-    pub area: AreaId,
+    pub location: Location,
     pub observed_at: SimTime,
     pub urgency: i64,
     pub preference: Option<ChildhoodInterest>,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct GuardianInput<'a> {
     pub target: PersonId,
     pub own_location: &'a Location,
@@ -282,6 +282,12 @@ pub struct GuardianInput<'a> {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuardianAction {
+    ApproachRoad {
+        from: AreaId,
+        to: AreaId,
+        progress: SimDuration,
+        duration: SimDuration,
+    },
     Move {
         destination: AreaId,
     },
@@ -314,9 +320,35 @@ pub fn guardian_intention(input: GuardianInput<'_>) -> GuardianIntent {
         );
     }
     if input.own_location != input.target_location {
+        if let Location::StoppedOnRoad {
+            from,
+            to,
+            progress,
+            duration,
+        } = input.target_location
+        {
+            return intent(
+                GuardianGoal::Searching,
+                "The incarnation remains on the road; reaching the exact position requires travel",
+                Some(GuardianAction::ApproachRoad {
+                    from: *from,
+                    to: *to,
+                    progress: *progress,
+                    duration: *duration,
+                }),
+            );
+        }
         let destination = match input.target_location {
             Location::AtArea(area) => *area,
             Location::InTransit { to, .. } => *to,
+            Location::Carried { .. } => {
+                return intent(
+                    GuardianGoal::Searching,
+                    "The carrier's physical position must be resolved before choosing a route",
+                    None,
+                );
+            }
+            Location::StoppedOnRoad { .. } => unreachable!("handled road approach"),
         };
         return intent(
             GuardianGoal::Searching,
@@ -340,7 +372,7 @@ pub fn guardian_intention(input: GuardianInput<'_>) -> GuardianIntent {
     };
     if let Some(need) = input
         .need
-        .filter(|need| need.area == *area && need.observed_at == input.now)
+        .filter(|need| need.location == Location::AtArea(*area) && need.observed_at == input.now)
     {
         if need.urgency > 0 {
             if let Some(food) = input.known_stocks.iter().find(|stock| {

@@ -509,3 +509,95 @@ fn existing_physical_completion_and_debug_transfer_cannot_consume_the_same_units
         0
     );
 }
+
+fn arriving_at_a_body_limit(exhaustion: bool) -> (Simulation, PersonId) {
+    let mut sim = sim(1);
+    command(
+        &mut sim,
+        Command::Move {
+            destination: AreaId(2),
+        },
+    )
+    .unwrap();
+    sim.advance(SimDuration(120_000)).unwrap();
+    let ruler = actor(&sim);
+    let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+    let mut state: CanonicalState = serde_json::from_value(envelope["state"].take()).unwrap();
+    let physical = state.physical.as_mut().unwrap();
+    let body = physical.actors.get_mut(&ruler).unwrap();
+    body.vitals.fatigue = if exhaustion {
+        physical.rules.fatigue_limit - 120_000
+    } else {
+        0
+    };
+    if !exhaustion {
+        body.vitals.hunger = physical.rules.hunger_harm;
+        body.vitals.health = 120_000;
+    }
+    envelope["state"] = serde_json::to_value(state).unwrap();
+    sim = Simulation::load(
+        &serde_json::to_vec(&envelope).unwrap(),
+        Execution::default(),
+    )
+    .unwrap();
+    command(
+        &mut sim,
+        Command::Move {
+            destination: AreaId(3),
+        },
+    )
+    .unwrap();
+    (sim, ruler)
+}
+
+#[test]
+fn death_at_an_intermediate_arrival_does_not_publish_a_phantom_next_leg() {
+    let (mut sim, ruler) = arriving_at_a_body_limit(false);
+    sim.advance(SimDuration(120_000)).unwrap();
+    let state = sim.canonical_state();
+    assert!(!state.physical.as_ref().unwrap().actors[&ruler].vitals.alive);
+    assert_eq!(state.people[0].location, Location::AtArea(AreaId(1)));
+    assert!(state.people[0].route.is_empty());
+    assert!(
+        !state
+            .events
+            .iter()
+            .any(|event| event.time == SimTime(240_000)
+                && matches!(event.kind, EventKind::Departed { actor, .. } if actor == ruler))
+    );
+    Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+}
+
+#[test]
+fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
+    let (mut sim, ruler) = arriving_at_a_body_limit(true);
+    sim.advance(SimDuration(120_000)).unwrap();
+    assert_eq!(
+        sim.canonical_state().people[0].location,
+        Location::AtArea(AreaId(1))
+    );
+    assert!(sim.canonical_state().people[0].route.is_empty());
+    assert_eq!(
+        command(
+            &mut sim,
+            Command::Move {
+                destination: AreaId(3)
+            }
+        ),
+        Err(Error::Unavailable)
+    );
+    assert!(
+        sim.canonical_state().physical.as_ref().unwrap().actors[&ruler]
+            .vitals
+            .alive
+    );
+    command(&mut sim, Command::Rest).unwrap();
+    sim.advance(MINUTE).unwrap();
+    command(
+        &mut sim,
+        Command::Move {
+            destination: AreaId(3),
+        },
+    )
+    .unwrap();
+}

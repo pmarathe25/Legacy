@@ -2,6 +2,8 @@
 use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod navigation;
+pub use navigation::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObstacleView {
@@ -28,6 +30,7 @@ pub struct Map {
     pub id: CombatMapId,
     pub version: u32,
     pub area: AreaId,
+    pub location: Location,
     pub width: i64,
     pub height: i64,
     pub obstacles: Vec<ObstacleView>,
@@ -44,11 +47,13 @@ pub struct Fighter {
     pub defending: bool,
     pub retreat: Option<AreaId>,
     pub known: BTreeMap<PersonId, Point>,
+    pub search: SearchState,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Encounter {
     pub id: EncounterId,
     pub area: AreaId,
+    pub location: Location,
     pub map: CombatMapId,
     pub round: u64,
     pub started: SimTime,
@@ -64,6 +69,7 @@ pub struct Captivity {
     pub captor: PersonId,
     pub area: AreaId,
     pub position: Point,
+    pub map: CombatMapId,
     pub binding: InventoryId,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +77,7 @@ pub struct World {
     pub rules: Rules,
     pub profiles: BTreeMap<PersonId, Profile>,
     pub maps: BTreeMap<AreaId, Map>,
+    pub road_maps: BTreeMap<CombatMapId, Map>,
     pub encounters: BTreeMap<EncounterId, Encounter>,
     pub captivity: BTreeMap<PersonId, Captivity>,
 }
@@ -143,6 +150,18 @@ fn crosses(a: Point, b: Point, min: Point, max: Point) -> bool {
 }
 
 impl World {
+    pub fn map(&self, id: CombatMapId) -> Option<&Map> {
+        self.road_maps
+            .get(&id)
+            .or_else(|| self.maps.values().find(|map| map.id == id))
+    }
+    pub fn map_mut(&mut self, id: CombatMapId) -> Option<&mut Map> {
+        if self.road_maps.contains_key(&id) {
+            self.road_maps.get_mut(&id)
+        } else {
+            self.maps.values_mut().find(|map| map.id == id)
+        }
+    }
     pub fn turn_position(
         &self,
         encounter: EncounterId,
@@ -154,7 +173,7 @@ impl World {
             return Err(Error::Unavailable);
         }
         let fighter = encounter.fighters.get(&actor).ok_or(Error::Unavailable)?;
-        let map = self.maps.get(&encounter.area).ok_or(Error::Unavailable)?;
+        let map = self.map(encounter.map).ok_or(Error::Unavailable)?;
         let position = movement.unwrap_or(fighter.position);
         if distance(position, fighter.position) > u128::from(self.rules.movement).pow(2)
             || !map.clear(fighter.position, position)
@@ -169,8 +188,7 @@ impl World {
                 !fighter.withdrawn
                     && distance(position, fighter.position) <= u128::from(self.rules.reach).pow(2)
                     && self
-                        .maps
-                        .get(&encounter.area)
+                        .map(encounter.map)
                         .is_some_and(|map| map.clear(position, fighter.position))
             })
         })
@@ -227,6 +245,7 @@ mod tests {
             id: CombatMapId(1),
             version: 1,
             area: AreaId(2),
+            location: Location::AtArea(AreaId(2)),
             width: 20_000,
             height: 20_000,
             obstacles: vec![ObstacleView {
@@ -282,6 +301,7 @@ mod tests {
                     defending: false,
                     retreat: None,
                     known: BTreeMap::new(),
+                    search: SearchState::default(),
                 },
             );
         }
@@ -300,12 +320,14 @@ mod tests {
                 .map(|p| (*p, Profile { initiative: 100 }))
                 .collect(),
             maps: BTreeMap::new(),
+            road_maps: BTreeMap::new(),
             captivity: BTreeMap::new(),
             encounters: BTreeMap::from([(
                 id,
                 Encounter {
                     id,
                     area: AreaId(2),
+                    location: Location::AtArea(AreaId(2)),
                     map: CombatMapId(1),
                     round: 1,
                     started: SimTime(0),
@@ -352,6 +374,7 @@ mod tests {
                         defending: false,
                         retreat: None,
                         known: BTreeMap::new(),
+                        search: SearchState::default(),
                     },
                 )
             })
@@ -367,12 +390,14 @@ mod tests {
             },
             profiles: BTreeMap::new(),
             maps: BTreeMap::from([(AreaId(2), map())]),
+            road_maps: BTreeMap::new(),
             captivity: BTreeMap::new(),
             encounters: BTreeMap::from([(
                 id,
                 Encounter {
                     id,
                     area: AreaId(2),
+                    location: Location::AtArea(AreaId(2)),
                     map: CombatMapId(1),
                     round: 1,
                     started: SimTime(0),

@@ -8,6 +8,7 @@ macro_rules! id {
     )*};
 }
 id!(
+    RealmCommitmentId,
     EnforcementCaseId,
     JudgmentId,
     ShelterId,
@@ -64,6 +65,19 @@ pub enum Role {
     Citizen,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RoadPosition {
+    pub from: AreaId,
+    pub to: AreaId,
+    pub progress: SimDuration,
+    pub duration: SimDuration,
+}
+impl RoadPosition {
+    pub fn valid(&self) -> bool {
+        self.from != self.to && self.duration.0 > 0 && self.progress <= self.duration
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
     AtArea(AreaId),
@@ -72,6 +86,16 @@ pub enum Location {
         to: AreaId,
         departed: SimTime,
         arrives: SimTime,
+        road_start: Option<RoadPosition>,
+    },
+    StoppedOnRoad {
+        from: AreaId,
+        to: AreaId,
+        progress: SimDuration,
+        duration: SimDuration,
+    },
+    Carried {
+        carrier: PersonId,
     },
 }
 

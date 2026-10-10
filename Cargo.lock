@@ -47,6 +47,7 @@ dependencies = [
  "game-lineage",
  "game-missions",
  "game-society",
+ "game-transport",
  "serde",
 ]
 
@@ -74,6 +75,7 @@ version = "0.1.0"
 dependencies = [
  "game-core",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -146,6 +148,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-realm"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-economy",
+ "game-missions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-sim"
 version = "0.1.0"
 dependencies = [
@@ -162,6 +175,7 @@ dependencies = [
  "game-physiology",
  "game-skills",
  "game-society",
+ "game-transport",
  "rayon",
  "serde",
  "serde_json",
@@ -181,6 +195,15 @@ version = "0.1.0"
 dependencies = [
  "game-core",
  "game-economy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-transport"
+version = "0.1.0"
+dependencies = [
+ "game-core",
  "serde",
  "serde_json",
 ]

@@ -6,6 +6,7 @@ pub const PLAYABLE: [&str; 3] = ["settlement-founder", "established-ruler", "chi
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
+    pub transport: game_transport::Rules,
     pub environment: environment::Config,
     pub biology: development::Rules,
     pub skills: skills::Rules,
@@ -27,6 +28,7 @@ impl Default for Config {
     fn default() -> Self {
         let hour = 3_600_000;
         Self {
+            transport: game_transport::Rules::default(),
             environment: environment::Config::default(),
             biology: development::Rules::human(),
             skills: skills::Rules {
@@ -109,6 +111,7 @@ impl Simulation {
         sim.state.areas[2].name = "North wood".into();
         sim.prepare_playable_people(&config)?;
         sim.install_playable_domains(&config)?;
+        sim.initialize_transport(config.transport.clone())?;
         sim.seed_playable_resources()?;
         sim.seed_playable_workshop(id != "settlement-founder")?;
         if let Some(rules) = config.genetics.clone() {
@@ -351,6 +354,7 @@ impl Simulation {
                 })
                 .collect(),
             maps: BTreeMap::new(),
+            road_maps: BTreeMap::new(),
             encounters: BTreeMap::new(),
             captivity: BTreeMap::new(),
         });

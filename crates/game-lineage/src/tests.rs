@@ -282,7 +282,7 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
         meal_size: Quantity(1_000),
     };
     assert_eq!(
-        guardian_intention(base).action,
+        guardian_intention(base.clone()).action,
         Some(GuardianAction::Move {
             destination: AreaId(3)
         })
@@ -291,14 +291,14 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
     let local = GuardianInput {
         target_location: &own,
         need: Some(NeedObservation {
-            area: AreaId(1),
+            location: Location::AtArea(AreaId(1)),
             observed_at: SimTime(40),
             urgency: 50,
             preference: None,
         }),
         ..base
     };
-    assert_eq!(guardian_intention(local).action, None);
+    assert_eq!(guardian_intention(local.clone()).action, None);
     let food = StockKnowledge {
         inventory: InventoryId(10),
         area: AreaId(1),
@@ -313,7 +313,7 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
     assert_eq!(
         guardian_intention(GuardianInput {
             known_stocks: &stocks,
-            ..local
+            ..local.clone()
         })
         .action,
         Some(GuardianAction::Care {
@@ -324,10 +324,10 @@ fn sensed_location_is_only_an_intent_and_care_uses_personal_fresh_knowledge() {
     let stale = GuardianInput {
         need: Some(NeedObservation {
             observed_at: SimTime(39),
-            ..local.need.unwrap()
+            ..local.need.clone().unwrap()
         }),
         known_stocks: &stocks,
-        ..local
+        ..local.clone()
     };
     assert_eq!(guardian_intention(stale).action, Some(GuardianAction::Rest));
 }

@@ -331,3 +331,33 @@ fn dead_clinical_history_can_remain_unreconciled() {
     fixture.people.get_mut(&PersonId(2)).unwrap().alive = true;
     assert!(fixture.validate().is_err());
 }
+
+#[test]
+fn stopped_road_work_is_valid_but_cannot_materialize_a_shelter_at_an_endpoint() {
+    let mut fixture = Fixture::new();
+    fixture.areas.insert(AreaId(6));
+    fixture.world.occupancy.remove(&PersonId(1));
+    fixture.people.get_mut(&PersonId(1)).unwrap().location = Location::StoppedOnRoad {
+        from: AreaId(5),
+        to: AreaId(6),
+        progress: SimDuration(20),
+        duration: SimDuration(100),
+    };
+    fixture.validate().unwrap(); // Boiling with the held toolkit is ordinary hand work.
+    fixture.world.jobs.get_mut(&PersonId(1)).unwrap().work = Work::Shelter {
+        timber_used: Quantity(1_000),
+        tool: InventoryId(11),
+        capacity: 1,
+        insulation: 500,
+        started: SimTime(0),
+    };
+    fixture
+        .people
+        .get_mut(&PersonId(1))
+        .unwrap()
+        .health_work
+        .as_mut()
+        .unwrap()
+        .kind = HealthWorkKind::Shelter;
+    assert!(fixture.validate().is_err());
+}

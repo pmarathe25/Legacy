@@ -28,6 +28,7 @@ pub mod skills;
 pub mod social;
 #[doc(hidden)]
 pub mod transactions;
+pub mod transport;
 
 use game_api::*;
 use serde::{Deserialize, Serialize};
@@ -125,6 +126,7 @@ enum Due {
 /// Logical state in persistent ID order; excludes host publication counters and timings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalState {
+    pub transport: Option<game_transport::World>,
     pub genetics: Option<game_genetics::World>,
     pub scenario: ScenarioInfo,
     pub seed: u64,
@@ -288,6 +290,11 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             debug_fixture: true,
         },
         ScenarioInfo {
+            id: "transport-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
             id: "genetics-fixture".into(),
             version: 1,
             debug_fixture: true,
@@ -346,6 +353,9 @@ impl Simulation {
         if scenario == "enforcement-fixture" {
             return Self::enforcement_fixture(seed, execution);
         }
+        if scenario == "transport-fixture" {
+            return Self::transport_fixture(seed, execution);
+        }
         if scenario == "genetics-fixture" {
             return Self::genetics_fixture(seed, execution);
         }
@@ -402,6 +412,7 @@ impl Simulation {
             ));
         }
         let mut state = CanonicalState {
+            transport: None,
             genetics: None,
             scenario: scenarios().remove(0),
             seed,
@@ -610,9 +621,12 @@ impl Simulation {
 
     pub fn observe(&self) -> PlayerView {
         let ruler = &self.state.people[self.person_index[&self.state.ruler]];
-        let origin = match ruler.location {
+        let ruler_location = self.resolved_location(ruler.id);
+        let origin = match ruler_location {
             Location::AtArea(a) => a,
             Location::InTransit { to, .. } => to,
+            Location::StoppedOnRoad { from, .. } => from,
+            Location::Carried { .. } => unreachable!("resolved carrier position"),
         };
         let known_routes = self
             .state
@@ -645,7 +659,10 @@ impl Simulation {
             let actor = &world.actors[&ruler.id];
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 available_commands.clear();
-            } else if matches!(ruler.location, Location::AtArea(_)) {
+            } else if matches!(
+                ruler_location,
+                Location::AtArea(_) | Location::StoppedOnRoad { .. }
+            ) {
                 available_commands.extend([Command::Rest, Command::Cancel]);
                 if let Some(view) = self.physical_view() {
                     available_commands.extend(
@@ -684,10 +701,15 @@ impl Simulation {
                             }
                         }
                     }
-                    if let Some(children) = self.dependent_index.get(&origin) {
+                    if let Some(development) = &self.state.development {
+                        let children = development.lives.iter().filter_map(|(id, life)| {
+                            (life.stage == LifeStage::Infant
+                                && self.transport_same_place(ruler.id, *id))
+                            .then_some(*id)
+                        });
                         for child in children {
-                            if *child != ruler.id {
-                                available_commands.push(Command::Comfort { child: *child });
+                            if child != ruler.id {
+                                available_commands.push(Command::Comfort { child });
                             }
                             for source in view.local_stocks.iter().filter(|s| {
                                 s.good == Good::Food
@@ -695,7 +717,7 @@ impl Simulation {
                                     && s.quantity >= world.rules.meal_size
                             }) {
                                 available_commands.push(Command::Care {
-                                    child: *child,
+                                    child,
                                     source: source.id,
                                 });
                             }
@@ -725,7 +747,6 @@ impl Simulation {
                     .vitals
                     .health
                     > 0
-                && matches!(ruler.location, Location::AtArea(_))
             {
                 for preference in [
                     ChildhoodInterest::Food,
@@ -739,7 +760,7 @@ impl Simulation {
                     ) {
                         available_commands.push(Command::Signal { preference });
                     }
-                    if stage == LifeStage::Child {
+                    if stage == LifeStage::Child && matches!(ruler_location, Location::AtArea(_)) {
                         available_commands.push(Command::Play {
                             interest: preference,
                         });
@@ -747,6 +768,17 @@ impl Simulation {
                 }
             }
         }
+        if !matches!(
+            ruler.location,
+            Location::AtArea(_) | Location::InTransit { .. }
+        ) {
+            available_commands.retain(|command| !matches!(command, Command::Move { .. }));
+        }
+        if matches!(ruler_location, Location::StoppedOnRoad { .. }) {
+            available_commands
+                .retain(|command| !matches!(command, Command::Work { .. } | Command::Load { .. }));
+        }
+        available_commands.extend(self.available_transport_commands(ruler.id));
         available_commands.extend(self.available_cultivation(ruler.id));
         available_commands.extend(self.available_agreement_commands(ruler.id));
         available_commands.extend(self.available_property_commands(ruler.id));
@@ -818,6 +850,7 @@ impl Simulation {
             available_commands.clear();
         }
         PlayerView {
+            transport: self.transport_view(ruler.id),
             genetics: self.genetic_phenotype(ruler.id),
             social: self.social_view(ruler.id),
             enforcement: self.enforcement_view(ruler.id),
@@ -997,12 +1030,14 @@ impl Simulation {
         destination: AreaId,
     ) -> Result<(), Error> {
         let index = *self.person_index.get(&actor).ok_or(Error::Unavailable)?;
-        if self.combat_restricts(actor) {
+        if self.combat_restricts(actor) || !self.transport_can_depart(actor) {
             return Err(Error::Unavailable);
         }
         if !self.independent(actor)
             || self.state.physical.as_ref().is_some_and(|w| {
-                !w.actors[&actor].vitals.alive || w.actors[&actor].vitals.health == 0
+                !w.actors[&actor].vitals.alive
+                    || w.actors[&actor].vitals.health == 0
+                    || w.actors[&actor].vitals.fatigue >= w.rules.fatigue_limit
             })
         {
             return Err(Error::Unavailable);
@@ -1013,6 +1048,9 @@ impl Simulation {
         let origin = match self.state.people[index].location {
             Location::AtArea(a) => a,
             Location::InTransit { to, .. } => to,
+            Location::StoppedOnRoad { .. } | Location::Carried { .. } => {
+                return Err(Error::Unavailable);
+            }
         };
         let path = if let Some(routes) = self.invocation_routes(actor) {
             decisions::known_path(&routes, origin, destination)?.0
@@ -1105,6 +1143,7 @@ impl Simulation {
             to,
             departed: self.state.time,
             arrives,
+            road_start: None,
         };
         self.state
             .due
@@ -1117,6 +1156,7 @@ impl Simulation {
             to,
             arrives,
         });
+        self.transport_departed(self.state.people[index].id);
     }
 
     pub fn advance(&mut self, duration: SimDuration) -> Result<AdvanceResult, Error> {
@@ -1167,7 +1207,9 @@ impl Simulation {
             let next = self.health_boundary(
                 self.social_boundary(self.mission_boundary(self.invocation_boundary(next))),
             )?;
-            let next = self.body_boundary(self.skill_boundary(self.genetics_boundary(next))?)?;
+            let next = self.body_boundary(
+                self.skill_boundary(self.genetics_boundary(self.transport_boundary(next)?))?,
+            )?;
             let controlled = self.state.ruler;
             self.step(next)?;
             if controlled != self.state.ruler {
@@ -1336,6 +1378,7 @@ impl Simulation {
             .filter(|d| matches!(d, Due::Age(_) | Due::Birth(_) | Due::CombatRound(_)))
             .cloned()
             .collect();
+        let mut continued_journeys = Vec::new();
         let mut production_completions = Vec::new();
         let mut force_completions = Vec::new();
         let transfers: Vec<_> = due
@@ -1412,6 +1455,9 @@ impl Simulation {
                     .or_default()
                     .push(Due::Review),
                 Due::Arrive(id) => {
+                    if self.transport_arrive(id) {
+                        continue;
+                    }
                     let index = self.person_index[&id];
                     if let Location::InTransit { to, .. } = self.state.people[index].location {
                         self.state.people[index].location = Location::AtArea(to);
@@ -1421,8 +1467,7 @@ impl Simulation {
                             area: to,
                         });
                         if let Some(destination) = self.state.people[index].route.first().copied() {
-                            let (_, arrival) = self.departure(to, destination)?;
-                            self.depart(index, to, destination, arrival);
+                            continued_journeys.push((id, to, destination));
                         }
                     }
                 }
@@ -1441,7 +1486,9 @@ impl Simulation {
                     } else if self.state.physical.as_ref().is_some_and(|w| {
                         matches!(
                             w.actors[&actor].activity,
-                            Activity::Escape { .. } | Activity::Restrain { .. }
+                            Activity::Escape { .. }
+                                | Activity::Restrain { .. }
+                                | Activity::Lift { .. }
                         )
                     }) {
                         force_completions.push(actor);
@@ -1506,11 +1553,12 @@ impl Simulation {
             }
         }
         self.commit_physical(physical_output, &closing_equipment);
+        self.reconcile_transport();
         for actor in force_completions {
             if self.state.physical.as_ref().is_some_and(|w| {
                 matches!(
                     w.actors[&actor].activity,
-                    Activity::Escape { .. } | Activity::Restrain { .. }
+                    Activity::Escape { .. } | Activity::Restrain { .. } | Activity::Lift { .. }
                 )
             }) {
                 self.complete_physical(actor);
@@ -1527,6 +1575,30 @@ impl Simulation {
             .filter(|d| !matches!(d, Due::CombatRound(_)))
         {
             self.complete_development(event.clone());
+        }
+        self.reconcile_transport();
+        // A closing arrival cannot grant another leg before death, exhaustion,
+        // or incapacity at that same timestamp has been committed.
+        for (actor, origin, destination) in continued_journeys {
+            let ready = self.state.physical.as_ref().is_none_or(|world| {
+                let body = &world.actors[&actor];
+                body.vitals.alive
+                    && body.vitals.health > 0
+                    && body.vitals.fatigue < world.rules.fatigue_limit
+            }) && !self.combat_restricts(actor)
+                && self.independent(actor)
+                && self.transport_can_depart(actor);
+            let index = self.person_index[&actor];
+            if ready
+                && self.state.people[index].location == Location::AtArea(origin)
+                && self.state.people[index].route.first() == Some(&destination)
+            {
+                let (_, arrival) = self.departure(origin, destination)?;
+                self.depart(index, origin, destination, arrival);
+            } else {
+                self.state.people[index].route.clear();
+                self.emit(EventKind::Interrupted { actor });
+            }
         }
         self.reconcile_missions()?;
         self.admit_due_mission_reinforcements();
@@ -1563,12 +1635,10 @@ impl Simulation {
     fn inventory_area(&self, inventory: &Inventory) -> Option<AreaId> {
         match inventory.location {
             InventoryLocation::Area(a) => Some(a),
-            InventoryLocation::Carried(id) => {
-                match self.state.people[self.person_index[&id]].location {
-                    Location::AtArea(a) => Some(a),
-                    _ => None,
-                }
-            }
+            InventoryLocation::Carried(id) => match self.resolved_location(id) {
+                Location::AtArea(a) => Some(a),
+                _ => None,
+            },
         }
     }
 
@@ -1660,20 +1730,54 @@ impl Simulation {
                 }
             })
             .collect();
-        transactions::arbitrate_with_capacity(&balances, requests, &carriers, &free_capacity)
-            .into_iter()
-            .map(|(r, granted)| {
-                (
-                    TransferIntent {
-                        actor: r.actor,
-                        source: r.source,
-                        destination: r.destination,
-                        quantity: Quantity(r.amount),
-                    },
-                    granted,
+        // Incoming loads share the same bearer capacities. Outgoing goods do
+        // not free capacity until this phase has committed.
+        let mut transport_bodies = self.transport_bodies().ok();
+        transactions::arbitrate_with_constraints(
+            &balances,
+            requests,
+            &carriers,
+            &free_capacity,
+            |request| {
+                let Some(world) = &self.state.transport else {
+                    return true;
+                };
+                let Some(actor) = carriers.get(&request.destination) else {
+                    return true;
+                };
+                if carriers.get(&request.source) == Some(actor) {
+                    return true;
+                }
+                let Some(bodies) = &mut transport_bodies else {
+                    return false;
+                };
+                if !game_transport::transfer_capacity(
+                    &world.groups,
+                    bodies,
+                    *actor,
+                    Quantity(request.amount),
                 )
-            })
-            .collect()
+                .unwrap_or(false)
+                {
+                    return false;
+                }
+                bodies.get_mut(actor).unwrap().cargo.0 += request.amount;
+                true
+            },
+        )
+        .into_iter()
+        .map(|(r, granted)| {
+            (
+                TransferIntent {
+                    actor: r.actor,
+                    source: r.source,
+                    destination: r.destination,
+                    quantity: Quantity(r.amount),
+                },
+                granted,
+            )
+        })
+        .collect()
     }
 
     pub fn debug_schedule_transfers(
@@ -1725,6 +1829,9 @@ impl Simulation {
             .map(|_| ())
     }
     fn emit(&mut self, kind: EventKind) {
+        if let EventKind::Died { actor } = kind {
+            self.transport_death(actor);
+        }
         self.on_health_event(&kind);
         self.on_social_event(&kind);
         self.on_genetic_event(&kind);

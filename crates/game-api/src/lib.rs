@@ -28,6 +28,9 @@ pub use enforcement::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Transport {
+        action: TransportAction,
+    },
     Social {
         action: SocialAction,
     },
@@ -152,6 +155,7 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub transport: Option<TransportView>,
     pub genetics: Option<game_genetics::Phenotype>,
     pub social: Option<SocialView>,
     pub enforcement: EnforcementView,
@@ -186,6 +190,10 @@ pub struct PlayerView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    Lift {
+        passenger: PersonId,
+        completes: SimTime,
+    },
     Social {
         partner: PersonId,
         topic: SocialTopic,
@@ -931,6 +939,7 @@ pub struct FighterView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TacticalView {
+    pub location: Location,
     pub encounter: EncounterId,
     pub active: bool,
     pub map: CombatMapId,
@@ -988,3 +997,5 @@ pub struct FieldView {
 pub use game_lineage::{
     GuardianGoalView, GuardianRequest, GuardianSearchView, LessonTopic, LineageView,
 };
+
+pub use game_transport::{Action as TransportAction, View as TransportView};

@@ -42,6 +42,7 @@ impl Simulation {
                 })
                 .collect(),
             maps: BTreeMap::new(),
+            road_maps: BTreeMap::new(),
             encounters: BTreeMap::new(),
             captivity: BTreeMap::new(),
         });

@@ -5,8 +5,8 @@ use crate::*;
 pub struct ConfinementView {
     pub target: PersonId,
     pub captor: PersonId,
-    pub area: AreaId,
-    pub position: Point,
+    pub location: Location,
+    pub captured_position: Point,
     pub can_escape: bool,
     pub escaping: bool,
 }

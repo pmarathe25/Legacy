@@ -2378,7 +2378,7 @@ impl Simulation {
         let Some(f) = e.fighters.get(&actor) else {
             return;
         };
-        let map = &self.state.combat.as_ref().unwrap().maps[&e.area];
+        let map = self.state.combat.as_ref().unwrap().map(e.map).unwrap();
         let m = &self.state.missions.as_ref().unwrap().missions[&id];
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
         if mind.personality.honesty >= 500 {
@@ -2459,7 +2459,7 @@ impl Simulation {
         self.observe_own_mission(actor, id);
     }
     pub(crate) fn mission_combat_action(
-        &self,
+        &mut self,
         encounter: EncounterId,
         actor: PersonId,
     ) -> Option<(Option<Point>, CombatAction)> {
@@ -2473,7 +2473,7 @@ impl Simulation {
         let w = self.state.combat.as_ref()?;
         let e = w.encounters.get(&encounter)?;
         let f = e.fighters.get(&actor)?;
-        let map = &w.maps[&e.area];
+        let map = w.map(e.map)?;
         let mind = &self.state.decisions.as_ref()?.minds[&actor];
         let body = &self.state.physical.as_ref()?.actors[&actor];
         let retreat = body.vitals.health < self.state.physical.as_ref()?.rules.max_health / 2
@@ -2491,11 +2491,13 @@ impl Simulation {
                 .exits
                 .iter()
                 .filter(|(area, _)| decisions::known_path(&mind.routes, e.area, *area).is_ok())
+                .filter(|(_, point)| map.route(f.position, *point).is_some())
                 .min_by_key(|(area, point)| (point_distance(f.position, *point), *area));
             if let Some((destination, exit)) = exit {
                 let movement = mission_combat_step(f.position, *exit, w.rules.movement, map);
                 let position = movement.unwrap_or(f.position);
                 let action = if point_distance(position, *exit) <= u128::from(w.rules.reach).pow(2)
+                    && map.clear(position, *exit)
                 {
                     CombatAction::Retreat {
                         destination: *destination,
@@ -2527,20 +2529,32 @@ impl Simulation {
                 .copied(),
         };
         let Some(target) = target else {
-            return Some((None, CombatAction::Defend));
+            return Some((
+                self.combat_search_step(encounter, actor),
+                CombatAction::Defend,
+            ));
         };
         let point = f.known[&target];
-        let distance = point_distance(f.position, point).isqrt() as u64;
-        let movement = mission_combat_step(
+        let movement = map.navigation_step(
             f.position,
             point,
-            distance
-                .saturating_sub(w.rules.reach.saturating_sub(2))
-                .min(w.rules.movement),
-            map,
+            w.rules.movement,
+            w.rules.reach.saturating_sub(2),
         );
+        let visible = map.clear(f.position, e.fighters[&target].position);
+        if !visible
+            && (movement.is_none()
+                || map.clear(f.position, point)
+                    && point_distance(f.position, point) <= u128::from(w.rules.reach).pow(2))
+        {
+            return Some((
+                self.combat_search_step(encounter, actor),
+                CombatAction::Defend,
+            ));
+        }
         let from = movement.unwrap_or(f.position);
-        let reachable = point_distance(from, point) <= u128::from(w.rules.reach).pow(2)
+        let reachable = visible
+            && point_distance(from, point) <= u128::from(w.rules.reach).pow(2)
             && map.clear(from, point);
         let action = if reachable
             && matches!(member.directive, MissionObjective::Rescue { person, .. } if person == target)
@@ -2614,18 +2628,7 @@ fn point_distance(a: Point, b: Point) -> u128 {
     u128::from(a.x.abs_diff(b.x)).pow(2) + u128::from(a.y.abs_diff(b.y)).pow(2)
 }
 fn mission_combat_step(from: Point, to: Point, limit: u64, map: &combat::Map) -> Option<Point> {
-    let square = point_distance(from, to);
-    let floor = square.isqrt();
-    let d = (floor + u128::from(floor * floor < square)) as i64;
-    if d == 0 || limit == 0 {
-        return None;
-    }
-    let step = (limit as i64).min(d);
-    let point = Point {
-        x: from.x + (to.x - from.x) * step / d,
-        y: from.y + (to.y - from.y) * step / d,
-    };
-    (point != from && map.clear(from, point)).then_some(point)
+    map.navigation_step(from, to, limit, 0)
 }
 
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {

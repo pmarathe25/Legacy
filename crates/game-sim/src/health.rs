@@ -3,7 +3,11 @@
 use crate::*;
 
 pub use game_health::*;
-type HealthCohort = (AreaId, Option<ShelterId>);
+type HealthCohort = (
+    game_transport::PositionKey,
+    Option<ShelterId>,
+    Option<(EncounterId, PersonId)>,
+);
 
 impl Simulation {
     /// Called after the physical water enters a stock. Existing contamination
@@ -125,6 +129,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         .physical
         .as_ref()
         .ok_or_else(|| Error::InvalidSave("health requires physical bodies".into()))?;
+    let locations = transport::resolved_locations_for(state)?;
     let people = state
         .people
         .iter()
@@ -142,7 +147,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 person.id,
                 PersonCatalog {
                     alive: body.vitals.alive,
-                    location: person.location.clone(),
+                    location: locations[&person.id].clone(),
                     health_work,
                 },
             ))
@@ -199,7 +204,7 @@ impl Simulation {
         Ok(sim)
     }
     fn health_area(&self, actor: PersonId, agency: bool) -> Result<AreaId, Error> {
-        let p = &self.state.people[*self.person_index.get(&actor).ok_or(Error::Unavailable)?];
+        self.person_index.get(&actor).ok_or(Error::Unavailable)?;
         let body = self
             .state
             .physical
@@ -215,14 +220,30 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        match p.location {
+        match self.resolved_location(actor) {
             Location::AtArea(area) => Ok(area),
+            Location::StoppedOnRoad { from, .. } => Ok(from),
             _ => Err(Error::Unavailable),
         }
     }
     fn medical_level(&self, actor: PersonId) -> u16 {
         self.own_skill_level(actor, Skill::Medicine)
             .max(self.borrowed_skill_level(actor, Skill::Medicine))
+    }
+    fn health_remembered_source_here(&self, actor: PersonId, stock: &StockKnowledge) -> bool {
+        let own = self
+            .state
+            .inventories
+            .get(&stock.inventory)
+            .is_some_and(|source| source.location == InventoryLocation::Carried(actor));
+        if self.health_tactical_place(actor).is_some() {
+            return own;
+        }
+        match self.resolved_location(actor) {
+            Location::AtArea(area) => own || stock.area == area,
+            Location::StoppedOnRoad { .. } => own,
+            _ => false,
+        }
     }
     fn health_stock(
         &self,
@@ -234,9 +255,63 @@ impl Simulation {
         self.state.inventories.get(&id).is_some_and(|stock| {
             stock.good == good
                 && self.has_stock_access(actor, stock)
-                && self.inventory_area(stock) == self.health_area(actor, true).ok()
+                && self.health_area(actor, true).is_ok()
+                && match stock.location {
+                    InventoryLocation::Area(area) => {
+                        self.resolved_location(actor) == Location::AtArea(area)
+                            && self.health_tactical_place(actor).is_none()
+                    }
+                    InventoryLocation::Carried(holder) => {
+                        self.transport_same_place(actor, holder)
+                            && self.health_tactical_clear(
+                                self.health_tactical_place(actor),
+                                self.health_tactical_place(holder),
+                                true,
+                            )
+                    }
+                }
                 && self.unreserved_stock(id, actor) >= quantity.0
         })
+    }
+    fn health_tactical_place(&self, actor: PersonId) -> Option<(EncounterId, PersonId)> {
+        let mut anchor = actor;
+        while let Location::Carried { carrier } =
+            self.state.people[self.person_index[&anchor]].location
+        {
+            anchor = carrier;
+        }
+        match self.state.physical.as_ref()?.actors[&anchor].activity {
+            Activity::Combat { encounter } => Some((encounter, anchor)),
+            _ => None,
+        }
+    }
+    fn health_tactical_clear(
+        &self,
+        a: Option<(EncounterId, PersonId)>,
+        b: Option<(EncounterId, PersonId)>,
+        contact: bool,
+    ) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some((scene_a, actor_a)), Some((scene_b, actor_b))) if scene_a == scene_b => {
+                if actor_a == actor_b {
+                    return true;
+                }
+                let world = self.state.combat.as_ref().unwrap();
+                let scene = &world.encounters[&scene_a];
+                let (a, b) = (
+                    scene.fighters[&actor_a].position,
+                    scene.fighters[&actor_b].position,
+                );
+                world
+                    .map(scene.map)
+                    .expect("clinical encounter map")
+                    .clear(a, b)
+                    && (!contact
+                        || game_conflict::distance(a, b) <= u128::from(world.rules.reach).pow(2))
+            }
+            _ => false,
+        }
     }
     fn consume_health_stock(&mut self, actor: PersonId, source: InventoryId, quantity: Quantity) {
         self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
@@ -393,14 +468,52 @@ impl Simulation {
             .retain(|(giver, patient), _| *giver != actor && *patient != actor);
     }
     pub(crate) fn leave_shelter_on_movement(&mut self, actor: PersonId) {
-        if let Some(shelter) = self
-            .state
-            .health
-            .as_mut()
-            .and_then(|w| w.occupancy.remove(&actor))
-        {
-            self.emit(EventKind::ShelterLeft { shelter, actor });
+        if self.state.health.is_none() {
+            return;
         }
+        let mut carried: BTreeMap<PersonId, Vec<PersonId>> = BTreeMap::new();
+        if let Some(transport) = &self.state.transport {
+            for group in transport.groups.values() {
+                carried
+                    .entry(group.anchor)
+                    .or_default()
+                    .push(group.passenger);
+            }
+        }
+        let mut leaving = vec![actor];
+        while let Some(actor) = leaving.pop() {
+            if let Some(passengers) = carried.get(&actor) {
+                leaving.extend(passengers);
+            }
+            if let Some(shelter) = self.state.health.as_mut().unwrap().occupancy.remove(&actor) {
+                self.emit(EventKind::ShelterLeft { shelter, actor });
+            }
+        }
+    }
+    pub(crate) fn health_before_putdown(&self, passenger: PersonId) -> Option<ShelterId> {
+        self.effective_shelter(passenger).map(|shelter| shelter.id)
+    }
+    pub(crate) fn health_after_putdown(&mut self, passenger: PersonId, shelter: Option<ShelterId>) {
+        let location = self.resolved_location(passenger);
+        let alive = self
+            .state
+            .physical
+            .as_ref()
+            .is_some_and(|world| world.actors[&passenger].vitals.alive);
+        let Some(world) = &mut self.state.health else {
+            return;
+        };
+        world.occupancy.remove(&passenger);
+        if let Some(shelter) = shelter.filter(|id| {
+            alive
+                && world
+                    .shelters
+                    .get(id)
+                    .is_some_and(|s| location == Location::AtArea(s.area))
+        }) {
+            world.occupancy.insert(passenger, shelter);
+        }
+        self.observe_health();
     }
     pub(crate) fn health_command(
         &mut self,
@@ -423,6 +536,33 @@ impl Simulation {
                     | HealthAction::RequestTreatment { .. }
             ),
         )?;
+        if self.health_tactical_place(actor).is_some()
+            && matches!(
+                action,
+                HealthAction::BuildShelter { .. }
+                    | HealthAction::EnterShelter { .. }
+                    | HealthAction::LeaveShelter
+            )
+        {
+            return Err(Error::Unavailable);
+        }
+        if matches!(
+            action,
+            HealthAction::BuildShelter { .. }
+                | HealthAction::ShelterAccess { .. }
+                | HealthAction::EnterShelter { .. }
+                | HealthAction::LeaveShelter
+        ) && self.resolved_location(actor) != Location::AtArea(area)
+            || matches!(
+                action,
+                HealthAction::EnterShelter { .. } | HealthAction::LeaveShelter
+            ) && matches!(
+                self.state.people[self.person_index[&actor]].location,
+                Location::Carried { .. }
+            )
+        {
+            return Err(Error::Unavailable);
+        }
         self.ensure_event_capacity(12)?;
         match *action {
             HealthAction::Drink { source } => {
@@ -588,7 +728,7 @@ impl Simulation {
             }
             HealthAction::RequestTreatment { caregiver } => {
                 if caregiver == actor
-                    || self.health_area(caregiver, true).ok() != Some(area)
+                    || self.health_area(caregiver, true).is_err()
                     || !self.can_observe_health(actor, caregiver)
                 {
                     return Err(Error::Unavailable);
@@ -615,7 +755,7 @@ impl Simulation {
                 water,
             } => {
                 if patient == actor
-                    || self.health_area(patient, false).ok() != Some(area)
+                    || self.health_area(patient, false).is_err()
                     || !self.can_observe_health(actor, patient)
                     || self.medical_level(actor) == 0
                     || !self.health_stock(actor, herbs, Good::Herb, rules.treatment_herbs)
@@ -658,7 +798,7 @@ impl Simulation {
                     .clone();
                 if offer.accepted
                     || offer.expires <= self.state.time
-                    || self.health_area(caregiver, true).ok() != Some(area)
+                    || self.health_area(caregiver, true).is_err()
                     || !self.can_observe_health(actor, caregiver)
                 {
                     return Err(Error::Unavailable);
@@ -708,7 +848,7 @@ impl Simulation {
                 herbs,
                 water,
             } => {
-                if self.health_area(patient, false).ok() != Some(area)
+                if self.health_area(patient, false).is_err()
                     || !self.can_observe_health(actor, patient)
                     || self.medical_level(actor) == 0
                     || !self.health_stock(actor, herbs, Good::Herb, rules.treatment_herbs)
@@ -791,11 +931,23 @@ impl Simulation {
 impl Simulation {
     fn effective_shelter(&self, actor: PersonId) -> Option<&Shelter> {
         let w = self.state.health.as_ref()?;
+        if let Location::Carried { carrier } = self.state.people[self.person_index[&actor]].location
+        {
+            return self
+                .state
+                .physical
+                .as_ref()?
+                .actors
+                .get(&actor)?
+                .vitals
+                .alive
+                .then(|| self.effective_shelter(carrier))
+                .flatten();
+        }
         let shelter = w.shelters.get(w.occupancy.get(&actor)?)?;
         let body = self.state.physical.as_ref()?.actors.get(&actor)?;
         if !body.vitals.alive
-            || self.state.people[self.person_index[&actor]].location
-                != Location::AtArea(shelter.area)
+            || self.resolved_location(actor) != Location::AtArea(shelter.area)
             || matches!(
                 body.activity,
                 Activity::Combat { .. }
@@ -813,19 +965,19 @@ impl Simulation {
     #[cfg(test)]
     fn in_health_contact(&self, a: PersonId, b: PersonId) -> bool {
         if a == b
-            || self.state.people[self.person_index[&a]].location
-                != self.state.people[self.person_index[&b]].location
+            || !self.transport_same_place(a, b)
+            || !self.health_tactical_clear(
+                self.health_tactical_place(a),
+                self.health_tactical_place(b),
+                true,
+            )
         {
             return false;
         }
-        let (Location::AtArea(pa), Location::AtArea(pb)) = (
-            &self.state.people[self.person_index[&a]].location,
-            &self.state.people[self.person_index[&b]].location,
-        ) else {
-            return false;
-        };
-        if pa != pb {
-            return false;
+        if matches!(self.state.people[self.person_index[&a]].location, Location::Carried { carrier } if carrier == b)
+            || matches!(self.state.people[self.person_index[&b]].location, Location::Carried { carrier } if carrier == a)
+        {
+            return true;
         }
         let sa = self.effective_shelter(a).map(|s| s.id);
         let sb = self.effective_shelter(b).map(|s| s.id);
@@ -868,18 +1020,53 @@ impl Simulation {
         }
     }
     fn health_locations(&self) -> BTreeMap<PersonId, HealthCohort> {
+        let resolved =
+            transport::resolved_locations_for(&self.state).expect("valid physical locations");
+        let mut shelters = BTreeMap::new();
+        let mut tactical = BTreeMap::new();
+        for person in &self.state.people {
+            let mut current = person.id;
+            let mut chain = Vec::new();
+            let mut shelter = loop {
+                if let Some(shelter) = shelters.get(&current) {
+                    break *shelter;
+                }
+                match self.state.people[self.person_index[&current]].location {
+                    Location::Carried { carrier } => {
+                        chain.push(current);
+                        current = carrier;
+                    }
+                    _ => {
+                        let shelter = self.effective_shelter(current).map(|s| s.id);
+                        shelters.insert(current, shelter);
+                        tactical.insert(current, self.health_tactical_place(current));
+                        break shelter;
+                    }
+                }
+            };
+            for carried in chain.into_iter().rev() {
+                if !self.state.physical.as_ref().unwrap().actors[&carried]
+                    .vitals
+                    .alive
+                {
+                    shelter = None;
+                }
+                shelters.insert(carried, shelter);
+                tactical.insert(carried, tactical[&current]);
+            }
+        }
         self.state
             .people
             .iter()
             .filter_map(|person| {
-                if let Location::AtArea(area) = person.location {
-                    Some((
+                let position =
+                    transport::location_position(&resolved[&person.id], self.state.time).ok();
+                position.map(|position| {
+                    (
                         person.id,
-                        (area, self.effective_shelter(person.id).map(|s| s.id)),
-                    ))
-                } else {
-                    None
-                }
+                        (position.key(), shelters[&person.id], tactical[&person.id]),
+                    )
+                })
             })
             .collect()
     }
@@ -905,7 +1092,7 @@ impl Simulation {
             })
             .collect();
         let mut shared: BTreeMap<ShelterId, [u64; 2]> = BTreeMap::new();
-        for (actor, (_, shelter)) in &locations {
+        for (actor, (_, shelter, _)) in &locations {
             if let Some(shelter) = shelter {
                 let count = shared.entry(*shelter).or_default();
                 for (total, flag) in count.iter_mut().zip(infectious[actor]) {
@@ -926,11 +1113,11 @@ impl Simulation {
                         .map_or(12, |w| w.weather.temperature),
                     insulation: locations
                         .get(&person.id)
-                        .and_then(|(_, shelter)| *shelter)
+                        .and_then(|(_, shelter, _)| *shelter)
                         .map_or(0, |id| world.shelters[&id].insulation),
                     infectious_contacts: [0; 2],
                 };
-                if let Some((_, Some(shelter))) = locations.get(&person.id) {
+                if let Some((_, Some(shelter), _)) = locations.get(&person.id) {
                     exposure.infectious_contacts = shared[shelter];
                     for (count, own) in exposure
                         .infectious_contacts
@@ -948,12 +1135,13 @@ impl Simulation {
             if a == b {
                 return;
             }
-            let (Some((area_a, shelter_a)), Some((area_b, shelter_b))) =
+            let (Some((area_a, shelter_a, tactical_a)), Some((area_b, shelter_b, tactical_b))) =
                 (locations.get(&a), locations.get(&b))
             else {
                 return;
             };
             if area_a != area_b
+                || !self.health_tactical_clear(*tactical_a, *tactical_b, true)
                 || (!treatment && shelter_a != shelter_b)
                 || (shelter_a.is_some() && shelter_a == shelter_b)
             {
@@ -973,6 +1161,11 @@ impl Simulation {
                 }
                 Activity::Tell { recipient, .. } => add_pair(*actor, recipient, false),
                 _ => {}
+            }
+        }
+        for person in &self.state.people {
+            if let Location::Carried { carrier } = person.location {
+                add_pair(person.id, carrier, true);
             }
         }
         if let Some(missions) = &self.state.missions {
@@ -1310,7 +1503,8 @@ impl Simulation {
                     skill_ms,
                     elapsed,
                 } => {
-                    if self.health_area(patient, false).ok() != Some(job.area)
+                    if self.health_area(patient, false).is_err()
+                        || !self.can_observe_health(job.actor, patient)
                         || self.state.physical.as_ref().unwrap().actors[&patient].activity
                             != Activity::Rest
                             && patient != job.actor
@@ -1435,11 +1629,12 @@ impl Simulation {
         Ok(())
     }
     fn can_observe_health(&self, observer: PersonId, subject: PersonId) -> bool {
-        self.state.people[self.person_index[&observer]].location
-            == self.state.people[self.person_index[&subject]].location
-            && matches!(
-                self.state.people[self.person_index[&observer]].location,
-                Location::AtArea(_)
+        self.transport_same_place(observer, subject)
+            && !self.transport_is_moving(observer)
+            && self.health_tactical_clear(
+                self.health_tactical_place(observer),
+                self.health_tactical_place(subject),
+                false,
             )
             && self.effective_shelter(observer).map(|s| s.id)
                 == self.effective_shelter(subject).map(|s| s.id)
@@ -1481,9 +1676,22 @@ impl Simulation {
         let symptoms: BTreeMap<_, _> = cohorts
             .iter()
             .map(|(cohort, actors)| {
+                let visible: BTreeSet<_> = if cohort.2.is_some() {
+                    cohorts
+                        .iter()
+                        .filter(|(other, _)| {
+                            other.0 == cohort.0
+                                && other.1 == cohort.1
+                                && self.health_tactical_clear(cohort.2, other.2, false)
+                        })
+                        .flat_map(|(_, actors)| actors.iter().copied())
+                        .collect()
+                } else {
+                    actors.clone()
+                };
                 (
                     *cohort,
-                    actors
+                    visible
                         .iter()
                         .take(64)
                         .map(|actor| (*actor, self.visible_symptoms(*actor)))
@@ -1501,10 +1709,18 @@ impl Simulation {
         }
         let mut occupants: BTreeMap<(ShelterId, HealthCohort), BTreeSet<PersonId>> =
             BTreeMap::new();
-        for (actor, shelter) in &world.occupancy {
-            if let Some(location) = locations.get(actor) {
+        for (actor, location) in &locations {
+            let shelter = if matches!(
+                self.state.people[self.person_index[actor]].location,
+                Location::Carried { .. }
+            ) {
+                location.1
+            } else {
+                world.occupancy.get(actor).copied()
+            };
+            if let Some(shelter) = shelter {
                 occupants
-                    .entry((*shelter, *location))
+                    .entry((shelter, *location))
                     .or_default()
                     .insert(*actor);
             }
@@ -1517,19 +1733,23 @@ impl Simulation {
                 self.state.physical.as_ref().unwrap().actors[&person.id]
                     .vitals
                     .alive
-                    && matches!(person.location, Location::AtArea(_))
+                    && !self.transport_is_moving(person.id)
+                    && locations.contains_key(&person.id)
             })
             .map(|person| person.id)
             .collect();
         for observer in observers {
-            let area = match self.state.people[self.person_index[&observer]].location {
-                Location::AtArea(area) => area,
-                _ => continue,
+            let area = match locations[&observer].0 {
+                game_transport::PositionKey::Area(area) if locations[&observer].2.is_none() => {
+                    Some(area)
+                }
+                game_transport::PositionKey::Area(_) => None,
+                game_transport::PositionKey::Road { .. } => None,
             };
             let cohort = locations[&observer];
             let people = &symptoms[&cohort];
-            let shelters: Vec<_> = area_shelters
-                .get(&area)
+            let shelters: Vec<_> = area
+                .and_then(|area| area_shelters.get(&area))
                 .into_iter()
                 .flatten()
                 .map(|id| {
@@ -1611,7 +1831,7 @@ impl Simulation {
         for offer in w.offers.values().filter(|o| {
             o.patient == actor
                 && o.expires > self.state.time
-                && self.health_area(o.caregiver, true).ok() == Some(area)
+                && self.health_area(o.caregiver, true).is_ok()
         }) {
             if !offer.accepted {
                 actions.push(HealthAction::AcceptTreatment {
@@ -1636,6 +1856,11 @@ impl Simulation {
             actions.push(HealthAction::RequestTreatment { caregiver: *person });
         }
         if self.health_area(actor, true).is_ok() {
+            let can_enter = self.resolved_location(actor) == Location::AtArea(area)
+                && !matches!(
+                    self.state.people[self.person_index[&actor]].location,
+                    Location::Carried { .. }
+                );
             let mind = self
                 .state
                 .decisions
@@ -1645,7 +1870,7 @@ impl Simulation {
                 for stock in mind.knowledge.values().filter(|stock| {
                     stock.good == Good::Water
                         && stock.accessible
-                        && stock.area == area
+                        && self.health_remembered_source_here(actor, stock)
                         && stock.quantity >= w.rules.drink_quantity
                 }) {
                     actions.push(HealthAction::Drink {
@@ -1659,7 +1884,8 @@ impl Simulation {
                 .into_iter()
                 .flat_map(|k| k.shelters.values())
                 .filter(|s| {
-                    s.area == area
+                    can_enter
+                        && s.area == area
                         && s.accessible
                         && w.occupancy.get(&actor) != Some(&s.id)
                         && s.known_occupants.len() < s.capacity as usize
@@ -1669,7 +1895,7 @@ impl Simulation {
                     shelter: shelter.id,
                 });
             }
-            if w.occupancy.contains_key(&actor) {
+            if can_enter && w.occupancy.contains_key(&actor) {
                 actions.push(HealthAction::LeaveShelter);
             }
         }
@@ -1696,7 +1922,7 @@ impl Simulation {
                 .filter(|s| {
                     s.good == Good::Water
                         && s.accessible
-                        && s.area == area
+                        && self.health_remembered_source_here(actor, s)
                         && s.quantity >= w.rules.drink_quantity
                 })
                 .min_by_key(|s| s.inventory)?;
@@ -1709,18 +1935,24 @@ impl Simulation {
             {
                 let fuel = mind.knowledge.values().find(|s| {
                     s.good == Good::Timber
-                        && s.area == area
+                        && self.health_remembered_source_here(actor, s)
                         && s.accessible
                         && s.quantity >= w.rules.boiling_fuel
                 });
                 let tool = mind.knowledge.values().find(|s| {
                     s.good == Good::Tool
-                        && s.area == area
+                        && self.health_remembered_source_here(actor, s)
                         && s.accessible
                         && s.quantity >= Quantity(1_000)
                 });
                 if let (Some(fuel), Some(tool)) = (fuel, tool) {
-                    if stock.quantity > w.rules.drink_quantity {
+                    if stock.quantity > w.rules.drink_quantity
+                        && !self
+                            .state
+                            .inventories
+                            .get(&stock.inventory)
+                            .is_some_and(|s| s.location == InventoryLocation::Carried(actor))
+                    {
                         return Some(Command::Carry {
                             source: stock.inventory,
                             quantity: w.rules.drink_quantity,
@@ -1743,6 +1975,11 @@ impl Simulation {
         }
         if clinical.cold >= w.rules.cold_harm / 4
             && self.effective_shelter(actor).is_none()
+            && self.resolved_location(actor) == Location::AtArea(area)
+            && !matches!(
+                self.state.people[self.person_index[&actor]].location,
+                Location::Carried { .. }
+            )
             && let Some(shelter) = w
                 .known
                 .get(&actor)
@@ -1814,8 +2051,9 @@ impl Simulation {
         for offer in offers {
             if offer.patient == self.state.ruler && !self.past_life_controls_actor(offer.patient)
                 || offer.accepted
-                || self.health_area(offer.patient, false).ok()
-                    != self.health_area(offer.caregiver, true).ok()
+                || self.health_area(offer.patient, false).is_err()
+                || self.health_area(offer.caregiver, true).is_err()
+                || !self.can_observe_health(offer.patient, offer.caregiver)
             {
                 continue;
             }
@@ -1882,17 +2120,17 @@ impl Simulation {
             {
                 continue;
             }
-            let area = self.health_area(caregiver, true)?;
+            self.health_area(caregiver, true)?;
             let herbs = mind.knowledge.values().find(|s| {
                 s.good == Good::Herb
                     && s.accessible
-                    && s.area == area
+                    && self.health_remembered_source_here(caregiver, s)
                     && s.quantity >= rules.treatment_herbs
             });
             let water = mind.knowledge.values().find(|s| {
                 s.good == Good::Water
                     && s.accessible
-                    && s.area == area
+                    && self.health_remembered_source_here(caregiver, s)
                     && s.quantity >= rules.treatment_water
             });
             let (Some(herbs), Some(water)) = (herbs, water) else {
@@ -2048,7 +2286,7 @@ impl Simulation {
                 self.tool_available_for(job.actor, tool)
             }
             Work::Treat { patient, .. } => {
-                self.health_area(patient, false).ok() == Some(job.area)
+                self.health_area(patient, false).is_ok()
                     && self.can_observe_health(job.actor, patient)
                     && (patient == job.actor
                         || self.state.physical.as_ref().unwrap().actors[&patient].activity
@@ -2233,7 +2471,7 @@ impl Simulation {
         if self.medical_level(giver) == 0 || self.health_actor_busy(giver) {
             return None;
         }
-        let area = self.health_area(giver, true).ok()?;
+        self.health_area(giver, true).ok()?;
         let mind = &self.state.decisions.as_ref()?.minds[&giver];
         let body = &self.state.physical.as_ref()?.actors[&giver];
         let r = &self.state.health.as_ref()?.rules;
@@ -2255,7 +2493,7 @@ impl Simulation {
             .find(|s| {
                 s.good == Good::Herb
                     && s.accessible
-                    && s.area == area
+                    && self.health_remembered_source_here(giver, s)
                     && s.quantity >= r.treatment_herbs
             })?
             .inventory;
@@ -2265,7 +2503,7 @@ impl Simulation {
             .find(|s| {
                 s.good == Good::Water
                     && s.accessible
-                    && s.area == area
+                    && self.health_remembered_source_here(giver, s)
                     && s.quantity >= r.treatment_water
             })?
             .inventory;
@@ -2864,6 +3102,330 @@ mod integration_tests {
 }
 
 #[cfg(test)]
+mod transport_health_tests {
+    use super::*;
+    fn held_peer() -> (Simulation, PersonId, PersonId) {
+        let mut sim = Simulation::health_fixture(23, Execution::default()).unwrap();
+        // This fixture's medic can support the adult and the actual supply pack.
+        sim.state.physical.as_mut().unwrap().rules.carrying_capacity = Quantity(20_000);
+        sim.initialize_transport(game_transport::Rules {
+            adult_mass: Quantity(6_000),
+            newborn_mass: Quantity(1_000),
+            lift_time: SimDuration(6_000),
+            ..game_transport::Rules::default()
+        })
+        .unwrap();
+        let bearer = sim.state.ruler;
+        let passenger = sim.state.people[3].id;
+        for actor in [bearer, passenger] {
+            sim.debug_actor_command(actor, Command::Rest).unwrap();
+        }
+        sim.debug_actor_command(
+            bearer,
+            Command::Transport {
+                action: game_transport::Action::OfferCarry { passenger },
+            },
+        )
+        .unwrap();
+        sim.debug_actor_command(
+            passenger,
+            Command::Transport {
+                action: game_transport::Action::AcceptCarry {
+                    bearers: vec![bearer],
+                },
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(6_000)).unwrap();
+        assert_eq!(
+            sim.state.people[sim.person_index[&passenger]].location,
+            Location::Carried { carrier: bearer }
+        );
+        (sim, bearer, passenger)
+    }
+    #[test]
+    fn held_body_shares_shelter_and_contact_without_obtaining_access() {
+        let (mut sim, bearer, passenger) = held_peer();
+        let area = sim.health_area(bearer, true).unwrap();
+        let quantity = shelter_cost(&sim.state.health.as_ref().unwrap().rules, 2, 650).unwrap();
+        let timber = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Area(area),
+                quantity,
+                quantity,
+                BTreeSet::from([bearer]),
+            )
+            .unwrap();
+        let shelter = sim
+            .seed_shelter(
+                area,
+                bearer,
+                BTreeSet::new(),
+                2,
+                650,
+                timber,
+                quantity,
+                sim.state.time,
+            )
+            .unwrap();
+        sim.debug_actor_command(
+            bearer,
+            Command::Health {
+                action: HealthAction::EnterShelter { shelter },
+            },
+        )
+        .unwrap();
+        assert_eq!(sim.effective_shelter(passenger).unwrap().id, shelter);
+        assert_eq!(sim.health_exposure(passenger).insulation, 650);
+        assert!(
+            !sim.state.health.as_ref().unwrap().shelters[&shelter]
+                .access
+                .contains(&passenger)
+        );
+        assert!(
+            sim.state.health.as_ref().unwrap().known[&bearer].shelters[&shelter]
+                .known_occupants
+                .contains(&passenger)
+        );
+        sim.debug_actor_command(
+            bearer,
+            Command::Transport {
+                action: game_transport::Action::PutDown { passenger },
+            },
+        )
+        .unwrap();
+        assert_eq!(sim.effective_shelter(passenger).unwrap().id, shelter);
+        assert!(
+            !sim.state.health.as_ref().unwrap().shelters[&shelter]
+                .access
+                .contains(&passenger)
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn roadside_drinking_uses_real_held_water_and_rejects_endpoint_stores() {
+        let (mut sim, bearer, passenger) = held_peer();
+        let home = sim.health_area(bearer, true).unwrap();
+        let destination = sim.state.areas[1].id;
+        let endpoint = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(home),
+                Quantity(2_000),
+                Quantity(2_000),
+                BTreeSet::from([bearer]),
+            )
+            .unwrap();
+        let water = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Carried(bearer),
+                Quantity(2_000),
+                Quantity(2_000),
+                BTreeSet::from([bearer]),
+            )
+            .unwrap();
+        for source in [endpoint, water] {
+            sim.state
+                .decisions
+                .as_mut()
+                .unwrap()
+                .minds
+                .get_mut(&bearer)
+                .unwrap()
+                .knowledge
+                .insert(
+                    source,
+                    StockKnowledge {
+                        inventory: source,
+                        area: home,
+                        good: Good::Water,
+                        quantity: Quantity(2_000),
+                        accessible: true,
+                        observed_at: sim.state.time,
+                        learned_at: sim.state.time,
+                        source: KnowledgeSource::Observed(bearer),
+                    },
+                );
+        }
+        sim.seed_water_safety(bearer, water).unwrap();
+        assert!(
+            sim.transport_can_depart(bearer),
+            "bodies={:?}, groups={:?}",
+            sim.transport_bodies(),
+            sim.state.transport.as_ref().unwrap().groups
+        );
+        sim.debug_move_actor(bearer, destination).unwrap();
+        sim.advance(SimDuration(10_000)).unwrap();
+        sim.debug_actor_command(
+            bearer,
+            Command::Transport {
+                action: game_transport::Action::Stop,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            sim.resolved_location(bearer),
+            Location::StoppedOnRoad { .. }
+        ));
+        sim.state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&bearer)
+            .unwrap()
+            .thirst = 100_000;
+        assert_eq!(
+            sim.health_candidate(bearer),
+            Some(Command::Health {
+                action: HealthAction::Drink { source: water }
+            })
+        );
+        let before = sim.state.clone();
+        assert_eq!(
+            sim.debug_actor_command(
+                bearer,
+                Command::Health {
+                    action: HealthAction::Drink { source: endpoint }
+                }
+            ),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(sim.state, before);
+        sim.debug_actor_command(
+            bearer,
+            Command::Health {
+                action: HealthAction::Drink { source: water },
+            },
+        )
+        .unwrap();
+        let mut sliced = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(10_000)).unwrap();
+        for elapsed in [1, 997, 9_002] {
+            sliced.advance(SimDuration(elapsed)).unwrap();
+        }
+        assert_eq!(sim.state, sliced.state);
+        assert_eq!(sim.state.inventories[&water].quantity, Quantity(1_000));
+        assert_eq!(sim.state.inventories[&endpoint].quantity, Quantity(2_000));
+        sim.state.health.as_mut().unwrap().rules.treatment_time = SimDuration(10_000);
+        sim.state
+            .skills
+            .as_mut()
+            .unwrap()
+            .credit(bearer, Skill::Medicine, 60_000, None);
+        let herbs = sim
+            .debug_add_inventory(
+                Good::Herb,
+                InventoryLocation::Carried(bearer),
+                Quantity(1_000),
+                Quantity(1_000),
+                BTreeSet::from([bearer]),
+            )
+            .unwrap();
+        sim.debug_actor_command(
+            bearer,
+            Command::Health {
+                action: HealthAction::OfferTreatment {
+                    patient: passenger,
+                    herbs,
+                    water,
+                },
+            },
+        )
+        .unwrap();
+        sim.debug_actor_command(
+            passenger,
+            Command::Health {
+                action: HealthAction::AcceptTreatment { caregiver: bearer },
+            },
+        )
+        .unwrap();
+        sim.debug_actor_command(
+            bearer,
+            Command::Health {
+                action: HealthAction::Treat {
+                    patient: passenger,
+                    herbs,
+                    water,
+                },
+            },
+        )
+        .unwrap();
+        let mut sliced = Simulation::load(
+            &sim.save().unwrap(),
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(10_000)).unwrap();
+        for elapsed in [503, 4_997, 4_500] {
+            sliced.advance(SimDuration(elapsed)).unwrap();
+        }
+        assert_eq!(sim.state, sliced.state);
+        assert!(
+            sim.state.health.as_ref().unwrap().clinical[&passenger]
+                .treatment
+                .is_some()
+        );
+        assert_eq!(sim.state.inventories[&herbs].quantity, Quantity(0));
+        assert_eq!(sim.state.inventories[&water].quantity, Quantity(0));
+    }
+    #[test]
+    fn carried_battle_body_is_not_a_strategic_area_contact_or_remote_patient() {
+        let (mut sim, bearer, passenger) = held_peer();
+        let enemy = sim.state.people[6].id;
+        let id = sim
+            .debug_start_encounter(vec![(bearer, 0), (enemy, 1)])
+            .unwrap();
+        let outside = sim.state.people[9].id;
+        assert!(sim.in_health_contact(bearer, passenger));
+        assert!(!sim.can_observe_health(outside, passenger));
+        sim.state
+            .combat
+            .as_mut()
+            .unwrap()
+            .encounters
+            .get_mut(&id)
+            .unwrap()
+            .fighters
+            .get_mut(&enemy)
+            .unwrap()
+            .position = Point {
+            x: 20_000,
+            y: 8_000,
+        };
+        sim.state
+            .health
+            .as_mut()
+            .unwrap()
+            .clinical
+            .get_mut(&enemy)
+            .unwrap()
+            .cold = 120_000;
+        assert!(!sim.health_tactical_clear(
+            sim.health_tactical_place(passenger),
+            sim.health_tactical_place(enemy),
+            true
+        ));
+        sim.observe_health();
+        assert!(!sim.state.health.as_ref().unwrap().known[&bearer].people[&enemy].shivering);
+        assert!(sim.visible_symptoms(enemy).shivering);
+        assert!(sim.indexed_health_exposures().contains_key(&passenger));
+    }
+}
+
+#[cfg(test)]
 mod index_tests {
     use super::*;
 
@@ -3017,6 +3579,7 @@ mod index_tests {
                         to: sim.state.areas[1].id,
                         departed: SimTime(0),
                         arrives: SimTime(100_000),
+                        road_start: None,
                     }
                 } else {
                     Location::AtArea(area)

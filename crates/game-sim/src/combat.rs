@@ -35,6 +35,7 @@ impl Simulation {
             rules,
             profiles,
             maps: BTreeMap::new(),
+            road_maps: BTreeMap::new(),
             encounters: BTreeMap::new(),
             captivity: BTreeMap::new(),
         });
@@ -105,9 +106,20 @@ impl Simulation {
                 .any(|fighter| fighter.team == team)
             || !self.can_fight(actor)
             || self.in_combat(actor)
-            || self.state.people[self.person_index[&actor]].location
-                != Location::AtArea(encounter.area)
+            || self.transport_position(actor).map(|p| p.key())
+                != transport::location_position(&encounter.location, self.state.time)
+                    .ok()
+                    .map(|p| p.key())
         {
+            return Err(Error::Unavailable);
+        }
+        let mut anchor = actor;
+        while let Location::Carried { carrier } =
+            self.state.people[self.person_index[&anchor]].location
+        {
+            anchor = carrier;
+        }
+        if anchor != actor && !encounter.fighters.contains_key(&anchor) {
             return Err(Error::Unavailable);
         }
         let area = encounter.area;
@@ -119,7 +131,7 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         let joins_round = encounter.round.checked_add(1).ok_or(Error::Overflow)?;
-        let map = &world.maps[&area];
+        let map = world.map(encounter.map).ok_or(Error::Unavailable)?;
         let position = map
             .exits
             .iter()
@@ -162,6 +174,7 @@ impl Simulation {
                     defending: false,
                     retreat: None,
                     known: BTreeMap::new(),
+                    search: game_conflict::SearchState::default(),
                 },
             );
         self.emit(EventKind::CombatReinforcement {
@@ -169,6 +182,7 @@ impl Simulation {
             actor,
             joins_round,
         });
+        self.synchronize_carried_fighters(id);
         Ok(())
     }
 
@@ -198,8 +212,10 @@ impl Simulation {
             .values()
             .rev()
             .find(|e| e.fighters.contains_key(&self.state.ruler))?;
-        if self.state.people[self.person_index[&self.state.ruler]].location
-            != Location::AtArea(e.area)
+        if self.transport_position(self.state.ruler).map(|p| p.key())
+            != transport::location_position(&e.location, self.state.time)
+                .ok()
+                .map(|p| p.key())
             || e.fighters[&self.state.ruler].withdrawn
             || !self.state.physical.as_ref().unwrap().actors[&self.state.ruler]
                 .vitals
@@ -207,13 +223,14 @@ impl Simulation {
         {
             return None;
         }
-        let map = &w.maps[&e.area];
+        let map = w.map(e.map)?;
         let mine = e.fighters[&self.state.ruler].position;
         Some(TacticalView {
             encounter: e.id,
             active: e.active,
             map: e.map,
             area: e.area,
+            location: e.location.clone(),
             round: e.round,
             round_started: e.started,
             round_ends: e.ends,
@@ -228,8 +245,10 @@ impl Simulation {
                 .values()
                 .filter(|f| {
                     f.actor == self.state.ruler
-                        || self.state.people[self.person_index[&f.actor]].location
-                            == Location::AtArea(e.area)
+                        || self.transport_position(f.actor).map(|p| p.key())
+                            == transport::location_position(&e.location, self.state.time)
+                                .ok()
+                                .map(|p| p.key())
                             && map.clear(mine, f.position)
                 })
                 .map(|f| FighterView {
@@ -317,6 +336,7 @@ impl Simulation {
             id,
             version: 1,
             area,
+            location: Location::AtArea(area),
             width: 24_000,
             height: 16_000,
             obstacles: vec![ObstacleView {
@@ -355,17 +375,16 @@ impl Simulation {
             ));
         }
         let mut ids = BTreeSet::new();
-        let mut area = None;
+        let mut location = None;
+        let mut place = None;
         for (actor, _) in &participants {
-            let p = self
-                .person_index
-                .get(actor)
-                .map(|i| &self.state.people[*i])
-                .ok_or(Error::Unavailable)?;
-            let Location::AtArea(at) = p.location else {
+            self.person_index.get(actor).ok_or(Error::Unavailable)?;
+            let at = self.resolved_location(*actor);
+            if !matches!(at, Location::AtArea(_) | Location::StoppedOnRoad { .. }) {
                 return Err(Error::Unavailable);
-            };
-            if area.is_some_and(|a| a != at)
+            }
+            let key = transport::location_position(&at, self.state.time)?.key();
+            if place.is_some_and(|p| p != key)
                 || !ids.insert(*actor)
                 || !(self.can_combat_act(*actor) || self.force_passive_participant(*actor))
                 || self.in_combat(*actor)
@@ -373,9 +392,25 @@ impl Simulation {
             {
                 return Err(Error::Unavailable);
             }
-            area = Some(at);
+            place = Some(key);
+            location = Some(at);
         }
-        let area = area.unwrap();
+        let location = location.unwrap();
+        let area = match place.unwrap() {
+            game_transport::PositionKey::Area(area) => area,
+            game_transport::PositionKey::Road { from, .. } => from,
+        };
+        for actor in &ids {
+            let mut anchor = *actor;
+            while let Location::Carried { carrier } =
+                self.state.people[self.person_index[&anchor]].location
+            {
+                anchor = carrier;
+            }
+            if !ids.contains(&anchor) {
+                return Err(Error::Unavailable);
+            }
+        }
         let ends = SimTime(
             self.state
                 .time
@@ -383,14 +418,10 @@ impl Simulation {
                 .checked_add(w.rules.round.0)
                 .ok_or(Error::Overflow)?,
         );
-        self.state
-            .next_id
-            .checked_add(if w.maps.contains_key(&area) { 1 } else { 2 })
-            .ok_or(Error::Overflow)?;
+        self.state.next_id.checked_add(2).ok_or(Error::Overflow)?;
         self.ensure_event_capacity(participants.len() * 8 + 2)?;
-        self.ensure_combat_map(area)?;
+        let map = self.ensure_combat_location_map(&location)?;
         let id = EncounterId(allocate(&mut self.state)?);
-        let map = self.state.combat.as_ref().unwrap().maps[&area].id;
         let mut fighters = BTreeMap::new();
         for (i, (actor, team)) in participants.into_iter().enumerate() {
             self.interrupt_actor_activity(actor);
@@ -409,6 +440,7 @@ impl Simulation {
                 .unwrap()
                 .captivity
                 .get(&actor)
+                .filter(|c| c.map == map)
                 .map(|captive| captive.position)
                 .unwrap_or(Point {
                     x: 4_000 + if team == 0 { 0 } else { 2_000 },
@@ -426,6 +458,7 @@ impl Simulation {
                     defending: false,
                     retreat: None,
                     known: BTreeMap::new(),
+                    search: game_conflict::SearchState::default(),
                 },
             );
         }
@@ -434,6 +467,7 @@ impl Simulation {
             Encounter {
                 id,
                 area,
+                location,
                 map,
                 round: 0,
                 started: self.state.time,
@@ -444,6 +478,7 @@ impl Simulation {
                 active: true,
             },
         );
+        self.synchronize_carried_fighters(id);
         self.emit(EventKind::EncounterStarted {
             encounter: id,
             area,
@@ -451,6 +486,100 @@ impl Simulation {
         self.begin_combat_round(id)?;
         self.revision += 1;
         Ok(id)
+    }
+    pub(crate) fn ensure_combat_location_map(
+        &mut self,
+        location: &Location,
+    ) -> Result<CombatMapId, Error> {
+        if let Location::AtArea(area) = *location {
+            return self.ensure_combat_map(area);
+        }
+        let key = transport::location_position(location, self.state.time)?.key();
+        let world = self.state.combat.as_ref().unwrap();
+        if let Some(map) = world
+            .road_maps
+            .values()
+            .find(|map| {
+                transport::location_position(&map.location, self.state.time)
+                    .is_ok_and(|p| p.key() == key)
+            })
+            .map(|map| map.id)
+        {
+            return Ok(map);
+        }
+        let Location::StoppedOnRoad { from, to, .. } = *location else {
+            return Err(Error::Unavailable);
+        };
+        let area = from.min(to);
+        let id = CombatMapId(allocate(&mut self.state)?);
+        self.state.combat.as_mut().unwrap().road_maps.insert(
+            id,
+            Map {
+                id,
+                version: 1,
+                area,
+                location: location.clone(),
+                width: 24_000,
+                height: 16_000,
+                obstacles: vec![ObstacleView {
+                    index: 0,
+                    minimum: Point {
+                        x: 12_000,
+                        y: 4_000,
+                    },
+                    maximum: Point {
+                        x: 14_000,
+                        y: 10_000,
+                    },
+                    integrity: 180_000,
+                }],
+                exits: vec![
+                    (from.min(to), Point { x: 0, y: 8_000 }),
+                    (
+                        from.max(to),
+                        Point {
+                            x: 24_000,
+                            y: 8_000,
+                        },
+                    ),
+                ],
+            },
+        );
+        Ok(id)
+    }
+    fn synchronize_carried_fighters(&mut self, id: EncounterId) {
+        let positions: Vec<_> = self.state.combat.as_ref().unwrap().encounters[&id]
+            .fighters
+            .keys()
+            .filter_map(|actor| {
+                let mut anchor = *actor;
+                while let Location::Carried { carrier } =
+                    self.state.people[self.person_index[&anchor]].location
+                {
+                    anchor = carrier;
+                }
+                (anchor != *actor).then(|| {
+                    (
+                        *actor,
+                        self.state.combat.as_ref().unwrap().encounters[&id].fighters[&anchor]
+                            .position,
+                    )
+                })
+            })
+            .collect();
+        for (actor, position) in positions {
+            self.state
+                .combat
+                .as_mut()
+                .unwrap()
+                .encounters
+                .get_mut(&id)
+                .unwrap()
+                .fighters
+                .get_mut(&actor)
+                .unwrap()
+                .position = position;
+        }
     }
     fn begin_combat_round(&mut self, id: EncounterId) -> Result<(), Error> {
         let e = &self.state.combat.as_ref().unwrap().encounters[&id];
@@ -486,12 +615,12 @@ impl Simulation {
     fn observe_fighter(&mut self, encounter: EncounterId, actor: PersonId) {
         let w = self.state.combat.as_ref().unwrap();
         let e = &w.encounters[&encounter];
-        let map = &w.maps[&e.area];
+        let map = w.map(e.map).expect("encounter map");
         let f = &e.fighters[&actor];
         let seen: Vec<_> = e
             .fighters
             .values()
-            .filter(|o| o.team != f.team && map.clear(f.position, o.position))
+            .filter(|o| o.actor != actor && map.clear(f.position, o.position))
             .map(|o| {
                 (
                     o.actor,
@@ -502,6 +631,16 @@ impl Simulation {
                             .alive,
                 )
             })
+            .collect();
+        // A remembered point is no longer a useful pursuit lead after the
+        // actor can see that location and its opponent is absent there.
+        let disproved: Vec<_> = f
+            .known
+            .iter()
+            .filter(|(id, point)| {
+                map.clear(f.position, **point) && !seen.iter().any(|(other, _, _)| other == *id)
+            })
+            .map(|(id, _)| *id)
             .collect();
         let known = &mut self
             .state
@@ -515,6 +654,9 @@ impl Simulation {
             .get_mut(&actor)
             .unwrap()
             .known;
+        for id in disproved {
+            known.remove(&id);
+        }
         for (id, position, alive) in seen {
             if alive {
                 known.insert(id, position);
@@ -551,8 +693,15 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         let f = &e.fighters[&actor];
-        let map = &w.maps[&e.area];
+        let map = w.map(e.map).expect("encounter map");
         let position = w.turn_position(id, actor, movement)?;
+        if matches!(
+            self.state.people[self.person_index[&actor]].location,
+            Location::Carried { .. }
+        ) && movement.is_some_and(|point| point != e.fighters[&actor].position)
+        {
+            return Err(Error::Unavailable);
+        }
         let reachable = |target| w.reachable(id, position, target);
         match action {
             CombatAction::MissionObjective {
@@ -601,23 +750,47 @@ impl Simulation {
                 }
             }
             CombatAction::Retreat { destination } => {
+                if matches!(
+                    self.state.people[self.person_index[&actor]].location,
+                    Location::Carried { .. }
+                ) {
+                    return Err(Error::Unavailable);
+                }
                 if !map.exits.iter().any(|(area, p)| {
                     *area == destination
+                        && map.clear(position, *p)
                         && distance(position, *p) <= u128::from(w.rules.reach).pow(2)
-                }) || !self
-                    .state
-                    .areas
-                    .iter()
-                    .find(|a| a.id == e.area)
-                    .unwrap()
-                    .links
-                    .iter()
-                    .any(|l| l.destination == destination)
+                }) || (matches!(e.location, Location::AtArea(_))
+                    && !self
+                        .state
+                        .areas
+                        .iter()
+                        .find(|a| a.id == e.area)
+                        .unwrap()
+                        .links
+                        .iter()
+                        .any(|l| l.destination == destination))
                 {
                     return Err(Error::Unavailable);
                 }
-                self.path(e.area, destination)?;
-                self.departure(e.area, destination)?;
+                if let Location::StoppedOnRoad {
+                    from,
+                    to,
+                    progress,
+                    duration,
+                } = e.location
+                {
+                    let point = game_transport::RoadPosition {
+                        from,
+                        to,
+                        progress,
+                        duration,
+                    };
+                    self.road_retreat_plan(point, destination, self.state.time)?;
+                } else {
+                    self.path(e.area, destination)?;
+                    self.departure(e.area, destination)?;
+                }
             }
             CombatAction::Breach { obstacle } => {
                 let o = map
@@ -642,6 +815,7 @@ impl Simulation {
         }
         let old = f.position;
         let area = e.area;
+        let encounter_map = e.map;
         self.state
             .combat
             .as_mut()
@@ -660,6 +834,7 @@ impl Simulation {
                 position,
             });
         }
+        self.synchronize_carried_fighters(id);
         match action {
             CombatAction::MissionObjective { mission, objective } => {
                 self.mission_combat_order(actor, mission, objective)?;
@@ -717,14 +892,16 @@ impl Simulation {
                 let binding = self
                     .add_inventory(
                         Good::Binding,
-                        InventoryLocation::Area(area),
-                        Quantity(1_000),
+                        InventoryLocation::Carried(target),
+                        Quantity(0),
                         Quantity(1_000),
                         BTreeSet::from([actor]),
                     )
                     .expect("preflight binding inventory");
+                self.state.inventories.get_mut(&binding).unwrap().quantity = Quantity(1_000);
                 let target_position =
                     self.state.combat.as_ref().unwrap().encounters[&id].fighters[&target].position;
+                let captured_map = self.state.combat.as_ref().unwrap().encounters[&id].map;
                 self.state.combat.as_mut().unwrap().captivity.insert(
                     target,
                     Captivity {
@@ -732,6 +909,7 @@ impl Simulation {
                         captor: actor,
                         area,
                         position: target_position,
+                        map: captured_map,
                         binding,
                     },
                 );
@@ -765,12 +943,41 @@ impl Simulation {
                     .unwrap();
                 f.withdrawn = true;
                 f.retreat = Some(destination);
+                let passengers: Vec<_> = self.state.combat.as_ref().unwrap().encounters[&id]
+                    .fighters
+                    .keys()
+                    .filter_map(|person| {
+                        let mut current = *person;
+                        while let Location::Carried { carrier } =
+                            self.state.people[self.person_index[&current]].location
+                        {
+                            current = carrier;
+                        }
+                        (current == actor && *person != actor).then_some(*person)
+                    })
+                    .collect();
+                for passenger in passengers {
+                    let body = self
+                        .state
+                        .combat
+                        .as_mut()
+                        .unwrap()
+                        .encounters
+                        .get_mut(&id)
+                        .unwrap()
+                        .fighters
+                        .get_mut(&passenger)
+                        .unwrap();
+                    body.withdrawn = true;
+                    body.retreat = Some(destination);
+                }
             }
             CombatAction::Breach { obstacle } => {
                 let w = self.state.combat.as_mut().unwrap();
-                let map = w.maps.get_mut(&area).unwrap();
+                let attack = w.rules.damage;
+                let map = w.map_mut(encounter_map).unwrap();
                 let o = &mut map.obstacles[obstacle as usize];
-                let damage = o.integrity.min(w.rules.damage);
+                let damage = o.integrity.min(attack);
                 o.integrity -= damage;
                 let map = map.id;
                 self.emit(EventKind::ObstacleDamaged {
@@ -832,11 +1039,14 @@ impl Simulation {
             }
             self.observe_fighter(id, actor);
             self.review_mission_combat(id, actor);
+            let mission_action = self.mission_combat_action(id, actor);
             let w = self.state.combat.as_ref().unwrap();
             let e = &w.encounters[&id];
             let f = &e.fighters[&actor];
-            let map = &w.maps[&e.area];
-            let rescue = self.force_rescue_target(actor);
+            let map = w.map(e.map).expect("encounter map");
+            let rescue = self
+                .force_rescue_target(actor)
+                .filter(|target| f.known.contains_key(target));
             let target = rescue.or_else(|| {
                 f.known
                     .keys()
@@ -844,42 +1054,43 @@ impl Simulation {
                     .min_by_key(|other| (distance(f.position, f.known[other]), **other))
                     .copied()
             });
-            let (movement, action) = if let Some(pair) = self.mission_combat_action(id, actor) {
+            let (movement, action) = if let Some(pair) = mission_action {
                 pair
             } else if let Some(action) = self.force_combat_action(actor, id) {
                 (None, action)
             } else if let Some(target) = target {
                 let destination = f.known[&target];
-                let d = distance(f.position, destination).isqrt() as i64;
-                let step = d
-                    .saturating_sub(w.rules.reach as i64)
-                    .min(w.rules.movement as i64);
-                let p = if d > 0 {
-                    Point {
-                        x: f.position.x + (destination.x - f.position.x) * step / d,
-                        y: f.position.y + (destination.y - f.position.y) * step / d,
-                    }
+                let movement = map.navigation_step(
+                    f.position,
+                    destination,
+                    w.rules.movement,
+                    w.rules.reach.saturating_sub(2),
+                );
+                let visible = map.clear(f.position, e.fighters[&target].position);
+                if !visible
+                    && (movement.is_none()
+                        || map.clear(f.position, destination)
+                            && distance(f.position, destination)
+                                <= u128::from(w.rules.reach).pow(2))
+                {
+                    (self.combat_search_step(id, actor), CombatAction::Defend)
                 } else {
-                    f.position
-                };
-                let movement = if p != f.position && map.clear(f.position, p) {
-                    Some(p)
-                } else {
-                    None
-                };
-                let from = movement.unwrap_or(f.position);
-                let reachable = map.clear(from, e.fighters[&target].position)
-                    && distance(from, e.fighters[&target].position)
-                        <= u128::from(w.rules.reach).pow(2);
-                let health = self.state.physical.as_ref().unwrap().actors[&actor]
-                    .vitals
-                    .health;
-                let borrowed = self.invocation_personality(actor);
-                let traits = borrowed
-                    .as_ref()
-                    .unwrap_or(&self.state.decisions.as_ref().unwrap().minds[&actor].personality);
-                let action =
-                    if rescue == Some(target) && reachable && self.can_release(actor, target) {
+                    let from = movement.unwrap_or(f.position);
+                    let reachable = visible
+                        && map.clear(from, destination)
+                        && distance(from, e.fighters[&target].position)
+                            <= u128::from(w.rules.reach).pow(2);
+                    let health = self.state.physical.as_ref().unwrap().actors[&actor]
+                        .vitals
+                        .health;
+                    let borrowed = self.invocation_personality(actor);
+                    let traits = borrowed.as_ref().unwrap_or(
+                        &self.state.decisions.as_ref().unwrap().minds[&actor].personality,
+                    );
+                    let action = if rescue == Some(target)
+                        && reachable
+                        && self.can_release(actor, target)
+                    {
                         CombatAction::Release { target }
                     } else if self.state.people[self.person_index[&actor]].role == Role::Guardian
                         && target == self.state.ruler
@@ -904,9 +1115,10 @@ impl Simulation {
                     } else {
                         CombatAction::Defend
                     };
-                (movement, action)
+                    (movement, action)
+                }
             } else {
-                (None, CombatAction::Defend)
+                (self.combat_search_step(id, actor), CombatAction::Defend)
             };
             if self.execute_turn(id, actor, movement, action).is_err() {
                 self.execute_turn(id, actor, None, CombatAction::Wait)?;
@@ -925,6 +1137,25 @@ impl Simulation {
         }
         Ok(())
     }
+    pub(crate) fn combat_search_step(&mut self, id: EncounterId, actor: PersonId) -> Option<Point> {
+        let world = self.state.combat.as_ref()?;
+        let encounter = world.encounters.get(&id)?;
+        let fighter = encounter.fighters.get(&actor)?;
+        let mut search = fighter.search.clone();
+        let movement = world
+            .map(encounter.map)
+            .expect("encounter map")
+            .search_step(fighter.position, world.rules.movement, &mut search);
+        self.state
+            .combat
+            .as_mut()?
+            .encounters
+            .get_mut(&id)?
+            .fighters
+            .get_mut(&actor)?
+            .search = search;
+        movement
+    }
     pub(crate) fn preflight_combat(&self, due: &[Due], at: SimTime) -> Result<(), Error> {
         let Some(w) = &self.state.combat else {
             return Ok(());
@@ -935,6 +1166,25 @@ impl Simulation {
                 e.round.checked_add(1).ok_or(Error::Overflow)?;
                 at.0.checked_add(w.rules.round.0).ok_or(Error::Overflow)?;
                 for f in e.fighters.values().filter(|f| f.retreat.is_some()) {
+                    if let Location::StoppedOnRoad {
+                        from,
+                        to,
+                        progress,
+                        duration,
+                    } = e.location
+                    {
+                        self.road_retreat_plan(
+                            game_transport::RoadPosition {
+                                from,
+                                to,
+                                progress,
+                                duration,
+                            },
+                            f.retreat.unwrap(),
+                            at,
+                        )?;
+                        continue;
+                    }
                     let link = self
                         .state
                         .areas
@@ -949,9 +1199,38 @@ impl Simulation {
         Ok(())
     }
 
+    fn road_retreat_plan(
+        &self,
+        point: game_transport::RoadPosition,
+        destination: AreaId,
+        at: SimTime,
+    ) -> Result<game_transport::Leg, Error> {
+        let from = if destination == point.to {
+            point.from
+        } else if destination == point.from {
+            point.to
+        } else {
+            return Err(Error::NoRoute);
+        };
+        let duration = self
+            .state
+            .areas
+            .iter()
+            .find(|a| a.id == from)
+            .and_then(|a| a.links.iter().find(|link| link.destination == destination))
+            .ok_or(Error::NoRoute)?
+            .duration;
+        game_transport::retreat(point, destination, duration, at)
+    }
     pub(crate) fn finish_combat_round(&mut self, id: EncounterId) -> Result<(), Error> {
         let e = self.state.combat.as_ref().unwrap().encounters[&id].clone();
         for f in e.fighters.values().filter(|f| f.retreat.is_some()) {
+            if matches!(
+                self.state.people[self.person_index[&f.actor]].location,
+                Location::Carried { .. }
+            ) {
+                continue;
+            }
             self.state
                 .physical
                 .as_mut()
@@ -960,7 +1239,38 @@ impl Simulation {
                 .get_mut(&f.actor)
                 .unwrap()
                 .activity = Activity::Idle;
-            self.start_movement(f.actor, f.retreat.unwrap())?;
+            if matches!(e.location, Location::StoppedOnRoad { .. }) {
+                self.transport_retreat(f.actor, f.retreat.unwrap())?;
+            } else {
+                self.start_movement(f.actor, f.retreat.unwrap())?;
+            }
+            self.state
+                .combat
+                .as_mut()
+                .unwrap()
+                .encounters
+                .get_mut(&id)
+                .unwrap()
+                .fighters
+                .get_mut(&f.actor)
+                .unwrap()
+                .retreat = None;
+        }
+        for f in e.fighters.values().filter(|f| {
+            f.retreat.is_some()
+                && matches!(
+                    self.state.people[self.person_index[&f.actor]].location,
+                    Location::Carried { .. }
+                )
+        }) {
+            self.state
+                .physical
+                .as_mut()
+                .unwrap()
+                .actors
+                .get_mut(&f.actor)
+                .unwrap()
+                .activity = Activity::Idle;
             self.state
                 .combat
                 .as_mut()
@@ -1057,14 +1367,7 @@ impl Simulation {
         else {
             return false;
         };
-        if !self.independent(actor)
-            || !self.state.physical.as_ref().is_some_and(|world| {
-                world.actors.get(&actor).is_some_and(|body| {
-                    body.vitals.alive
-                        && body.vitals.health
-                            > self.state.combat.as_ref().unwrap().rules.incapacitation
-                })
-            })
+        if !self.force_body_ready(actor)
             || (self
                 .state
                 .combat
@@ -1076,9 +1379,8 @@ impl Simulation {
         {
             return false;
         }
-        self.person_index
-            .get(&actor)
-            .is_some_and(|i| self.state.people[*i].location == Location::AtArea(c.area))
+        self.transport_same_place(actor, target)
+            && !self.transport_is_moving(actor)
             && (c.captor == actor
                 || self
                     .inventory_index
@@ -1097,6 +1399,7 @@ impl Simulation {
             .unwrap()
             .captivity
             .remove(&target);
+        self.transport_release_confinement(target);
         if let Some(force) = &mut self.state.force {
             force.escapes.remove(&target);
             force.yielded.remove(&target);
@@ -1111,6 +1414,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     };
     let fail = || Error::InvalidSave("inconsistent combat state".into());
     let people: BTreeSet<_> = s.people.iter().map(|p| p.id).collect();
+    let people_by_id: BTreeMap<_, _> = s.people.iter().map(|person| (person.id, person)).collect();
+    let locations = transport::resolved_locations_for(s)?;
     if w.rules.round.0 == 0
         || w.rules.movement > 1_000_000
         || w.rules.reach > 1_000_000
@@ -1125,6 +1430,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     for (area, map) in &w.maps {
         if *area != map.area
+            || map.location != Location::AtArea(*area)
             || map.version != 1
             || !(1..=1_000_000).contains(&map.width)
             || !(1..=1_000_000).contains(&map.height)
@@ -1153,6 +1459,52 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
+    for (id, map) in &w.road_maps {
+        let Location::StoppedOnRoad {
+            from,
+            to,
+            progress,
+            duration,
+        } = map.location
+        else {
+            return Err(fail());
+        };
+        if *id != map.id
+            || map.version != 1
+            || map.area != from.min(to)
+            || !(1..=1_000_000).contains(&map.width)
+            || !(1..=1_000_000).contains(&map.height)
+            || progress > duration
+            || duration.0 == 0
+            || !s.areas.iter().any(|a| {
+                a.id == from
+                    && a.links
+                        .iter()
+                        .any(|link| link.destination == to && link.duration == duration)
+            })
+        {
+            return Err(fail());
+        }
+        for (index, obstacle) in map.obstacles.iter().enumerate() {
+            if obstacle.index != index as u32
+                || !map.contains(obstacle.minimum)
+                || !map.contains(obstacle.maximum)
+                || obstacle.minimum.x >= obstacle.maximum.x
+                || obstacle.minimum.y >= obstacle.maximum.y
+            {
+                return Err(fail());
+            }
+        }
+        if map.exits.len() != 2
+            || map
+                .exits
+                .iter()
+                .any(|(area, point)| (*area != from && *area != to) || !map.contains(*point))
+            || map.exits[0].0 == map.exits[1].0
+        {
+            return Err(fail());
+        }
+    }
     let mut active = BTreeSet::new();
     let mut deadlines = BTreeSet::new();
     for (at, due) in &s.due {
@@ -1169,8 +1521,15 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     for (id, e) in &w.encounters {
-        let map = w.maps.get(&e.area).ok_or_else(fail)?;
+        let map = w.map(e.map).ok_or_else(fail)?;
+        let place = transport::location_position(&e.location, s.time)?.key();
         if *id != e.id
+            || e.area != map.area
+            || !matches!(
+                e.location,
+                Location::AtArea(_) | Location::StoppedOnRoad { .. }
+            )
+            || transport::location_position(&map.location, s.time)?.key() != place
             || e.map != map.id
             || e.started > s.time
             || e.ends.0.checked_sub(e.started.0) != Some(w.rules.round.0)
@@ -1182,11 +1541,26 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         for (actor, f) in &e.fighters {
+            if e.active && !f.withdrawn {
+                let mut anchor = *actor;
+                while let Location::Carried { carrier } = people_by_id[&anchor].location {
+                    anchor = carrier;
+                }
+                if anchor != *actor
+                    && !e
+                        .fighters
+                        .get(&anchor)
+                        .is_some_and(|parent| parent.position == f.position)
+                {
+                    return Err(fail());
+                }
+            }
             if *actor != f.actor
                 || f.joins_round > e.round.saturating_add(1)
                 || (f.joins_round > e.round && e.order.contains(actor))
                 || !people.contains(actor)
                 || !map.contains(f.position)
+                || !f.search.valid(map)
                 || f.known
                     .iter()
                     .any(|(id, p)| !e.fighters.contains_key(id) || !map.contains(*p))
@@ -1199,10 +1573,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 && (!active.insert(*actor)
                     || s.physical.as_ref().unwrap().actors[actor].activity
                         != (Activity::Combat { encounter: *id })
-                    || !s
-                        .people
-                        .iter()
-                        .any(|p| p.id == *actor && p.location == Location::AtArea(e.area)))
+                    || transport::location_position(&locations[actor], s.time)?.key() != place)
             {
                 return Err(fail());
             }
@@ -1221,15 +1592,13 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         if *actor != c.actor
             || !people.contains(actor)
             || !people.contains(&c.captor)
-            || !s
-                .people
-                .iter()
-                .any(|p| p.id == *actor && p.location == Location::AtArea(c.area))
-            || !w.maps.get(&c.area).is_some_and(|m| m.contains(c.position))
+            || !w
+                .map(c.map)
+                .is_some_and(|m| m.area == c.area && m.contains(c.position))
             || !s.inventories.get(&c.binding).is_some_and(|i| {
                 i.good == Good::Binding
                     && i.quantity.0 == 1_000
-                    && i.location == InventoryLocation::Area(c.area)
+                    && i.location == InventoryLocation::Carried(*actor)
             })
         {
             return Err(fail());

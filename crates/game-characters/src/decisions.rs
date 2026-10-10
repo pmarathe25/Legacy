@@ -101,7 +101,7 @@ pub struct SiteKnowledge {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChildSignal {
     pub preference: Option<ChildhoodInterest>,
-    pub area: AreaId,
+    pub location: game_core::Location,
     pub urgency: i64,
     pub observed_at: SimTime,
 }

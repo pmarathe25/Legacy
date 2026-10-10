@@ -224,7 +224,7 @@ impl Simulation {
                 local_sites: Vec::new(),
             });
         }
-        let area = if let Location::AtArea(a) = ruler.location {
+        let area = if let Location::AtArea(a) = self.resolved_location(ruler.id) {
             Some(a)
         } else {
             None
@@ -301,12 +301,31 @@ impl Simulation {
         }
         let world = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let a = world.actors.get(&actor).ok_or(Error::Unavailable)?;
-        let p = &self.state.people[self.person_index[&actor]];
         if !a.vitals.alive || a.vitals.health == 0 {
             return Err(Error::Unavailable);
         }
-        let Location::AtArea(area) = p.location else {
-            return Err(Error::Unavailable);
+        let area = match self.resolved_location(actor) {
+            Location::AtArea(area) => area,
+            Location::StoppedOnRoad { from, .. }
+                if matches!(
+                    command,
+                    Command::Cancel
+                        | Command::Rest
+                        | Command::Eat { .. }
+                        | Command::Care { .. }
+                        | Command::Comfort { .. }
+                        | Command::FreeCaptive { .. }
+                        | Command::Signal { .. }
+                ) =>
+            {
+                from
+            }
+            Location::InTransit { from, .. }
+                if matches!(command, Command::Signal { .. } | Command::Cancel) =>
+            {
+                from
+            }
+            _ => return Err(Error::Unavailable),
         };
         let rules = &world.rules;
         let (activity, new_job, consume) = match command {
@@ -394,8 +413,7 @@ impl Simulation {
                 if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
                     || child == actor
                     || !world.actors[&child].vitals.alive
-                    || self.state.people[self.person_index[&child]].location
-                        != Location::AtArea(area)
+                    || !self.transport_same_place(actor, child)
                     || self.care_index.contains_key(&child)
                 {
                     return Err(Error::Unavailable);
@@ -427,8 +445,7 @@ impl Simulation {
                     || !receiver.vitals.alive
                     || !matches!(receiver.activity, Activity::Idle | Activity::Rest)
                     || self.care_index.get(&child).is_some_and(|id| *id != actor)
-                    || self.state.people[self.person_index[&child]].location
-                        != Location::AtArea(area)
+                    || !self.transport_same_place(actor, child)
                     || !matches!(food.good, Good::Food | Good::Water)
                     || !self.can_use(actor, food)
                     || self.unreserved_stock(source, actor) < rules.meal_size.0
@@ -716,11 +733,14 @@ impl Simulation {
     }
 
     fn can_use(&self, actor: PersonId, inventory: &Inventory) -> bool {
-        let p = &self.state.people[self.person_index[&actor]];
-        if let Location::AtArea(area) = p.location {
-            self.has_stock_access(actor, inventory) && self.inventory_area(inventory) == Some(area)
-        } else {
-            false
+        if !self.has_stock_access(actor, inventory) {
+            return false;
+        }
+        match inventory.location {
+            InventoryLocation::Area(area) => {
+                self.resolved_location(actor) == Location::AtArea(area)
+            }
+            InventoryLocation::Carried(holder) => self.transport_same_place(actor, holder),
         }
     }
 
@@ -768,6 +788,7 @@ impl Simulation {
                 .map(|id| u128::from(self.state.inventories[id].quantity.0))
                 .sum();
             carried + u128::from(amount) <= u128::from(self.body_rules(actor).carrying_capacity.0)
+                && self.transport_transfer_capacity(actor, amount)
         } else {
             true
         }
@@ -825,7 +846,7 @@ impl Simulation {
                 | Activity::Combat { .. }
                 | Activity::Play { .. }
                 | Activity::Cultivate { .. }
-        ) || matches!(person.location, Location::InTransit { .. })
+        ) || self.transport_exerting(actor)
             || self.health_work_exerting(actor)
             || self.social_activity_is_practical(actor);
         let resting = body.activity == Activity::Rest || self.health_patient_resting(actor);
@@ -978,6 +999,10 @@ impl Simulation {
         let activity = self.state.physical.as_ref().unwrap().actors[&actor]
             .activity
             .clone();
+        if matches!(activity, Activity::Lift { .. }) {
+            self.complete_transport_lift(actor);
+            return;
+        }
         let mut success = false;
         if matches!(
             activity,
@@ -1037,8 +1062,7 @@ impl Simulation {
                 if self.state.physical.as_ref().unwrap().actors[&child]
                     .vitals
                     .alive
-                    && self.state.people[self.person_index[&child]].location
-                        == self.state.people[self.person_index[&actor]].location
+                    && self.transport_same_place(child, actor)
                 {
                     let life = self
                         .state
@@ -1186,8 +1210,7 @@ impl Simulation {
                 let recipient = &self.state.physical.as_ref().unwrap().actors[&child];
                 let quantity = self.state.physical.as_ref().unwrap().rules.meal_size;
                 if recipient.vitals.alive
-                    && self.state.people[self.person_index[&child]].location
-                        == self.state.people[self.person_index[&actor]].location
+                    && self.transport_same_place(child, actor)
                     && self.can_use(actor, &self.state.inventories[&source])
                     && self.state.inventories[&source].quantity >= quantity
                 {
@@ -1466,8 +1489,10 @@ impl Simulation {
                 .map(|id| u128::from(self.state.inventories[id].quantity.0))
                 .sum();
             if self.state.physical.as_ref().is_some_and(|_| {
-                held + u128::from(quantity.0)
-                    > u128::from(self.body_rules(actor).carrying_capacity.0)
+                quantity.0 > 0
+                    && (held + u128::from(quantity.0)
+                        > u128::from(self.body_rules(actor).carrying_capacity.0)
+                        || !self.transport_transfer_capacity(actor, quantity.0))
             }) {
                 return Err(Error::InvalidFixture("carrying capacity exceeded".into()));
             }

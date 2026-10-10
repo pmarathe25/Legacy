@@ -1343,6 +1343,7 @@ impl Simulation {
         let origin = match person.location {
             Location::AtArea(area) => area,
             Location::InTransit { to, .. } => to,
+            Location::StoppedOnRoad { .. } | Location::Carried { .. } => return,
         };
         let owned = &self.state.decisions.as_ref().unwrap().minds[&actor].routes;
         let route = decisions::known_path(owned, origin, destination)
@@ -1524,7 +1525,9 @@ impl Simulation {
             current
                 .child_signals
                 .iter()
-                .filter(|(_, signal)| signal.area == area && signal.urgency > 0)
+                .filter(|(_, signal)| {
+                    signal.location == Location::AtArea(area) && signal.urgency > 0
+                })
                 .find_map(|(child, _)| {
                     knowledge
                         .values()

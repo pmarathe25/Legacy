@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 19;
+const SAVE_VERSION: u32 = 20;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -58,7 +58,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         s.scenario.id.as_str(),
         "ecology-fixture" | "farm-enterprise-fixture"
     );
-    if (s.scenario.id == "genetics-fixture" && s.genetics.is_none())
+    if (s.scenario.id == "transport-fixture" && s.transport.is_none())
+        || (s.scenario.id == "genetics-fixture" && s.genetics.is_none())
         || (!playable
             && !expanded_fixture
             && !enforcement_fixture
@@ -78,6 +79,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     | "skills-fixture"
                     | "health-fixture"
                     | "genetics-fixture"
+                    | "transport-fixture"
                     | "project-fixture"
                     | "invocation-fixture"
                     | "force-fixture"
@@ -99,6 +101,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "skills-fixture"
                         | "health-fixture"
                         | "genetics-fixture"
+                        | "transport-fixture"
                         | "project-fixture"
                         | "invocation-fixture"
                         | "force-fixture"
@@ -115,6 +118,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "skills-fixture"
                         | "health-fixture"
                         | "genetics-fixture"
+                        | "transport-fixture"
                         | "invocation-fixture"
                         | "force-fixture"
                         | "mission-fixture"
@@ -127,6 +131,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "skills-fixture"
                         | "health-fixture"
                         | "genetics-fixture"
+                        | "transport-fixture"
                         | "invocation-fixture"
                         | "force-fixture"
                         | "mission-fixture"
@@ -146,6 +151,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "skills-fixture"
                         | "health-fixture"
                         | "genetics-fixture"
+                        | "transport-fixture"
                         | "invocation-fixture"
                         | "force-fixture"
                 ) != s.lineage.is_some()
@@ -350,6 +356,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         for id in world
             .maps
             .values()
+            .chain(world.road_maps.values())
             .map(|m| m.id.0)
             .chain(world.encounters.keys().map(|e| e.0))
         {
@@ -393,7 +400,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             match event {
                 Due::Arrive(id) => {
                     let p = people.get(id).ok_or_else(fail)?;
-                    if !matches!(p.location, Location::InTransit { arrives, .. } if arrives == *time)
+                    let deadline = s
+                        .transport
+                        .as_ref()
+                        .and_then(|world| world.approaches.get(id))
+                        .map(|approach| approach.completes);
+                    if !matches!(p.location, Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
                         || !scheduled_arrivals.insert(*id)
                     {
                         return Err(fail());
@@ -428,7 +440,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Social { completes, .. } | Activity::Instruction { completes, .. } | Activity::Practice { completes, .. } | Activity::EnforcementTalk { completes, .. } | Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::Lift { completes, .. } | Activity::Social { completes, .. } | Activity::Instruction { completes, .. } | Activity::Practice { completes, .. } | Activity::EnforcementTalk { completes, .. } | Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -472,6 +484,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 to,
                 departed,
                 arrives,
+                road_start,
             } => {
                 let link = s
                     .areas
@@ -484,13 +497,73 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .as_ref()
                     .is_some_and(|w| w.actors.get(&p.id).is_some_and(|a| !a.vitals.alive));
                 if departed > s.time
-                    || arrived_duration(departed, arrives) != Some(link.duration.0)
+                    || arrived_duration(departed, arrives)
+                        != Some(match road_start {
+                            None => link.duration.0,
+                            Some(point) => {
+                                let original = s
+                                    .areas
+                                    .iter()
+                                    .find(|area| area.id == point.from)
+                                    .and_then(|area| {
+                                        area.links.iter().find(|edge| edge.destination == point.to)
+                                    })
+                                    .ok_or_else(fail)?;
+                                if point.duration != original.duration {
+                                    return Err(fail());
+                                }
+                                let leg =
+                                    game_transport::retreat(point, to, link.duration, SimTime(0))
+                                        .map_err(|_| fail())?;
+                                if leg.from != from {
+                                    return Err(fail());
+                                }
+                                leg.arrives.0
+                            }
+                        })
                     || (!dead && (arrives <= s.time || !scheduled_arrivals.contains(&p.id)))
                     || (dead && scheduled_arrivals.contains(&p.id))
                 {
                     return Err(fail());
                 }
                 to
+            }
+            Location::StoppedOnRoad {
+                from,
+                to,
+                progress,
+                duration,
+            } => {
+                let link = s
+                    .areas
+                    .iter()
+                    .find(|area| area.id == from)
+                    .and_then(|area| area.links.iter().find(|link| link.destination == to))
+                    .ok_or_else(fail)?;
+                if duration != link.duration
+                    || progress > duration
+                    || !p.route.is_empty()
+                    || scheduled_arrivals.contains(&p.id)
+                {
+                    return Err(fail());
+                }
+                from
+            }
+            Location::Carried { carrier } => {
+                if !people.contains_key(&carrier)
+                    || carrier == p.id
+                    || !p.route.is_empty()
+                    || scheduled_arrivals.contains(&p.id)
+                    || !s
+                        .transport
+                        .as_ref()
+                        .and_then(|world| world.groups.get(&p.id))
+                        .is_some_and(|group| group.anchor == carrier)
+                {
+                    return Err(fail());
+                }
+                // No independent route remains on a body being physically borne.
+                s.areas.first().ok_or_else(fail)?.id
             }
         };
         for destination in &p.route {
@@ -947,9 +1020,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::ObstacleDamaged { map, obstacle, .. } => {
                 if !s.combat.as_ref().is_some_and(|w| {
-                    w.maps
-                        .values()
-                        .any(|m| m.id == map && m.obstacles.iter().any(|o| o.index == obstacle))
+                    w.map(map)
+                        .is_some_and(|m| m.obstacles.iter().any(|o| o.index == obstacle))
                 }) {
                     return Err(fail());
                 }
@@ -1589,7 +1661,36 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             for (child, signal) in &mind.child_signals {
                 if !people.contains_key(child)
-                    || !areas.contains(&signal.area)
+                    || !match signal.location {
+                        Location::AtArea(area) => areas.contains(&area),
+                        Location::StoppedOnRoad {
+                            from,
+                            to,
+                            progress,
+                            duration,
+                        } => {
+                            areas.contains(&from)
+                                && areas.contains(&to)
+                                && from != to
+                                && duration.0 > 0
+                                && progress <= duration
+                        }
+                        Location::InTransit {
+                            from,
+                            to,
+                            departed,
+                            arrives,
+                            ..
+                        } => {
+                            areas.contains(&from)
+                                && areas.contains(&to)
+                                && from != to
+                                && departed <= signal.observed_at
+                                && signal.observed_at <= arrives
+                                && departed < arrives
+                        }
+                        Location::Carried { .. } => false,
+                    }
                     || signal.observed_at > s.time
                     || ![0, 3_000, 20_000].contains(&signal.urgency)
                 {
@@ -1621,6 +1722,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     agreements::validate(s)?;
     development::validate(s)?;
     combat::validate(s)?;
+    transport::validate(s)?;
     lineage::validate(s)?;
     property::validate(s)?;
     institutions::validate(s)?;
@@ -1683,6 +1785,7 @@ fn validate_physical(
             *cargo.entry(p).or_default() += u128::from(i.quantity.0);
         }
     }
+    let locations = crate::transport::resolved_locations_for(s)?;
     let mut care_targets = BTreeSet::new();
     for (id, actor) in &world.actors {
         let p = people.get(id).ok_or_else(fail)?;
@@ -1691,7 +1794,8 @@ fn validate_physical(
             || actor.fatigue_remainder >= 1_000
             || actor.vitals.health > physical::rules_for(s, *id).max_health
             || actor.vitals.fatigue > rules.fatigue_limit
-            || carried > u128::from(physical::rules_for(s, *id).carrying_capacity.0)
+            || (carried > u128::from(physical::rules_for(s, *id).carrying_capacity.0)
+                && matches!(p.location, Location::InTransit { .. }))
             || (p.hunger_exempt && (actor.vitals.hunger != 0 || !actor.vitals.alive))
             || (!actor.vitals.alive && actor.vitals.health != 0)
         {
@@ -1734,7 +1838,8 @@ fn validate_physical(
         }
         let timed = matches!(
             actor.activity,
-            Activity::Social { .. }
+            Activity::Lift { .. }
+                | Activity::Social { .. }
                 | Activity::Instruction { .. }
                 | Activity::Practice { .. }
                 | Activity::EnforcementTalk { .. }
@@ -1760,7 +1865,31 @@ fn validate_physical(
         if timed != deadlines.contains(id) {
             return Err(fail());
         }
-        if actor.activity != Activity::Idle && !matches!(p.location, Location::AtArea(_)) {
+        let location = &locations[id];
+        let allowed = match location {
+            Location::AtArea(_) => true,
+            Location::StoppedOnRoad { .. } => matches!(
+                actor.activity,
+                Activity::Idle
+                    | Activity::Rest
+                    | Activity::Eat { .. }
+                    | Activity::Care { .. }
+                    | Activity::Comfort { .. }
+                    | Activity::Express { .. }
+                    | Activity::Lift { .. }
+                    | Activity::HealthWork { .. }
+                    | Activity::Unbind { .. }
+                    | Activity::Escape { .. }
+                    | Activity::Restrain { .. }
+                    | Activity::Combat { .. }
+            ),
+            Location::InTransit { .. } => matches!(
+                actor.activity,
+                Activity::Idle | Activity::Express { .. } | Activity::Escape { .. }
+            ),
+            Location::Carried { .. } => false,
+        };
+        if !allowed {
             return Err(fail());
         }
         match actor.activity {

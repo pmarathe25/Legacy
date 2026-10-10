@@ -552,6 +552,7 @@ impl Simulation {
         }
         self.record_genetic_birth(id, child)
             .expect("frozen conception genome for actual birth");
+        self.transport_birth(child, pregnancy.gestator);
         self.schedule_age(child);
         self.emit(EventKind::Born {
             pregnancy: id,
@@ -609,6 +610,7 @@ impl Simulation {
         a.vitals.alive = false;
         a.vitals.health = 0;
         a.job = None;
+        self.transport_death(id);
         self.interrupt_actor_activity(id);
         self.state.people[self.person_index[&id]].route.clear();
         for due in self.state.due.values_mut() {

@@ -807,6 +807,7 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
                 to: AreaId(1),
                 departed: SimTime(300_000),
                 arrives: SimTime(480_000),
+                road_start: None,
             }
         );
         let knowledge = &sim.canonical_state().lineage.as_ref().unwrap().guardians[guardian];

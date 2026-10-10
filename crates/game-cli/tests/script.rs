@@ -1015,3 +1015,44 @@ fn normal_openings_and_seeded_random_selection_launch_through_the_cli() {
         }
     }
 }
+
+#[test]
+fn roadside_transport_is_playable_with_carried_food_through_the_text_client() {
+    let execution = Execution::default();
+    let mut sim = Simulation::new("transport-fixture", 1, execution.clone()).unwrap();
+    let ruler = sim.canonical_state().ruler;
+    let food = sim
+        .debug_add_inventory(
+            Good::Food,
+            InventoryLocation::Carried(ruler),
+            Quantity(2_000),
+            Quantity(2_000),
+            std::collections::BTreeSet::from([ruler]),
+        )
+        .unwrap();
+    game_cli::execute(&mut sim, "move 2", &execution).unwrap();
+    game_cli::execute(&mut sim, "run 30000ms", &execution).unwrap();
+    game_cli::execute(&mut sim, "transport \"Stop\"", &execution).unwrap();
+    assert!(matches!(
+        sim.observe().location,
+        Location::StoppedOnRoad {
+            progress: SimDuration(30_000),
+            ..
+        }
+    ));
+    assert!(
+        sim.observe()
+            .available_commands
+            .contains(&Command::Eat { source: food })
+    );
+    game_cli::execute(&mut sim, &format!("eat {}", food.0), &execution).unwrap();
+    game_cli::execute(&mut sim, "run 60000ms", &execution).unwrap();
+    assert_eq!(
+        sim.canonical_state().inventories[&food].quantity,
+        Quantity(1_000)
+    );
+    let mut restored = Simulation::load(&sim.save().unwrap(), execution.clone()).unwrap();
+    game_cli::execute(&mut restored, "transport \"Resume\"", &execution).unwrap();
+    game_cli::execute(&mut restored, "run 90000ms", &execution).unwrap();
+    assert_eq!(restored.observe().location, Location::AtArea(AreaId(2)));
+}

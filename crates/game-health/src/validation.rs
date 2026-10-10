@@ -198,10 +198,17 @@ pub fn validate_world(world: &World, catalog: ValidationCatalog<'_>) -> Result<(
                 HealthWorkKind::Treat
             }
         };
+        let local = match person.location {
+            Location::AtArea(area) => area == job.area,
+            Location::StoppedOnRoad { from, .. } => {
+                from == job.area && !matches!(job.work, Work::Shelter { .. })
+            }
+            _ => false,
+        };
         if *actor != job.actor
             || !person.alive
             || job.completes <= catalog.now
-            || person.location != Location::AtArea(job.area)
+            || !local
             || person.health_work
                 != Some(HealthWorkLink {
                     kind,

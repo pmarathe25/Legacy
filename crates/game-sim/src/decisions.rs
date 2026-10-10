@@ -104,16 +104,40 @@ impl Simulation {
         if self.state.decisions.is_none() {
             return;
         }
-        let signal_rules: BTreeMap<_, _> = self
-            .dependent_index
+        let locations =
+            transport::resolved_locations_for(&self.state).expect("valid physical observations");
+        let mut cohorts: BTreeMap<game_transport::PositionKey, Vec<PersonId>> = BTreeMap::new();
+        for person in &self.state.people {
+            if self.state.development.as_ref().is_some_and(|w| {
+                matches!(
+                    w.lives[&person.id].stage,
+                    LifeStage::Infant | LifeStage::Child
+                )
+            }) && self.state.physical.as_ref().unwrap().actors[&person.id]
+                .vitals
+                .alive
+                && let Some(position) = self.transport_position(person.id)
+            {
+                cohorts.entry(position.key()).or_default().push(person.id);
+            }
+        }
+        let signal_rules: BTreeMap<_, _> = cohorts
             .values()
             .flatten()
             .map(|child| (*child, self.body_rules(*child)))
             .collect();
         for p in &self.state.people {
-            let Location::AtArea(area) = p.location else {
-                continue;
+            let location = &locations[&p.id];
+            let area = match *location {
+                Location::AtArea(area) => area,
+                Location::StoppedOnRoad { from, .. } | Location::InTransit { from, .. } => from,
+                Location::Carried { .. } => continue,
             };
+            let stationary = matches!(
+                location,
+                Location::AtArea(_) | Location::StoppedOnRoad { .. }
+            );
+            let at_area = matches!(location, Location::AtArea(_));
             let actor = &self.state.physical.as_ref().unwrap().actors[&p.id];
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 continue;
@@ -121,6 +145,7 @@ impl Simulation {
             let visible_stocks: Vec<_> = self
                 .inventory_index
                 .get(&InventoryLocation::Area(area))
+                .filter(|_| at_area)
                 .into_iter()
                 .flatten()
                 .chain(
@@ -136,6 +161,55 @@ impl Simulation {
                 .filter(|id| self.has_stock_access(p.id, &self.state.inventories[id]))
                 .copied()
                 .collect();
+            let visible_children = cohorts.get(
+                &match *location {
+                    Location::AtArea(area) => game_transport::Position::Area(area),
+                    Location::StoppedOnRoad {
+                        from,
+                        to,
+                        progress,
+                        duration,
+                    } => game_transport::Position::Road(game_transport::RoadPosition {
+                        from,
+                        to,
+                        progress,
+                        duration,
+                    }),
+                    Location::InTransit {
+                        from,
+                        to,
+                        departed,
+                        road_start,
+                        arrives,
+                    } => game_transport::Leg {
+                        from,
+                        to,
+                        departed,
+                        road_start,
+                        arrives,
+                    }
+                    .position(self.state.time)
+                    .expect("valid current leg"),
+                    Location::Carried { .. } => continue,
+                }
+                .key(),
+            );
+            let visible_children: Vec<_> = visible_children
+                .into_iter()
+                .flatten()
+                .filter(|child| {
+                    stationary
+                        || self
+                            .state
+                            .transport
+                            .as_ref()
+                            .and_then(|w| w.groups.get(child))
+                            .is_some_and(|g| g.bearers.contains(&p.id))
+                })
+                .take(64)
+                .filter(|child| self.transport_same_place(p.id, **child))
+                .copied()
+                .collect();
             let mind = self
                 .state
                 .decisions
@@ -144,17 +218,19 @@ impl Simulation {
                 .minds
                 .get_mut(&p.id)
                 .unwrap();
-            let actual_routes = self
-                .state
-                .areas
-                .iter()
-                .find(|a| a.id == area)
-                .unwrap()
-                .links
-                .iter()
-                .map(|l| (l.destination, l.duration))
-                .collect();
-            mind.routes.insert(area, actual_routes);
+            if at_area {
+                let actual_routes = self
+                    .state
+                    .areas
+                    .iter()
+                    .find(|a| a.id == area)
+                    .unwrap()
+                    .links
+                    .iter()
+                    .map(|l| (l.destination, l.duration))
+                    .collect();
+                mind.routes.insert(area, actual_routes);
+            }
             for id in &visible_stocks {
                 let inventory = &self.state.inventories[id];
                 if mind.goal == Goal::Survival
@@ -183,8 +259,9 @@ impl Simulation {
                     },
                 );
             }
-            mind.child_signals.retain(|_, signal| signal.area != area);
-            for child in self.dependent_index.get(&area).into_iter().flatten() {
+            mind.child_signals
+                .retain(|_, signal| signal.location != *location);
+            for child in &visible_children {
                 let vitals = &self.state.physical.as_ref().unwrap().actors[child].vitals;
                 let rules = &signal_rules[child];
                 let mut urgency = if vitals.hunger >= rules.hunger_harm {
@@ -209,7 +286,7 @@ impl Simulation {
                             .preference
                             .filter(|(_, until)| *until >= self.state.time)
                             .map(|(p, _)| p),
-                        area,
+                        location: locations[child].clone(),
                         urgency,
                         observed_at: self.state.time,
                     },
@@ -222,7 +299,7 @@ impl Simulation {
                 .unwrap()
                 .sites
                 .values()
-                .filter(|s| s.area == area)
+                .filter(|s| at_area && s.area == area)
             {
                 mind.sites.insert(
                     site.id,
@@ -245,6 +322,7 @@ impl Simulation {
             return Ok(());
         };
         self.observe_local_facts();
+        self.review_transport_choices()?;
         self.observe_projects();
         self.observe_property();
         self.review_property_sharing();
@@ -331,6 +409,11 @@ impl Simulation {
             || self.lineage_handles(id)
             || self.mission_actor_busy(id)
             || self.health_actor_busy(id)
+            || self
+                .state
+                .transport
+                .as_ref()
+                .is_some_and(|world| world.busy(id))
             || id == self.state.ruler
             || !actor.vitals.alive
             || actor.vitals.health == 0
@@ -354,8 +437,12 @@ impl Simulation {
         if !self.independent(id) {
             return none();
         }
-        let Location::AtArea(area) = p.location else {
-            return none();
+        let area = match self.resolved_location(id) {
+            Location::AtArea(area) => area,
+            Location::StoppedOnRoad { .. } | Location::InTransit { .. } => {
+                return self.decide_on_road(id, mind);
+            }
+            Location::Carried { .. } => return none(),
         };
         let urgent = actor.vitals.hunger >= rules.meal_relief;
         if matches!(
@@ -470,7 +557,7 @@ impl Simulation {
             }
         }
         for (child, signal) in mind.child_signals.iter().filter(|(_, signal)| {
-            signal.area == area
+            signal.location == Location::AtArea(area)
                 && (signal.urgency > 0 || signal.preference == Some(ChildhoodInterest::Company))
                 && signal.observed_at == self.state.time
         }) {
@@ -642,6 +729,184 @@ impl Simulation {
         }
     }
 
+    fn decide_on_road(&self, id: PersonId, mind: &Mind) -> Intention {
+        let body = &self.state.physical.as_ref().unwrap().actors[&id];
+        let none = || Intention {
+            actor: id,
+            command: None,
+            explanation: mind.explanation.clone(),
+        };
+        if !matches!(body.activity, Activity::Idle | Activity::Rest) {
+            return none();
+        }
+        let location = self.resolved_location(id);
+        let current_signals: Vec<_> =
+            mind.child_signals
+                .iter()
+                .filter(|(child, signal)| {
+                    **child != id
+                        && transport::location_position(&signal.location, signal.observed_at)
+                            .is_ok_and(|point| {
+                                self.transport_position(id)
+                                    .is_some_and(|own| point.same_point(own))
+                            })
+                        && signal.observed_at == self.state.time
+                })
+                .collect();
+        let motivation = |child: &PersonId| {
+            i64::from(mind.personality.empathy) / 2
+                + i64::from(
+                    mind.relationships
+                        .get(child)
+                        .map_or(0, |r| r.affection.max(0)),
+                )
+        };
+        if matches!(location, Location::InTransit { .. }) {
+            if current_signals.iter().any(|(child, signal)| {
+                (signal.urgency > 0 || signal.preference == Some(ChildhoodInterest::Company))
+                    && motivation(child) >= 300
+            }) {
+                return Intention {
+                    actor: id,
+                    command: Some(Command::Transport {
+                        action: TransportAction::Stop,
+                    }),
+                    explanation: Explanation {
+                        goal: Goal::Care,
+                        need: 3_000,
+                        benefit: 0,
+                        value: 0,
+                        total: 3_000,
+                        blocker: None,
+                    },
+                };
+            }
+            return none();
+        }
+        let rules = self.body_rules(id);
+        let own_stocks: Vec<_> = mind
+            .knowledge
+            .values()
+            .filter(|fact| {
+                fact.source == KnowledgeSource::Observed(id)
+                    && fact.accessible
+                    && self
+                        .inventory_index
+                        .get(&InventoryLocation::Carried(id))
+                        .is_some_and(|ids| ids.contains(&fact.inventory))
+            })
+            .collect();
+        let mut candidates = Vec::new();
+        let mut add = |command, goal, need, benefit| {
+            candidates.push((
+                command,
+                Explanation {
+                    goal,
+                    need,
+                    benefit,
+                    value: 0,
+                    total: need + benefit,
+                    blocker: None,
+                },
+            ))
+        };
+        if body.vitals.hunger >= rules.meal_relief {
+            for fact in &own_stocks {
+                if fact.good == Good::Food && fact.quantity >= rules.meal_size {
+                    add(
+                        Command::Eat {
+                            source: fact.inventory,
+                        },
+                        Goal::Survival,
+                        10_000 + body.vitals.hunger as i64 / 100,
+                        0,
+                    );
+                }
+            }
+        }
+        for (child, signal) in &current_signals {
+            let motive = motivation(child);
+            if motive < 300 {
+                continue;
+            }
+            if signal.urgency > 0 {
+                for fact in &own_stocks {
+                    if fact.good == Good::Food && fact.quantity >= rules.meal_size {
+                        add(
+                            Command::Care {
+                                child: **child,
+                                source: fact.inventory,
+                            },
+                            Goal::Care,
+                            signal.urgency,
+                            motive,
+                        );
+                    }
+                }
+            }
+            if signal.preference == Some(ChildhoodInterest::Company) {
+                add(Command::Comfort { child: **child }, Goal::Care, 500, motive);
+            }
+        }
+        let recovery = (body.vitals.fatigue / 500
+            + rules.max_health.saturating_sub(body.vitals.health) / 100)
+            .min(i64::MAX as u64) as i64;
+        add(
+            Command::Rest,
+            Goal::Recovery,
+            recovery,
+            i64::from(mind.personality.hedonism) / 3,
+        );
+        if recovery == 0
+            && current_signals
+                .iter()
+                .all(|(_, s)| s.urgency == 0 && s.preference != Some(ChildhoodInterest::Company))
+            && self.transport_can_depart(id)
+        {
+            add(
+                Command::Transport {
+                    action: TransportAction::Resume,
+                },
+                Goal::Survival,
+                0,
+                100,
+            );
+        }
+        let scores: Vec<_> = candidates
+            .iter()
+            .map(
+                |(command, explanation)| game_characters::decisions::CandidateScore {
+                    total: explanation.total,
+                    tie: match command {
+                        Command::Care { child, .. } | Command::Comfort { child } => (0, child.0),
+                        Command::Eat { source } => (1, source.0),
+                        Command::Rest => (2, 0),
+                        _ => (3, 0),
+                    },
+                    resting: *command == Command::Rest,
+                },
+            )
+            .collect();
+        let Some(index) = game_characters::decisions::choose(
+            &scores,
+            game_characters::decisions::ChoiceContext {
+                working: false,
+                resting: body.activity == Activity::Rest,
+                urgent: body.vitals.hunger >= rules.meal_relief
+                    || current_signals.iter().any(|(_, s)| s.urgency > 0),
+                previous_score: mind.explanation.total,
+                switching_margin: self.state.decisions.as_ref().unwrap().switching_margin,
+            },
+        ) else {
+            return none();
+        };
+        let (command, explanation) = candidates.swap_remove(index);
+        Intention {
+            actor: id,
+            command: Some(command),
+            explanation,
+        }
+    }
     pub(crate) fn learn_from_work(&mut self) {
         let Some(world) = &mut self.state.decisions else {
             return;

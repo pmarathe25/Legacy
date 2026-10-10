@@ -27,9 +27,19 @@ pub fn arbitrate(
 
 pub fn arbitrate_with_capacity(
     balances: &BTreeMap<InventoryId, Balance>,
+    requests: Vec<Request>,
+    carriers: &BTreeMap<InventoryId, PersonId>,
+    free_capacity: &BTreeMap<PersonId, u64>,
+) -> Vec<(Request, bool)> {
+    arbitrate_with_constraints(balances, requests, carriers, free_capacity, |_| true)
+}
+
+pub fn arbitrate_with_constraints(
+    balances: &BTreeMap<InventoryId, Balance>,
     mut requests: Vec<Request>,
     carriers: &BTreeMap<InventoryId, PersonId>,
     free_capacity: &BTreeMap<PersonId, u64>,
+    mut reserve: impl FnMut(&Request) -> bool,
 ) -> Vec<(Request, bool)> {
     requests.sort_by_key(|r| {
         let cursor = balances.get(&r.source).and_then(|b| b.last_granted);
@@ -68,6 +78,7 @@ pub fn arbitrate_with_capacity(
                             v.checked_sub(incoming.get(&r.destination).copied().unwrap_or(0))
                         })
                         .is_some_and(|v| r.amount <= v)
+                    && reserve(&r)
             } else {
                 false
             };
