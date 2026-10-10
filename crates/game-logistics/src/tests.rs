@@ -1123,3 +1123,41 @@ fn transferring_real_material_can_free_the_room_needed_for_another_prerequisite(
     assert_eq!(delivery.plan(&f.input()), Step::Acquire(42));
     assert_eq!(delivery.remaining, Quantity(1_000));
 }
+
+#[test]
+fn single_lot_prerequisites_consolidate_actual_cargo_before_using_equipment() {
+    let target = Destination::Contact(PersonId(4));
+    let delivery = delivery(Good::Food, 1_000, target);
+    let mut f = frame(Good::Food, target);
+    f.stocks.clear();
+    f.cargo = vec![cargo(21, Good::Tool, 600), cargo(22, Good::Tool, 400)];
+    f.offers.push(offer(
+        Good::Food,
+        1,
+        42,
+        vec![prerequisite(
+            Good::Tool,
+            1_000,
+            PrerequisitePlacement::CarriedInOneLot,
+        )],
+    ));
+    assert_eq!(
+        delivery.plan(&f.input()),
+        Step::Transfer {
+            source: InventoryId(22),
+            destination: InventoryId(21),
+            quantity: Quantity(400),
+        }
+    );
+    assert_eq!(f.cargo[0].quantity, Quantity(600));
+    f.cargo[0].room = Quantity(0);
+    f.cargo[1].room = Quantity(0);
+    assert_eq!(
+        delivery.plan(&f.input()),
+        Step::Blocked(BlockReason::Capacity)
+    );
+    // Only the actual transfer makes one usable lot; forecasts change no cargo.
+    f.cargo[0].quantity = Quantity(1_000);
+    f.cargo[1].quantity = Quantity(0);
+    assert_eq!(delivery.plan(&f.input()), Step::Acquire(42));
+}

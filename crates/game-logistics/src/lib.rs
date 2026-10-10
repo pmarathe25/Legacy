@@ -117,7 +117,11 @@ pub struct Prerequisite {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrerequisitePlacement {
     Carried,
-    AccessibleAtProvider { inventory: Option<InventoryId> },
+    /// Equipment or another resource that must be usable as one physical lot.
+    CarriedInOneLot,
+    AccessibleAtProvider {
+        inventory: Option<InventoryId>,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfferYield {
@@ -536,6 +540,52 @@ impl<A: Clone> Composition<'_, '_, A> {
         }
         let carried = self.carried(requirement);
         match prerequisite.placement {
+            PrerequisitePlacement::CarriedInOneLot => {
+                let input = self.input;
+                let mut lots = input
+                    .cargo
+                    .iter()
+                    .filter(|cargo| cargo_quantity(cargo, requirement).0 > 0)
+                    .collect::<Vec<_>>();
+                lots.sort_by_key(|cargo| {
+                    (
+                        std::cmp::Reverse(cargo_quantity(cargo, requirement)),
+                        cargo.inventory,
+                    )
+                });
+                if lots
+                    .first()
+                    .is_some_and(|cargo| cargo_quantity(cargo, requirement) >= requirement.quantity)
+                {
+                    return None;
+                }
+                if let Some(target) = lots.iter().find(|cargo| {
+                    u128::from(cargo_quantity(cargo, requirement).0) + u128::from(cargo.room.0)
+                        >= u128::from(requirement.quantity.0)
+                }) && let Some(source) = lots
+                    .iter()
+                    .find(|cargo| cargo.inventory != target.inventory)
+                {
+                    return Some(Step::Transfer {
+                        source: source.inventory,
+                        destination: target.inventory,
+                        quantity: Quantity(
+                            cargo_quantity(source, requirement)
+                                .0
+                                .min(requirement.quantity.0 - cargo_quantity(target, requirement).0)
+                                .min(target.room.0),
+                        ),
+                    });
+                }
+                if carried >= u128::from(requirement.quantity.0) {
+                    return Some(Step::Blocked(BlockReason::Capacity));
+                }
+                Some(self.acquire(
+                    requirement,
+                    (u128::from(requirement.quantity.0) - carried) as u64,
+                    self.room(requirement.good),
+                ))
+            }
             PrerequisitePlacement::Carried => {
                 if carried >= u128::from(requirement.quantity.0) {
                     return None;
