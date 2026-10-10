@@ -1027,7 +1027,7 @@ impl Simulation {
             .state
             .events
             .iter()
-            .filter(|event| event.id.0 > world.last_event)
+            .skip(world.last_event as usize)
             .cloned()
             .collect();
         // Newly created inventories may contain goods before a creation event.

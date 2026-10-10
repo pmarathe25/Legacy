@@ -915,7 +915,7 @@ impl Simulation {
             .state
             .events
             .iter()
-            .filter(|event| event.id.0 > cursor)
+            .skip(cursor as usize)
             .cloned()
             .collect();
         for event in events {
