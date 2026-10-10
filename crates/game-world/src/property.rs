@@ -1057,12 +1057,24 @@ impl Simulation {
     }
 
     pub(crate) fn property_opportunities(&self, actor: PersonId) -> Vec<Command> {
-        let Some(world) = &self.state.property else {
-            return Vec::new();
-        };
         let Some(physical) = &self.state.physical else {
             return Vec::new();
         };
+        self.property_acquisition_opportunities(actor, None, physical.rules.meal_size)
+    }
+    pub(crate) fn property_acquisition_opportunities(
+        &self,
+        actor: PersonId,
+        good: Option<Good>,
+        quantity: Quantity,
+    ) -> Vec<Command> {
+        let Some(world) = &self.state.property else {
+            return Vec::new();
+        };
+        let actor_facts = self.property_actor_facts(actor);
+        if !world.acquisition_eligible(actor_facts) {
+            return Vec::new();
+        }
         let Some(mind) = self
             .state
             .decisions
@@ -1071,37 +1083,49 @@ impl Simulation {
         else {
             return Vec::new();
         };
-        let quantity = physical.rules.meal_size;
+        let mut destinations = BTreeMap::<Good, InventoryId>::new();
+        for id in self
+            .inventory_index
+            .get(&InventoryLocation::Carried(actor))
+            .into_iter()
+            .flatten()
+        {
+            let stock = &self.state.inventories[id];
+            destinations
+                .entry(stock.good)
+                .and_modify(|existing| *existing = (*existing).min(*id))
+                .or_insert(*id);
+        }
         let mut actions = Vec::new();
-        for known in mind.knowledge.values() {
-            let destination = self
-                .state
-                .inventories
-                .values()
-                .find(|stock| {
-                    stock.good == known.good && stock.location == InventoryLocation::Carried(actor)
-                })
-                .map(|stock| stock.id);
+        for known in mind
+            .knowledge
+            .values()
+            .filter(|known| good.is_none_or(|good| known.good == good))
+        {
+            let quantity = Quantity(quantity.0.min(known.quantity.0));
+            let destination = destinations.get(&known.good).copied();
+            let need = game_property::AcquisitionFacts {
+                actor: actor_facts,
+                good: known.good,
+                destination,
+                quantity,
+            };
+            if !world.acquisition_source_eligible(&need, known) {
+                continue;
+            }
             let opportunity = game_property::NeedOpportunity {
                 known: known.clone(),
-                local_custodian: self.property_custodian(known.inventory).is_some_and(|c| {
-                    c != actor && self.property_area(c) == self.property_area(actor)
-                }),
-                can_take: destination.is_some_and(|destination| {
-                    self.taking_possible(actor, known.inventory, destination, quantity, true)
-                }),
+                local_custodian: self
+                    .property_custodian(known.inventory)
+                    .is_some_and(|c| c != actor && self.property_area(c) == actor_facts.area),
+                can_take: quantity.0 > 0
+                    && destination.is_some_and(|destination| {
+                        self.taking_possible(actor, known.inventory, destination, quantity, true)
+                    }),
             };
             actions.extend(
                 world
-                    .acquisition_opportunities(
-                        game_property::AcquisitionFacts {
-                            actor: self.property_actor_facts(actor),
-                            good: known.good,
-                            destination,
-                            quantity,
-                        },
-                        &[opportunity],
-                    )
+                    .acquisition_opportunities(need, &[opportunity])
                     .into_iter()
                     .map(|action| Command::Property { action }),
             );
@@ -1133,6 +1157,10 @@ impl Simulation {
                         signal.location == Location::AtArea(area) && signal.urgency >= 1_000
                     })
                 });
+            let actor_facts = self.property_actor_facts(actor);
+            if !world.sharing_eligible(actor_facts, needy) {
+                continue;
+            }
             let recipients = self.property_present(area);
             let stores = self
                 .state
@@ -1156,13 +1184,7 @@ impl Simulation {
                 })
                 .collect::<Vec<_>>();
             let minimum = self.state.physical.as_ref().unwrap().rules.meal_size;
-            let actions = world.plan_sharing(
-                self.property_actor_facts(actor),
-                needy,
-                Good::Food,
-                minimum,
-                &stores,
-            );
+            let actions = world.plan_sharing(actor_facts, needy, Good::Food, minimum, &stores);
             for action in actions {
                 let _ = self.debug_property_action(actor, action);
             }

@@ -13,29 +13,38 @@ pub struct AcquisitionFacts {
     pub quantity: Quantity,
 }
 impl World {
+    pub fn acquisition_eligible(&self, actor: ActorFacts) -> bool {
+        actor.capable
+            && !self
+                .next_search
+                .get(&actor.actor)
+                .is_some_and(|at| *at > actor.now)
+    }
+    pub fn acquisition_source_eligible(
+        &self,
+        need: &AcquisitionFacts,
+        stock: &StockKnowledge,
+    ) -> bool {
+        self.acquisition_eligible(need.actor)
+            && stock.good == need.good
+            && !stock.accessible
+            && stock.quantity.0 > 0
+            && stock.quantity >= need.quantity
+            && Some(stock.area) == need.actor.area
+    }
     /// Enumerates known feasible actions; personal motives belong to the actor.
     pub fn acquisition_opportunities(
         &self,
         need: AcquisitionFacts,
         opportunities: &[NeedOpportunity],
     ) -> Vec<PropertyAction> {
-        if !need.actor.capable
-            || need.quantity.0 == 0
-            || self
-                .next_search
-                .get(&need.actor.actor)
-                .is_some_and(|at| *at > need.actor.now)
-        {
+        if !self.acquisition_eligible(need.actor) {
             return Vec::new();
         }
         let mut actions = Vec::new();
         for opportunity in opportunities {
             let stock = &opportunity.known;
-            if stock.good != need.good
-                || stock.accessible
-                || stock.quantity < need.quantity
-                || Some(stock.area) != need.actor.area
-            {
+            if !self.acquisition_source_eligible(&need, stock) {
                 continue;
             }
             if opportunity.local_custodian {
@@ -43,7 +52,8 @@ impl World {
                     inventory: stock.inventory,
                 });
             }
-            if opportunity.can_take
+            if need.quantity.0 > 0
+                && opportunity.can_take
                 && let Some(destination) = need.destination
             {
                 actions.push(PropertyAction::Take {
@@ -63,13 +73,7 @@ impl World {
         minimum: Quantity,
         stores: &[SharingStore],
     ) -> Vec<PropertyAction> {
-        if !actor.capable
-            || !needy
-            || !self
-                .attitudes
-                .get(&actor.actor)
-                .is_some_and(|a| a.sharing >= 700)
-        {
+        if !self.sharing_eligible(actor, needy) {
             return Vec::new();
         }
         stores
@@ -91,6 +95,14 @@ impl World {
                     })
             })
             .collect()
+    }
+    pub fn sharing_eligible(&self, actor: ActorFacts, needy: bool) -> bool {
+        actor.capable
+            && needy
+            && self
+                .attitudes
+                .get(&actor.actor)
+                .is_some_and(|a| a.sharing >= 700)
     }
 }
 pub struct SharingStore {

@@ -354,14 +354,19 @@ fn main() {
         );
     }
 
-    if alive < population * 9 / 10 {
+    let player_alive = sim.canonical_state().physical.as_ref().unwrap().actors
+        [&sim.canonical_state().ruler]
+        .vitals
+        .alive;
+    if alive < population * 9 / 10 || !player_alive {
         let state = sim.canonical_state();
         for (actor, body) in &state.physical.as_ref().unwrap().actors {
             if !body.vitals.alive {
                 let clinical = &state.health.as_ref().unwrap().clinical[actor];
                 eprintln!(
-                    "dead_body actor={} hunger={} fatigue={} thirst={} cold={} illnesses={} age_ms={}",
+                    "dead_body actor={} ruler={} hunger={} fatigue={} thirst={} cold={} illnesses={} age_ms={} activity={:?}",
                     actor.0,
+                    *actor == state.ruler,
                     body.vitals.hunger,
                     body.vitals.fatigue,
                     clinical.thirst,
@@ -369,7 +374,8 @@ fn main() {
                     clinical.illnesses.len(),
                     state.development.as_ref().unwrap().lives[actor]
                         .age_at(state.time)
-                        .unwrap()
+                        .unwrap(),
+                    body.activity,
                 );
             }
         }

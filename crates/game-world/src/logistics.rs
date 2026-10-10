@@ -166,7 +166,7 @@ impl Simulation {
                 Quantity(quantity.0.min(capacity.0)),
                 capacity,
             );
-            owned.extend(self.property_acquisition_offers(actor, good));
+            owned.extend(self.property_acquisition_offers(actor, good, quantity));
             owned.extend(self.production_acquisition_offers(actor, good));
             for prerequisite in owned.iter().flat_map(|offer| &offer.requirements) {
                 requested
@@ -434,6 +434,7 @@ impl Simulation {
         &self,
         actor: PersonId,
         good: Good,
+        quantity: Quantity,
     ) -> Vec<AcquisitionOffer<Command>> {
         let Some(mind) = self
             .state
@@ -443,7 +444,7 @@ impl Simulation {
         else {
             return Vec::new();
         };
-        self.available_property_commands(actor)
+        self.property_acquisition_opportunities(actor, Some(good), quantity)
             .into_iter()
             .filter_map(|command| {
                 let (source, quantity) = match command {
@@ -565,135 +566,18 @@ impl Simulation {
     }
     fn delivery_travel_command(&self, actor: PersonId, target: &Location) -> Option<Command> {
         let routes = &self.state.decisions.as_ref()?.minds.get(&actor)?.routes;
-        let target_road = match *target {
-            Location::StoppedOnRoad {
-                from,
-                to,
-                progress,
-                duration,
-            } => Some(game_transport::RoadPosition {
-                from,
-                to,
-                progress,
-                duration,
-            }),
-            Location::AtArea(_) => None,
-            _ => return None,
-        };
-        if target_road.is_some_and(|point| !point.valid()) {
-            return None;
-        }
-        let target_cost = |origin: AreaId| -> Option<u128> {
-            if let Location::AtArea(destination) = *target {
-                return Some(u128::from(
-                    decisions::known_path(routes, origin, destination).ok()?.1.0,
-                ));
+        match game_transport::route_intent(
+            &self.resolved_location(actor),
+            target,
+            self.state.time,
+            routes,
+        )
+        .ok()?
+        {
+            game_transport::RouteIntent::MoveArea { destination } => {
+                Some(Command::Move { destination })
             }
-            let point = target_road?;
-            [point.from, point.to]
-                .into_iter()
-                .filter_map(|endpoint| {
-                    let cost = decisions::known_path(routes, origin, endpoint).ok()?.1.0;
-                    let (other, distance) = if endpoint == point.from {
-                        (point.to, point.progress.0)
-                    } else {
-                        (point.from, point.duration.0 - point.progress.0)
-                    };
-                    let approach = (u128::from(routes.get(&endpoint)?.get(&other)?.0)
-                        * u128::from(distance))
-                    .div_ceil(u128::from(point.duration.0));
-                    Some(u128::from(cost) + approach)
-                })
-                .min()
-        };
-        match self.resolved_location(actor) {
-            Location::StoppedOnRoad {
-                from,
-                to,
-                progress,
-                duration,
-            } => {
-                let point = game_transport::RoadPosition {
-                    from,
-                    to,
-                    progress,
-                    duration,
-                };
-                if !point.valid() {
-                    return None;
-                }
-                if let Some(target) = target_road.filter(|target| {
-                    target.from == from && target.to == to || target.from == to && target.to == from
-                }) {
-                    return Some(Command::Transport {
-                        action: game_transport::Action::ApproachRoad {
-                            from: target.from,
-                            to: target.to,
-                            progress: target.progress,
-                            duration: target.duration,
-                        },
-                    });
-                }
-                let endpoint = [from, to]
-                    .into_iter()
-                    .filter_map(|endpoint| {
-                        let (start, distance) = if endpoint == from {
-                            (to, progress.0)
-                        } else {
-                            (from, duration.0 - progress.0)
-                        };
-                        let remaining = (u128::from(routes.get(&start)?.get(&endpoint)?.0)
-                            * u128::from(distance))
-                        .div_ceil(u128::from(duration.0));
-                        Some((remaining + target_cost(endpoint)?, endpoint))
-                    })
-                    .min()?
-                    .1;
-                Some(Command::Transport {
-                    action: game_transport::Action::ReturnToArea {
-                        destination: endpoint,
-                    },
-                })
-            }
-            Location::AtArea(area) => {
-                if let Some(point) = target_road {
-                    if area == point.from || area == point.to {
-                        Some(Command::Transport {
-                            action: game_transport::Action::ApproachRoad {
-                                from: point.from,
-                                to: point.to,
-                                progress: point.progress,
-                                duration: point.duration,
-                            },
-                        })
-                    } else {
-                        let endpoint = [point.from, point.to]
-                            .into_iter()
-                            .filter_map(|endpoint| {
-                                let cost = decisions::known_path(routes, area, endpoint).ok()?.1.0;
-                                let (other, distance) = if endpoint == point.from {
-                                    (point.to, point.progress.0)
-                                } else {
-                                    (point.from, point.duration.0 - point.progress.0)
-                                };
-                                let approach = (u128::from(routes.get(&endpoint)?.get(&other)?.0)
-                                    * u128::from(distance))
-                                .div_ceil(u128::from(point.duration.0));
-                                Some((u128::from(cost) + approach, endpoint))
-                            })
-                            .min()?
-                            .1;
-                        Some(Command::Move {
-                            destination: endpoint,
-                        })
-                    }
-                } else if let Location::AtArea(destination) = *target {
-                    Some(Command::Move { destination })
-                } else {
-                    None
-                }
-            }
-            _ => None,
+            game_transport::RouteIntent::Transport(action) => Some(Command::Transport { action }),
         }
     }
 }
@@ -1450,6 +1334,81 @@ mod tests {
                 }
             })
         );
+        assert_eq!(delivery.remaining, Quantity(1_000));
+    }
+    #[test]
+    fn acquisition_uses_known_partial_stock_without_public_action_list_truncation() {
+        let mut sim = Simulation::property_fixture(9, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        let custodian = sim.state.people[3].id;
+        let mut source = InventoryId(0);
+        for _ in 0..25 {
+            source = sim
+                .debug_add_inventory(
+                    Good::Food,
+                    InventoryLocation::Area(AreaId(1)),
+                    Quantity(600),
+                    Quantity(1_000),
+                    BTreeSet::from([custodian]),
+                )
+                .unwrap();
+            sim.state
+                .agreements
+                .as_mut()
+                .unwrap()
+                .custodians
+                .insert(source, custodian);
+        }
+        let mind = sim
+            .state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&actor)
+            .unwrap();
+        mind.knowledge.clear();
+        mind.sites.clear();
+        mind.personality.honesty = 0;
+        mind.personality.risk_tolerance = 900;
+        remember(&mut sim, source, AreaId(1), Good::Food, false);
+        sim.state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&actor)
+            .unwrap()
+            .knowledge
+            .get_mut(&source)
+            .unwrap()
+            .quantity = Quantity(600);
+        assert!(!sim.available_property_commands(actor).iter().any(|command| matches!(command,
+            Command::Property { action: PropertyAction::RequestAccess { inventory } } if *inventory == source)));
+        let delivery = Delivery::new(
+            Requirement {
+                good: Good::Food,
+                quantity: Quantity(1_000),
+                source: None,
+            },
+            Destination::Contact(actor),
+        )
+        .unwrap();
+        let before = sim.state.clone();
+        assert!(
+            sim.property_acquisition_offers(actor, Good::Food, Quantity(1_000))
+                .iter()
+                .any(|offer| matches!(offer.action, Command::Property {
+                action: PropertyAction::Take { source: from, quantity: Quantity(600), .. }
+            } if from == source))
+        );
+        assert_eq!(
+            sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
+            Step::Acquire(Command::Property {
+                action: PropertyAction::RequestAccess { inventory: source }
+            })
+        );
+        assert_eq!(sim.state, before);
         assert_eq!(delivery.remaining, Quantity(1_000));
     }
 }

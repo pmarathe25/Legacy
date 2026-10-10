@@ -786,3 +786,38 @@ fn taking_completion_preflights_actual_balances_and_stale_opening_partitions() {
     assert_eq!(prepared.commit(&mut world), Err(Error::Unavailable));
     assert_eq!(world, before);
 }
+
+#[test]
+fn permission_preparation_needs_no_cargo_yield_and_never_offers_a_zero_quantity_taking() {
+    let world = world();
+    let before = world.clone();
+    let offers = world.acquisition_opportunities(
+        AcquisitionFacts {
+            actor: actor(1, 0),
+            good: Good::Water,
+            destination: Some(InventoryId(11)),
+            quantity: Quantity(0),
+        },
+        &[NeedOpportunity {
+            known: StockKnowledge {
+                inventory: InventoryId(10),
+                area: AreaId(5),
+                good: Good::Water,
+                quantity: Quantity(500),
+                accessible: false,
+                observed_at: SimTime(0),
+                learned_at: SimTime(0),
+                source: KnowledgeSource::Observed(PersonId(1)),
+            },
+            local_custodian: true,
+            can_take: true,
+        }],
+    );
+    assert_eq!(
+        offers,
+        vec![PropertyAction::RequestAccess {
+            inventory: InventoryId(10)
+        }]
+    );
+    assert_eq!(world, before);
+}

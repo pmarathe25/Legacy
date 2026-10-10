@@ -4,6 +4,9 @@ use game_core::{AreaId, Error, Location, PersonId, Quantity, SimDuration, SimTim
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod routes;
+pub use routes::{KnownRoutes, RouteIntent, route_intent};
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rules {
     pub adult_mass: Quantity,
