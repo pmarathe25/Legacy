@@ -8,6 +8,9 @@ macro_rules! id {
     )*};
 }
 id!(
+    ArmyId,
+    ArmyOrderId,
+    ArmyReportId,
     RealmCommitmentId,
     EnforcementCaseId,
     JudgmentId,

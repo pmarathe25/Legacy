@@ -1,6 +1,8 @@
 //! Renderer-independent commands and committed observations. Time is in milliseconds;
 //! quantities use 1,000 fixed-point units per whole good.
+pub use game_armies::{ArmyAction, ArmyView};
 pub use game_core::*;
+pub use game_realm::{Action as RealmAction, View as RealmView};
 use serde::{Deserialize, Serialize};
 pub mod agreements;
 pub use agreements::*;
@@ -28,6 +30,12 @@ pub use enforcement::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
+    Army {
+        action: ArmyAction,
+    },
+    Realm {
+        action: RealmAction,
+    },
     Transport {
         action: TransportAction,
     },
@@ -155,6 +163,8 @@ pub struct AreaView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerView {
+    pub armies: Vec<ArmyView>,
+    pub realm: RealmView,
     pub transport: Option<TransportView>,
     pub genetics: Option<game_genetics::Phenotype>,
     pub social: Option<SocialView>,
@@ -190,6 +200,21 @@ pub struct PlayerView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Activity {
+    ArmyApproach {
+        mission: MissionId,
+        encounter: EncounterId,
+        completes: SimTime,
+    },
+    ArmyTalk {
+        army: ArmyId,
+        listener: PersonId,
+        completes: SimTime,
+    },
+    RealmTalk {
+        commitment: RealmCommitmentId,
+        recipient: PersonId,
+        completes: SimTime,
+    },
     Lift {
         passenger: PersonId,
         completes: SimTime,
@@ -350,6 +375,27 @@ pub struct PhysicalView {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    RealmProposed {
+        commitment: RealmCommitmentId,
+        actor: PersonId,
+        revision: u32,
+    },
+    RealmReported {
+        commitment: RealmCommitmentId,
+        sender: PersonId,
+        recipient: PersonId,
+    },
+    RealmWorkRequested {
+        key: game_realm::TermKey,
+        actor: PersonId,
+    },
+    RealmRatified {
+        commitment: RealmCommitmentId,
+        revision: u32,
+        institution: InstitutionId,
+        proposal: RuleProposalId,
+        adopted: bool,
+    },
     Socialized {
         first: PersonId,
         second: PersonId,

@@ -97,23 +97,17 @@ impl Simulation {
             body.health_remainder = 0;
         }
     }
-    pub fn survival_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
-        let mut sim = Self::kernel_fixture(seed, 15, execution)?;
-        sim.state.scenario = scenarios().remove(1);
-        let village = sim.state.areas[0].id;
-        let forest = sim.state.areas[2].id;
-        let people: BTreeSet<_> = sim.state.people.iter().map(|p| p.id).collect();
-        let rules = Rules {
-            hunger_harm: 600_000,
-            fatigue_limit: 300_000,
-            max_health: 180_000,
-            meal_relief: 300_000,
-            meal_size: Quantity(1_000),
-            eating_time: MINUTE,
-            loading_time: MINUTE,
-            carrying_capacity: Quantity(10_000),
-        };
-        let actors = sim
+    pub(crate) fn initialize_physical_people(&mut self, rules: Rules) -> Result<(), Error> {
+        if self.state.physical.is_some()
+            || rules.max_health == 0
+            || rules.fatigue_limit == 0
+            || rules.eating_time.0 == 0
+            || rules.loading_time.0 == 0
+            || rules.carrying_capacity.0 == 0
+        {
+            return Err(Error::InvalidConfiguration("invalid initial bodies".into()));
+        }
+        let actors = self
             .state
             .people
             .iter()
@@ -135,11 +129,30 @@ impl Simulation {
                 )
             })
             .collect();
-        sim.state.physical = Some(World {
+        self.state.physical = Some(World {
             rules,
             actors,
             sites: BTreeMap::new(),
         });
+        Ok(())
+    }
+    pub fn survival_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
+        let mut sim = Self::kernel_fixture(seed, 15, execution)?;
+        sim.state.scenario = scenarios().remove(1);
+        let village = sim.state.areas[0].id;
+        let forest = sim.state.areas[2].id;
+        let people: BTreeSet<_> = sim.state.people.iter().map(|p| p.id).collect();
+        let rules = Rules {
+            hunger_harm: 600_000,
+            fatigue_limit: 300_000,
+            max_health: 180_000,
+            meal_relief: 300_000,
+            meal_size: Quantity(1_000),
+            eating_time: MINUTE,
+            loading_time: MINUTE,
+            carrying_capacity: Quantity(10_000),
+        };
+        sim.initialize_physical_people(rules)?;
         let food = *sim.state.inventories.keys().next_back().unwrap();
         sim.state.inventories.get_mut(&food).unwrap().quantity = Quantity(100_000);
         let timber = sim.debug_add_inventory(
@@ -652,7 +665,10 @@ impl Simulation {
             self.preflight_enterprise_input(site, *quantity)?;
         }
         self.ensure_event_capacity(3)?;
+        let phase_started = Instant::now();
         self.interrupt_actor_activity(actor);
+        self.profile
+            .record_phase("physical.interrupt_actor_activity", phase_started);
         if let Some((source, quantity)) = consume {
             self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
             self.emit(EventKind::Consumed {
@@ -724,10 +740,22 @@ impl Simulation {
         if let Activity::Unbind { target, completes } = activity {
             self.force_release_started(actor, target, completes)?;
         }
+        let phase_started = Instant::now();
         self.update_property_events();
+        self.profile
+            .record_phase("physical.update_property_events", phase_started);
+        let phase_started = Instant::now();
         self.reconcile_agreements()?;
+        self.profile
+            .record_phase("physical.reconcile_agreements", phase_started);
+        let phase_started = Instant::now();
         self.observe_agreement_events();
+        self.profile
+            .record_phase("physical.observe_agreement_events", phase_started);
+        let phase_started = Instant::now();
         self.reconcile_institutions()?;
+        self.profile
+            .record_phase("physical.reconcile_institutions", phase_started);
         self.revision += 1;
         Ok(())
     }
@@ -844,6 +872,7 @@ impl Simulation {
                 | Activity::Take { .. }
                 | Activity::Construct { .. }
                 | Activity::Combat { .. }
+                | Activity::ArmyApproach { .. }
                 | Activity::Play { .. }
                 | Activity::Cultivate { .. }
         ) || self.transport_exerting(actor)
@@ -999,6 +1028,10 @@ impl Simulation {
         let activity = self.state.physical.as_ref().unwrap().actors[&actor]
             .activity
             .clone();
+        if matches!(activity, Activity::RealmTalk { .. }) {
+            self.complete_realm_talk(actor);
+            return;
+        }
         if matches!(activity, Activity::Lift { .. }) {
             self.complete_transport_lift(actor);
             return;

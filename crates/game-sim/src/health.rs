@@ -997,7 +997,12 @@ impl Simulation {
                 {
                     return true;
                 }
-                Activity::Tell { recipient, .. } if recipient == receiver => return true,
+                Activity::Tell { recipient, .. } | Activity::RealmTalk { recipient, .. }
+                    if recipient == receiver =>
+                {
+                    return true;
+                }
+                Activity::ArmyTalk { listener, .. } if listener == receiver => return true,
                 _ => {}
             }
         }
@@ -1159,7 +1164,10 @@ impl Simulation {
                 Activity::Care { child, .. } | Activity::Comfort { child, .. } => {
                     add_pair(*actor, child, false)
                 }
-                Activity::Tell { recipient, .. } => add_pair(*actor, recipient, false),
+                Activity::Tell { recipient, .. } | Activity::RealmTalk { recipient, .. } => {
+                    add_pair(*actor, recipient, false)
+                }
+                Activity::ArmyTalk { listener, .. } => add_pair(*actor, listener, false),
                 _ => {}
             }
         }
@@ -1779,6 +1787,19 @@ impl Simulation {
                 .known
                 .entry(observer)
                 .or_default();
+            if let Some(area) = area {
+                if knowledge.water_searched.len() == 16
+                    && !knowledge.water_searched.contains_key(&area)
+                    && let Some(oldest) = knowledge
+                        .water_searched
+                        .iter()
+                        .min_by_key(|(id, at)| (**at, **id))
+                        .map(|(id, _)| *id)
+                {
+                    knowledge.water_searched.remove(&oldest);
+                }
+                knowledge.water_searched.insert(area, self.state.time);
+            }
             for (person, symptoms) in people {
                 knowledge.people.insert(*person, symptoms.clone());
             }
@@ -1925,7 +1946,10 @@ impl Simulation {
                         && self.health_remembered_source_here(actor, s)
                         && s.quantity >= w.rules.drink_quantity
                 })
-                .min_by_key(|s| s.inventory)?;
+                .min_by_key(|s| s.inventory);
+            let Some(stock) = stock else {
+                return self.health_water_procurement(actor);
+            };
             let safety = w
                 .known
                 .get(&actor)
@@ -1997,6 +2021,70 @@ impl Simulation {
             });
         }
         None
+    }
+    /// Procurement reads remembered leads. Execution revalidates real access,
+    /// quantity and capacity after the person actually reaches the source.
+    pub(crate) fn health_water_procurement(&self, actor: PersonId) -> Option<Command> {
+        let world = self.state.health.as_ref()?;
+        let area = self.health_area(actor, true).ok()?;
+        if self.resolved_location(actor) != Location::AtArea(area) {
+            return None;
+        }
+        let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
+        if let Some(command) = self.ecology_water_candidate(actor, true) {
+            return Some(command);
+        }
+        // A remote quantity is a dated lead, not a reservation or current fact.
+        if let Some((_, stock)) = mind
+            .knowledge
+            .values()
+            .filter(|s| {
+                s.good == Good::Water
+                    && s.accessible
+                    && s.quantity >= world.rules.drink_quantity
+                    && s.area != area
+            })
+            .filter_map(|s| {
+                decisions::known_path(&mind.routes, area, s.area)
+                    .ok()
+                    .map(|(_, cost)| (cost, s))
+            })
+            .min_by_key(|(cost, s)| (*cost, s.inventory))
+        {
+            return Some(Command::Move {
+                destination: stock.area,
+            });
+        }
+        if let Some(command) = self.ecology_water_candidate(actor, false) {
+            return Some(command);
+        }
+        // Ask an actual present custodian. The normal property command retains
+        // their refusal, personal judgment and request cooldown.
+        if let Some(command) = self.available_property_commands(actor).into_iter().find(|c| {
+            matches!(c, Command::Property {action:PropertyAction::RequestAccess {inventory}}
+                if mind.knowledge.get(inventory).is_some_and(|s|s.good==Good::Water && s.quantity>=world.rules.drink_quantity))
+        }) {
+            return Some(command);
+        }
+        let searched = world.known.get(&actor).map(|k| &k.water_searched);
+        // Search at most sixteen personally known places per retry interval.
+        // A dry observation eventually becomes stale; it is not permanent truth.
+        mind.routes
+            .keys()
+            .take(16)
+            .filter(|destination| **destination != area)
+            .filter(|destination| {
+                searched.and_then(|k| k.get(destination)).is_none_or(|at| {
+                    self.state.time.0.saturating_sub(at.0) >= world.rules.water_search_retry.0
+                })
+            })
+            .filter_map(|destination| {
+                decisions::known_path(&mind.routes, area, *destination)
+                    .ok()
+                    .map(|(_, cost)| (cost, *destination))
+            })
+            .min_by_key(|(cost, destination)| (*cost, *destination))
+            .map(|(_, destination)| Command::Move { destination })
     }
     pub(crate) fn health_actor_busy(&self, actor: PersonId) -> bool {
         self.state
@@ -3529,6 +3617,7 @@ mod index_tests {
                 })
                 .collect();
             let knowledge = known.entry(observer.id).or_default();
+            knowledge.water_searched.insert(area, sim.state.time);
             knowledge.people.extend(people);
             knowledge.shelters.extend(shelters);
         }

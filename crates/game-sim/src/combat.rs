@@ -11,6 +11,7 @@ impl Simulation {
         sim.state.scenario = scenarios().remove(4);
         // These rates and starting bindings belong to this explicit fixture.
         let rules = Rules {
+            encounter_limit: 128,
             round: SimDuration(6_000),
             movement: 5_000,
             reach: 2_000,
@@ -99,6 +100,7 @@ impl Simulation {
         let world = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
         let encounter = world.encounters.get(&id).ok_or(Error::Unavailable)?;
         if !encounter.active
+            || encounter.fighters.len() >= world.rules.encounter_limit
             || encounter.fighters.contains_key(&actor)
             || !encounter
                 .fighters
@@ -144,6 +146,50 @@ impl Simulation {
         if !map.clear(position, position) {
             return Err(Error::Unavailable);
         }
+        self.admit_combat_fighter(id, actor, team, position, joins_round)
+    }
+    pub(crate) fn admit_local_army_approach(
+        &mut self,
+        approach: &armies::Approach,
+    ) -> Result<(), Error> {
+        let (team, position) = self.validate_army_approach(approach, true)?;
+        let w = self.state.combat.as_ref().unwrap();
+        let e = &w.encounters[&approach.encounter];
+        if e.fighters.len() >= w.rules.encounter_limit
+            || self
+                .state
+                .armies
+                .as_ref()
+                .unwrap()
+                .approaches
+                .get(&approach.actor)
+                != Some(approach)
+            || self.state.physical.as_ref().unwrap().actors[&approach.actor].activity
+                != (Activity::ArmyApproach {
+                    mission: approach.mission,
+                    encounter: approach.encounter,
+                    completes: approach.completes,
+                })
+        {
+            return Err(Error::Unavailable);
+        }
+        let joins_round = e.round.checked_add(1).ok_or(Error::Overflow)?;
+        self.admit_combat_fighter(
+            approach.encounter,
+            approach.actor,
+            team,
+            position,
+            joins_round,
+        )
+    }
+    fn admit_combat_fighter(
+        &mut self,
+        id: EncounterId,
+        actor: PersonId,
+        team: u32,
+        position: Point,
+        joins_round: u64,
+    ) -> Result<(), Error> {
         self.ensure_event_capacity(1)?;
         self.interrupt_actor_activity(actor);
         self.state
@@ -362,7 +408,8 @@ impl Simulation {
         participants: Vec<(PersonId, u32)>,
     ) -> Result<EncounterId, Error> {
         let w = self.state.combat.as_ref().ok_or(Error::Unavailable)?;
-        if !(2..=32).contains(&participants.len())
+        if !w.rules.capacity_valid()
+            || !(2..=w.rules.encounter_limit).contains(&participants.len())
             || participants
                 .iter()
                 .map(|(_, team)| *team)
@@ -420,7 +467,45 @@ impl Simulation {
         );
         self.state.next_id.checked_add(2).ok_or(Error::Overflow)?;
         self.ensure_event_capacity(participants.len() * 8 + 2)?;
+        // An existing map can be fully obstructed; reject before allocating or
+        // interrupting anybody. Generated maps have clear deployment space.
+        let existing_map = w.maps.values().chain(w.road_maps.values()).find(|map| {
+            transport::location_position(&map.location, self.state.time)
+                .is_ok_and(|p| Some(p.key()) == place)
+        });
+        if existing_map.is_some_and(|map| {
+            participants
+                .iter()
+                .enumerate()
+                .any(|(i, (_, team))| map.deployment(i, *team).is_none())
+        }) {
+            return Err(Error::Unavailable);
+        }
         let map = self.ensure_combat_location_map(&location)?;
+        let positions: Vec<_> = participants
+            .iter()
+            .enumerate()
+            .map(|(i, (actor, team))| {
+                self.state
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .captivity
+                    .get(actor)
+                    .filter(|c| c.map == map)
+                    .map(|c| c.position)
+                    .or_else(|| {
+                        self.state
+                            .combat
+                            .as_ref()
+                            .unwrap()
+                            .map(map)
+                            .unwrap()
+                            .deployment(i, *team)
+                    })
+                    .ok_or(Error::Unavailable)
+            })
+            .collect::<Result<_, _>>()?;
         let id = EncounterId(allocate(&mut self.state)?);
         let mut fighters = BTreeMap::new();
         for (i, (actor, team)) in participants.into_iter().enumerate() {
@@ -433,19 +518,7 @@ impl Simulation {
                 .get_mut(&actor)
                 .unwrap()
                 .activity = Activity::Combat { encounter: id };
-            let position = self
-                .state
-                .combat
-                .as_ref()
-                .unwrap()
-                .captivity
-                .get(&actor)
-                .filter(|c| c.map == map)
-                .map(|captive| captive.position)
-                .unwrap_or(Point {
-                    x: 4_000 + if team == 0 { 0 } else { 2_000 },
-                    y: 8_000 + (i as i64 / 2) * 300,
-                });
+            let position = positions[i];
             fighters.insert(
                 actor,
                 Fighter {
@@ -1417,6 +1490,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let people_by_id: BTreeMap<_, _> = s.people.iter().map(|person| (person.id, person)).collect();
     let locations = transport::resolved_locations_for(s)?;
     if w.rules.round.0 == 0
+        || !w.rules.capacity_valid()
         || w.rules.movement > 1_000_000
         || w.rules.reach > 1_000_000
         || w.rules.damage == 0
@@ -1524,6 +1598,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         let map = w.map(e.map).ok_or_else(fail)?;
         let place = transport::location_position(&e.location, s.time)?.key();
         if *id != e.id
+            || !(2..=w.rules.encounter_limit).contains(&e.fighters.len())
             || e.area != map.area
             || !matches!(
                 e.location,

@@ -14,6 +14,7 @@ pub struct ObstacleView {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rules {
+    pub encounter_limit: usize,
     pub round: SimDuration,
     pub movement: u64,
     pub reach: u64,
@@ -91,6 +92,9 @@ pub struct TargetBody {
 }
 
 impl Rules {
+    pub fn capacity_valid(&self) -> bool {
+        (2..=4096).contains(&self.encounter_limit)
+    }
     pub fn can_fight(&self, body: TargetBody, captive: bool) -> bool {
         body.alive && body.health > self.incapacitation && !captive
     }
@@ -100,6 +104,54 @@ impl Rules {
 }
 
 impl Map {
+    /// Stable initial placement inside actual observed geometry. Existing small
+    /// encounter positions remain unchanged; larger groups wrap within bounds.
+    pub fn deployment(&self, index: usize, team: u32) -> Option<Point> {
+        if !(1..=1_000_000).contains(&self.width) || !(1..=1_000_000).contains(&self.height) {
+            return None;
+        }
+        let x = (4_000 + if team == 0 { 0 } else { 2_000 }).min(self.width);
+        let row = i64::try_from(index / 2).ok()?;
+        let y = 8_000i64.checked_add(row.checked_mul(300)?)?;
+        let preferred = Point { x, y };
+        if self.clear(preferred, preferred) {
+            return Some(preferred);
+        }
+        let wrapped = Point {
+            x,
+            y: y % (self.height + 1),
+        };
+        if self.clear(wrapped, wrapped) {
+            return Some(wrapped);
+        }
+        for offset in 0..64 {
+            let cell = (index % 64 + offset) % 64;
+            let p = Point {
+                x: self.width * (cell % 8 + 1) as i64 / 9,
+                y: self.height * (cell / 8 + 1) as i64 / 9,
+            };
+            if self.clear(p, p) {
+                return Some(p);
+            }
+        }
+        [
+            Point { x: 0, y: 0 },
+            Point {
+                x: self.width,
+                y: 0,
+            },
+            Point {
+                x: 0,
+                y: self.height,
+            },
+            Point {
+                x: self.width,
+                y: self.height,
+            },
+        ]
+        .into_iter()
+        .find(|p| self.clear(*p, *p))
+    }
     pub fn contains(&self, p: Point) -> bool {
         p.x >= 0 && p.y >= 0 && p.x <= self.width && p.y <= self.height
     }
@@ -240,6 +292,47 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_deployments_remain_inside_clear_geometry_and_blocked_maps_have_no_spawn() {
+        let mut scene = Map {
+            id: CombatMapId(1),
+            version: 1,
+            area: AreaId(1),
+            location: Location::AtArea(AreaId(1)),
+            width: 24_000,
+            height: 16_000,
+            obstacles: vec![],
+            exits: vec![],
+        };
+        for index in 0..4096 {
+            let p = scene.deployment(index, (index % 2) as u32).unwrap();
+            assert!(scene.clear(p, p));
+            assert_eq!(scene.deployment(index, (index % 2) as u32), Some(p));
+            if index < 32 {
+                assert_eq!(
+                    p,
+                    Point {
+                        x: 4_000 + if index % 2 == 0 { 0 } else { 2_000 },
+                        y: 8_000 + (index as i64 / 2) * 300
+                    }
+                );
+            }
+        }
+        scene.obstacles = vec![ObstacleView {
+            index: 0,
+            minimum: Point { x: 0, y: 0 },
+            maximum: Point {
+                x: 24_000,
+                y: 16_000,
+            },
+            integrity: 1,
+        }];
+        assert_eq!(scene.deployment(0, 0), None);
+        scene.obstacles[0].integrity = 0;
+        assert!(scene.deployment(65, 1).is_some());
+        scene.height = i64::MAX;
+        assert_eq!(scene.deployment(65, 1), None);
+    }
     fn map() -> Map {
         Map {
             id: CombatMapId(1),
@@ -308,6 +401,7 @@ mod tests {
         let id = EncounterId(10);
         let mut world = World {
             rules: Rules {
+                encounter_limit: 128,
                 round: SimDuration(6_000),
                 movement: 5_000,
                 reach: 2_000,
@@ -381,6 +475,7 @@ mod tests {
             .collect();
         let mut world = World {
             rules: Rules {
+                encounter_limit: 128,
                 round: SimDuration(6_000),
                 movement: 5_000,
                 reach: 2_000,

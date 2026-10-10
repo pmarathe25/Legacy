@@ -10,6 +10,28 @@ pub use game_characters::development::{
 };
 
 impl Simulation {
+    pub(crate) fn initialize_life_people(
+        &mut self,
+        rules: Rules,
+        lives: BTreeMap<PersonId, Life>,
+    ) -> Result<(), Error> {
+        if self.state.development.is_some()
+            || !rules.valid()
+            || lives.len() != self.state.people.len()
+            || self.state.people.iter().any(|p| !lives.contains_key(&p.id))
+        {
+            return Err(Error::InvalidConfiguration("invalid initial lives".into()));
+        }
+        self.state.development = Some(World {
+            rules,
+            lives,
+            pregnancies: BTreeMap::new(),
+        });
+        for actor in self.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+            self.schedule_age(actor);
+        }
+        Ok(())
+    }
     pub fn life_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::autonomy_fixture(seed, execution)?;
         sim.state.scenario = scenarios().remove(3);
@@ -50,14 +72,7 @@ impl Simulation {
                 )
             })
             .collect();
-        sim.state.development = Some(World {
-            rules,
-            lives,
-            pregnancies: BTreeMap::new(),
-        });
-        for p in sim.state.people.clone() {
-            sim.schedule_age(p.id);
-        }
+        sim.initialize_life_people(rules, lives)?;
         let first = sim.state.people[3].id;
         let second = sim.state.people[4].id;
         for (id, partner) in [(first, second), (second, first)] {

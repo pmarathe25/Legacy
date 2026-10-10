@@ -8,6 +8,8 @@ use std::collections::BTreeSet;
 pub struct HealthRules {
     pub drink_quantity: Quantity,
     pub drink_relief: u64,
+    /// How long a personally searched dry place remains an unpromising lead.
+    pub water_search_retry: SimDuration,
     pub drinking_time: SimDuration,
     pub thirst_harm: u64,
     pub thirst_damage: u16,
@@ -40,6 +42,7 @@ impl HealthRules {
         Self {
             drink_quantity: Quantity(1_000),
             drink_relief: 8 * hour,
+            water_search_retry: SimDuration(8 * hour),
             drinking_time: SimDuration(30_000),
             thirst_harm: 24 * hour,
             thirst_damage: 2_000,

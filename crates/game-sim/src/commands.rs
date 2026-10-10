@@ -3,6 +3,28 @@
 use crate::*;
 
 impl Simulation {
+    pub(crate) fn conversation_actor_available(&self, actor: PersonId) -> bool {
+        self.state.physical.as_ref().is_some_and(|w| {
+            w.actors
+                .get(&actor)
+                .is_some_and(|body| matches!(body.activity, Activity::Idle | Activity::Rest))
+        }) && self.state.armies.as_ref().is_none_or(|w| {
+            !w.talks
+                .values()
+                .any(|t| t.speaker == actor || t.listener == actor)
+        }) && self.state.missions.as_ref().is_none_or(|w| {
+            !w.talks
+                .values()
+                .any(|t| t.speaker == actor || t.listener == actor)
+        }) && self.state.realm.as_ref().is_none_or(|w| {
+            !w.talks.contains_key(&actor) && !w.talks.values().any(|t| t.recipient == actor)
+        }) && self
+            .state
+            .social
+            .as_ref()
+            .is_none_or(|w| !w.participants.contains_key(&actor))
+    }
+
     pub(crate) fn submit_actor_action(
         &mut self,
         submission: Submission,
@@ -26,8 +48,24 @@ impl Simulation {
     }
 
     pub fn debug_actor_command(&mut self, actor: PersonId, command: Command) -> Result<(), Error> {
+        let started = Instant::now();
         self.preflight_agreements()?;
+        self.profile
+            .record_phase("command.preflight_agreements", started);
+        let started = Instant::now();
         self.preflight_institutions()?;
+        self.profile
+            .record_phase("command.preflight_institutions", started);
+        if let Command::Army { ref action } = command {
+            self.army_command(actor, action)?;
+            self.revision += 1;
+            return Ok(());
+        }
+        if let Command::Realm { ref action } = command {
+            self.realm_command(actor, action)?;
+            self.revision += 1;
+            return Ok(());
+        }
         if let Command::Social { ref action } = command {
             self.start_social(actor, action.clone())?;
             self.revision += 1;
@@ -113,6 +151,8 @@ impl Simulation {
         self.start_physical_action(actor, command)
     }
     pub(crate) fn interrupt_actor_activity(&mut self, actor: PersonId) {
+        self.interrupt_army_talk(actor);
+        self.interrupt_realm(actor);
         self.interrupt_transport_lift(actor);
         self.interrupt_social(actor);
         self.interrupt_enforcement(actor);

@@ -314,7 +314,9 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                if !self.enforcement_change_actor_allowed(actor, i, change, true) {
+                if !self.enforcement_change_actor_allowed(actor, i, change, true)
+                    || !self.realm_change_actor_allowed(actor, i, change, true)
+                {
                     return Err(Error::Unavailable);
                 }
                 self.validate_change(i, change)?;
@@ -334,6 +336,7 @@ impl Simulation {
                     },
                 );
                 self.publish_institution(*institution);
+                self.observe_realm()?;
             }
             InstitutionAction::Vote { proposal, support } => {
                 let p = w.proposals.get(proposal).ok_or(Error::Unavailable)?;
@@ -350,7 +353,9 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                if !self.enforcement_change_actor_allowed(actor, i, &p.change, false) {
+                if !self.enforcement_change_actor_allowed(actor, i, &p.change, false)
+                    || !self.realm_change_actor_allowed(actor, i, &p.change, false)
+                {
                     return Err(Error::Unavailable);
                 }
                 self.validate_change(i, &p.change)?;
@@ -919,6 +924,10 @@ impl Simulation {
     }
     fn validate_change(&self, i: &Institution, change: &InstitutionChange) -> Result<(), Error> {
         match change {
+            InstitutionChange::RatifyRegional { .. }
+            | InstitutionChange::AuthorizeRegionalPassage { .. } => {
+                self.validate_realm_change(i, change)
+            }
             InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. } => {
                 self.validate_enforcement_change(i, change)
             }
@@ -1059,9 +1068,20 @@ impl Simulation {
         if outcome == RuleProposalStatus::Adopted && external_enforcement {
             self.preflight_enforcement_adoption(institution, id)?;
         }
+        let external_realm = matches!(
+            proposal.change,
+            InstitutionChange::RatifyRegional { .. }
+                | InstitutionChange::AuthorizeRegionalPassage { .. }
+        );
+        if external_realm && outcome != RuleProposalStatus::Proposed {
+            self.preflight_realm_outcome(institution, id, outcome)?;
+        }
         plan.commit(self.state.institutions.as_mut().unwrap())?;
         if concept.is_some() {
             self.state.next_id += 1;
+        }
+        if external_realm && outcome != RuleProposalStatus::Proposed {
+            self.apply_realm_outcome(institution, id, outcome)?;
         }
         if outcome == RuleProposalStatus::Adopted {
             self.emit(EventKind::InstitutionChanged {
@@ -1305,14 +1325,18 @@ impl Simulation {
             .cloned()
             .collect();
         let last = self.state.next_event - 1;
-        for person in &self.state.people {
-            self.state
-                .institutions
-                .as_mut()
-                .unwrap()
-                .memories
-                .entry(person.id)
-                .or_default();
+        // Memory keys are validated person IDs, including the dead. Only new
+        // people can change coverage; ordinary actions need no population scan.
+        if w.memories.len() != self.state.people.len() {
+            for person in &self.state.people {
+                self.state
+                    .institutions
+                    .as_mut()
+                    .unwrap()
+                    .memories
+                    .entry(person.id)
+                    .or_default();
+            }
         }
         let attributable: BTreeSet<_> = events
             .iter()
@@ -1706,6 +1730,10 @@ impl Simulation {
         change: &InstitutionChange,
     ) -> i64 {
         match change {
+            InstitutionChange::RatifyRegional { .. }
+            | InstitutionChange::AuthorizeRegionalPassage { .. } => {
+                self.realm_vote_score(actor, change)
+            }
             InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. } => {
                 self.enforcement_vote_score(actor, i, change)
             }

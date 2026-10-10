@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-armies.workspace = true
+game-realm.workspace = true
 game-transport.workspace = true
 game-genetics.workspace = true
 game-missions.workspace = true
@@ -27,3 +29,7 @@ rayon.workspace = true
 name = "kernel"
 harness = false
 
+
+[[bench]]
+name = "full_world"
+harness = false

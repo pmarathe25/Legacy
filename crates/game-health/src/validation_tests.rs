@@ -62,6 +62,7 @@ impl Fixture {
         world.known.insert(
             PersonId(2),
             Knowledge {
+                water_searched: BTreeMap::new(),
                 people: BTreeMap::from([(
                     PersonId(1),
                     SymptomsView {

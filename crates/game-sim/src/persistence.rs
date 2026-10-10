@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 20;
+const SAVE_VERSION: u32 = 21;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -53,12 +53,17 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     genetics::validate(s)?;
     let fail = || Error::InvalidSave("inconsistent committed state".into());
     let playable = scenarios::PLAYABLE.contains(&s.scenario.id.as_str());
-    let enforcement_fixture = s.scenario.id == "enforcement-fixture";
+    let enforcement_fixture = matches!(
+        s.scenario.id.as_str(),
+        "enforcement-fixture" | "realm-fixture"
+    );
     let expanded_fixture = matches!(
         s.scenario.id.as_str(),
         "ecology-fixture" | "farm-enterprise-fixture"
     );
-    if (s.scenario.id == "transport-fixture" && s.transport.is_none())
+    if (playable && (s.realm.is_none() || s.armies.is_none()))
+        || (s.scenario.id == "realm-fixture" && s.realm.is_none())
+        || (s.scenario.id == "transport-fixture" && s.transport.is_none())
         || (s.scenario.id == "genetics-fixture" && s.genetics.is_none())
         || (!playable
             && !expanded_fixture
@@ -84,6 +89,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     | "invocation-fixture"
                     | "force-fixture"
                     | "mission-fixture"
+                    | "army-fixture"
             ) || s.scenario.version != 1
                 || !s.scenario.debug_fixture
                 || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
@@ -106,6 +112,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "invocation-fixture"
                         | "force-fixture"
                         | "mission-fixture"
+                        | "army-fixture"
                 ) != s.decisions.is_some()
                 || matches!(
                     s.scenario.id.as_str(),
@@ -135,6 +142,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "invocation-fixture"
                         | "force-fixture"
                         | "mission-fixture"
+                        | "army-fixture"
                 ) != s.combat.is_some()
                 || (s.scenario.id == "farming-fixture") != s.environment.is_some()
                 || matches!(
@@ -144,6 +152,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "institution-fixture"
                         | "project-fixture"
                         | "mission-fixture"
+                        | "army-fixture"
                 ) != s.agreements.is_some()
                 || matches!(
                     s.scenario.id.as_str(),
@@ -166,6 +175,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 || (s.scenario.id == "force-fixture" && s.force.is_none())
                 || (s.force.is_some() && s.combat.is_none())
                 || (s.scenario.id == "mission-fixture" && s.missions.is_none())
+                || (s.scenario.id == "army-fixture" && s.armies.is_none())
+                || (s.armies.is_some() && s.missions.is_none())
                 || (s.missions.is_some() && (s.combat.is_none() || s.agreements.is_none()))))
         || ((playable || expanded_fixture || enforcement_fixture) && s.scenario.version != 1)
         || (playable
@@ -352,6 +363,25 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
+    if let Some(world) = &s.armies {
+        for army in world.kernel.armies.values() {
+            for id in std::iter::once(army.id.0)
+                .chain(army.orders.keys().map(|id| id.0))
+                .chain(army.reports.keys().map(|id| id.0))
+            {
+                if id == 0 || id >= s.next_id || !ids.insert(id) {
+                    return Err(fail());
+                }
+            }
+        }
+    }
+    if let Some(world) = &s.realm {
+        for id in world.kernel.commitments.keys() {
+            if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
+                return Err(fail());
+            }
+        }
+    }
     if let Some(world) = &s.combat {
         for id in world
             .maps
@@ -440,7 +470,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|w| w.actors.get(id))
                         .ok_or_else(fail)?;
-                    if !matches!(actor.activity, Activity::Lift { completes, .. } | Activity::Social { completes, .. } | Activity::Instruction { completes, .. } | Activity::Practice { completes, .. } | Activity::EnforcementTalk { completes, .. } | Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
+                    if !matches!(actor.activity, Activity::RealmTalk { completes, .. } | Activity::Lift { completes, .. } | Activity::Social { completes, .. } | Activity::Instruction { completes, .. } | Activity::Practice { completes, .. } | Activity::EnforcementTalk { completes, .. } | Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
                         || !physical_deadlines.insert(*id)
                     {
                         return Err(fail());
@@ -602,6 +632,69 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         match event.kind {
+            EventKind::RealmProposed {
+                commitment,
+                actor,
+                revision,
+            } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .realm
+                        .as_ref()
+                        .and_then(|w| w.kernel.commitments.get(&commitment))
+                        .is_some_and(|c| c.revision(revision).is_some())
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::RealmReported {
+                commitment,
+                sender,
+                recipient,
+            } => {
+                if !people.contains_key(&sender)
+                    || !people.contains_key(&recipient)
+                    || !s
+                        .realm
+                        .as_ref()
+                        .is_some_and(|w| w.kernel.commitments.contains_key(&commitment))
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::RealmWorkRequested { key, actor } => {
+                if !people.contains_key(&actor)
+                    || !s
+                        .realm
+                        .as_ref()
+                        .and_then(|w| w.kernel.commitments.get(&key.commitment))
+                        .and_then(|c| c.revision(key.revision))
+                        .is_some_and(|r| usize::from(key.index) < r.proposal.terms.len())
+                {
+                    return Err(fail());
+                }
+            }
+            EventKind::RealmRatified {
+                commitment,
+                revision,
+                institution,
+                proposal,
+                ..
+            } => {
+                if !s
+                    .realm
+                    .as_ref()
+                    .and_then(|w| w.kernel.commitments.get(&commitment))
+                    .is_some_and(|c| c.revision(revision).is_some())
+                    || !s.institutions.as_ref().is_some_and(|w| {
+                        w.proposals
+                            .get(&proposal)
+                            .is_some_and(|p| p.institution == institution)
+                    })
+                {
+                    return Err(fail());
+                }
+            }
             EventKind::Socialized { first, second, .. }
             | EventKind::InstructionCompleted {
                 teacher: first,
@@ -1838,7 +1931,8 @@ fn validate_physical(
         }
         let timed = matches!(
             actor.activity,
-            Activity::Lift { .. }
+            Activity::RealmTalk { .. }
+                | Activity::Lift { .. }
                 | Activity::Social { .. }
                 | Activity::Instruction { .. }
                 | Activity::Practice { .. }

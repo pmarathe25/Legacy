@@ -1,5 +1,6 @@
 //! Authoritative headless simulation. Debug fixtures are never player scenarios.
 pub mod agreements;
+pub mod armies;
 #[doc(hidden)]
 pub mod benchmark;
 pub mod combat;
@@ -20,8 +21,10 @@ pub mod lineage;
 pub mod missions;
 mod persistence;
 pub mod physical;
+pub mod population;
 pub mod projects;
 pub mod property;
+pub mod realm;
 pub mod scenarios;
 pub mod session;
 pub mod skills;
@@ -51,11 +54,19 @@ impl Default for Execution {
 
 #[derive(Clone, Debug, Default)]
 pub struct Profile {
+    pub command_attempts: BTreeMap<&'static str, u64>,
+    pub phases_ns: BTreeMap<&'static str, u128>,
     pub evaluation_ns: u128,
     pub arbitration_ns: u128,
     pub commit_ns: u128,
     pub evaluated_people: u64,
     pub boundaries: u64,
+}
+
+impl Profile {
+    fn record_phase(&mut self, phase: &'static str, started: Instant) {
+        *self.phases_ns.entry(phase).or_default() += started.elapsed().as_nanos();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +137,8 @@ enum Due {
 /// Logical state in persistent ID order; excludes host publication counters and timings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalState {
+    pub armies: Option<armies::World>,
+    pub realm: Option<realm::World>,
     pub transport: Option<game_transport::World>,
     pub genetics: Option<game_genetics::World>,
     pub scenario: ScenarioInfo,
@@ -319,6 +332,16 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
             version: 1,
             debug_fixture: false,
         },
+        ScenarioInfo {
+            id: "army-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
+        ScenarioInfo {
+            id: "realm-fixture".into(),
+            version: 1,
+            debug_fixture: true,
+        },
     ]
 }
 
@@ -341,6 +364,9 @@ impl Simulation {
         if scenario == "mission-fixture" {
             return Self::mission_fixture(seed, execution);
         }
+        if scenario == "army-fixture" {
+            return Self::army_fixture(seed, execution);
+        }
         if scenario == "force-fixture" {
             return Self::force_fixture(seed, execution);
         }
@@ -352,6 +378,9 @@ impl Simulation {
         }
         if scenario == "enforcement-fixture" {
             return Self::enforcement_fixture(seed, execution);
+        }
+        if scenario == "realm-fixture" {
+            return Self::realm_fixture(seed, execution);
         }
         if scenario == "transport-fixture" {
             return Self::transport_fixture(seed, execution);
@@ -438,6 +467,8 @@ impl Simulation {
             institutions: None,
             skills: None,
             projects: None,
+            armies: None,
+            realm: None,
             invocation: None,
             force: None,
             missions: None,
@@ -602,6 +633,8 @@ impl Simulation {
             dependent_index,
         };
         sim.validate_environment()?;
+        sim.validate_realm()?;
+        sim.validate_armies()?;
         Ok(sim)
     }
 
@@ -778,6 +811,8 @@ impl Simulation {
             available_commands
                 .retain(|command| !matches!(command, Command::Work { .. } | Command::Load { .. }));
         }
+        available_commands.extend(self.available_army_commands(ruler.id));
+        available_commands.extend(self.available_realm_commands(ruler.id));
         available_commands.extend(self.available_transport_commands(ruler.id));
         available_commands.extend(self.available_cultivation(ruler.id));
         available_commands.extend(self.available_agreement_commands(ruler.id));
@@ -850,6 +885,8 @@ impl Simulation {
             available_commands.clear();
         }
         PlayerView {
+            armies: self.army_view(ruler.id),
+            realm: self.realm_view(ruler.id),
             transport: self.transport_view(ruler.id),
             genetics: self.genetic_phenotype(ruler.id),
             social: self.social_view(ruler.id),
@@ -1207,9 +1244,9 @@ impl Simulation {
             let next = self.health_boundary(
                 self.social_boundary(self.mission_boundary(self.invocation_boundary(next))),
             )?;
-            let next = self.body_boundary(
-                self.skill_boundary(self.genetics_boundary(self.transport_boundary(next)?))?,
-            )?;
+            let next = self.body_boundary(self.skill_boundary(self.genetics_boundary(
+                self.transport_boundary(self.army_boundary(self.realm_boundary(next)))?,
+            ))?)?;
             let controlled = self.state.ruler;
             self.step(next)?;
             if controlled != self.state.ruler {
@@ -1341,6 +1378,8 @@ impl Simulation {
             .and_then(|id| id.checked_add(birth_ids))
             .and_then(|id| id.checked_add(self.invocation_allocation_bound(next)))
             .and_then(|id| id.checked_add(self.force_allocation_bound(&due)))
+            .and_then(|id| id.checked_add(self.realm_allocation_bound()))
+            .and_then(|id| id.checked_add(self.army_allocation_bound()))
             .and_then(|id| id.checked_add(self.mission_allocation_bound()))
             .and_then(|id| id.checked_add(self.health_allocation_bound(next)))
             .and_then(|id| id.checked_add(self.enforcement_allocation_bound()))
@@ -1349,6 +1388,7 @@ impl Simulation {
         self.preflight_combat(&due, next)?;
         self.preflight_force(&due)?;
         self.preflight_health(next)?;
+        self.preflight_armies_at(next)?;
         self.preflight_missions()?;
         self.preflight_agreements()?;
         self.preflight_institutions_at(next)?;
@@ -1365,6 +1405,7 @@ impl Simulation {
             .sum::<usize>()
             + self.state.people.len() * 2
             + self.mission_event_bound()
+            + self.army_event_bound()
             + self.health_event_bound()
             + self
                 .state
@@ -1489,6 +1530,7 @@ impl Simulation {
                             Activity::Escape { .. }
                                 | Activity::Restrain { .. }
                                 | Activity::Lift { .. }
+                                | Activity::RealmTalk { .. }
                         )
                     }) {
                         force_completions.push(actor);
@@ -1552,20 +1594,29 @@ impl Simulation {
                 self.emit(EventKind::Interrupted { actor });
             }
         }
+        let phase_started = Instant::now();
         self.commit_physical(physical_output, &closing_equipment);
+        self.profile
+            .record_phase("commit.commit_physical", phase_started);
         self.reconcile_transport();
         for actor in force_completions {
             if self.state.physical.as_ref().is_some_and(|w| {
                 matches!(
                     w.actors[&actor].activity,
-                    Activity::Escape { .. } | Activity::Restrain { .. } | Activity::Lift { .. }
+                    Activity::Escape { .. }
+                        | Activity::Restrain { .. }
+                        | Activity::Lift { .. }
+                        | Activity::RealmTalk { .. }
                 )
             }) {
                 self.complete_physical(actor);
             }
         }
         self.commit_skills(skill_output);
+        let phase_started = Instant::now();
         self.reconcile_health(&closing_equipment)?;
+        self.profile
+            .record_phase("commit.reconcile_health", phase_started);
         self.reconcile_social();
         self.observe_invocation_deaths()?;
         self.commit_invocation(invocation_output)?;
@@ -1601,6 +1652,7 @@ impl Simulation {
             }
         }
         self.reconcile_missions()?;
+        self.reconcile_armies()?;
         self.admit_due_mission_reinforcements();
         for event in lifecycle {
             if let Due::CombatRound(encounter) = event {
@@ -1610,20 +1662,61 @@ impl Simulation {
         self.observe_invocation_deaths()?;
         self.update_force();
         self.reconcile_missions()?;
+        self.reconcile_armies()?;
+        let phase_started = Instant::now();
         self.update_projects()?;
+        self.profile
+            .record_phase("commit.update_projects", phase_started);
+        let phase_started = Instant::now();
         self.update_property_events();
+        self.profile
+            .record_phase("commit.update_property_events", phase_started);
+        let phase_started = Instant::now();
         self.observe_ecology();
+        self.profile
+            .record_phase("commit.observe_ecology", phase_started);
+        let phase_started = Instant::now();
         self.observe_health();
+        self.profile
+            .record_phase("commit.observe_health", phase_started);
+        let phase_started = Instant::now();
         self.observe_enforcement();
+        self.profile
+            .record_phase("commit.observe_enforcement", phase_started);
+        let phase_started = Instant::now();
         self.reconcile_agreements()?;
+        self.profile
+            .record_phase("commit.reconcile_agreements", phase_started);
+        let phase_started = Instant::now();
         self.observe_agreement_events();
+        self.profile
+            .record_phase("commit.observe_agreement_events", phase_started);
+        let phase_started = Instant::now();
+        self.observe_realm()?;
+        self.profile
+            .record_phase("commit.observe_realm", phase_started);
+        let phase_started = Instant::now();
         self.reconcile_institutions()?;
+        self.profile
+            .record_phase("commit.reconcile_institutions", phase_started);
+        let phase_started = Instant::now();
         self.learn_from_work();
+        self.profile
+            .record_phase("commit.learn_from_work", phase_started);
+        let phase_started = Instant::now();
         self.refresh_genetics()?;
+        self.profile
+            .record_phase("commit.refresh_genetics", phase_started);
+        let phase_started = Instant::now();
         self.review_social()?;
+        self.profile
+            .record_phase("commit.review_social", phase_started);
         if self.state.time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
+            let phase_started = Instant::now();
             self.review_invocation()?;
+            self.profile
+                .record_phase("commit.review_invocation", phase_started);
         }
         self.revision += 1;
         self.profile.commit_ns += started.elapsed().as_nanos();

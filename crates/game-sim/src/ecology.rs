@@ -21,6 +21,7 @@ impl Simulation {
         let maximum = sim.state.physical.as_ref().unwrap().rules.max_health;
         sim.state.combat = Some(combat::World {
             rules: combat::Rules {
+                encounter_limit: 128,
                 round: SimDuration(6_000),
                 movement: 5_000,
                 reach: 2_000,
@@ -711,6 +712,80 @@ impl Simulation {
             }
         }
         commands
+    }
+    /// A remembered spring is a lead. The local available action performs the
+    /// real reservation, collection, access check and resistance resolution.
+    pub(crate) fn ecology_water_candidate(
+        &self,
+        actor: PersonId,
+        local_only: bool,
+    ) -> Option<Command> {
+        let world = self.state.ecology.as_ref()?;
+        if !self.ecology_able(actor) || world.jobs.contains_key(&actor) {
+            return None;
+        }
+        let area = self.ecology_area(actor)?;
+        let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
+        let traits = self
+            .invocation_personality(actor)
+            .unwrap_or_else(|| mind.personality.clone());
+        let may_take = traits.honesty < 250 && traits.risk_tolerance >= 700;
+        let local = self.available_ecology_commands(actor);
+        world
+            .known
+            .get(&actor)?
+            .values()
+            .filter(|s| s.kind == ResourceKind::Spring && (!local_only || s.area == area))
+            .filter(|s| s.available.0 >= 1_000)
+            .filter_map(|s| {
+                if s.area != area {
+                    if !s.accessible && !may_take {
+                        return None;
+                    }
+                    return decisions::known_path(&mind.routes, area, s.area).ok().map(
+                        |(_, cost)| {
+                            (
+                                cost,
+                                s.contamination,
+                                s.id,
+                                Command::Move {
+                                    destination: s.area,
+                                },
+                            )
+                        },
+                    );
+                }
+                // Permission requests are considered before a risky collection.
+                let command = if !s.accessible && !may_take {
+                    local.iter().find(|c| {
+                        matches!(c,
+                        Command::Ecology {action:EcologyAction::RequestAccess {resource}}
+                        if *resource==s.id && world.next_request.get(&actor)
+                            .and_then(|k|k.get(resource)).is_none_or(|at|*at<=self.state.time))
+                    })
+                } else {
+                    local.iter().find(|c| {
+                        matches!(c,
+                        Command::Ecology {action:EcologyAction::Gather {resource,..}}
+                        if *resource==s.id)
+                    })
+                }?;
+                Some((SimDuration(0), s.contamination, s.id, command.clone()))
+            })
+            .min_by_key(|(cost, contamination, id, command)| {
+                (
+                    *cost,
+                    matches!(
+                        command,
+                        Command::Ecology {
+                            action: EcologyAction::RequestAccess { .. }
+                        }
+                    ),
+                    *contamination,
+                    *id,
+                )
+            })
+            .map(|(_, _, _, command)| command)
     }
     pub(crate) fn ecology_candidate(&self, actor: PersonId) -> Option<Command> {
         let world = self.state.ecology.as_ref()?;

@@ -89,6 +89,7 @@ pub struct InstitutionalRule {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum OfficePower {
+    Negotiate,
     Adjudicate,
     Enforce,
     Access,
@@ -122,6 +123,16 @@ pub struct InstitutionCharter {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstitutionChange {
+    RatifyRegional {
+        commitment: RealmCommitmentId,
+        revision: u32,
+        support: bool,
+    },
+    AuthorizeRegionalPassage {
+        commitment: RealmCommitmentId,
+        revision: u32,
+        index: u16,
+    },
     EnforcementPolicy {
         office: u16,
         policy: Option<EnforcementPolicy>,
@@ -627,7 +638,10 @@ impl World {
                 after.status = InstitutionStatus::Dissolved;
                 after.grants.clear();
             }
-            InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. } => {
+            InstitutionChange::RatifyRegional { .. }
+            | InstitutionChange::AuthorizeRegionalPassage { .. }
+            | InstitutionChange::EnforcementPolicy { .. }
+            | InstitutionChange::Adjudicate { .. } => {
                 plan.external_change = Some(proposal.change.clone())
             }
         }

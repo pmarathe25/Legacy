@@ -83,7 +83,8 @@ impl Simulation {
                 "invalid playable development rules".into(),
             ));
         }
-        let mut sim = Self::farming_with_config(seed, execution, config.environment.clone())?;
+        let (mut sim, _) =
+            Self::initial_population(seed, execution, &config, population::Plan::small(), false)?;
         sim.state.time = SimTime(
             config
                 .environment
@@ -112,6 +113,8 @@ impl Simulation {
         sim.prepare_playable_people(&config)?;
         sim.install_playable_domains(&config)?;
         sim.initialize_transport(config.transport.clone())?;
+        sim.initialize_realm(realm::Rules::default())?;
+        sim.initialize_armies(armies::Rules::default())?;
         sim.seed_playable_resources()?;
         sim.seed_playable_workshop(id != "settlement-founder")?;
         if let Some(rules) = config.genetics.clone() {
@@ -261,7 +264,7 @@ impl Simulation {
         Ok(())
     }
 
-    fn install_playable_domains(&mut self, config: &Config) -> Result<(), Error> {
+    pub(crate) fn install_playable_domains(&mut self, config: &Config) -> Result<(), Error> {
         let people: BTreeSet<_> = self.state.people.iter().map(|p| p.id).collect();
         let ruler = self.state.ruler;
         let village = self.state.areas[0].id;
@@ -335,6 +338,7 @@ impl Simulation {
         });
         self.state.combat = Some(combat::World {
             rules: combat::Rules {
+                encounter_limit: 128,
                 round: SimDuration(6_000),
                 movement: 5_000,
                 reach: 2_000,
@@ -979,6 +983,7 @@ impl Simulation {
                 inventories: BTreeSet::from([food, fund]),
                 sites: BTreeSet::new(),
                 powers: BTreeSet::from([
+                    OfficePower::Negotiate,
                     OfficePower::Access,
                     OfficePower::Delivery,
                     OfficePower::HearAccessCases,

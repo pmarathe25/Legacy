@@ -37,6 +37,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 name = "game-api"
 version = "0.1.0"
 dependencies = [
+ "game-armies",
  "game-characters",
  "game-conflict",
  "game-core",
@@ -46,9 +47,20 @@ dependencies = [
  "game-invocation",
  "game-lineage",
  "game-missions",
+ "game-realm",
  "game-society",
  "game-transport",
  "serde",
+]
+
+[[package]]
+name = "game-armies"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-missions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -163,6 +175,7 @@ name = "game-sim"
 version = "0.1.0"
 dependencies = [
  "game-api",
+ "game-armies",
  "game-characters",
  "game-conflict",
  "game-core",
@@ -173,6 +186,7 @@ dependencies = [
  "game-lineage",
  "game-missions",
  "game-physiology",
+ "game-realm",
  "game-skills",
  "game-society",
  "game-transport",

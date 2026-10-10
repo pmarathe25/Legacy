@@ -99,6 +99,8 @@ pub struct Job {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Knowledge {
+    /// Actual local searches, never inferred from another person's report.
+    pub water_searched: BTreeMap<AreaId, SimTime>,
     pub people: BTreeMap<PersonId, SymptomsView>,
     pub shelters: BTreeMap<ShelterId, ShelterView>,
     pub water: BTreeMap<InventoryId, WaterSafetyView>,

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/game-realm", "crates/game-transport", "crates/game-genetics", "crates/game-missions", "crates/game-society", "crates/game-lineage", "crates/game-skills", "crates/game-conflict", "crates/game-invocation", "crates/game-physiology", "crates/game-health", "crates/game-characters", "crates/game-economy", "crates/game-core", "crates/game-api", "crates/game-sim", "crates/game-cli"]
+members = ["crates/game-armies", "crates/game-realm", "crates/game-transport", "crates/game-genetics", "crates/game-missions", "crates/game-society", "crates/game-lineage", "crates/game-skills", "crates/game-conflict", "crates/game-invocation", "crates/game-physiology", "crates/game-health", "crates/game-characters", "crates/game-economy", "crates/game-core", "crates/game-api", "crates/game-sim", "crates/game-cli"]
 resolver = "3"
 
 [workspace.package]
@@ -8,6 +8,7 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+game-armies = { path = "crates/game-armies" }
 game-realm = { path = "crates/game-realm" }
 game-transport = { path = "crates/game-transport" }
 game-genetics = { path = "crates/game-genetics" }

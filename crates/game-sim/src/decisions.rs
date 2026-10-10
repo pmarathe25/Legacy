@@ -40,10 +40,29 @@ struct Intention {
 }
 
 impl Simulation {
+    pub(crate) fn initialize_decision_people(
+        &mut self,
+        minds: BTreeMap<PersonId, Mind>,
+    ) -> Result<(), Error> {
+        if self.state.decisions.is_some()
+            || minds.len() != self.state.people.len()
+            || self.state.people.iter().any(|p| !minds.contains_key(&p.id))
+        {
+            return Err(Error::InvalidConfiguration("invalid initial minds".into()));
+        }
+        let work_concept = ConceptId(allocate(&mut self.state)?);
+        self.state.decisions = Some(World {
+            minds,
+            concepts: BTreeMap::from([(work_concept, Good::Food)]),
+            work_concept,
+            last_learning_event: self.state.next_event - 1,
+            switching_margin: 50,
+        });
+        Ok(())
+    }
     pub fn autonomy_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::survival_fixture(seed, execution)?;
         sim.state.scenario = scenarios().remove(2);
-        let work_concept = ConceptId(allocate(&mut sim.state)?);
         let minds = sim
             .state
             .people
@@ -89,13 +108,7 @@ impl Simulation {
                 )
             })
             .collect();
-        sim.state.decisions = Some(World {
-            minds,
-            concepts: BTreeMap::from([(work_concept, Good::Food)]),
-            work_concept,
-            last_learning_event: 0,
-            switching_margin: 50,
-        });
+        sim.initialize_decision_people(minds)?;
         sim.observe_local_facts();
         Ok(sim)
     }
@@ -321,19 +334,67 @@ impl Simulation {
         let Some(_) = self.state.decisions else {
             return Ok(());
         };
+        let phase_started = Instant::now();
         self.observe_local_facts();
+        self.profile
+            .record_phase("review.observe_local_facts", phase_started);
+        let phase_started = Instant::now();
         self.review_transport_choices()?;
+        self.profile
+            .record_phase("review.review_transport_choices", phase_started);
+        let phase_started = Instant::now();
         self.observe_projects();
+        self.profile
+            .record_phase("review.observe_projects", phase_started);
+        let phase_started = Instant::now();
         self.observe_property();
+        self.profile
+            .record_phase("review.observe_property", phase_started);
+        let phase_started = Instant::now();
         self.review_property_sharing();
+        self.profile
+            .record_phase("review.review_property_sharing", phase_started);
+        let phase_started = Instant::now();
         self.review_lineage()?;
+        self.profile
+            .record_phase("review.review_lineage", phase_started);
+        let phase_started = Instant::now();
         self.review_agreements()?;
+        self.profile
+            .record_phase("review.review_agreements", phase_started);
+        let phase_started = Instant::now();
         self.review_institutions()?;
+        self.profile
+            .record_phase("review.review_institutions", phase_started);
+        let phase_started = Instant::now();
+        self.review_realm()?;
+        self.profile
+            .record_phase("review.review_realm", phase_started);
+        let phase_started = Instant::now();
         self.review_health()?;
+        self.profile
+            .record_phase("review.review_health", phase_started);
+        let phase_started = Instant::now();
         self.review_enforcement()?;
+        self.profile
+            .record_phase("review.review_enforcement", phase_started);
+        let phase_started = Instant::now();
+        self.review_armies()?;
+        self.profile
+            .record_phase("review.review_armies", phase_started);
+        let phase_started = Instant::now();
         self.review_missions()?;
+        self.profile
+            .record_phase("review.review_missions", phase_started);
+        let phase_started = Instant::now();
         self.review_projects()?;
+        self.profile
+            .record_phase("review.review_projects", phase_started);
+        let phase_started = Instant::now();
         self.review_conception()?;
+        self.profile
+            .record_phase("review.review_conception", phase_started);
+        let phase_started = Instant::now();
         let world = self.state.decisions.as_ref().unwrap();
         let evaluate =
             |(id, mind): (&PersonId, &Mind)| self.decide(*id, mind, world.switching_margin);
@@ -343,6 +404,8 @@ impl Simulation {
             self.pool
                 .install(|| world.minds.par_iter().map(evaluate).collect())
         };
+        self.profile.record_phase("review.rank", phase_started);
+        let phase_started = Instant::now();
         // Equal claims use the same persistent rotating cursor as physical transfers.
         intentions.sort_by_key(|i| {
             let (resource, cursor) = match i.command {
@@ -365,11 +428,24 @@ impl Simulation {
             let Some(command) = i.command else {
                 continue;
             };
+            let phase_started = Instant::now();
+            let kind = match &command {
+                Command::Rest => "apply.Rest",
+                Command::Work { .. } => "apply.Work",
+                Command::Eat { .. } => "apply.Eat",
+                Command::Load { .. } => "apply.Load",
+                Command::Move { .. } => "apply.Move",
+                Command::Care { .. } => "apply.Care",
+                Command::Play { .. } => "apply.Play",
+                _ => "apply.Other",
+            };
+            *self.profile.command_attempts.entry(kind).or_default() += 1;
             let accepted = if let Command::Move { destination } = command {
                 self.start_movement(i.actor, destination)
             } else {
                 self.debug_actor_command(i.actor, command.clone())
             };
+            self.profile.record_phase(kind, phase_started);
             let mind = self
                 .state
                 .decisions
@@ -392,6 +468,7 @@ impl Simulation {
                 );
             }
         }
+        self.profile.record_phase("review.apply", phase_started);
         Ok(())
     }
 
@@ -405,6 +482,17 @@ impl Simulation {
             command: None,
             explanation: mind.explanation.clone(),
         };
+        if (self.army_actor_talking(id) || self.realm_actor_busy(id))
+            && actor.vitals.hunger < rules.meal_relief
+            && actor.vitals.fatigue < rules.fatigue_limit
+            && actor.vitals.health >= rules.max_health / 2
+            && !mind
+                .child_signals
+                .values()
+                .any(|signal| signal.urgency >= 20_000)
+        {
+            return none();
+        }
         if self.in_combat(id)
             || self.lineage_handles(id)
             || self.mission_actor_busy(id)

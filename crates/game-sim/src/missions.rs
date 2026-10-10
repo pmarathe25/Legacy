@@ -164,7 +164,7 @@ impl Simulation {
                     }
             })
     }
-    fn mission_objective_valid(&self, objective: &MissionObjective) -> bool {
+    pub(crate) fn mission_objective_valid(&self, objective: &MissionObjective) -> bool {
         let area = |id: &AreaId| self.state.areas.iter().any(|a| a.id == *id);
         match objective {
             MissionObjective::Visit { destination } => area(destination),
@@ -998,9 +998,14 @@ impl Simulation {
         let body = &self.state.physical.as_ref().unwrap().actors[&actor];
         let rules = &self.state.physical.as_ref().unwrap().rules;
         let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        if self.army_actor_talking(actor) || self.realm_actor_busy(actor) {
+            return;
+        }
         if matches!(
             body.activity,
             Activity::MissionTalk { .. }
+                | Activity::ArmyTalk { .. }
+                | Activity::ArmyApproach { .. }
                 | Activity::Eat { .. }
                 | Activity::Load { .. }
                 | Activity::Tell { .. }
@@ -1356,22 +1361,77 @@ impl Simulation {
             Location::AtArea(area) => area,
             _ => return,
         };
-        let m = &self.state.missions.as_ref().unwrap().missions[&id];
-        let allies: Vec<_> = m
-            .members
+        if let Some(encounter) = self
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters
             .values()
-            .filter(|member| {
+            .find(|e| e.active && e.fighters.contains_key(&target))
+            .map(|e| e.id)
+        {
+            let _ = self.start_army_approach(actor, id, encounter);
+            return;
+        }
+        let linked = self.army_allied_missions(id);
+        let allies: BTreeSet<_> = linked
+            .iter()
+            .flat_map(|mission| {
+                self.state.missions.as_ref().unwrap().missions[mission]
+                    .members
+                    .values()
+                    .map(|member| (*mission, member))
+            })
+            .filter(|(mission, member)| {
                 member.person != self.state.ruler
                     && member.status == CompanionStatus::Accepted
                     && self.state.people[self.person_index[&member.person]].location
                         == Location::AtArea(area)
                     && self.can_fight(member.person)
                     && !self.in_combat(member.person)
+                    && member.directive.requires_force()
+                    && member.directive.target_person() == Some(target)
+                    && (*mission == id
+                        || self.mission_force_willing(member.person, *mission, target))
             })
-            .map(|member| (member.person, 0))
+            .map(|(_, member)| member.person)
+            .collect();
+        let participants = allies
+            .into_iter()
+            .map(|p| (p, 0))
             .chain([(target, 1)])
             .collect();
-        let _ = self.debug_start_encounter(allies);
+        let _ = self.debug_start_encounter(participants);
+    }
+    pub(crate) fn mission_force_willing(
+        &self,
+        actor: PersonId,
+        id: MissionId,
+        target: PersonId,
+    ) -> bool {
+        let Some(m) = self
+            .state
+            .missions
+            .as_ref()
+            .and_then(|w| w.missions.get(&id))
+        else {
+            return false;
+        };
+        let Some(member) = m.members.get(&actor) else {
+            return false;
+        };
+        if member.status != CompanionStatus::Accepted
+            || !member.directive.requires_force()
+            || member.directive.target_person() != Some(target)
+            || self.guardian_mission_duty(actor, id)
+        {
+            return false;
+        }
+        let mut proposed = m.clone();
+        proposed.proposal.objective = member.directive.clone();
+        let offer = &self.state.missions.as_ref().unwrap().recruitments[&member.recruitment];
+        actor == self.state.ruler || self.recruitment_score(actor, &proposed, offer) >= 0
     }
     pub(crate) fn mission_combat_order(
         &mut self,
@@ -1383,6 +1443,45 @@ impl Simulation {
         let leader = self.state.missions.as_ref().unwrap().missions[&id]
             .proposal
             .leader;
+        self.apply_mission_order(id, leader, objective);
+        Ok(())
+    }
+    /// A leader considers the new objective using their own original service
+    /// terms, remembered trust, bodily needs and guardian commitments.
+    pub(crate) fn mission_leader_judgment(
+        &self,
+        leader: PersonId,
+        id: MissionId,
+        objective: &MissionObjective,
+    ) -> Result<i64, Error> {
+        self.validate_mission_combat_order(leader, id, objective)?;
+        let m = &self.state.missions.as_ref().unwrap().missions[&id];
+        if m.proposal.leader != leader {
+            return Err(Error::Unavailable);
+        }
+        let mut offered = m.clone();
+        offered.proposal.objective = objective.clone();
+        let offer =
+            &self.state.missions.as_ref().unwrap().recruitments[&m.members[&leader].recruitment];
+        Ok(self.recruitment_score(leader, &offered, offer))
+    }
+    /// The caller has already completed actual communication and obtained this
+    /// named leader's choice. Local companions still choose independently.
+    pub(crate) fn apply_accepted_leader_objective(
+        &mut self,
+        leader: PersonId,
+        id: MissionId,
+        objective: MissionObjective,
+    ) -> Result<(), Error> {
+        self.validate_mission_combat_order(leader, id, &objective)?;
+        if self.state.missions.as_ref().unwrap().missions[&id]
+            .proposal
+            .leader
+            != leader
+            || self.in_combat(leader)
+        {
+            return Err(Error::Unavailable);
+        }
         self.apply_mission_order(id, leader, objective);
         Ok(())
     }
@@ -2608,11 +2707,21 @@ impl Simulation {
                     .flat_map(|w| w.encounters.values())
                     .filter(|e| e.active && e.area == area)
                 {
+                    let linked = self.army_allied_missions(m.id);
                     if let Some(ally) = encounter.fighters.values().find(|f| {
-                        m.members
-                            .get(&f.actor)
-                            .is_some_and(|p| p.status == CompanionStatus::Accepted)
-                            && !f.withdrawn
+                        linked.iter().any(|id| {
+                            w.missions[id].members.get(&f.actor).is_some_and(|p| {
+                                p.status == CompanionStatus::Accepted
+                                    && (*id == m.id
+                                        || member.directive.target_person().is_some_and(|target| {
+                                            self.mission_force_willing(member.person, m.id, target)
+                                                && encounter
+                                                    .fighters
+                                                    .get(&target)
+                                                    .is_some_and(|enemy| enemy.team != f.team)
+                                        }))
+                            })
+                        }) && !f.withdrawn
                             && !f.surrendered
                     }) {
                         candidates.push((encounter.id, member.person, ally.team, from));
@@ -2971,7 +3080,7 @@ impl Simulation {
         }
         self.ensure_event_capacity(m.members.len() + 1)
     }
-    fn guardian_mission_duty(&self, actor: PersonId, id: MissionId) -> bool {
+    pub(crate) fn guardian_mission_duty(&self, actor: PersonId, id: MissionId) -> bool {
         if self.state.people[self.person_index[&actor]].role != Role::Guardian {
             return false;
         }
