@@ -7,6 +7,23 @@ use game_society::institutions::{
 };
 pub use game_society::institutions::{Institution, RuleProposal, SocialMemory, World};
 
+struct InstitutionalVotingKnowledge<'a> {
+    stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
+    custodians: &'a BTreeMap<InventoryId, PersonId>,
+    relationships: &'a BTreeMap<PersonId, decisions::Relationship>,
+}
+impl game_society::voting::VotingKnowledge for InstitutionalVotingKnowledge<'_> {
+    fn stock(&self, id: InventoryId) -> Option<&StockKnowledge> {
+        self.stocks.get(&id)
+    }
+    fn custodian(&self, id: InventoryId) -> Option<PersonId> {
+        self.custodians.get(&id).copied()
+    }
+    fn trust(&self, id: PersonId) -> i32 {
+        self.relationships.get(&id).map_or(0, |row| row.trust)
+    }
+}
+
 impl Simulation {
     pub fn institution_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::agreement_fixture(seed, execution)?;
@@ -1398,50 +1415,36 @@ impl Simulation {
         Ok(())
     }
 
-    fn learned_rule_score(&self, actor: PersonId, rule: &InstitutionalRule) -> i64 {
-        let w = self.host.state.institutions.as_ref().unwrap();
-        let Some(memory) = w.memories.get(&actor) else {
-            return 0;
-        };
-        memory
-            .values
-            .iter()
-            .rev()
-            .take(32)
-            .map(|(id, value)| {
-                let old = &w.concepts[id];
-                let same = match (&old.effect, &rule.effect) {
-                    (
-                        SocialEffect::Access {
-                            inventory: a,
-                            allowed: aa,
-                        },
-                        SocialEffect::Access {
-                            inventory: b,
-                            allowed: ba,
-                        },
-                    ) => a == b && aa == ba,
-                    (SocialEffect::Labor { site: a, .. }, SocialEffect::Labor { site: b, .. }) => {
-                        a == b
-                    }
-                    (
-                        SocialEffect::Delivery {
-                            source: a,
-                            destination: ad,
-                            ..
-                        },
-                        SocialEffect::Delivery {
-                            source: b,
-                            destination: bd,
-                            ..
-                        },
-                    ) => a == b && ad == bd,
-                    _ => false,
-                };
-                if same { i64::from(value.weight) } else { 0 }
-            })
-            .sum::<i64>()
-            .clamp(-4_000, 4_000)
+    fn institutional_vote_knowledge(&self, actor: PersonId) -> InstitutionalVotingKnowledge<'_> {
+        let mind = game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+            .expect("institutional actor has a mind");
+        InstitutionalVotingKnowledge {
+            stocks: &mind.knowledge,
+            custodians: &self
+                .host
+                .state
+                .agreements
+                .as_ref()
+                .expect("agreements are installed")
+                .custodians,
+            relationships: &mind.relationships,
+        }
+    }
+    fn institutional_vote_facts<'a>(
+        &self,
+        actor: PersonId,
+        knowledge: &'a dyn game_society::voting::VotingKnowledge,
+    ) -> game_society::voting::VoterFacts<'a> {
+        let mind = game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+            .expect("institutional actor has a mind");
+        game_society::voting::VoterFacts {
+            actor,
+            local_area: self.social_area(actor).ok(),
+            autonomous: actor != self.host.state.ruler,
+            empathy: mind.personality.empathy,
+            supports_others: mind.dream == decisions::Aspiration::SupportOthers,
+            knowledge,
+        }
     }
     fn rule_vote_score(
         &self,
@@ -1449,104 +1452,28 @@ impl Simulation {
         charter: &InstitutionCharter,
         rule: &InstitutionalRule,
     ) -> i64 {
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap();
-        let recipient = rule.subjects.members
-            || rule.subjects.named.contains(&actor)
-            || rule.subjects.offices.iter().any(|slot| {
-                charter
-                    .offices
-                    .iter()
-                    .any(|o| o.slot == *slot && o.holder == actor)
-            });
-        let mut score = i64::from(mind.personality.empathy) - 500;
-        match rule.effect {
-            SocialEffect::Access { inventory, allowed } => {
-                if recipient
-                    && mind
-                        .knowledge
-                        .get(&inventory)
-                        .is_some_and(|k| k.quantity.0 >= 1_000)
-                {
-                    score += if allowed { 1_200 } else { -1_200 };
-                }
-                if self
-                    .host
-                    .state
-                    .agreements
-                    .as_ref()
-                    .unwrap()
-                    .custodians
-                    .get(&inventory)
-                    == Some(&actor)
-                    && allowed
-                {
-                    score -= 300;
-                }
-            }
-            SocialEffect::Labor {
-                millis,
-                ref beneficiary,
-                ..
-            } => {
-                if recipient {
-                    score -= (millis / 120).min(100_000) as i64;
-                }
-                if beneficiary == &Beneficiary::Person(actor)
-                    || matches!(beneficiary, Beneficiary::Office(slot) if charter.offices.iter().any(|o| o.slot == *slot && o.holder == actor))
-                {
-                    score += 700;
-                }
-                if mind.dream == decisions::Aspiration::SupportOthers {
-                    score += 300;
-                }
-            }
-            SocialEffect::Delivery {
-                quantity,
-                ref beneficiary,
-                ..
-            } => {
-                if recipient {
-                    score -= quantity.0.min(100_000) as i64;
-                }
-                if beneficiary == &Beneficiary::Person(actor)
-                    || matches!(beneficiary, Beneficiary::Office(slot) if charter.offices.iter().any(|o| o.slot == *slot && o.holder == actor))
-                {
-                    score += quantity.0.min(100_000) as i64;
-                }
-            }
-        }
-        score + self.learned_rule_score(actor, rule)
+        let knowledge = self.institutional_vote_knowledge(actor);
+        self.host
+            .state
+            .institutions
+            .as_ref()
+            .unwrap()
+            .rule_vote_score(
+                &self.institutional_vote_facts(actor, &knowledge),
+                charter,
+                rule,
+            )
     }
     fn charter_vote_score(&self, actor: PersonId, charter: &InstitutionCharter) -> i64 {
-        let mut score: i64 = charter
-            .rules
-            .iter()
-            .map(|rule| self.rule_vote_score(actor, charter, rule))
-            .sum();
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap();
-        for office in &charter.offices {
-            score += i64::from(
-                mind.relationships
-                    .get(&office.holder)
-                    .map_or(0, |r| r.trust),
-            );
-        }
-        for contribution in &charter.contributions {
-            if contribution.parties()[0] == actor {
-                score -= match contribution {
-                    AgreementTerm::Labor { millis, .. } => (millis / 120).min(100_000) as i64,
-                    _ => contribution.amount().min(100_000) as i64,
-                };
-            } else if contribution.parties()[1] == actor {
-                score += contribution.amount().min(100_000) as i64;
-            }
-        }
-        score
+        let knowledge = self.institutional_vote_knowledge(actor);
+        self.host
+            .state
+            .institutions
+            .as_ref()
+            .unwrap()
+            .charter_vote_score(&self.institutional_vote_facts(actor, &knowledge), charter)
     }
+
     fn change_vote_score(
         &self,
         actor: PersonId,
@@ -1652,26 +1579,21 @@ impl Simulation {
         self.reconcile_institutions()?;
         self.observe_exclusions()?;
         let w = self.host.state.institutions.as_ref().unwrap();
-        let mut replies = Vec::new();
-        for i in w
+        let founders = w
             .institutions
             .values()
-            .filter(|i| i.status == InstitutionStatus::Proposed)
-        {
-            for actor in i.charter.founders.iter().filter(|id| {
-                **id != self.host.state.ruler && !i.members.contains(id) && !i.declined.contains(id)
-            }) {
-                if self.social_area(*actor).ok() != Some(i.charter.jurisdiction) {
-                    continue;
-                }
-                let action = if self.charter_vote_score(*actor, &i.charter) >= 0 {
-                    InstitutionAction::Join { institution: i.id }
-                } else {
-                    InstitutionAction::Decline { institution: i.id }
-                };
-                replies.push((*actor, action));
-            }
-        }
+            .filter(|row| row.status == InstitutionStatus::Proposed)
+            .flat_map(|row| row.charter.founders.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let knowledge = founders
+            .into_iter()
+            .map(|actor| (actor, self.institutional_vote_knowledge(actor)))
+            .collect::<Vec<_>>();
+        let facts = knowledge
+            .iter()
+            .map(|(actor, knowledge)| self.institutional_vote_facts(*actor, knowledge))
+            .collect::<Vec<_>>();
+        let mut replies = w.formation_replies(&facts)?;
         for p in w
             .proposals
             .values()
