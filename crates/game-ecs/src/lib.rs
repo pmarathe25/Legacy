@@ -98,6 +98,26 @@ pub struct Snapshot {
 pub struct Store {
     backend: backend::Storage,
 }
+/// Sparse typed writes, admitted together before any row or entity changes.
+/// Features guard their opening values before submitting a batch. A component
+/// may appear only once per entity; removing an absent row is a no-op.
+#[derive(Default)]
+pub struct Batch {
+    edits: Vec<Box<dyn backend::Edit>>,
+}
+impl Batch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn insert<C: Component>(&mut self, id: StableId, value: C) -> &mut Self {
+        self.edits.push(backend::insert_edit(id, value));
+        self
+    }
+    pub fn remove<C: Component>(&mut self, id: StableId) -> &mut Self {
+        self.edits.push(backend::remove_edit::<C>(id));
+        self
+    }
+}
 impl Store {
     pub fn with_schema(schema: Schema) -> Self {
         Self {
@@ -159,6 +179,11 @@ impl Store {
     }
     pub fn remove<C: Component>(&mut self, id: StableId) -> Result<Option<C>, Error> {
         self.backend.remove(id)
+    }
+    /// Preflight all schemas, validators, identities, and the structural counter
+    /// before applying sparse writes. Unrelated components remain in place.
+    pub fn apply_batch(&mut self, batch: Batch) -> Result<(), Error> {
+        self.backend.apply_batch(batch.edits)
     }
     pub fn iter<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> {
         self.backend.iter()
@@ -450,6 +475,84 @@ mod tests {
                 .is_err()
         );
         assert_eq!(schema.keys().count(), 3);
+    }
+    #[test]
+    fn sparse_batches_publish_multiple_entities_without_replacing_the_store() {
+        let mut store = fixture(false);
+        let mut query = store.query2::<Count, Name>();
+        let foreign = store.get::<Wide>(StableId(2)).cloned();
+        let mut batch = Batch::new();
+        batch.insert(StableId(2), Count(80));
+        batch.remove::<Name>(StableId(2));
+        batch.insert(StableId(8), Count(10));
+        batch.insert(StableId(8), Name("new".into()));
+        store.apply_batch(batch).unwrap();
+        assert_eq!(store.get::<Wide>(StableId(2)), foreign.as_ref());
+        assert_eq!(store.get::<Count>(StableId(2)), Some(&Count(80)));
+        assert_eq!(store.get::<Name>(StableId(2)), None);
+        assert_eq!(store.get::<Count>(StableId(8)), Some(&Count(10)));
+        assert!(query.iter(&store).is_err());
+        query.refresh(&store).unwrap();
+        assert!(
+            query
+                .iter(&store)
+                .unwrap()
+                .any(|(id, _, _)| id == StableId(8))
+        );
+        let restored = Store::restore(schema(), store.snapshot().unwrap()).unwrap();
+        assert_eq!(restored, store);
+    }
+    #[test]
+    fn a_late_batch_failure_preserves_rows_entities_and_query_bindings() {
+        let mut store = fixture(false);
+        let query = store.query2::<Count, Name>();
+        let before = store.clone();
+        let mut invalid = Batch::new();
+        invalid.remove::<Name>(StableId(1));
+        invalid.insert(StableId(8), Name("unpublished".into()));
+        invalid.insert(StableId(9), Count(0));
+        assert_eq!(store.apply_batch(invalid), Err(Error::Unavailable));
+        assert_eq!(store, before);
+        assert_eq!(query.iter(&store).unwrap().count(), 1);
+        let mut duplicate = Batch::new();
+        duplicate.insert(StableId(1), Count(10));
+        duplicate.remove::<Count>(StableId(1));
+        assert!(store.apply_batch(duplicate).is_err());
+        let mut zero = Batch::new();
+        zero.insert(StableId(1), Count(10));
+        zero.remove::<Name>(StableId(0));
+        assert!(store.apply_batch(zero).is_err());
+        let mut unregistered = Batch::new();
+        unregistered.insert(StableId(1), Count(10));
+        unregistered.remove::<StableId>(StableId(2));
+        assert!(store.apply_batch(unregistered).is_err());
+        assert_eq!(store, before);
+        assert_eq!(query.iter(&store).unwrap().count(), 1);
+    }
+    #[test]
+    fn batch_order_does_not_change_canonical_values_and_absent_removals_are_inert() {
+        let mut a = fixture(false);
+        let mut b = fixture(true);
+        let mut forward = Batch::new();
+        forward.insert(StableId(9), Count(90));
+        forward.insert(StableId(8), Name("new".into()));
+        forward.remove::<Name>(StableId(2));
+        let mut reverse = Batch::new();
+        reverse.remove::<Name>(StableId(2));
+        reverse.insert(StableId(8), Name("new".into()));
+        reverse.insert(StableId(9), Count(90));
+        a.apply_batch(forward).unwrap();
+        b.apply_batch(reverse).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.snapshot().unwrap(), b.snapshot().unwrap());
+        let before = a.clone();
+        let query = a.query2::<Count, Name>();
+        let mut absent = Batch::new();
+        absent.remove::<Name>(StableId(99));
+        absent.remove::<Name>(StableId(9));
+        a.apply_batch(absent).unwrap();
+        assert_eq!(a, before);
+        assert!(query.iter(&a).is_ok());
     }
     #[test]
     fn creating_a_component_entity_validates_before_any_structural_change() {

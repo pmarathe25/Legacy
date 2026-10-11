@@ -24,7 +24,7 @@ type RestoreRow = dyn Fn(&mut World, Entity, &RawValue) -> Result<(), Error> + S
 #[derive(Clone)]
 pub(super) struct Registration {
     component_type: TypeId,
-    // Only immutable validator callbacks are erased. Components remain typed
+    // Immutable validator callbacks are erased here. Components remain typed
     // native storage; no Any world or component bag is exposed to consumers.
     validator: Arc<dyn Any + Send + Sync>,
     initialize: fn(&mut World),
@@ -98,6 +98,68 @@ pub(super) struct Storage {
     schema: Schema,
     structural_revision: u64,
 }
+// Pending operations are erased only inside this adapter. They validate against
+// typed registrations and publish into native typed columns, never a value bag.
+pub(super) trait Edit: Send {
+    fn key(&self) -> (StableId, TypeId);
+    fn preflight(&self, store: &Storage) -> Result<bool, Error>;
+    fn publish(self: Box<Self>, store: &mut Storage);
+}
+struct Insert<C: Component> {
+    id: StableId,
+    value: C,
+}
+impl<C: Component> Edit for Insert<C> {
+    fn key(&self) -> (StableId, TypeId) {
+        (self.id, TypeId::of::<C>())
+    }
+    fn preflight(&self, store: &Storage) -> Result<bool, Error> {
+        let registration = store.schema.registration::<C>()?;
+        (registration
+            .validator
+            .downcast_ref::<fn(&C) -> Result<(), Error>>()
+            .expect("registered validator type"))(&self.value)?;
+        Ok(store.get::<C>(self.id).is_none())
+    }
+    fn publish(self: Box<Self>, store: &mut Storage) {
+        let entity = match store.entities.get(&self.id) {
+            Some(entity) => *entity,
+            None => {
+                let entity = store.world.spawn(NativeId(self.id)).id();
+                store.entities.insert(self.id, entity);
+                entity
+            }
+        };
+        store.world.entity_mut(entity).insert(Native(self.value));
+    }
+}
+struct Remove<C: Component> {
+    id: StableId,
+    marker: std::marker::PhantomData<C>,
+}
+impl<C: Component> Edit for Remove<C> {
+    fn key(&self) -> (StableId, TypeId) {
+        (self.id, TypeId::of::<C>())
+    }
+    fn preflight(&self, store: &Storage) -> Result<bool, Error> {
+        store.schema.registration::<C>()?;
+        Ok(store.get::<C>(self.id).is_some())
+    }
+    fn publish(self: Box<Self>, store: &mut Storage) {
+        if let Some(entity) = store.entities.get(&self.id) {
+            store.world.entity_mut(*entity).remove::<Native<C>>();
+        }
+    }
+}
+pub(super) fn insert_edit<C: Component>(id: StableId, value: C) -> Box<dyn Edit> {
+    Box::new(Insert { id, value })
+}
+pub(super) fn remove_edit<C: Component>(id: StableId) -> Box<dyn Edit> {
+    Box::new(Remove::<C> {
+        id,
+        marker: std::marker::PhantomData,
+    })
+}
 impl Storage {
     pub(super) fn new(schema: Schema) -> Self {
         let mut world = World::new();
@@ -123,6 +185,31 @@ impl Storage {
     }
     pub(super) fn contains(&self, id: StableId) -> bool {
         self.entities.contains_key(&id)
+    }
+    pub(super) fn apply_batch(&mut self, edits: Vec<Box<dyn Edit>>) -> Result<(), Error> {
+        let mut keys = std::collections::BTreeSet::new();
+        let mut structural = false;
+        for edit in &edits {
+            let key = edit.key();
+            if key.0.0 == 0 || !keys.insert(key) {
+                return Err(Error::InvalidConfiguration(
+                    "zero or duplicate component batch key".into(),
+                ));
+            }
+            structural |= edit.preflight(self)?;
+        }
+        let revision = if structural {
+            self.structural_revision
+                .checked_add(1)
+                .ok_or(Error::Overflow)?
+        } else {
+            self.structural_revision
+        };
+        for edit in edits {
+            edit.publish(self);
+        }
+        self.structural_revision = revision;
+        Ok(())
     }
     pub(super) fn spawn(&mut self, id: StableId) -> Result<(), Error> {
         if id.0 == 0 {
@@ -430,5 +517,32 @@ impl<A: Component, B: Component, C: Component> Query2Optional<A, B, C> {
             .state
             .iter_manual(&store.world)
             .map(|(id, a, b, c)| (id.0, &a.0, &b.0, c.map(|component| &component.0))))
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    #[test]
+    fn structural_counter_admission_precedes_every_batch_write() {
+        let mut schema = Schema::new();
+        schema.register::<u64>("test/count", |_| Ok(())).unwrap();
+        let mut store = Storage::new(schema);
+        store.insert_or_spawn(StableId(1), 10_u64).unwrap();
+        store.structural_revision = u64::MAX;
+        let edits = vec![
+            insert_edit(StableId(1), 20_u64),
+            insert_edit(StableId(2), 30_u64),
+        ];
+        assert_eq!(store.apply_batch(edits), Err(Error::Overflow));
+        assert_eq!(store.get::<u64>(StableId(1)), Some(&10));
+        assert!(!store.contains(StableId(2)));
+        assert_eq!(store.structural_revision, u64::MAX);
+        store
+            .apply_batch(vec![insert_edit(StableId(1), 20_u64)])
+            .unwrap();
+        assert_eq!(store.get::<u64>(StableId(1)), Some(&20));
+        assert_eq!(store.structural_revision, u64::MAX);
     }
 }
