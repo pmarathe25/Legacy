@@ -193,6 +193,10 @@ impl Store {
     pub fn iter<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> {
         self.backend.iter()
     }
+    /// Count matching rows without visiting unrelated entities or their data.
+    pub fn count<C: Component>(&self) -> usize {
+        self.backend.count::<C>()
+    }
     pub fn query2<A: Component, B: Component>(&mut self) -> Query2<A, B> {
         Query2 {
             backend: backend::Query2::new(&mut self.backend),
@@ -348,6 +352,34 @@ mod tests {
         store.insert(StableId(2), Name("Ada".into())).unwrap();
         store.insert(StableId(2), Wide(55)).unwrap();
         store
+    }
+    #[test]
+    fn component_counts_follow_structural_batches_rejection_and_restore() {
+        let mut store = fixture(true);
+        assert_eq!(store.count::<Count>(), 3);
+        assert_eq!(store.count::<Name>(), 1);
+        assert_eq!(store.count::<u16>(), 0);
+        store
+            .insert_or_spawn(StableId(99), Name("other".into()))
+            .unwrap();
+        store.remove::<Count>(StableId(2)).unwrap();
+        let mut batch = Batch::new();
+        batch.insert(StableId(4), Count(9));
+        batch.remove::<Name>(StableId(2));
+        store.apply_batch(batch).unwrap();
+        assert_eq!(store.count::<Count>(), 3);
+        assert_eq!(store.count::<Name>(), 1);
+        assert_eq!(store.count::<Wide>(), 1);
+        let mut rejected = Batch::new();
+        rejected.insert(StableId(100), Name("unpublished".into()));
+        rejected.insert(StableId(4), Count(0));
+        assert!(store.apply_batch(rejected).is_err());
+        assert_eq!(store.count::<Count>(), 3);
+        assert_eq!(store.count::<Name>(), 1);
+        let restored = Store::restore(schema(), store.snapshot().unwrap()).unwrap();
+        assert_eq!(restored.count::<Count>(), 3);
+        assert_eq!(restored.count::<Name>(), 1);
+        assert_eq!(restored.count::<Wide>(), 1);
     }
     #[test]
     fn plain_components_join_without_engine_derives_or_native_handles() {

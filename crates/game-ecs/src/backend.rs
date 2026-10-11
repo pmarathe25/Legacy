@@ -369,6 +369,17 @@ impl Storage {
                 .map(|component| (*id, &component.0))
         })
     }
+    pub(super) fn count<C: Component>(&self) -> usize {
+        let Some(component) = self.world.components().get_id(TypeId::of::<Native<C>>()) else {
+            return 0;
+        };
+        self.world
+            .archetypes()
+            .iter()
+            .filter(|archetype| archetype.contains(component))
+            .map(|archetype| archetype.len() as usize)
+            .sum()
+    }
     pub(super) fn snapshot(&self) -> Result<Snapshot, Error> {
         let mut columns = BTreeMap::new();
         for (id, entity) in &self.entities {
