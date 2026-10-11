@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn submit(sim: &mut Simulation, command: Command) {

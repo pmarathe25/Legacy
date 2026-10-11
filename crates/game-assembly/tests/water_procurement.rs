@@ -2,7 +2,7 @@ mod support;
 use game_api::{
     AreaId, Command, EventKind, Good, HealthRules, Location, PersonId, Role, SimDuration,
 };
-use game_world::{
+use game_assembly::{
     Execution, Simulation,
     decisions::{Aspiration, Personality},
 };
@@ -15,7 +15,7 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         "child-successor",
         81,
         Execution::default(),
-        game_world::scenarios::Config::default(),
+        game_assembly::scenarios::Config::default(),
     )
     .unwrap();
     sim.advance(SimDuration(60_000)).unwrap();
@@ -494,19 +494,19 @@ fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_
 
 #[test]
 fn normal_population_uses_the_renewable_spring_after_consuming_its_authored_stocks() {
-    let config = game_world::scenarios::Config {
+    let config = game_assembly::scenarios::Config {
         genetics: None,
         health: HealthRules {
             drink_relief: 30 * 60_000,
             ..HealthRules::human()
         },
-        ..game_world::scenarios::Config::default()
+        ..game_assembly::scenarios::Config::default()
     };
     let mut sim = Simulation::populated_world(
         82,
         Execution::default(),
         config,
-        game_world::population::Plan {
+        game_assembly::population::Plan {
             people: 100,
             settlement_size: 100,
         },
@@ -522,7 +522,7 @@ fn normal_population_uses_the_renewable_spring_after_consuming_its_authored_stoc
         }
     )));
     assert!(state.events.iter().any(|e|matches!(e.kind,
-        EventKind::Drank {source,..} if state.inventories[&source].location != game_world::InventoryLocation::Area(state.areas[0].id))));
+        EventKind::Drank {source,..} if state.inventories[&source].location != game_assembly::InventoryLocation::Area(state.areas[0].id))));
     assert!(
         state
             .components

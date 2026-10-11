@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::{
+use game_assembly::{
     decisions::{Aspiration, Personality},
     *,
 };
@@ -37,7 +37,7 @@ fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
         .as_ref()
         .unwrap()
         .custodians;
-    let owned = |stock: &&game_world::Inventory| {
+    let owned = |stock: &&game_assembly::Inventory| {
         stock.location == InventoryLocation::Area(AreaId(1))
             && custodians.get(&stock.id) == Some(&maker)
     };

@@ -22,8 +22,18 @@ fn domain_kernels_cannot_depend_on_the_coordinator_or_client_facade() {
             for dependency in package["dependencies"].as_array().unwrap() {
                 assert_ne!(
                     dependency["name"].as_str().unwrap(),
-                    "game-world",
+                    "game-assembly",
                     "the host must compile without the simulation implementation"
+                );
+            }
+        }
+        if name == "game-world" {
+            for dependency in package["dependencies"].as_array().unwrap() {
+                let dependency = dependency["name"].as_str().unwrap();
+                assert!(
+                    !dependency.starts_with("game-")
+                        || ["game-core", "game-ecs", "game-sim"].contains(&dependency),
+                    "the world host must be feature-agnostic: {dependency}"
                 );
             }
         }
@@ -44,6 +54,7 @@ fn domain_kernels_cannot_depend_on_the_coordinator_or_client_facade() {
                 "game-api",
                 "game-sim",
                 "game-world",
+                "game-assembly",
                 "game-session",
                 "game-cli",
             ]
@@ -55,7 +66,14 @@ fn domain_kernels_cannot_depend_on_the_coordinator_or_client_facade() {
         for dependency in package["dependencies"].as_array().unwrap() {
             let dependency = dependency["name"].as_str().unwrap();
             assert!(
-                !["game-api", "game-world", "game-session", "game-cli"].contains(&dependency),
+                ![
+                    "game-api",
+                    "game-world",
+                    "game-assembly",
+                    "game-session",
+                    "game-cli"
+                ]
+                .contains(&dependency),
                 "{name} cannot compile independently with dependency {dependency}"
             );
         }

@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 use std::collections::BTreeSet;
 
 fn add(
@@ -36,7 +36,7 @@ fn submit_choice(sim: &mut Simulation, action: QuantityAction, quantity: Quantit
     .unwrap();
 }
 fn health_fixture() -> Simulation {
-    use game_world::decisions::{Aspiration, Personality};
+    use game_assembly::decisions::{Aspiration, Personality};
     let mut sim = Simulation::ecology_fixture(67, Execution::default()).unwrap();
     let mut rules = HealthRules::fixture();
     rules.drink_quantity = Quantity(250);

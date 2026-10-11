@@ -1,5 +1,5 @@
 use game_api::Error;
-use game_world::{Execution, Simulation};
+use game_assembly::{Execution, Simulation};
 
 #[test]
 fn future_personal_resource_observations_are_rejected_from_the_actual_component_column() {

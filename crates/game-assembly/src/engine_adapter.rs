@@ -6,26 +6,7 @@ use game_sim::{Clock, ClockWorld, Engine, Interval, Module, ModuleId, PhaseId, P
 /// One opening checked sum of closing IDs and publications. Domain demands
 /// stay with their owners; checking the sum prevents individually valid bounds
 /// from exhausting the shared counters halfway through publication.
-#[derive(Default)]
-pub(crate) struct ResourceEnvelope {
-    ids: u64,
-    events: u64,
-}
-impl ResourceEnvelope {
-    pub(crate) fn add_ids(&mut self, count: u64) -> Result<(), Error> {
-        self.ids = self.ids.checked_add(count).ok_or(Error::Overflow)?;
-        Ok(())
-    }
-    pub(crate) fn add_events(&mut self, count: u64) -> Result<(), Error> {
-        self.events = self.events.checked_add(count).ok_or(Error::Overflow)?;
-        Ok(())
-    }
-    pub(crate) fn check(&self, next_id: u64, next_event: u64) -> Result<(), Error> {
-        next_id.checked_add(self.ids).ok_or(Error::Overflow)?;
-        next_event.checked_add(self.events).ok_or(Error::Overflow)?;
-        Ok(())
-    }
-}
+pub(crate) type ResourceEnvelope = game_world::ResourceBudget;
 
 pub(crate) type WorldEngine = Engine<Simulation, StopReason>;
 pub(crate) const PREPARE: PhaseKey = PhaseKey {

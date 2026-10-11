@@ -473,6 +473,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-assembly"
+version = "0.1.0"
+dependencies = [
+ "game-agreements",
+ "game-agriculture",
+ "game-api",
+ "game-armies",
+ "game-cargo",
+ "game-characters",
+ "game-conflict",
+ "game-content",
+ "game-core",
+ "game-ecology",
+ "game-ecs",
+ "game-environment",
+ "game-genetics",
+ "game-health",
+ "game-invocation",
+ "game-land",
+ "game-lifecycle",
+ "game-lineage",
+ "game-logistics",
+ "game-missions",
+ "game-physiology",
+ "game-projects",
+ "game-property",
+ "game-realm",
+ "game-session",
+ "game-sim",
+ "game-skills",
+ "game-society",
+ "game-spatial",
+ "game-transport",
+ "game-workshop",
+ "game-world",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-cargo"
 version = "0.1.0"
 dependencies = [
@@ -498,8 +539,8 @@ name = "game-cli"
 version = "0.1.0"
 dependencies = [
  "game-api",
+ "game-assembly",
  "game-session",
- "game-world",
  "serde_json",
 ]
 
@@ -758,38 +799,9 @@ dependencies = [
 name = "game-world"
 version = "0.1.0"
 dependencies = [
- "game-agreements",
- "game-agriculture",
- "game-api",
- "game-armies",
- "game-cargo",
- "game-characters",
- "game-conflict",
- "game-content",
  "game-core",
- "game-ecology",
  "game-ecs",
- "game-environment",
- "game-genetics",
- "game-health",
- "game-invocation",
- "game-land",
- "game-lifecycle",
- "game-lineage",
- "game-logistics",
- "game-missions",
- "game-physiology",
- "game-projects",
- "game-property",
- "game-realm",
- "game-session",
  "game-sim",
- "game-skills",
- "game-society",
- "game-spatial",
- "game-transport",
- "game-workshop",
- "rayon",
  "serde",
  "serde_json",
 ]

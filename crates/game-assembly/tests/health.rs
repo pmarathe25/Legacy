@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 use std::collections::BTreeSet;
 
 fn fixture() -> (Simulation, InventoryId) {
@@ -148,7 +148,7 @@ fn malformed_clinical_actor_is_rejected_by_the_save_boundary() {
         .expect("actual clinical component column");
     rows.push(serde_json::json!({
         "entity": foreign,
-        "value": game_world::health::Clinical::default(),
+        "value": game_assembly::health::Clinical::default(),
     }));
     rows.sort_by_key(|row| row["entity"].as_u64().unwrap());
     assert!(matches!(
@@ -159,7 +159,7 @@ fn malformed_clinical_actor_is_rejected_by_the_save_boundary() {
 
 #[test]
 fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it() {
-    use game_world::decisions::{Aspiration, Personality};
+    use game_assembly::decisions::{Aspiration, Personality};
     let mut whole = Simulation::ecology_fixture(67, Execution::default()).unwrap();
     whole.initialize_health(HealthRules::fixture()).unwrap();
     let actor = whole.canonical_state().ruler;

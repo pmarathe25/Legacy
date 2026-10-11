@@ -1,6 +1,6 @@
 use game_api::*;
+use game_assembly::{Execution, Simulation};
 use game_session::Session;
-use game_world::{Execution, Simulation};
 
 #[test]
 fn host_services_pause_queries_commands_and_save_during_long_advancement() {

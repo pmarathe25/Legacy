@@ -4,7 +4,7 @@ Complete the migration of the existing headless game to shared components and fe
 
 ## Crate responsibilities
 
-- [ ] `game-world` is a feature-agnostic host. Its production dependencies and source contain no game feature, command, scenario, ruler, trait, crop, or health policy. Feature-named modules such as `genetics.rs` and `health.rs` have left the crate.
+- [x] `game-world` is a feature-agnostic host. Its production dependencies and source contain no game feature, command, scenario, ruler, trait, crop, or health policy. Feature-named modules such as `genetics.rs` and `health.rs` have left the crate.
 - [ ] A separate game assembly crate registers component schemas and systems, connects typed feature interfaces, constructs scenarios, and binds public commands and views. Its code performs wiring and cross-feature transactions; domain algorithms, entity-update loops, scoring rules, and feature validation live in their owners.
 - [ ] Every gameplay behavior has a feature-owned entry point that tests can exercise without the assembly. This includes candidate selection, scoring, progression, perception, reconciliation, and event reactions. Assembly adapters translate factual inputs and typed effects; they do not determine those policies or mutate feature state directly during play.
 - [ ] Features communicate through small typed dependencies, traits, components, and effects. Integration that has a natural feature owner lives there. Shared contracts or a focused integration crate handle genuinely shared behavior; the assembly does not provide a required helper library for the features.
@@ -14,7 +14,7 @@ Complete the migration of the existing headless game to shared components and fe
 ## State and execution
 
 - [ ] The host owns one shared component store. Entity state has one canonical owner and representation; feature runtimes retain rules, content, and system metadata rather than shadow entity maps or private ECS worlds.
-- [ ] Only `game-ecs`'s private adapter depends on the chosen ECS engine. Vendor entity handles, query internals, derives, and schedules do not appear in application or feature interfaces.
+- [x] Only `game-ecs`'s private adapter depends on the chosen ECS engine. Vendor entity handles, query internals, derives, and schedules do not appear in application or feature interfaces.
 - [ ] Features share stable entity IDs and a common spatial model. Local systems consume local cells and explicit component joins rather than unrelated global feature state. Carrier resolution and movement use the same spatial rules across systems.
 - [ ] Systems declare their ordering and run at appropriate deadlines, fixed intervals, or events. Independently keyed work can use the bounded executor; authoritative results are merged in stable order. Derived indexes and query caches rebuild safely after structural changes and loading.
 - [ ] Prepared effects reject stale inputs and invalid configuration before publication. Failed commands and transactions preserve canonical state, allocation counters, and published events. Cross-feature effects are applied through owner interfaces.

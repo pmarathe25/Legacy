@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::{
+use game_assembly::{
     decisions::{Aspiration, Personality},
     *,
 };

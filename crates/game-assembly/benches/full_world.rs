@@ -3,7 +3,7 @@ use game_api::{
     InvocationAction, LifeStage, PlayerView, Quantity, ResourceKind, SimDuration, SocialAction,
     StockPosition, StopReason, Submission,
 };
-use game_world::{Execution, Simulation, population::Plan, scenarios::Config};
+use game_assembly::{Execution, Simulation, population::Plan, scenarios::Config};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -343,7 +343,7 @@ fn main() {
                     .inventories
                     .values()
                     .filter(|stock| {
-                        stock.location == game_world::InventoryLocation::Carried(view.ruler)
+                        stock.location == game_assembly::InventoryLocation::Carried(view.ruler)
                     })
                     .map(|stock| u128::from(stock.quantity.0))
                     .sum::<u128>();

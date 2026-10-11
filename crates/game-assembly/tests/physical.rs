@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 use std::collections::BTreeSet;
 
 fn sim(workers: usize) -> Simulation {

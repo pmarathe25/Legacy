@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 
 #[test]
 fn text_adapter_and_direct_api_produce_identical_logical_results() {
@@ -741,8 +741,8 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.debug_set_personality(
             actor,
-            game_world::decisions::Personality::restful(),
-            game_world::decisions::Aspiration::Comfort,
+            game_assembly::decisions::Personality::restful(),
+            game_assembly::decisions::Aspiration::Comfort,
         )
         .unwrap();
     }
@@ -751,7 +751,7 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
         .inventories
         .values()
         .find(|i| {
-            i.good == Good::Tool && i.location == game_world::InventoryLocation::Area(AreaId(1))
+            i.good == Good::Tool && i.location == game_assembly::InventoryLocation::Area(AreaId(1))
         })
         .unwrap()
         .id;
@@ -882,8 +882,8 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         sim.debug_actor_command(person, Command::Rest).unwrap();
         sim.debug_set_personality(
             person,
-            game_world::decisions::Personality::restful(),
-            game_world::decisions::Aspiration::Comfort,
+            game_assembly::decisions::Personality::restful(),
+            game_assembly::decisions::Aspiration::Comfort,
         )
         .unwrap();
     }
@@ -892,7 +892,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         .inventories
         .values()
         .find(|i| {
-            i.good == Good::Food && i.location == game_world::InventoryLocation::Area(AreaId(1))
+            i.good == Good::Food && i.location == game_assembly::InventoryLocation::Area(AreaId(1))
         })
         .unwrap()
         .id;
@@ -963,7 +963,7 @@ fn normal_openings_and_seeded_random_selection_launch_through_the_cli() {
         assert!(result.status.success(), "{scenario}");
         let text = String::from_utf8(result.stdout).unwrap();
         let actual = if scenario == "random" {
-            game_world::scenarios::choose(41)
+            game_assembly::scenarios::choose(41)
         } else {
             scenario
         };

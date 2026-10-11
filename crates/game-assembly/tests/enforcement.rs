@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::{Execution, InventoryLocation, Simulation};
+use game_assembly::{Execution, InventoryLocation, Simulation};
 use std::collections::BTreeSet;
 fn actor(sim: &Simulation, index: usize) -> PersonId {
     sim.canonical_state().people[index].id
@@ -189,20 +189,20 @@ fn an_officer_can_refuse_a_funded_order_without_physical_capture_or_spending() {
     decide(&mut sim, case, EnforcementRemedy::Confine { until });
     let officer = actor(&sim, 4);
     let judge = role(&sim);
-    let mut personality = game_world::decisions::Personality::restful();
+    let mut personality = game_assembly::decisions::Personality::restful();
     personality.risk_tolerance = 0;
     personality.empathy = 0;
     personality.aggression = 0;
     sim.debug_set_personality(
         officer,
         personality,
-        game_world::decisions::Aspiration::Comfort,
+        game_assembly::decisions::Aspiration::Comfort,
     )
     .unwrap();
     sim.debug_set_relationship(
         officer,
         judge,
-        game_world::decisions::Relationship {
+        game_assembly::decisions::Relationship {
             trust: -1_000,
             affection: -1_000,
         },
@@ -419,11 +419,15 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     let judge = role(&sim);
     let officer = actor(&sim, 4);
     let target = actor(&sim, 5);
-    let mut opponent = game_world::decisions::Personality::restful();
+    let mut opponent = game_assembly::decisions::Personality::restful();
     opponent.aggression = 900;
     opponent.risk_tolerance = 900;
-    sim.debug_set_personality(target, opponent, game_world::decisions::Aspiration::Comfort)
-        .unwrap();
+    sim.debug_set_personality(
+        target,
+        opponent,
+        game_assembly::decisions::Aspiration::Comfort,
+    )
+    .unwrap();
     let proposal = dispatch_proposal(&mut sim, case);
     let binding_source = proposal
         .supplies

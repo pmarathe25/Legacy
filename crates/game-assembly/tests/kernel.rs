@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 
 fn fixture(workers: usize, reverse_jobs: bool) -> Simulation {
     Simulation::kernel_fixture(

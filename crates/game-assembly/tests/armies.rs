@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn submit(sim: &mut Simulation, command: Command) {
@@ -248,9 +248,9 @@ fn battle(
         state.missions.as_ref().unwrap().missions.values().all(|m|matches!(m.proposal.objective,MissionObjective::Confine {person,..} if person==enemy)) && state.armies.as_ref().unwrap().talks.is_empty()
     });
     if injured_opponent {
-        let mut traits = game_world::decisions::Personality::industrious();
+        let mut traits = game_assembly::decisions::Personality::industrious();
         traits.risk_tolerance = 0;
-        sim.debug_set_personality(enemy, traits, game_world::decisions::Aspiration::Comfort)
+        sim.debug_set_personality(enemy, traits, game_assembly::decisions::Aspiration::Comfort)
             .unwrap();
         sim.debug_injure(enemy, 100_000).unwrap();
     }
@@ -534,13 +534,17 @@ fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
         .proposal
         .objective
         .clone();
-    let mut traits = game_world::decisions::Personality::restful();
+    let mut traits = game_assembly::decisions::Personality::restful();
     traits.ambition = 0;
     traits.sociability = 0;
     traits.risk_tolerance = 0;
     traits.empathy = 1_000;
-    sim.debug_set_personality(leader, traits, game_world::decisions::Aspiration::Comfort)
-        .unwrap();
+    sim.debug_set_personality(
+        leader,
+        traits,
+        game_assembly::decisions::Aspiration::Comfort,
+    )
+    .unwrap();
     submit(
         &mut sim,
         Command::Army {

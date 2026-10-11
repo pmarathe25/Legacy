@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::{
+use game_assembly::{
     decisions::{Aspiration, Personality, Relationship},
     development::PregnancyState,
     *,
@@ -323,7 +323,7 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
 fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
     for dose in [Quantity(250), Quantity(2_000)] {
         let mut sim = sim(1);
-        let mut rules = game_world::health::Rules::human();
+        let mut rules = game_assembly::health::Rules::human();
         rules.drink_quantity = dose;
         let relief = rules.drink_relief;
         sim.initialize_health(rules).unwrap();

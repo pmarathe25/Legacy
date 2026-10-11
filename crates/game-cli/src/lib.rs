@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::{Execution, Simulation};
+use game_assembly::{Execution, Simulation};
 
 /// Text parsing and display only. The same authoritative API serves every client.
 pub fn execute(

@@ -1,5 +1,5 @@
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 
 fn sim(workers: usize) -> Simulation {
     Simulation::combat_fixture(

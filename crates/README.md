@@ -1,8 +1,6 @@
 # Crate boundaries
 
-Domain crates own game data and the systems that change it. The playable game assumes all systems are available; modularity serves independent development and testing. `game-sim` supplies deterministic scheduling and parallel execution. `game-world` currently assembles the playable simulation, connects domain interfaces, and presents it through `game-api`; its remaining feature handlers are being moved into their owners.
-
-The final `game-world` boundary is a feature-agnostic host. Domain algorithms and feature-named modules belong in their owning crates. A separate game assembly crate will depend on the features to register their components and systems, wire typed interfaces, build scenarios, and bind public commands and views. Shared storage, clock and identity management, execution, and transaction infrastructure remain generic. The graph below describes current dependencies, before that assembly boundary is extracted.
+Domain crates own game data and the systems that change it. The playable game assumes all systems are available; modularity serves independent development and testing. `game-sim` supplies deterministic scheduling and parallel execution. `game-world` provides generic host infrastructure. `game-assembly` composes the playable simulation and presents it through `game-api`; its remaining domain algorithms are being moved into their owners.
 
 ## Dependency graph
 
@@ -11,15 +9,19 @@ An arrow means a production Cargo dependency, from consumer to provider. The dom
 ```mermaid
 flowchart TD
     CLI[game-cli] --> Session[game-session]
-    CLI --> World[game-world]
+    CLI --> Assembly[game-assembly]
     CLI --> API[game-api]
     Session --> API
-    World --> API
-    World --> Sim[game-sim]
-    World --> Content[game-content]
+    Assembly --> API
+    Assembly --> Sim[game-sim]
+    Assembly --> World[game-world]
+    World --> Sim
     World --> ECS
-    World --> Land[game-land]
-    World --> Spatial[game-spatial]
+    World --> Core
+    Assembly --> Content[game-content]
+    Assembly --> ECS
+    Assembly --> Land[game-land]
+    Assembly --> Spatial[game-spatial]
     Spatial --> ECS
     Spatial --> Core
     Land --> ECS
@@ -28,7 +30,7 @@ flowchart TD
     Domains -->|typed component access| ECS[game-ecs]
     ECS --> Core
     ECS --> Backend[private ECS backend]
-    World --> Domains[Domain crates]
+    Assembly --> Domains[Domain crates]
     API -->|public types from a subset| Domains
     Sim --> Core[game-core]
     Content --> Core
@@ -36,7 +38,7 @@ flowchart TD
     Domains -. selected content loaders .-> Content
 ```
 
-The graph collapses `game-world`'s dependency on every domain crate and `game-api`'s dependencies on domain public types. `game-api` and `game-world` also depend directly on `game-core`. The API imports agreements, agriculture, armies, characters, conflict, ecology, health, invocation, lineage, missions, physiology, projects, property, realm, society, and transport.
+The graph collapses `game-assembly`'s dependency on every domain crate and `game-api`'s dependencies on domain public types. `game-api` and `game-assembly` also depend directly on `game-core`. The API imports agreements, agriculture, armies, characters, conflict, ecology, health, invocation, lineage, missions, physiology, projects, property, realm, society, and transport.
 
 Every domain crate depends on `game-core` for shared IDs, time, quantities, and errors. Their additional production dependencies are:
 

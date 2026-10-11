@@ -1,6 +1,6 @@
 mod support;
 use game_api::*;
-use game_world::*;
+use game_assembly::*;
 
 fn child(workers: usize) -> Simulation {
     Simulation::new(
@@ -309,7 +309,7 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
         sim.debug_set_relationship(
             id,
             ruler,
-            game_world::decisions::Relationship {
+            game_assembly::decisions::Relationship {
                 trust: 0,
                 affection: 0,
             },

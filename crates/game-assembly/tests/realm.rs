@@ -1,6 +1,6 @@
 use game_api::*;
+use game_assembly::{Execution, Simulation};
 use game_realm::{Participant, Progress, Proposal, Status, Term, TermKey};
-use game_world::{Execution, Simulation};
 use std::collections::{BTreeMap, BTreeSet};
 fn command(sim: &mut Simulation, c: Command) {
     sim.submit(Submission {
@@ -44,13 +44,13 @@ fn fixture(seed: u64) -> (Simulation, Context) {
     let mayor = actor(&sim, 4);
     let av = actor(&sim, 3);
     let bv = actor(&sim, 5);
-    let mut disposition = game_world::decisions::Personality::restful();
+    let mut disposition = game_assembly::decisions::Personality::restful();
     disposition.honesty = 100;
     disposition.discipline = 100;
     sim.debug_set_personality(
         mayor,
         disposition,
-        game_world::decisions::Aspiration::Comfort,
+        game_assembly::decisions::Aspiration::Comfort,
     )
     .unwrap();
     let institutions = sim.canonical_state().institutions.as_ref().unwrap();
@@ -601,7 +601,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
     }]
         .owner
     {
-        game_world::realm::PendingOwner::Agreement(id) => id,
+        game_assembly::realm::PendingOwner::Agreement(id) => id,
         _ => panic!("expected the actual proposed agreement"),
     };
     assert_eq!(

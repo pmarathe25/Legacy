@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/game-land", "crates/game-spatial", "crates/game-ecs", "crates/game-content", "crates/game-workshop", "crates/game-cargo", "crates/game-logistics", "crates/game-property", "crates/game-world", "crates/game-environment", "crates/game-ecology", "crates/game-agriculture", "crates/game-agreements", "crates/game-projects", "crates/game-lifecycle", "crates/game-session", "crates/game-armies", "crates/game-realm", "crates/game-transport", "crates/game-genetics", "crates/game-missions", "crates/game-society", "crates/game-lineage", "crates/game-skills", "crates/game-conflict", "crates/game-invocation", "crates/game-physiology", "crates/game-health", "crates/game-characters", "crates/game-core", "crates/game-api", "crates/game-sim", "crates/game-cli"]
+members = ["crates/game-land", "crates/game-spatial", "crates/game-ecs", "crates/game-content", "crates/game-workshop", "crates/game-cargo", "crates/game-logistics", "crates/game-property", "crates/game-world", "crates/game-assembly", "crates/game-environment", "crates/game-ecology", "crates/game-agriculture", "crates/game-agreements", "crates/game-projects", "crates/game-lifecycle", "crates/game-session", "crates/game-armies", "crates/game-realm", "crates/game-transport", "crates/game-genetics", "crates/game-missions", "crates/game-society", "crates/game-lineage", "crates/game-skills", "crates/game-conflict", "crates/game-invocation", "crates/game-physiology", "crates/game-health", "crates/game-characters", "crates/game-core", "crates/game-api", "crates/game-sim", "crates/game-cli"]
 resolver = "3"
 
 [workspace.package]
@@ -18,6 +18,7 @@ game-cargo = { path = "crates/game-cargo" }
 game-logistics = { path = "crates/game-logistics" }
 game-property = { path = "crates/game-property" }
 game-world = { path = "crates/game-world" }
+game-assembly = { path = "crates/game-assembly" }
 game-environment = { path = "crates/game-environment" }
 game-ecology = { path = "crates/game-ecology" }
 game-agriculture = { path = "crates/game-agriculture" }

@@ -1,4 +1,4 @@
-use game_world::{Execution, Simulation};
+use game_assembly::{Execution, Simulation};
 use std::io::{self, BufRead, IsTerminal, Write};
 
 fn main() {
@@ -42,57 +42,58 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let mut environment_document = None;
-    let mut sim =
-        if game_world::scenarios::PLAYABLE.contains(&scenario.as_str()) || scenario == "random" {
-            let explicit_config = scenario_config.is_some();
-            let mut config: game_world::scenarios::Config = if let Some(path) = scenario_config {
-                serde_json::from_slice(&std::fs::read(path)?)?
-            } else {
-                game_world::scenarios::Config::default()
-            };
-            if !explicit_config {
-                config.agriculture = game_world::agriculture::catalog_source(
-                    content_root.join("agriculture/crops.toml"),
+    let mut sim = if game_assembly::scenarios::PLAYABLE.contains(&scenario.as_str())
+        || scenario == "random"
+    {
+        let explicit_config = scenario_config.is_some();
+        let mut config: game_assembly::scenarios::Config = if let Some(path) = scenario_config {
+            serde_json::from_slice(&std::fs::read(path)?)?
+        } else {
+            game_assembly::scenarios::Config::default()
+        };
+        if !explicit_config {
+            config.agriculture = game_assembly::agriculture::catalog_source(
+                content_root.join("agriculture/crops.toml"),
+            );
+        }
+        if let Some(genetics) = &mut config.genetics {
+            genetics.content_dir = content_root.join("human");
+        }
+        if environment_config.is_some() || !explicit_config {
+            let path = environment_config
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| content_root.join("environment/temperate.toml"));
+            let document = game_assembly::environment::Config::read(path)?;
+            config.environment = document.data.clone();
+            environment_document = Some(document);
+        }
+        Simulation::playable_scenario(&scenario, seed, execution.clone(), config)?
+    } else {
+        if scenario_config.is_some() {
+            return Err("scenario configuration requires a playable opening".into());
+        }
+        if let Some(path) = environment_config {
+            if scenario != "farming-fixture" {
+                return Err(
+                    "environment configuration requires a playable opening or farming-fixture"
+                        .into(),
                 );
             }
-            if let Some(genetics) = &mut config.genetics {
-                genetics.content_dir = content_root.join("human");
-            }
-            if environment_config.is_some() || !explicit_config {
-                let path = environment_config
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| content_root.join("environment/temperate.toml"));
-                let document = game_world::environment::Config::read(path)?;
-                config.environment = document.data.clone();
-                environment_document = Some(document);
-            }
-            Simulation::playable_scenario(&scenario, seed, execution.clone(), config)?
+            let document = game_assembly::environment::Config::read(path)?;
+            let config = document.data.clone();
+            environment_document = Some(document);
+            Simulation::farming_with_config(
+                seed,
+                execution.clone(),
+                game_assembly::agriculture::FarmingConfig {
+                    environment: config,
+                    ..Default::default()
+                },
+            )?
         } else {
-            if scenario_config.is_some() {
-                return Err("scenario configuration requires a playable opening".into());
-            }
-            if let Some(path) = environment_config {
-                if scenario != "farming-fixture" {
-                    return Err(
-                        "environment configuration requires a playable opening or farming-fixture"
-                            .into(),
-                    );
-                }
-                let document = game_world::environment::Config::read(path)?;
-                let config = document.data.clone();
-                environment_document = Some(document);
-                Simulation::farming_with_config(
-                    seed,
-                    execution.clone(),
-                    game_world::agriculture::FarmingConfig {
-                        environment: config,
-                        ..Default::default()
-                    },
-                )?
-            } else {
-                Simulation::new(&scenario, seed, execution.clone())?
-            }
-        };
+            Simulation::new(&scenario, seed, execution.clone())?
+        }
+    };
     if let Some(document) = environment_document {
         sim.attach_environment_content(document)?;
     }
