@@ -372,12 +372,12 @@ impl Simulation {
         Ok(())
     }
     fn invocation_control_actor(&self) -> Option<PersonId> {
-        let w = &self.host.state.invocation.as_ref()?.control;
-        w.active
-            .as_ref()
-            .map(|a| a.actor)
-            .or_else(|| w.pending_warning(&self.host.storage).map(|view| view.actor))
-            .or_else(|| w.activation.as_ref().map(|p| p.actor))
+        self.host
+            .state
+            .invocation
+            .as_ref()?
+            .control
+            .actor(&self.host.storage)
     }
     fn invocation_admission(&self, actor: PersonId) -> game_invocation::AdmissionFacts {
         let lineage = self.host.state.lineage.as_ref().unwrap();
@@ -861,19 +861,6 @@ impl Simulation {
         self.observe_invocation_deaths()?;
         Ok(())
     }
-    fn next_cost_after(&self, actor: PersonId, lives: &BTreeSet<PersonId>) -> Option<SimDuration> {
-        let w = self.host.state.invocation.as_ref()?;
-        let before = game_invocation::burden(&self.host.storage, actor)
-            .cloned()
-            .unwrap_or_default();
-        let next_loss = w
-            .control
-            .active
-            .as_ref()
-            .filter(|a| a.actor == actor)
-            .map_or(w.control.rules.loss_threshold, |a| a.next_loss_burden);
-        game_invocation::next_cost_after(&w.control.rules, &before, lives.len(), next_loss)
-    }
     pub(crate) fn invocation_boundary(&self, limit: SimTime) -> SimTime {
         let Some(w) = &self.host.state.invocation else {
             return limit;
@@ -905,21 +892,13 @@ impl Simulation {
         let Some(a) = w.control.active.as_ref().filter(|a| a.actor == actor) else {
             return 0;
         };
-        let levels: Vec<_> = a
-            .lives
-            .iter()
-            .map(|id| {
-                w.history[id]
-                    .skills
-                    .iter()
-                    .find(|s| s.skill == skill)
-                    .map_or(0, |s| s.level)
-            })
-            .collect();
-        let maximum = levels.iter().copied().max().unwrap_or(0);
-        (u32::from(maximum)
-            + (levels.iter().map(|v| u32::from(*v)).sum::<u32>() - u32::from(maximum)) / 2)
-            .min(200) as u16
+        game_invocation::borrowed_level(a.lives.iter().map(|id| {
+            w.history[id]
+                .skills
+                .iter()
+                .find(|entry| entry.skill == skill)
+                .map_or(0, |entry| entry.level)
+        }))
     }
     pub(crate) fn invocation_work_rate(
         &self,
@@ -953,14 +932,14 @@ impl Simulation {
             .active
             .as_ref()
             .is_some_and(|active| active.actor == actor);
-        let borrowed = if borrowing {
-            1_000 + u64::from(self.borrowed_skill_level(actor, skill)) * u64::from(bonus)
-        } else {
-            0
-        };
-        let penalty = u64::from(state.temporary_identity) + u64::from(state.permanent_identity);
-        game_invocation::compose_work_rate(own, body, borrowed, penalty)
-            .expect("validated frozen body and invocation rate bounds")
+        game_invocation::borrowed_work_rate(
+            own,
+            body,
+            &state,
+            borrowing.then(|| self.borrowed_skill_level(actor, skill)),
+            bonus,
+        )
+        .expect("validated frozen body and invocation rate bounds")
     }
     pub(crate) fn invocation_combat_damage(
         &self,
@@ -981,13 +960,7 @@ impl Simulation {
             .skills
             .as_ref()
             .map_or(5, |s| s.rules.damage_bonus_per_level);
-        let penalty = u64::from(state.temporary_identity) + u64::from(state.permanent_identity);
-        let denominator = 1_000 + u64::from(own) * u64::from(bonus);
-        let multiplier = (1_000 + u64::from(borrowed.max(own)) * u64::from(bonus))
-            .saturating_sub(penalty * 5)
-            .max(1);
-        u64::try_from(u128::from(base) * u128::from(multiplier) / u128::from(denominator))
-            .map_err(|_| Error::Overflow)
+        game_invocation::borrowed_combat_damage(base, own, borrowed, bonus, &state)
     }
     pub(crate) fn invocation_routes(
         &self,
@@ -1230,53 +1203,18 @@ impl Simulation {
             .invocation
             .as_ref()
             .ok_or(Error::Unavailable)?;
-        if !self.invocation_ready(self.host.state.ruler)
-            || lives.is_empty()
-            || lives.len() > 8
-            || lives.iter().any(|id| !w.history.contains_key(id))
-        {
-            return Err(Error::Unavailable);
-        }
-        let levels = Skill::ALL
-            .into_iter()
-            .map(|skill| {
-                let values: Vec<_> = lives
-                    .iter()
-                    .map(|id| {
-                        w.history[id]
-                            .skills
-                            .iter()
-                            .find(|s| s.skill == skill)
-                            .map_or(0, |s| s.level)
-                    })
-                    .collect();
-                let max = values.iter().copied().max().unwrap_or(0);
-                (
-                    skill,
-                    (u32::from(max)
-                        + (values.iter().map(|v| u32::from(*v)).sum::<u32>() - u32::from(max)) / 2)
-                        .min(200) as u16,
-                )
-            })
-            .collect();
-        Ok(InvocationPreview {
-            burden_rate: (lives.len() as u64).pow(2),
-            activation_burden: w
-                .control
-                .rules
-                .activation_burden
-                .checked_mul((lives.len() as u64).pow(2))
-                .ok_or(Error::Overflow)?,
-            activation_fatigue: w
-                .control
-                .rules
-                .activation_fatigue
-                .checked_mul((lives.len() as u64).pow(2))
-                .ok_or(Error::Overflow)?,
-            next_cost_in: self.next_cost_after(self.host.state.ruler, &lives),
+        w.control.preview(
+            &self.host.storage,
+            &self.invocation_admission(self.host.state.ruler),
             lives,
-            borrowed_skills: levels,
-        })
+            |life, skill| {
+                w.history[&life]
+                    .skills
+                    .iter()
+                    .find(|entry| entry.skill == skill)
+                    .map_or(0, |entry| entry.level)
+            },
+        )
     }
     pub(crate) fn invocation_view(&self) -> Option<InvocationView> {
         let w = self.host.state.invocation.as_ref()?;
@@ -1357,29 +1295,20 @@ impl Simulation {
         if self.past_life_controls_actor(actor) {
             return Vec::new();
         }
-        let mut actions = Vec::new();
-        if let Some(warning) = w.control.pending_warning(&self.host.storage)
-            && warning.actor == actor
-        {
-            actions.push(InvocationAction::AcceptWarning {
-                warning: warning.id,
-            });
-        }
-        if w.control.active.as_ref().is_some_and(|a| a.actor == actor)
-            || w.control
-                .pending_warning(&self.host.storage)
-                .is_some_and(|a| a.actor == actor)
-        {
-            actions.push(InvocationAction::Dismiss);
-        }
-        if self.invocation_ready(actor) && w.control.warning.is_none() {
-            for life in w.history.keys().rev().take(32) {
-                let lives = BTreeSet::from([*life]);
-                if w.control.active.as_ref().is_none_or(|a| a.lives != lives) {
-                    actions.push(InvocationAction::Activate { lives });
+        let mut actions: Vec<_> = w
+            .control
+            .available_actions(&self.host.storage, &self.invocation_admission(actor))
+            .into_iter()
+            .map(|action| match action {
+                game_invocation::ControlAction::Activate { lives } => {
+                    InvocationAction::Activate { lives }
                 }
-            }
-        }
+                game_invocation::ControlAction::Dismiss => InvocationAction::Dismiss,
+                game_invocation::ControlAction::AcceptWarning { warning } => {
+                    InvocationAction::AcceptWarning { warning }
+                }
+            })
+            .collect();
         for record in w
             .records
             .values()

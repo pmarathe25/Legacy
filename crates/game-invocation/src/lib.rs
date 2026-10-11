@@ -28,3 +28,8 @@ pub use advance::*;
 
 #[cfg(test)]
 mod component_tests;
+
+mod benefits;
+pub use benefits::*;
+mod options;
+pub use options::*;

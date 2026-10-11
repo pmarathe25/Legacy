@@ -74,15 +74,8 @@ pub struct InvokedLifeView {
     pub institutions: Vec<InstitutionView>,
     pub cases: Vec<SocialCaseView>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InvocationPreview {
-    pub lives: BTreeSet<PersonId>,
-    pub burden_rate: u64,
-    pub activation_burden: u64,
-    pub activation_fatigue: u64,
-    pub borrowed_skills: Vec<(Skill, u16)>,
-    pub next_cost_in: Option<SimDuration>,
-}
+pub use game_invocation::InvocationPreview;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvocationView {
     pub ready: bool,

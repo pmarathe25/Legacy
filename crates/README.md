@@ -56,7 +56,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-lifecycle` | `game-ecs`; `game-genetics` (optional) | Life and pregnancy components; guarded age and birth transitions; opaque inheritable reproductive characteristics |
 | `game-invocation` | `game-ecs`, `game-characters` | Native personal costs and warning records; consent, guarded progression and validation; historical-controller intentions over borrowed character memories |
 | `game-lineage` | `game-logistics` | Care provision delivery requirements and receipts |
-| `game-missions` | `game-agreements` | Agreement terms in mission objectives |
+| `game-missions` | `game-agreements`, `game-logistics`, `game-transport` | Objective terms, member delivery plans, travel intentions and qualified engagement participants |
 | `game-openings` | `game-content`, `game-ecology`, `game-property` | Authored opening and settlement declarations, validated independently of simulation startup |
 | `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components and numerical integration; opaque inheritable physical characteristics |
 | `game-projects` | `game-ecs`, `game-agreements`, `game-workshop` | Native plans, enterprises, construction and personal knowledge; guarded material funding and selected-recipe accounts |
