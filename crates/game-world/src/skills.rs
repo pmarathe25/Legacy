@@ -5,9 +5,8 @@
 use crate::*;
 
 pub(crate) use game_skills::PracticeDelta;
-use game_skills::progress;
 pub use game_skills::{
-    Progress, Rules, World, advance_work, damage_for_level, rate_for_level, work_duration,
+    Progress, Rules, Runtime, Skills, advance_work, damage_for_level, rate_for_level, work_duration,
 };
 
 impl Simulation {
@@ -17,14 +16,20 @@ impl Simulation {
             .into_iter()
             .find(|scenario| scenario.id == "skills-fixture")
             .ok_or_else(|| Error::InvalidFixture("skills fixture is not registered".into()))?;
-        let mut world = World::default();
+        let world = Runtime::default();
         for person in &sim.state.people {
-            world.records.insert(person.id, BTreeMap::new());
+            game_skills::insert_skills(&mut sim.state.components, person.id, Skills::default())?;
             if person.role == Role::Guardian {
                 // These authored immortal mentors have practiced the lineage
                 // method before the fixture begins. This is not a newborn gift.
                 let prior_practice = world.rules.per_level.0 * u64::from(world.rules.max_level);
-                world.credit(person.id, Skill::Invocation, prior_practice, None);
+                world.credit(
+                    &mut sim.state.components,
+                    person.id,
+                    Skill::Invocation,
+                    prior_practice,
+                    None,
+                )?;
             }
         }
         sim.state.skills = Some(world);
@@ -80,9 +85,10 @@ impl Simulation {
                     ..
                 } if student == *actor => {
                     match topic {
-                        LessonTopic::Craft => {
-                            (Skill::Craft, Some(skills.practice(teacher, Skill::Craft)))
-                        }
+                        LessonTopic::Craft => (
+                            Skill::Craft,
+                            Some(skills.practice(&self.state.components, teacher, Skill::Craft)),
+                        ),
                         LessonTopic::Invocation => (Skill::Invocation, None),
                         // Route instruction supplies actual information, but does
                         // not pretend that sitting through it is farming/combat.
@@ -114,7 +120,9 @@ impl Simulation {
             return;
         };
         for delta in pending {
-            world.apply_practice(delta);
+            world
+                .apply_practice(&mut self.state.components, delta)
+                .expect("validated practice effect");
         }
     }
 
@@ -124,9 +132,12 @@ impl Simulation {
         };
         let mut next = limit;
         for delta in self.evaluate_skills(limit)? {
-            if let Some(remaining) =
-                world.until_next_level(delta.actor, delta.skill, delta.mastery_cap)?
-                && remaining <= delta.milliseconds
+            if let Some(remaining) = world.until_next_level(
+                &self.state.components,
+                delta.actor,
+                delta.skill,
+                delta.mastery_cap,
+            )? && remaining <= delta.milliseconds
             {
                 next = next.min(SimTime(
                     self.state
@@ -147,14 +158,23 @@ impl Simulation {
         if self.person_index.contains_key(&actor)
             && let Some(world) = &mut self.state.skills
         {
-            world.credit_action(actor, skill, milliseconds, self.state.time);
+            world
+                .credit_action(
+                    &mut self.state.components,
+                    actor,
+                    skill,
+                    milliseconds,
+                    self.state.time,
+                )
+                .expect("validated semantic skill credit");
         }
     }
 
     pub(crate) fn on_skill_event(&mut self, kind: &EventKind) {
         if let EventKind::Born { child, .. } = kind {
-            if let Some(world) = &mut self.state.skills {
-                world.records.entry(*child).or_default();
+            if self.state.skills.is_some() {
+                game_skills::insert_skills(&mut self.state.components, *child, Skills::default())
+                    .expect("validated newborn skills");
             }
             return;
         }
@@ -196,20 +216,18 @@ impl Simulation {
         self.state
             .skills
             .as_ref()
-            .map_or(0, |world| world.level(actor, skill))
+            .map_or(0, |world| world.level(&self.state.components, actor, skill))
     }
 
     pub(crate) fn own_skill_view(&self, actor: PersonId) -> Vec<SkillView> {
-        let Some(world) = &self.state.skills else {
+        let Some(_) = &self.state.skills else {
             return Vec::new();
         };
         Skill::ALL
             .into_iter()
             .map(|skill| {
-                let owned = world
-                    .records
-                    .get(&actor)
-                    .and_then(|skills| skills.get(&skill))
+                let owned = game_skills::skills(&self.state.components, actor)
+                    .and_then(|skills| skills.records.get(&skill))
                     .cloned()
                     .unwrap_or_default();
                 SkillView {
@@ -249,45 +267,23 @@ impl Simulation {
 }
 
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
-    let Some(world) = &state.skills else {
+    let fail = || Error::InvalidSave("inconsistent personal skills".into());
+    let Some(runtime) = &state.skills else {
+        if game_skills::all_skills(&state.components).next().is_some() {
+            return Err(fail());
+        }
         return Ok(());
     };
-    let fail = || Error::InvalidSave("inconsistent personal skills".into());
-    let rules = &world.rules;
-    let cap = rules
-        .per_level
-        .0
-        .checked_mul(u64::from(rules.max_level))
-        .ok_or_else(fail)?;
-    if state.physical.is_none()
-        || rules.per_level.0 == 0
-        || !(1..=1_000).contains(&rules.max_level)
-        || u64::from(rules.max_level) * u64::from(rules.work_bonus_per_level) > 1_000
-        || u64::from(rules.max_level) * u64::from(rules.damage_bonus_per_level) > 1_000
-        || rules.action_practice_ms == 0
-        || rules.action_practice_ms > cap
-    {
+    if state.physical.is_none() {
         return Err(fail());
     }
-    for (actor, skills) in &world.records {
-        if !state.people.iter().any(|person| person.id == *actor) {
-            return Err(fail());
-        }
-        for record in skills.values() {
-            if record.practice_ms > cap || record != &progress(record.practice_ms, rules) {
-                return Err(fail());
-            }
-        }
-    }
-    for (actor, ticks) in &world.semantic_ticks {
-        if !state.people.iter().any(|person| person.id == *actor)
-            || ticks.iter().any(|(skill, tick)| {
-                !matches!(skill, Skill::Negotiation | Skill::Leadership)
-                    || *tick > state.time.0 / MINUTE.0
-            })
-        {
-            return Err(fail());
-        }
+    runtime
+        .validate(&state.components, state.time)
+        .map_err(|_| fail())?;
+    if game_skills::all_skills(&state.components)
+        .any(|(actor, _)| !state.people.iter().any(|person| person.id == actor))
+    {
+        return Err(fail());
     }
     Ok(())
 }
@@ -357,12 +353,11 @@ mod tests {
         sim.debug_actor_command(actor, Command::Work { site })
             .unwrap();
         let remaining_to_level = 120_000
-            - sim
-                .state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Craft);
+            - sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                actor,
+                Skill::Craft,
+            );
         sim.advance(SimDuration(remaining_to_level)).unwrap();
         assert_eq!(sim.own_skill_level(actor, Skill::Craft), 2);
         let now_faster =
@@ -390,12 +385,12 @@ mod tests {
         .unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
-        let practice = sim
-            .state
-            .skills
-            .as_ref()
-            .unwrap()
-            .practice(actor, Skill::Craft);
+        let practice =
+            sim.state
+                .skills
+                .as_ref()
+                .unwrap()
+                .practice(&sim.state.components, actor, Skill::Craft);
         assert_eq!(practice, 30_000);
         sim.advance(MINUTE).unwrap();
         sim.debug_move_actor(actor, AreaId(2)).unwrap();
@@ -405,7 +400,7 @@ mod tests {
                 .skills
                 .as_ref()
                 .unwrap()
-                .practice(actor, Skill::Craft),
+                .practice(&sim.state.components, actor, Skill::Craft),
             practice
         );
         assert_eq!(sim.own_skill_level(actor, Skill::Craft), 0);
@@ -448,7 +443,7 @@ mod tests {
                 .skills
                 .as_ref()
                 .unwrap()
-                .practice(actor, Skill::Craft),
+                .practice(&a.state.components, actor, Skill::Craft),
             60_000
         );
     }
@@ -476,18 +471,18 @@ mod tests {
                 .all(|skill| skill.practice_ms == 0 && skill.level == 0)
         );
         assert_eq!(sim.own_skill_level(predecessor, Skill::Craft), 1);
-        let before = sim.state.skills.clone();
+        let before = sim.state.components.snapshot().unwrap();
         let _borrowed = rate_for_level(
             sim.own_skill_level(predecessor, Skill::Craft),
             &sim.state.skills.as_ref().unwrap().rules,
         );
-        assert_eq!(sim.state.skills, before);
+        assert_eq!(sim.state.components.snapshot().unwrap(), before);
     }
 
     #[test]
     fn practical_farming_and_real_combat_actions_train_distinct_skills() {
         let mut farmer = Simulation::farming_fixture(1, Execution::default()).unwrap();
-        farmer.state.skills = Some(World::default());
+        farmer.state.skills = Some(Runtime::default());
         let actor = farmer.state.ruler;
         let field = farmer
             .state
@@ -520,21 +515,19 @@ mod tests {
         farmer.advance(SimDuration(30_000)).unwrap();
         farmer.debug_actor_command(actor, Command::Cancel).unwrap();
         assert_eq!(
-            farmer
-                .state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Farming),
+            farmer.state.skills.as_ref().unwrap().practice(
+                &farmer.state.components,
+                actor,
+                Skill::Farming
+            ),
             30_000
         );
         assert_eq!(
-            farmer
-                .state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Craft),
+            farmer.state.skills.as_ref().unwrap().practice(
+                &farmer.state.components,
+                actor,
+                Skill::Craft
+            ),
             0
         );
 
@@ -559,12 +552,11 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            fighter
-                .state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Combat),
+            fighter.state.skills.as_ref().unwrap().practice(
+                &fighter.state.components,
+                actor,
+                Skill::Combat
+            ),
             6_000
         );
         fighter.advance(SimDuration(6_000)).unwrap();
@@ -580,21 +572,19 @@ mod tests {
             .unwrap();
         fighter.advance(SimDuration(6_000)).unwrap();
         assert_eq!(
-            fighter
-                .state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Combat),
+            fighter.state.skills.as_ref().unwrap().practice(
+                &fighter.state.components,
+                actor,
+                Skill::Combat
+            ),
             6_000
         );
         assert_eq!(
-            fighter
-                .state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Farming),
+            fighter.state.skills.as_ref().unwrap().practice(
+                &fighter.state.components,
+                actor,
+                Skill::Farming
+            ),
             0
         );
     }
@@ -623,19 +613,19 @@ mod tests {
         .unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(student, Skill::Invocation),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                student,
+                Skill::Invocation
+            ),
             30_000
         );
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(teacher, Skill::Leadership),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                teacher,
+                Skill::Leadership
+            ),
             30_000
         );
         assert_eq!(sim.own_skill_level(student, Skill::Invocation), 0);
@@ -661,11 +651,11 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(student, Skill::Invocation),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                student,
+                Skill::Invocation
+            ),
             90_000
         );
         assert_eq!(sim.own_skill_level(student, Skill::Invocation), 1);
@@ -680,7 +670,7 @@ mod tests {
     #[test]
     fn only_an_adopted_agreement_trains_negotiation_and_zero_time_churn_is_bounded() {
         let mut sim = Simulation::agreement_fixture(1, Execution::default()).unwrap();
-        sim.state.skills = Some(World::default());
+        sim.state.skills = Some(Runtime::default());
         let actor = sim.state.ruler;
         let citizen = sim
             .state
@@ -722,51 +712,51 @@ mod tests {
             .next_back()
             .unwrap();
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Negotiation),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                actor,
+                Skill::Negotiation
+            ),
             0
         );
         sim.debug_agreement_action(citizen, AgreementAction::Accept { agreement })
             .unwrap();
         assert!(sim.state.inventories[&stock].access.contains(&citizen));
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Negotiation),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                actor,
+                Skill::Negotiation
+            ),
             6_000
         );
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(citizen, Skill::Negotiation),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                citizen,
+                Skill::Negotiation
+            ),
             6_000
         );
         for _ in 0..100 {
             sim.credit_skill(actor, Skill::Negotiation, 6_000);
         }
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Negotiation),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                actor,
+                Skill::Negotiation
+            ),
             6_000
         );
         sim.advance(MINUTE).unwrap();
         sim.credit_skill(actor, Skill::Negotiation, 6_000);
         assert_eq!(
-            sim.state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Negotiation),
+            sim.state.skills.as_ref().unwrap().practice(
+                &sim.state.components,
+                actor,
+                Skill::Negotiation
+            ),
             12_000
         );
     }

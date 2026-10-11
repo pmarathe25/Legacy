@@ -19,6 +19,8 @@ flowchart TD
     World --> Spatial[game-spatial]
     Spatial --> ECS
     Spatial --> Core
+    Land[game-land] --> ECS
+    Land --> Core
     Domains -->|typed component access| ECS[game-ecs]
     ECS --> Core
     ECS --> Backend[private ECS backend]
@@ -49,9 +51,10 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-projects` | `game-agreements` | Project funding terms |
 | `game-realm` | `game-agreements`, `game-missions` | Diplomatic terms and objectives |
 | `game-society` | `game-agreements` | Obligations and disputes |
+| `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
 | `game-workshop` | `game-ecs`, `game-cargo`, `game-skills` | Site and optional job components; material inputs and outputs; work rates and craft practice effects |
 
-`game-agreements`, `game-cargo`, `game-genetics`, `game-health`, `game-invocation`, `game-logistics`, `game-property`, `game-skills`, and `game-transport` have no other production dependencies. Existing optional integrations remain available; making every feature optional is no longer an architecture requirement.
+`game-agreements`, `game-cargo`, `game-genetics`, `game-health`, `game-invocation`, `game-logistics`, `game-property`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Existing optional integrations remain available; making every feature optional is no longer an architecture requirement.
 
 ## Components and systems
 

@@ -2434,7 +2434,14 @@ mod integration_tests {
             .skills
             .as_mut()
             .unwrap()
-            .credit(actor, Skill::Medicine, 60_000, None);
+            .credit(
+                &mut sim.state.components,
+                actor,
+                Skill::Medicine,
+                60_000,
+                None,
+            )
+            .unwrap();
         sim.state
             .decisions
             .as_mut()
@@ -2493,7 +2500,14 @@ mod integration_tests {
             .skills
             .as_mut()
             .unwrap()
-            .credit(actor, Skill::Medicine, 90_000, None);
+            .credit(
+                &mut whole.state.components,
+                actor,
+                Skill::Medicine,
+                90_000,
+                None,
+            )
+            .unwrap();
         let herbs = whole
             .debug_add_inventory(
                 Good::Herb,
@@ -2604,7 +2618,14 @@ mod integration_tests {
             .skills
             .as_mut()
             .unwrap()
-            .credit(actor, Skill::Medicine, 90_000, None);
+            .credit(
+                &mut whole.state.components,
+                actor,
+                Skill::Medicine,
+                90_000,
+                None,
+            )
+            .unwrap();
         let herbs = whole
             .debug_add_inventory(
                 Good::Herb,
@@ -2666,12 +2687,11 @@ mod integration_tests {
         }
         assert_eq!(whole.canonical_state(), sliced.canonical_state());
         assert_eq!(
-            whole
-                .state
-                .skills
-                .as_ref()
-                .unwrap()
-                .practice(actor, Skill::Medicine),
+            whole.state.skills.as_ref().unwrap().practice(
+                &whole.state.components,
+                actor,
+                Skill::Medicine
+            ),
             95_000
         );
         assert!(matches!(
@@ -3071,7 +3091,14 @@ mod transport_health_tests {
             .skills
             .as_mut()
             .unwrap()
-            .credit(bearer, Skill::Medicine, 60_000, None);
+            .credit(
+                &mut sim.state.components,
+                bearer,
+                Skill::Medicine,
+                60_000,
+                None,
+            )
+            .unwrap();
         let herbs = sim
             .debug_add_inventory(
                 Good::Herb,

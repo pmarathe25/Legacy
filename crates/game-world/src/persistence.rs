@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 30;
+const SAVE_VERSION: u32 = 31;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -2097,7 +2097,7 @@ fn validate_physical(
                         u128::from(job.rate.denominator) * u128::from(job.body_rate.numerator);
                     let maximum = s.skills.as_ref().map_or(1_000, |skills| {
                         1_000
-                            + u64::from(skills.level(*id, Skill::Craft))
+                            + u64::from(skills.level(&s.components, *id, Skill::Craft))
                                 * u64::from(skills.rules.work_bonus_per_level)
                     });
                     denominator == 0

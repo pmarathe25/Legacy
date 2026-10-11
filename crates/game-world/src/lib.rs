@@ -136,8 +136,6 @@ pub struct CanonicalState {
     pub next_id: u64,
     pub ruler: PersonId,
     pub areas: Vec<Area>,
-    // The common 10k-person storage spike favored typed rows over ECS adapters;
-    // explicit commit boundaries also avoid converting persistent IDs to handles.
     pub people: Vec<Person>,
     pub inventories: BTreeMap<InventoryId, Inventory>,
     pub events: Vec<Event>,
@@ -159,7 +157,7 @@ pub struct CanonicalState {
     #[serde(default)]
     pub institutions: Option<institutions::World>,
     #[serde(default)]
-    pub skills: Option<skills::World>,
+    pub skills: Option<skills::Runtime>,
     #[serde(default)]
     pub projects: Option<projects::World>,
     #[serde(default)]

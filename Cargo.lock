@@ -507,6 +507,7 @@ version = "0.1.0"
 dependencies = [
  "game-cargo",
  "game-core",
+ "game-ecs",
  "game-skills",
  "serde",
  "serde_json",
@@ -583,6 +584,16 @@ name = "game-invocation"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-land"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-ecs",
  "serde",
  "serde_json",
 ]
@@ -691,7 +702,9 @@ name = "game-skills"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

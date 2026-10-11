@@ -326,7 +326,8 @@ impl Simulation {
                             .state
                             .skills
                             .as_ref()
-                            .and_then(|w| w.records.get(&teacher))
+                            .and_then(|_| self.state.components.personal_skills(teacher))
+                            .map(|row| &row.records)
                             .and_then(|r| r.get(&skill))
                         else {
                             return self.social_refusal(
@@ -1016,7 +1017,8 @@ impl Simulation {
                 .state
                 .skills
                 .as_ref()
-                .and_then(|world| world.records.get(teacher))
+                .and_then(|_| self.state.components.personal_skills(*teacher))
+                .map(|row| &row.records)
             {
                 for (skill, progress) in records {
                     if progress.practice_ms > 0
@@ -1647,11 +1649,9 @@ mod tests {
         let before = sim.state.inventories[&timber].quantity.0;
         let prior = sim
             .state
-            .skills
-            .as_ref()
-            .unwrap()
-            .records
-            .get(&actor)
+            .components
+            .personal_skills(actor)
+            .map(|row| &row.records)
             .and_then(|records| records.get(&Skill::Craft))
             .map_or(0, |progress| progress.practice_ms);
         social(
@@ -1665,7 +1665,7 @@ mod tests {
         sim.advance(SimDuration(30_000)).unwrap();
         cancel(&mut sim, actor);
         assert_eq!(
-            sim.state.skills.as_ref().unwrap().records[&actor][&Skill::Craft].practice_ms,
+            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms,
             prior + 30_000
         );
         sim.debug_set_personality(
@@ -1674,10 +1674,11 @@ mod tests {
             decisions::Aspiration::Comfort,
         )
         .unwrap();
-        let own = sim.state.skills.as_ref().unwrap().records[&actor][&Skill::Craft].practice_ms;
+        let own =
+            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms;
         sim.advance(SimDuration(30_000)).unwrap();
         assert_eq!(
-            sim.state.skills.as_ref().unwrap().records[&actor][&Skill::Craft].practice_ms,
+            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms,
             own
         );
     }
@@ -1709,7 +1710,8 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert!(sim.state.social.as_ref().unwrap().interactions.is_empty());
-        let learned = sim.state.skills.as_ref().unwrap().records[&actor][&Skill::Craft].practice_ms;
+        let learned =
+            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms;
         sim.debug_set_personality(
             actor,
             decisions::Personality::restful(),
@@ -1718,7 +1720,7 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state.skills.as_ref().unwrap().records[&actor][&Skill::Craft].practice_ms,
+            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms,
             learned
         );
         assert!(!sim.state.events.iter().any(|event| matches!(event.kind, EventKind::PracticeCompleted { actor: worker, .. } if worker == actor)));

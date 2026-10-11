@@ -9,6 +9,7 @@ fn schema() -> Result<Schema, Error> {
     game_agriculture::register_components(&mut schema)?;
     game_physiology::register_components(&mut schema)?;
     game_workshop::register_components(&mut schema)?;
+    game_skills::register_components(&mut schema)?;
     game_spatial::register_components(&mut schema)?;
     game_environment::register_components(&mut schema)?;
     game_ecology::register_components(&mut schema)?;
@@ -30,6 +31,20 @@ impl Components {
     }
     pub fn bodies(&self) -> impl Iterator<Item = (game_api::PersonId, &game_physiology::Body)> {
         game_physiology::bodies(&self.0)
+    }
+    pub fn personal_skills(&self, actor: game_api::PersonId) -> Option<&game_skills::Skills> {
+        game_skills::skills(&self.0, actor)
+    }
+    pub fn personal_skills_mut(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Option<&mut game_skills::Skills> {
+        game_skills::skills_mut(&mut self.0, actor)
+    }
+    pub fn all_personal_skills(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_skills::Skills)> {
+        game_skills::all_skills(&self.0)
     }
     pub fn site(&self, id: game_api::SiteId) -> Option<&game_workshop::Site> {
         game_workshop::site(&self.0, id)
@@ -387,5 +402,34 @@ mod tests {
             })
             .unwrap();
         assert!(Simulation::load(&kernel.save().unwrap(), Execution::default()).is_err());
+    }
+
+    #[test]
+    fn personal_skills_are_saved_as_components_and_require_their_runtime() {
+        let sim = Simulation::skills_fixture(20, Execution::default()).unwrap();
+        let saved = sim.save().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        let metadata = json["state"]["skills"].as_object().unwrap();
+        assert!(!metadata.contains_key("records"));
+        assert!(!metadata.contains_key("semantic_ticks"));
+        assert_eq!(
+            json["state"]["components"]["columns"]["skills/personal"]
+                .as_array()
+                .unwrap()
+                .len(),
+            sim.state.people.len()
+        );
+        let restored = Simulation::load(
+            &saved,
+            Execution {
+                workers: 2,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
+        let mut missing_runtime = sim.canonical_state().clone();
+        missing_runtime.skills = None;
+        assert!(crate::skills::validate(&missing_runtime).is_err());
     }
 }

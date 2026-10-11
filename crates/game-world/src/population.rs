@@ -277,12 +277,10 @@ impl Simulation {
         }
         let levels = 10.min(config.skills.max_level);
         self.state
-            .skills
-            .as_mut()
+            .components
+            .personal_skills_mut(healer)
             .unwrap()
             .records
-            .get_mut(&healer)
-            .unwrap()
             .insert(
                 Skill::Medicine,
                 skills::Progress {

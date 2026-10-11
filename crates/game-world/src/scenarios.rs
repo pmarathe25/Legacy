@@ -270,11 +270,14 @@ impl Simulation {
         let people: BTreeSet<_> = self.state.people.iter().map(|p| p.id).collect();
         let ruler = self.state.ruler;
         let village = self.state.areas[0].id;
-        self.state.skills = Some(skills::World {
-            rules: config.skills.clone(),
-            records: people.iter().map(|p| (*p, BTreeMap::new())).collect(),
-            semantic_ticks: BTreeMap::new(),
-        });
+        self.state.skills = Some(skills::Runtime::new(config.skills.clone())?);
+        for person in &people {
+            game_skills::insert_skills(
+                &mut self.state.components,
+                *person,
+                game_skills::Skills::default(),
+            )?;
+        }
         skills::validate(&self.state)?;
         let cap = config
             .skills
@@ -314,12 +317,10 @@ impl Simulation {
             .map(|p| p.id)
         {
             self.state
-                .skills
-                .as_mut()
+                .components
+                .personal_skills_mut(actor)
                 .unwrap()
                 .records
-                .get_mut(&actor)
-                .unwrap()
                 .insert(
                     Skill::Invocation,
                     skills::Progress {
@@ -681,12 +682,10 @@ impl Simulation {
             let level = 10.min(self.state.skills.as_ref().unwrap().rules.max_level);
             let practice = self.state.skills.as_ref().unwrap().rules.per_level.0 * u64::from(level);
             self.state
-                .skills
-                .as_mut()
+                .components
+                .personal_skills_mut(craftsperson)
                 .unwrap()
                 .records
-                .get_mut(&craftsperson)
-                .unwrap()
                 .insert(
                     Skill::Craft,
                     skills::Progress {
@@ -715,12 +714,10 @@ impl Simulation {
             })
             .collect();
             self.state
-                .skills
-                .as_mut()
+                .components
+                .personal_skills_mut(ruler)
                 .unwrap()
                 .records
-                .get_mut(&ruler)
-                .unwrap()
                 .extend(experiences);
             for guardian in self.state.lineage.as_mut().unwrap().guardians.values_mut() {
                 guardian.assessments.insert(ruler, lineage::Assessment {
@@ -837,12 +834,10 @@ impl Simulation {
         let level = 10.min(skill_rules.max_level);
         let practice_ms = skill_rules.per_level.0 * u64::from(level);
         self.state
-            .skills
-            .as_mut()
+            .components
+            .personal_skills_mut(healer)
             .unwrap()
             .records
-            .get_mut(&healer)
-            .unwrap()
             .insert(
                 Skill::Medicine,
                 skills::Progress {

@@ -334,10 +334,13 @@ mod tests {
         let strike = rules.strike(PersonId(1), rules.defence, true, 6_000);
         assert_eq!(strike.damage, 0);
         assert_eq!(strike.practice.skill, Skill::Combat);
-        let mut skills = game_skills::World::default();
-        skills.apply_practice(strike.practice);
-        assert_eq!(skills.practice(PersonId(1), Skill::Combat), 6_000);
-        assert_eq!(skills.practice(PersonId(2), Skill::Combat), 0);
+        let skills = game_skills::Runtime::default();
+        let mut schema = game_ecs::Schema::new();
+        game_skills::register_components(&mut schema).unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
+        skills.apply_practice(&mut store, strike.practice).unwrap();
+        assert_eq!(skills.practice(&store, PersonId(1), Skill::Combat), 6_000);
+        assert_eq!(skills.practice(&store, PersonId(2), Skill::Combat), 0);
     }
     #[test]
     fn large_deployments_remain_inside_clear_geometry_and_blocked_maps_have_no_spawn() {

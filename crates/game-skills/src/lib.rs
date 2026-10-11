@@ -1,7 +1,12 @@
 //! Personal learning and exact skill-adjusted work arithmetic.
 use game_core::*;
+use game_ecs::Store;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod storage;
+pub use storage::{
+    all_skills, insert_skills, register_components, remove_skills, skills, skills_mut,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rules {
@@ -23,6 +28,25 @@ impl Default for Rules {
         }
     }
 }
+impl Rules {
+    pub fn validate(&self) -> Result<(), Error> {
+        let cap = self
+            .per_level
+            .0
+            .checked_mul(u64::from(self.max_level))
+            .ok_or(Error::Overflow)?;
+        if self.per_level.0 == 0
+            || !(1..=1_000).contains(&self.max_level)
+            || u64::from(self.max_level) * u64::from(self.work_bonus_per_level) > 1_000
+            || u64::from(self.max_level) * u64::from(self.damage_bonus_per_level) > 1_000
+            || self.action_practice_ms == 0
+            || self.action_practice_ms > cap
+        {
+            return Err(Error::InvalidConfiguration("invalid skill rules".into()));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Progress {
@@ -32,12 +56,17 @@ pub struct Progress {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub rules: Rules,
-    pub records: BTreeMap<PersonId, BTreeMap<Skill, Progress>>,
-    pub semantic_ticks: BTreeMap<PersonId, BTreeMap<Skill, u64>>,
+#[serde(deny_unknown_fields)]
+pub struct Skills {
+    pub records: BTreeMap<Skill, Progress>,
+    pub semantic_ticks: BTreeMap<Skill, u64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
+    pub rules: Rules,
+}
 /// Learning earned by an actual interval of activity, supplied by its owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PracticeDelta {
@@ -47,52 +76,86 @@ pub struct PracticeDelta {
     pub mastery_cap: Option<u64>,
 }
 
-impl World {
-    pub fn apply_practice(&mut self, practice: PracticeDelta) {
+impl Runtime {
+    pub fn new(rules: Rules) -> Result<Self, Error> {
+        rules.validate()?;
+        Ok(Self { rules })
+    }
+
+    /// Validate this owner's rows against its rules and the supplied clock.
+    /// Person membership is a host fact.
+    pub fn validate(&self, store: &Store, now: SimTime) -> Result<(), Error> {
+        self.rules.validate()?;
+        for (_, row) in all_skills(store) {
+            row.validate_progress(&self.rules)?;
+            if row
+                .semantic_ticks
+                .values()
+                .any(|tick| *tick > now.0 / MINUTE.0)
+            {
+                return Err(Error::InvalidSave("future semantic skill credit".into()));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn apply_practice(&self, store: &mut Store, practice: PracticeDelta) -> Result<(), Error> {
         self.credit(
+            store,
             practice.actor,
             practice.skill,
             practice.milliseconds,
             practice.mastery_cap,
-        );
+        )
     }
 
     /// Social actions have a bounded learning rate even when several people
     /// publish the same achievement. Physical strikes retain individual credit.
     pub fn credit_action(
-        &mut self,
+        &self,
+        store: &mut Store,
         actor: PersonId,
         skill: Skill,
         milliseconds: u64,
         now: SimTime,
-    ) {
+    ) -> Result<(), Error> {
         if milliseconds == 0 {
-            return;
+            return Ok(());
         }
-        if matches!(skill, Skill::Negotiation | Skill::Leadership) {
+        self.rules.validate()?;
+        let mut row = skills(store, actor).cloned().unwrap_or_default();
+        row.validate_progress(&self.rules)?;
+        let semantic = matches!(skill, Skill::Negotiation | Skill::Leadership);
+        if semantic {
             let tick = now.0 / MINUTE.0;
-            let last = self.semantic_ticks.entry(actor).or_default();
-            if last.get(&skill).is_some_and(|previous| *previous >= tick) {
-                return;
+            if row
+                .semantic_ticks
+                .get(&skill)
+                .is_some_and(|previous| *previous >= tick)
+            {
+                return Ok(());
             }
-            last.insert(skill, tick);
+            row.semantic_ticks.insert(skill, tick);
         }
-        self.credit(actor, skill, milliseconds, None);
+        if !row.credit(skill, milliseconds, None, &self.rules) && !semantic {
+            return Ok(());
+        }
+        insert_skills(store, actor, row)
     }
     /// Time to a live mastery change during continuous practice. Guides cannot
     /// teach across a level their own accumulated mastery has not reached.
     pub fn until_next_level(
         &self,
+        store: &Store,
         actor: PersonId,
         skill: Skill,
         mastery_cap: Option<u64>,
     ) -> Result<Option<u64>, Error> {
-        if self.rules.per_level.0 == 0 {
-            return Err(Error::InvalidConfiguration(
-                "zero skill level duration".into(),
-            ));
+        self.rules.validate()?;
+        if let Some(row) = skills(store, actor) {
+            row.validate_progress(&self.rules)?;
         }
-        let practice = self.practice(actor, skill);
+        let practice = self.practice(store, actor, skill);
         let level = practice / self.rules.per_level.0;
         if level >= u64::from(self.rules.max_level) {
             return Ok(None);
@@ -105,48 +168,110 @@ impl World {
         }
         Ok(Some(threshold - practice))
     }
-    pub fn level(&self, actor: PersonId, skill: Skill) -> u16 {
-        self.records
-            .get(&actor)
-            .and_then(|skills| skills.get(&skill))
-            .map_or(0, |p| p.level)
+    pub fn level(&self, store: &Store, actor: PersonId, skill: Skill) -> u16 {
+        skills(store, actor).map_or(0, |row| row.level(skill))
     }
 
-    pub fn practice(&self, actor: PersonId, skill: Skill) -> u64 {
-        self.records
-            .get(&actor)
-            .and_then(|skills| skills.get(&skill))
-            .map_or(0, |p| p.practice_ms)
+    pub fn practice(&self, store: &Store, actor: PersonId, skill: Skill) -> u64 {
+        skills(store, actor).map_or(0, |row| row.practice(skill))
     }
 
     pub fn credit(
-        &mut self,
+        &self,
+        store: &mut Store,
         actor: PersonId,
         skill: Skill,
         milliseconds: u64,
         mastery_cap: Option<u64>,
-    ) {
+    ) -> Result<(), Error> {
         if milliseconds == 0 {
-            return;
+            return Ok(());
         }
-        let cap = self.rules.per_level.0 * u64::from(self.rules.max_level);
-        let existing = self.practice(actor, skill);
+        self.rules.validate()?;
+        let mut row = skills(store, actor).cloned().unwrap_or_default();
+        row.validate_progress(&self.rules)?;
+        if !row.credit(skill, milliseconds, mastery_cap, &self.rules) {
+            return Ok(());
+        }
+        insert_skills(store, actor, row)
+    }
+}
+
+impl Skills {
+    /// Intrinsic checks do not capture the current rules or simulation clock.
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.records.values().any(|record| {
+            if record.level == 0 {
+                record.progress_ms != record.practice_ms
+            } else {
+                record.progress_ms >= record.practice_ms
+            }
+        }) || self
+            .semantic_ticks
+            .keys()
+            .any(|skill| !matches!(skill, Skill::Negotiation | Skill::Leadership))
+        {
+            return Err(Error::InvalidSave(
+                "invalid personal skill component".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_progress(&self, rules: &Rules) -> Result<(), Error> {
+        rules.validate()?;
+        self.validate()?;
+        let cap = rules.per_level.0 * u64::from(rules.max_level);
+        if self.records.values().any(|record| {
+            record.practice_ms > cap || record != &calculated_progress(record.practice_ms, rules)
+        }) {
+            return Err(Error::InvalidSave(
+                "inconsistent personal skill progress".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn level(&self, skill: Skill) -> u16 {
+        self.records.get(&skill).map_or(0, |record| record.level)
+    }
+
+    pub fn practice(&self, skill: Skill) -> u64 {
+        self.records
+            .get(&skill)
+            .map_or(0, |record| record.practice_ms)
+    }
+
+    // Runtime validates the opening row and rules before calculating changes.
+    fn credit(
+        &mut self,
+        skill: Skill,
+        milliseconds: u64,
+        mastery_cap: Option<u64>,
+        rules: &Rules,
+    ) -> bool {
+        let cap = rules.per_level.0 * u64::from(rules.max_level);
+        let existing = self.practice(skill);
         // A guide cannot teach beyond their personal mastery. A pupil with more
         // experience retains it; an inadequate guide never subtracts learning.
         let cap = mastery_cap.map_or(cap, |teacher| cap.min(teacher.max(existing)));
         let credited =
             (u128::from(existing) + u128::from(milliseconds)).min(u128::from(cap)) as u64;
         if credited == existing {
-            return;
+            return false;
         }
         self.records
-            .entry(actor)
-            .or_default()
-            .insert(skill, progress(credited, &self.rules));
+            .insert(skill, calculated_progress(credited, rules));
+        true
     }
 }
 
-pub fn progress(practice_ms: u64, rules: &Rules) -> Progress {
+pub fn progress(practice_ms: u64, rules: &Rules) -> Result<Progress, Error> {
+    rules.validate()?;
+    Ok(calculated_progress(practice_ms, rules))
+}
+
+fn calculated_progress(practice_ms: u64, rules: &Rules) -> Progress {
     let level = (practice_ms / rules.per_level.0).min(u64::from(rules.max_level)) as u16;
     Progress {
         practice_ms,
@@ -201,150 +326,4 @@ pub fn damage_for_level(base: u64, level: u16, rules: &Rules) -> Result<u64, Err
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn semantic_learning_limits_duplicates_without_discarding_distinct_physical_actions() {
-        let mut world = World::default();
-        let actor = PersonId(1);
-        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(59_999));
-        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(59_999));
-        world.credit_action(actor, Skill::Leadership, 1_000, SimTime(59_999));
-        world.credit_action(PersonId(2), Skill::Negotiation, 1_000, SimTime(59_999));
-        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(60_000));
-        let after = world.clone();
-        world.credit_action(actor, Skill::Negotiation, 1_000, SimTime(59_999));
-        assert_eq!(world, after);
-        assert_eq!(world.practice(actor, Skill::Negotiation), 2_000);
-        assert_eq!(world.practice(actor, Skill::Leadership), 1_000);
-        assert_eq!(world.practice(PersonId(2), Skill::Negotiation), 1_000);
-        for _ in 0..2 {
-            world.credit_action(actor, Skill::Combat, 1_000, SimTime(60_000));
-        }
-        assert_eq!(world.practice(actor, Skill::Combat), 2_000);
-        assert!(!world.semantic_ticks[&actor].contains_key(&Skill::Combat));
-    }
-
-    #[test]
-    fn independent_practice_effects_preserve_elapsed_learning_and_a_guides_limit() {
-        let mut world = World::default();
-        for elapsed in [20_000, 30_000, 40_000] {
-            world.apply_practice(PracticeDelta {
-                actor: PersonId(1),
-                skill: Skill::Craft,
-                milliseconds: elapsed,
-                mastery_cap: Some(70_000),
-            });
-        }
-        assert_eq!(world.practice(PersonId(1), Skill::Craft), 70_000);
-        assert_eq!(world.level(PersonId(1), Skill::Craft), 1);
-        world.apply_practice(PracticeDelta {
-            actor: PersonId(1),
-            skill: Skill::Craft,
-            milliseconds: 20_000,
-            mastery_cap: None,
-        });
-        assert_eq!(world.practice(PersonId(1), Skill::Craft), 90_000);
-    }
-    #[test]
-    fn partial_training_is_fractional_bounded_and_slice_invariant() {
-        let mut whole = World::default();
-        let mut sliced = whole.clone();
-        whole.credit(PersonId(1), Skill::Craft, 170_003, None);
-        for elapsed in [1, 59_999, 10_003, 40_000, 60_000] {
-            sliced.credit(PersonId(1), Skill::Craft, elapsed, None);
-        }
-        assert_eq!(whole, sliced);
-        assert_eq!(whole.level(PersonId(1), Skill::Craft), 2);
-        assert_eq!(
-            whole.records[&PersonId(1)][&Skill::Craft].progress_ms,
-            50_003
-        );
-        assert_eq!(whole.level(PersonId(1), Skill::Farming), 0);
-        whole.credit(PersonId(1), Skill::Craft, u64::MAX, None);
-        assert_eq!(whole.level(PersonId(1), Skill::Craft), 100);
-        assert_eq!(whole.records[&PersonId(1)][&Skill::Craft].progress_ms, 0);
-        assert_eq!(whole.level(PersonId(2), Skill::Craft), 0);
-    }
-
-    #[test]
-    fn rational_work_progress_and_completion_share_the_exact_remainder() {
-        let rate = SkillRate {
-            numerator: 1_370,
-            denominator: 1_000,
-        };
-        let (whole, remainder) = advance_work(70_013, rate, 19).unwrap();
-        let (mut total, mut carry) = (0, 19);
-        for elapsed in [1, 9, 60_003, 10_000] {
-            let (work, next) = advance_work(elapsed, rate, carry).unwrap();
-            total += work;
-            carry = next;
-        }
-        assert_eq!((whole, remainder), (total, carry));
-        let duration = work_duration(60_000, rate, 19).unwrap();
-        assert!(advance_work(duration - 1, rate, 19).unwrap().0 < 60_000);
-        assert!(advance_work(duration, rate, 19).unwrap().0 >= 60_000);
-        assert_eq!(
-            work_duration(60_000, SkillRate::default(), 0).unwrap(),
-            60_000
-        );
-        assert!(advance_work(u64::MAX, rate, 0).is_err());
-    }
-
-    #[test]
-    fn guidance_cannot_copy_a_teachers_full_mastery_and_borrowing_is_read_only() {
-        let mut world = World::default();
-        world.credit(PersonId(1), Skill::Craft, 300_000, None);
-        let before = world.clone();
-        let borrowed = rate_for_level(world.level(PersonId(1), Skill::Craft), &world.rules);
-        assert!(borrowed.numerator > 1_000);
-        assert_eq!(world, before);
-        let teacher = world.practice(PersonId(1), Skill::Craft);
-        world.credit(PersonId(2), Skill::Craft, 30_000, Some(teacher));
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 0);
-        world.credit(PersonId(2), Skill::Craft, 600_000, Some(teacher));
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 5);
-        world.credit(PersonId(2), Skill::Craft, 60_000, None);
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 6);
-        world.credit(PersonId(2), Skill::Craft, 60_000, Some(teacher));
-        assert_eq!(world.level(PersonId(2), Skill::Craft), 6);
-        assert_eq!(damage_for_level(45_000, 100, &world.rules).unwrap(), 67_500);
-    }
-    #[test]
-    fn live_mastery_changes_have_exact_boundaries_and_respect_a_guides_cap() {
-        let mut world = World::default();
-        let actor = PersonId(1);
-        world.credit(actor, Skill::Medicine, 90_000, None);
-        assert_eq!(
-            world
-                .until_next_level(actor, Skill::Medicine, None)
-                .unwrap(),
-            Some(30_000)
-        );
-        assert_eq!(
-            world
-                .until_next_level(actor, Skill::Medicine, Some(119_999))
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            world
-                .until_next_level(actor, Skill::Medicine, Some(120_000))
-                .unwrap(),
-            Some(30_000)
-        );
-        world.credit(actor, Skill::Medicine, u64::MAX, None);
-        assert_eq!(
-            world
-                .until_next_level(actor, Skill::Medicine, None)
-                .unwrap(),
-            None
-        );
-        world.rules.per_level = SimDuration(0);
-        assert!(
-            world
-                .until_next_level(actor, Skill::Medicine, None)
-                .is_err()
-        );
-    }
-}
+mod tests;
