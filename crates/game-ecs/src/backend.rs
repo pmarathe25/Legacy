@@ -365,11 +365,32 @@ impl Storage {
         Ok(())
     }
     pub(super) fn iter<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> {
-        self.entities.iter().filter_map(|(id, entity)| {
-            self.world
-                .get::<Native<C>>(*entity)
-                .map(|component| (*id, &component.0))
-        })
+        let mut rows = Vec::new();
+        if let Some(component) = self.world.components().get_id(TypeId::of::<Native<C>>()) {
+            for archetype in self
+                .world
+                .archetypes()
+                .iter()
+                .filter(|archetype| archetype.contains(component))
+            {
+                for row in archetype.entities() {
+                    let entity = row.id();
+                    let id = self
+                        .world
+                        .get::<NativeId>(entity)
+                        .expect("registered stable identity")
+                        .0;
+                    let value = &self
+                        .world
+                        .get::<Native<C>>(entity)
+                        .expect("matched native component")
+                        .0;
+                    rows.push((id, value));
+                }
+            }
+        }
+        rows.sort_unstable_by_key(|(id, _)| *id);
+        rows.into_iter()
     }
     pub(super) fn count<C: Component>(&self) -> usize {
         let Some(component) = self.world.components().get_id(TypeId::of::<Native<C>>()) else {

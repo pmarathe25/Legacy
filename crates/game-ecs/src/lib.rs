@@ -354,6 +354,42 @@ mod tests {
         store
     }
     #[test]
+    fn sparse_iteration_preserves_stable_order_across_archetypes_edits_and_restore() {
+        let mut store = Store::with_schema(schema());
+        for id in 1..=10_000 {
+            store.insert_or_spawn(StableId(id), Count(id)).unwrap();
+        }
+        for id in [9_999, 10_001, 5] {
+            store
+                .insert_or_spawn(StableId(id), Name(id.to_string()))
+                .unwrap();
+        }
+        store.insert(StableId(5), Wide(77)).unwrap();
+        let rows = |store: &Store| {
+            store
+                .iter::<Name>()
+                .map(|(id, row)| (id.0, row.0.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(&store),
+            [
+                (5, "5".into()),
+                (9_999, "9999".into()),
+                (10_001, "10001".into())
+            ]
+        );
+        assert_eq!(store.iter::<u16>().count(), 0);
+        store.remove::<Name>(StableId(9_999)).unwrap();
+        store.remove::<Name>(StableId(10_001)).unwrap();
+        store.insert(StableId(7), Name("new".into())).unwrap();
+        assert_eq!(rows(&store), [(5, "5".into()), (7, "new".into())]);
+        assert_eq!(store.count::<Count>(), 10_000);
+        let restored = Store::restore(schema(), store.snapshot().unwrap()).unwrap();
+        assert_eq!(rows(&restored), rows(&store));
+        assert_eq!(rows(&store.clone()), rows(&store));
+    }
+    #[test]
     fn component_counts_follow_structural_batches_rejection_and_restore() {
         let mut store = fixture(true);
         assert_eq!(store.count::<Count>(), 3);
