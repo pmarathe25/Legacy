@@ -1352,8 +1352,7 @@ impl Simulation {
             return Ok(());
         }
         if matches!(activity, Activity::Gather { .. }) {
-            self.complete_gathering(actor);
-            return Ok(());
+            return self.complete_gathering(actor);
         }
         if matches!(
             activity,

@@ -6,6 +6,12 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod deposit;
+pub use deposit::{
+    DepositBounds, PreparedDeposit, append_deposit_schema_bounds, deposit_available,
+    prepare_deposit,
+};
+
 mod storage;
 pub use storage::{
     insert_inventory, inventories, inventory, inventory_mut, register_components, remove_inventory,

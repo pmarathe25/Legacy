@@ -1555,6 +1555,7 @@ impl Simulation {
         self.preflight_development(&due, next)?;
         self.preflight_combat(&due, next)?;
         self.preflight_force(&due)?;
+        self.preflight_ecology_collections(next, &due, ecology_output.as_ref())?;
         self.preflight_health(next)?;
         self.preflight_armies_at(next)?;
         self.preflight_missions()?;

@@ -54,45 +54,27 @@ impl Simulation {
         amount: Quantity,
         contamination: u16,
     ) {
-        let owner_now = self.host.clock().time;
-        assert!(contamination <= 1_000);
         let stock = game_cargo::inventory(&self.host.storage, inventory).expect("inventory exists");
         assert_eq!(stock.good, Good::Water);
-        assert!(stock.quantity >= amount);
-        let quantity = stock.quantity.0;
-        let location = stock.location.clone();
+        let prepared = game_health::prepare_water_collection(
+            &self.host.storage,
+            game_health::WaterCollectionFacts {
+                inventory,
+                quantity_after: stock.quantity,
+                collected: amount,
+                contamination,
+                holder: match stock.location {
+                    InventoryLocation::Carried(actor) => Some(actor),
+                    InventoryLocation::Area(_) => None,
+                },
+                now: self.host.clock().time,
+            },
+        )
+        .expect("validated configured water collection");
+        prepared
+            .commit(&mut self.host.storage)
+            .expect("registered water collection");
         self.host.state.health.get_or_insert_with(Runtime::default);
-        let existing =
-            game_health::water_lot(&self.host.storage, inventory).map_or(0, WaterLot::load);
-        let lot = game_health::collect_water(CollectionInput {
-            quantity_after: quantity,
-            existing_load: existing,
-            collected: amount.0,
-            contamination,
-        })
-        .expect("validated physical collection");
-        game_health::insert_water_lot(&mut self.host.storage, inventory, lot)
-            .expect("validated water lot");
-        if let InventoryLocation::Carried(actor) = location {
-            let old = game_health::knowledge(&self.host.storage, actor)
-                .and_then(|k| k.water.get(&inventory))
-                .cloned();
-            let purified = contamination == 0
-                && (quantity == amount.0 || old.as_ref().is_some_and(|s| s.purified));
-            let suspected_unsafe = contamination > 0 || old.is_some_and(|s| s.suspected_unsafe);
-            game_health::ensure_knowledge(&mut self.host.storage, actor)
-                .expect("known health observer")
-                .water
-                .insert(
-                    inventory,
-                    WaterSafetyView {
-                        inventory,
-                        purified,
-                        suspected_unsafe,
-                        observed_at: owner_now,
-                    },
-                );
-        }
     }
     pub(crate) fn update_water_event(&mut self, event: &EventKind) {
         if self.host.state.health.is_none() {

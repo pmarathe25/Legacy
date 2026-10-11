@@ -3,6 +3,15 @@
 use crate::*;
 pub use game_ecology::{EcologyRules, Gathering, Plot, Resource, Runtime};
 
+struct PreparedGatheringCompletion {
+    actor: PersonId,
+    facts: game_ecology::CollectionFacts,
+    activity: Activity,
+    ecology: game_ecology::PreparedCollectionFinish,
+    cargo: Option<game_cargo::PreparedDeposit>,
+    water: Option<game_health::PreparedWaterCollection>,
+}
+
 impl Simulation {
     pub fn ecology_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         Self::ecology_with_config(seed, execution, agriculture::FarmingConfig::default())
@@ -226,115 +235,84 @@ impl Simulation {
         }
         let area = self.ecology_area(actor).unwrap();
         match action {
-            EcologyAction::GrantAccess {
-                resource,
-                recipient,
-                allowed,
-            } => {
-                let source = self
-                    .host
-                    .state
-                    .ecology
-                    .as_ref()
-                    .unwrap()
-                    .resource(&self.host.storage, resource)
-                    .ok_or(Error::Unavailable)?;
-                if source.area != area
-                    || source.custodian != Some(actor)
-                    || self.ecology_area(recipient) != Some(area)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.ensure_event_capacity(1)?;
-                let access = &mut self
-                    .host
-                    .state
-                    .ecology
-                    .as_mut()
-                    .unwrap()
-                    .resource_mut(&mut self.host.storage, resource)
-                    .unwrap()
-                    .access;
-                if allowed {
-                    access.insert(recipient);
-                } else {
-                    access.remove(&recipient);
-                }
-                self.emit(EventKind::ResourceAccessChanged {
-                    resource,
-                    actor,
-                    recipient,
-                    allowed,
-                });
-                self.observe_ecology();
-            }
-            EcologyAction::RequestAccess { resource } => {
-                if game_ecology::requests(&self.host.storage, actor)
-                    .and_then(|row| row.next_request.get(&resource))
-                    .is_some_and(|t| *t > self.host.clock().time)
-                {
-                    return Err(Error::Unavailable);
-                }
-                let next_request = SimTime(
-                    self.host
-                        .clock()
-                        .time
-                        .0
-                        .checked_add(180_000)
-                        .ok_or(Error::Overflow)?,
-                );
-                let source = self
-                    .host
-                    .state
-                    .ecology
-                    .as_ref()
-                    .unwrap()
-                    .resource(&self.host.storage, resource)
-                    .ok_or(Error::Unavailable)?;
-                let custodian = source.custodian.ok_or(Error::Unavailable)?;
-                if source.area != area
-                    || self.ecology_area(custodian) != Some(area)
-                    || custodian == actor
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.ensure_event_capacity(2)?;
-                game_ecology::ensure_requests(&mut self.host.storage, actor)
-                    .expect("known requester")
-                    .next_request
-                    .insert(resource, next_request);
-                self.emit(EventKind::ResourceAccessRequested {
-                    resource,
-                    actor,
-                    custodian,
-                });
-                let mind = &game_characters::decisions::mind::<game_api::Command>(
+            EcologyAction::GrantAccess { .. } | EcologyAction::RequestAccess { .. } => {
+                let runtime = self.host.state.ecology.as_ref().unwrap();
+                let prepared = runtime.prepare_access(
                     &self.host.storage,
-                    custodian,
-                )
-                .unwrap();
-                if custodian != self.host.state.ruler
-                    && self.ecology_able(custodian)
-                    && mind.personality.empathy >= 700
-                    && mind
-                        .relationships
-                        .get(&actor)
-                        .is_none_or(|relation| relation.trust >= 0)
-                {
-                    self.debug_ecology_action(
-                        custodian,
-                        EcologyAction::GrantAccess {
+                    self.host.clock().time,
+                    &action,
+                    game_ecology::AccessFacts {
+                        actor,
+                        area,
+                        capable: self.ecology_able(actor),
+                    },
+                    |person| self.ecology_area(person),
+                )?;
+                let effect = prepared.effect().clone();
+                self.ensure_event_capacity(
+                    if matches!(effect, game_ecology::AccessEffect::Requested { .. }) {
+                        2
+                    } else {
+                        1
+                    },
+                )?;
+                prepared.commit(runtime, &mut self.host.storage)?;
+                match effect {
+                    game_ecology::AccessEffect::Changed {
+                        resource,
+                        actor,
+                        recipient,
+                        allowed,
+                    } => {
+                        self.emit(EventKind::ResourceAccessChanged {
                             resource,
-                            recipient: actor,
-                            allowed: true,
-                        },
-                    )?;
-                } else {
-                    self.emit(EventKind::ResourceAccessRefused {
+                            actor,
+                            recipient,
+                            allowed,
+                        });
+                        self.observe_ecology();
+                    }
+                    game_ecology::AccessEffect::Requested {
                         resource,
                         actor,
                         custodian,
-                    });
+                    } => {
+                        self.emit(EventKind::ResourceAccessRequested {
+                            resource,
+                            actor,
+                            custodian,
+                        });
+                        let mind = game_characters::decisions::mind::<game_api::Command>(
+                            &self.host.storage,
+                            custodian,
+                        )
+                        .unwrap();
+                        let response = game_characters::resource_responses::permission_response(
+                            &mind.personality,
+                            mind.relationships.get(&actor),
+                            game_characters::resource_responses::ResponseFacts {
+                                autonomous: custodian != self.host.state.ruler,
+                                capable: self.ecology_able(custodian),
+                            },
+                        );
+                        match response {
+                            game_characters::resource_responses::PermissionResponse::Grant => self
+                                .debug_ecology_action(
+                                    custodian,
+                                    EcologyAction::GrantAccess {
+                                        resource,
+                                        recipient: actor,
+                                        allowed: true,
+                                    },
+                                )?,
+                            game_characters::resource_responses::PermissionResponse::Refuse => self
+                                .emit(EventKind::ResourceAccessRefused {
+                                    resource,
+                                    actor,
+                                    custodian,
+                                }),
+                        }
+                    }
                 }
             }
             EcologyAction::Gather {
@@ -471,19 +449,24 @@ impl Simulation {
         if unauthorized
             && let Some(custodian) = custodian
             && custodian != actor
-            && custodian != self.host.state.ruler
-            && self.ecology_area(custodian) == self.ecology_area(actor)
-            && !self.combat_restricts(custodian)
-            && self.host.state.combat.is_some()
-            && self.can_fight(actor)
-            && self.can_fight(custodian)
         {
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
+            let mind = game_characters::decisions::mind::<game_api::Command>(
                 &self.host.storage,
                 custodian,
             )
             .unwrap();
-            if mind.personality.aggression >= 500 && mind.personality.risk_tolerance >= 500 {
+            let response = game_characters::resource_responses::unauthorized_use_response(
+                &mind.personality,
+                game_characters::resource_responses::ResponseFacts {
+                    autonomous: custodian != self.host.state.ruler,
+                    capable: self.ecology_area(custodian) == self.ecology_area(actor)
+                        && !self.combat_restricts(custodian)
+                        && self.host.state.combat.is_some()
+                        && self.can_fight(actor)
+                        && self.can_fight(custodian),
+                },
+            );
+            if response == game_characters::resource_responses::UnauthorizedUseResponse::Resist {
                 self.debug_start_encounter(vec![(actor, 0), (custodian, 1)])?;
             }
         }
@@ -497,64 +480,216 @@ impl Simulation {
                 .expect("registered gathering");
         }
     }
-    pub(crate) fn complete_gathering(&mut self, actor: PersonId) {
-        let Some(job) = self.host.state.ecology.as_mut().and_then(|world| {
-            world
-                .remove_gathering(&mut self.host.storage, actor)
-                .expect("registered gathering")
-        }) else {
-            return;
-        };
-        let source = self
-            .host
-            .state
-            .ecology
-            .as_ref()
-            .unwrap()
+    fn gathering_facts(&self, actor: PersonId) -> Result<game_ecology::CollectionFacts, Error> {
+        let runtime = self.host.state.ecology.as_ref().ok_or(Error::Unavailable)?;
+        let job = runtime
+            .gathering(&self.host.storage, actor)
+            .ok_or(Error::Unavailable)?;
+        let source = runtime
             .resource(&self.host.storage, job.resource)
-            .expect("component exists")
+            .ok_or(Error::Unavailable)?;
+        Ok(game_ecology::CollectionFacts {
+            now: self.host.clock().time,
+            area: self.ecology_area(actor).unwrap_or(source.area),
+            capable: self.ecology_able(actor),
+            cargo_available: self.transfer_capacity(job.destination, job.quantity.0)
+                && game_cargo::deposit_available(
+                    &self.host.storage,
+                    job.destination,
+                    source.kind.good(),
+                    job.quantity,
+                ),
+            tool_available: job
+                .tool
+                .is_none_or(|tool| self.tool_available_after_release(actor, tool)),
+        })
+    }
+    fn prepare_gathering_completion(
+        &self,
+        actor: PersonId,
+    ) -> Result<Option<PreparedGatheringCompletion>, Error> {
+        let Some(runtime) = self.host.state.ecology.as_ref() else {
+            return Ok(None);
+        };
+        if runtime.gathering(&self.host.storage, actor).is_none() {
+            return Ok(None);
+        }
+        let facts = self.gathering_facts(actor)?;
+        let Some(ecology) = runtime.prepare_collection_finish(&self.host.storage, actor, facts)?
+        else {
+            return Ok(None);
+        };
+        let (cargo, water) = match ecology.outcome() {
+            game_ecology::CollectionOutcome::Collected(effect) => {
+                let cargo = game_cargo::prepare_deposit(
+                    &self.host.storage,
+                    effect.destination,
+                    effect.good,
+                    effect.quantity,
+                )?;
+                let water = effect
+                    .contamination
+                    .map(|contamination| {
+                        game_health::prepare_water_collection(
+                            &self.host.storage,
+                            game_health::WaterCollectionFacts {
+                                inventory: effect.destination,
+                                quantity_after: cargo.quantity_after(),
+                                collected: effect.quantity,
+                                contamination,
+                                holder: match *cargo.location() {
+                                    InventoryLocation::Carried(holder) => Some(holder),
+                                    InventoryLocation::Area(_) => None,
+                                },
+                                now: self.host.clock().time,
+                            },
+                        )
+                    })
+                    .transpose()?;
+                (Some(cargo), water)
+            }
+            game_ecology::CollectionOutcome::Interrupted { .. } => (None, None),
+        };
+        let activity = self
+            .host
+            .storage
+            .activity(actor)
+            .ok_or(Error::Unavailable)?
             .clone();
-        let plan = game_ecology::prepare_collection(
-            &source,
+        Ok(Some(PreparedGatheringCompletion {
             actor,
-            &job,
-            game_ecology::CollectionFacts {
-                now: self.host.clock().time,
-                area: self.ecology_area(actor).unwrap_or(source.area),
-                capable: self.ecology_able(actor),
-                cargo_available: self.transfer_capacity(job.destination, job.quantity.0),
-                tool_available: job
-                    .tool
-                    .is_none_or(|tool| self.tool_available_for(actor, tool)),
-            },
-        );
-        if let Ok(plan) = plan {
+            facts,
+            activity,
+            ecology,
+            cargo,
+            water,
+        }))
+    }
+    fn commit_gathering_completion(
+        &mut self,
+        prepared: PreparedGatheringCompletion,
+    ) -> Result<(), Error> {
+        let runtime = self.host.state.ecology.as_ref().ok_or(Error::Unavailable)?;
+        prepared.ecology.validate(runtime, &self.host.storage)?;
+        if self.gathering_facts(prepared.actor)? != prepared.facts
+            || self.host.storage.activity(prepared.actor) != Some(&prepared.activity)
+        {
+            return Err(Error::Unavailable);
+        }
+        if let Some(cargo) = &prepared.cargo {
+            cargo.validate(&self.host.storage)?;
+        }
+        if let Some(water) = &prepared.water {
+            water.validate(&self.host.storage)?;
+        }
+        self.ensure_event_capacity(1)?;
+        let mut batch = game_ecs::Batch::new();
+        let outcome = prepared.ecology.append_writes(&mut batch);
+        if let Some(cargo) = prepared.cargo {
+            cargo.append_writes(&mut batch);
+        }
+        let has_water = prepared.water.is_some();
+        if let Some(water) = prepared.water {
+            water.append_writes(&mut batch);
+        }
+        batch.insert(game_ecs::StableId(prepared.actor.0), Activity::Idle);
+        self.host.storage.apply_batch(batch)?;
+        if has_water {
             self.host
                 .state
-                .ecology
-                .as_mut()
-                .unwrap()
-                .resource_mut(&mut self.host.storage, plan.resource)
-                .unwrap()
-                .remaining = plan.remaining;
-            game_cargo::inventory_mut(&mut self.host.storage, plan.destination)
-                .unwrap()
-                .quantity
-                .0 += plan.quantity.0;
-            if let Some(contamination) = plan.contamination {
-                self.collected_water_quality(plan.destination, plan.quantity, contamination);
-            }
-            self.emit(EventKind::ResourceCollected {
-                actor,
-                resource: plan.resource,
-                destination: plan.destination,
-                good: plan.good,
-                quantity: plan.quantity,
-            });
-        } else {
-            self.emit(EventKind::Interrupted { actor });
+                .health
+                .get_or_insert_with(health::Runtime::default);
         }
-        *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
+        match outcome {
+            game_ecology::CollectionOutcome::Collected(effect) => {
+                self.emit(EventKind::ResourceCollected {
+                    actor: prepared.actor,
+                    resource: effect.resource,
+                    destination: effect.destination,
+                    good: effect.good,
+                    quantity: effect.quantity,
+                })
+            }
+            game_ecology::CollectionOutcome::Interrupted { actor } => {
+                self.emit(EventKind::Interrupted { actor })
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn complete_gathering(&mut self, actor: PersonId) -> Result<(), Error> {
+        if let Some(prepared) = self.prepare_gathering_completion(actor)? {
+            self.commit_gathering_completion(prepared)?;
+        }
+        Ok(())
+    }
+    /// Closing collection uses fresh post-renewal/post-transfer facts. Admit
+    /// all possible accepted shapes before the clock: fixed schema validators
+    /// allow source/stock quantities within capacities, water load<=quantity*1000
+    /// and own observation identity. The existing physical event envelope covers
+    /// its single receipt. No collection creates a stable entity or changes good,
+    /// capacity or identity; unavailable closing facts yield Interrupted.
+    pub(crate) fn preflight_ecology_collections(
+        &self,
+        next: SimTime,
+        due: &[Due],
+        renewed: Option<&game_ecology::PreparedAdvance>,
+    ) -> Result<(), Error> {
+        let Some(runtime) = self.host.state.ecology.as_ref() else {
+            return Ok(());
+        };
+        let changed: BTreeMap<_, _> = renewed
+            .into_iter()
+            .flat_map(|rows| rows.changed_resources())
+            .map(|(id, row)| (*id, row))
+            .collect();
+        for deadline in due {
+            let Due::Physical(actor) = deadline else {
+                continue;
+            };
+            if !matches!(
+                self.host.storage.activity(*actor),
+                Some(Activity::Gather { .. })
+            ) {
+                continue;
+            }
+            let Some(job) = runtime.gathering(&self.host.storage, *actor) else {
+                continue;
+            };
+            let source = changed
+                .get(&job.resource)
+                .copied()
+                .or_else(|| runtime.resource(&self.host.storage, job.resource))
+                .ok_or(Error::Unavailable)?;
+            let mut batch = game_ecs::Batch::new();
+            let collection = runtime.append_collection_schema_bounds(
+                &self.host.storage,
+                *actor,
+                source,
+                &mut batch,
+            )?;
+            let bounds = game_cargo::append_deposit_schema_bounds(
+                &self.host.storage,
+                collection.destination,
+                collection.good,
+                &mut batch,
+            )?;
+            if collection.water {
+                game_health::append_water_collection_schema_bounds(
+                    &self.host.storage,
+                    collection.destination,
+                    bounds.capacity,
+                    match bounds.location {
+                        InventoryLocation::Carried(holder) => Some(holder),
+                        InventoryLocation::Area(_) => None,
+                    },
+                    next,
+                    &mut batch,
+                )?;
+            }
+            batch.insert(game_ecs::StableId(actor.0), Activity::Idle);
+            self.host.storage.validate_batch(&batch)?;
+        }
+        Ok(())
     }
     pub(crate) fn evaluate_ecology(
         &self,
@@ -1482,5 +1617,152 @@ mod tests {
                 ),
             Quantity(0)
         );
+    }
+    #[test]
+    fn a_scheduled_transfer_fills_the_compartment_before_collection_and_interrupts_without_debit() {
+        let mut sim = fixture();
+        let actor = sim.host.state.ruler;
+        let spring = resource(&sim, ResourceKind::Spring, AreaId(1));
+        let source = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Area(AreaId(1)),
+                Quantity(1000),
+                Quantity(1000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let destination = sim
+            .debug_add_inventory(
+                Good::Water,
+                InventoryLocation::Carried(actor),
+                Quantity(0),
+                Quantity(1000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let before = sim
+            .host
+            .state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resource(&sim.host.storage, spring)
+            .unwrap()
+            .remaining;
+        sim.debug_ecology_action(
+            actor,
+            EcologyAction::Gather {
+                resource: spring,
+                quantity: Quantity(1000),
+                unauthorized: false,
+            },
+        )
+        .unwrap();
+        let job = game_ecology::gathering(&sim.host.storage, actor).unwrap();
+        assert_eq!(job.destination, destination);
+        let completes = job.completes;
+        sim.debug_schedule_transfers(
+            completes,
+            vec![TransferIntent {
+                actor,
+                source,
+                destination,
+                quantity: Quantity(1000),
+            }],
+        )
+        .unwrap();
+        sim.advance(SimDuration(completes.0 - sim.host.clock().time.0))
+            .unwrap();
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, source)
+                .unwrap()
+                .quantity,
+            Quantity(0)
+        );
+        let stock = game_cargo::inventory(&sim.host.storage, destination).unwrap();
+        assert_eq!(stock.quantity, stock.capacity);
+        assert_eq!(
+            sim.host
+                .state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.host.storage, spring)
+                .unwrap()
+                .remaining,
+            before
+        );
+        assert!(game_ecology::gathering(&sim.host.storage, actor).is_none());
+        let events = sim.canonical_state().events;
+        let moved=events.iter().position(|event|matches!(event.event,EventKind::Transferred{actor:who,source:from,destination:to,..} if who==actor && from==source && to==destination)).unwrap();
+        let stopped = events
+            .iter()
+            .position(|event| matches!(event.event,EventKind::Interrupted{actor:who} if who==actor))
+            .unwrap();
+        assert!(moved < stopped);
+        assert!(!events.iter().any(|event|matches!(event.event,EventKind::ResourceCollected{actor:who,resource,..} if who==actor && resource==spring)));
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn a_prepared_collection_rejects_stale_stock_or_foreign_place_before_any_publication() {
+        for change_stock in [false, true] {
+            let mut sim = fixture();
+            let actor = sim.host.state.ruler;
+            let spring = resource(&sim, ResourceKind::Spring, AreaId(1));
+            sim.debug_ecology_action(
+                actor,
+                EcologyAction::Gather {
+                    resource: spring,
+                    quantity: Quantity(1000),
+                    unauthorized: false,
+                },
+            )
+            .unwrap();
+            let job = game_ecology::gathering(&sim.host.storage, actor).unwrap();
+            let destination = job.destination;
+            // This is the enclosing interval's closing read phase, after clock publication.
+            let mut clock = sim.host.clock();
+            clock.time = job.completes;
+            game_sim::ClockWorld::publish_clock(&mut sim.host, clock);
+            let prepared = sim.prepare_gathering_completion(actor).unwrap().unwrap();
+            assert!(prepared.cargo.is_some());
+            if change_stock {
+                game_cargo::inventory_mut(&mut sim.host.storage, destination)
+                    .unwrap()
+                    .quantity = Quantity(1);
+            } else {
+                *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId(actor.0))
+                    .unwrap() = Location::AtArea(AreaId(2));
+            }
+            let before = sim.canonical_snapshot().unwrap();
+            assert_eq!(
+                sim.commit_gathering_completion(prepared),
+                Err(Error::Unavailable)
+            );
+            assert_eq!(sim.canonical_snapshot().unwrap(), before);
+            assert!(game_ecology::gathering(&sim.host.storage, actor).is_some());
+        }
+    }
+    #[test]
+    fn pending_collection_and_all_other_state_survive_an_unrepresentable_public_advance() {
+        let mut sim = fixture();
+        let actor = sim.host.state.ruler;
+        let spring = resource(&sim, ResourceKind::Spring, AreaId(1));
+        sim.debug_ecology_action(
+            actor,
+            EcologyAction::Gather {
+                resource: spring,
+                quantity: Quantity(1000),
+                unauthorized: false,
+            },
+        )
+        .unwrap();
+        sim.advance(SimDuration(1)).unwrap();
+        let before = sim.canonical_snapshot().unwrap();
+        assert_eq!(sim.advance(SimDuration(u64::MAX)), Err(Error::Overflow));
+        assert_eq!(sim.canonical_snapshot().unwrap(), before);
+        assert!(game_ecology::gathering(&sim.host.storage, actor).is_some());
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
 }

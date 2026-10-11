@@ -163,6 +163,11 @@ pub enum CollectionOutcome {
     Collected(CollectionEffect),
     Interrupted { actor: PersonId },
 }
+pub struct CollectionStorageBounds {
+    pub destination: InventoryId,
+    pub good: Good,
+    pub water: bool,
+}
 pub struct PreparedCollectionFinish {
     actor: PersonId,
     job: Gathering,
@@ -182,20 +187,52 @@ impl PreparedCollectionFinish {
         }
         Ok(())
     }
-    pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<CollectionOutcome, Error> {
-        self.validate(runtime, store)?;
-        let mut batch = Batch::new();
+    /// Validate first, then combine with other owners' admitted effects. Only
+    /// ecological rows enter this batch; cargo and health supply their own rows.
+    pub fn append_writes(self, batch: &mut Batch) -> CollectionOutcome {
         if let CollectionOutcome::Collected(effect) = &self.outcome {
             let mut resource = self.resource;
             resource.remaining = effect.remaining;
             batch.insert(StableId(resource.id.0), resource);
         }
         batch.remove::<Gathering>(StableId(self.actor.0));
+        self.outcome
+    }
+    pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<CollectionOutcome, Error> {
+        self.validate(runtime, store)?;
+        let mut batch = Batch::new();
+        let outcome = self.append_writes(&mut batch);
         store.apply_batch(batch)?;
-        Ok(self.outcome)
+        Ok(outcome)
     }
 }
 impl Runtime {
+    /// Admit the minimum remaining-source shape for the built-in Resource
+    /// validator. Renewal preserves identity/kind/capacity and validates its
+    /// outputs; collection only decreases remaining inside [0, capacity].
+    pub fn append_collection_schema_bounds(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        source: &Resource,
+        batch: &mut Batch,
+    ) -> Result<CollectionStorageBounds, Error> {
+        let job = self.gathering(store, actor).ok_or(Error::Unavailable)?;
+        job.validate()?;
+        source.validate()?;
+        if source.id != job.resource {
+            return Err(stale("inconsistent future collection source"));
+        }
+        let mut after = source.clone();
+        after.remaining = Quantity(0);
+        batch.insert(StableId(after.id.0), after);
+        batch.remove::<Gathering>(StableId(actor.0));
+        Ok(CollectionStorageBounds {
+            destination: job.destination,
+            good: source.kind.good(),
+            water: source.kind == ResourceKind::Spring,
+        })
+    }
     /// Read the currently committed source after any environmental renewal.
     /// Neither the job nor stock changes until enclosing admission succeeds.
     pub fn prepare_collection_finish(

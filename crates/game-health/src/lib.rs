@@ -10,6 +10,8 @@ mod state;
 mod storage;
 pub use storage::*;
 mod validation;
+mod water_collection;
+pub use water_collection::*;
 mod water;
 pub use planner::*;
 mod actions;

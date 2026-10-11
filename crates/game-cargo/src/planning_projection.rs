@@ -152,6 +152,16 @@ impl ToolAllocations {
             })
     }
 
+    /// A finishing actor's own selection is released before a prospective
+    /// availability check; other selected users keep their physical use.
+    pub fn allows_after_release(&self, actor: PersonId, tool: InventoryId) -> bool {
+        actor.0 > 0
+            && self.tools.get(&tool).is_some_and(|allocation| {
+                allocation.users - u64::from(allocation.ranks.contains_key(&actor))
+                    < allocation.slots
+            })
+    }
+
     pub fn allocated_users(&self, tool: InventoryId) -> impl Iterator<Item = PersonId> + '_ {
         self.tools.get(&tool).into_iter().flat_map(|allocation| {
             allocation
@@ -344,5 +354,40 @@ mod tests {
             ToolAllocations::prepare([tool(10, 1_000, None)], [usage(1, 10), usage(1, 10)]),
             Err(Error::Unavailable)
         ));
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+    #[test]
+    fn prospective_release_matches_an_actual_selection_removal_under_contention() {
+        for slots in [0, 1, 2, 3] {
+            for last in [None, Some(PersonId(1)), Some(PersonId(3))] {
+                let tool = ToolSlots {
+                    tool: InventoryId(10),
+                    quantity: Quantity(slots * 1000),
+                    last_granted: last,
+                };
+                let uses: Vec<_> = (1..=3)
+                    .map(|actor| ToolUse {
+                        actor: PersonId(actor),
+                        tool: tool.tool,
+                    })
+                    .collect();
+                let before = ToolAllocations::prepare([tool], uses.clone()).unwrap();
+                for actor in [PersonId(1), PersonId(2), PersonId(3), PersonId(4)] {
+                    let actual = ToolAllocations::prepare(
+                        [tool],
+                        uses.iter().copied().filter(|usage| usage.actor != actor),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        before.allows_after_release(actor, tool.tool),
+                        actual.allows(actor, tool.tool)
+                    );
+                }
+            }
+        }
     }
 }

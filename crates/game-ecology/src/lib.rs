@@ -509,7 +509,7 @@ impl GatheringPlan {
         }
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CollectionFacts {
     pub now: SimTime,
     pub area: AreaId,

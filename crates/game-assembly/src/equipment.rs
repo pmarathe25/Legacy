@@ -259,6 +259,20 @@ impl Simulation {
         tool: InventoryId,
         resources: Option<&RankingResources>,
     ) -> bool {
+        self.tool_available_with_release(actor, tool, resources, false)
+    }
+
+    pub(crate) fn tool_available_after_release(&self, actor: PersonId, tool: InventoryId) -> bool {
+        self.tool_available_with_release(actor, tool, None, true)
+    }
+
+    fn tool_available_with_release(
+        &self,
+        actor: PersonId,
+        tool: InventoryId,
+        resources: Option<&RankingResources>,
+        released: bool,
+    ) -> bool {
         let Some(index) = self.person_index.get(&actor) else {
             return false;
         };
@@ -289,10 +303,20 @@ impl Simulation {
             return false;
         }
         if let Some(resources) = resources {
-            return resources.allocations.allows(actor, tool);
+            return if released {
+                resources.allocations.allows_after_release(actor, tool)
+            } else {
+                resources.allocations.allows(actor, tool)
+            };
         }
         self.prepare_tool_allocations(Some(tool))
-            .is_ok_and(|allocations| allocations.allows(actor, tool))
+            .is_ok_and(|allocations| {
+                if released {
+                    allocations.allows_after_release(actor, tool)
+                } else {
+                    allocations.allows(actor, tool)
+                }
+            })
     }
 
     pub(crate) fn select_work_tool(&self, actor: PersonId, site: SiteId) -> Option<InventoryId> {

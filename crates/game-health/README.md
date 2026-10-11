@@ -13,3 +13,5 @@ Local exposure and observation systems consume temporary spatial, activity, body
 `prepare_local_index` builds one immutable index for a preparation. Physical systems can reuse its scalar exposure lookups, and perception can prepare observations from the same cohorts. Its borrowed store prevents using the index after health state changes.
 
 Individual affordances can resolve shelter through a small carrier-chain lookup or inspect symptoms and pair visibility directly, without indexing the population.
+
+Collected water mixes its contamination load with existing water and updates the holder's own observations. Clean water added to an unknown or unsafe stock does not erase that history. Prepared water and memory writes can join a cargo deposit in one guarded batch.
