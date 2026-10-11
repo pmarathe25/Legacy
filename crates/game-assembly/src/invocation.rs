@@ -6,7 +6,7 @@ pub use game_invocation::{Activation, Active, Burden, Consent, Episode, Rules, W
 
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let Some(w) = &s.state.invocation else {
-        return Ok(());
+        return game_invocation::validate_absent(s.components);
     };
     let fail = || Error::InvalidSave("invalid invocation state".into());
     let lineage = s.state.lineage.as_ref().ok_or_else(fail)?;
@@ -21,13 +21,6 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         .map(|life| life.person)
         .collect();
     let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
-    let r = &w.control.rules;
-    game_invocation::validate_rules(r).map_err(|_| fail())?;
-    let valid_lives = |selected: &BTreeSet<PersonId>| {
-        !selected.is_empty()
-            && selected.len() <= 8
-            && selected.iter().all(|id| w.history.contains_key(id))
-    };
     let source_valid = |source: &KnowledgeSource| match source {
         KnowledgeSource::Observed(actor) | KnowledgeSource::Reported(actor) => {
             people.contains(actor)
@@ -81,92 +74,16 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
-    for (actor, b) in &w.control.people {
-        if !lives.contains(actor)
-            || b.burden_remainder >= 1_000
-            || b.exposure_remainder >= 1_000
-            || b.temporary_identity > 15
-            || b.emotional_disruption > 300
-            || b.permanent_identity > 252 * r.permanent_identity_per_band
-            || b.lifespan_loss > r.lifespan_loss_per_band.0 * 252
-            || b.uninterrupted > b.exposure
-        {
-            return Err(fail());
-        }
-    }
-    let consent_valid = |accepted: &BTreeMap<InvocationCost, Consent>| {
-        accepted.iter().all(|(kind, c)| {
-            c.permanent <= 252
-                && c.temporary
-                    <= if *kind == InvocationCost::Strain {
-                        4
-                    } else if *kind == InvocationCost::LossOfControl {
-                        1
-                    } else {
-                        3
-                    }
-                && (c.permanent == 0
-                    || matches!(kind, InvocationCost::Identity | InvocationCost::Lifespan))
-        })
-    };
-    if let Some(a) = &w.control.active {
-        if lineage.current() != Some(a.actor)
-            || !valid_lives(&a.lives)
-            || !w.control.people.contains_key(&a.actor)
-            || a.started > s.time
-            || a.next_loss_burden == 0
-            || !consent_valid(&a.accepted)
-            || !a.accepted.contains_key(&InvocationCost::Strain)
-            || a.dominant.is_some_and(|id| !a.lives.contains(&id))
-        {
-            return Err(fail());
-        }
-        if let Some(e) = &a.episode
-            && (e.actor != a.actor
-                || e.starts > s.time
-                || e.ends <= s.time
-                || e.ends.0 - e.starts.0 != r.loss_duration.0
-                || a.next_controller < s.time
-                || a.next_controller > e.ends
-                || w.control.warning.is_some()
-                || w.control.activation.is_some())
-        {
-            return Err(fail());
-        }
-    }
-    if let Some(plan) = &w.control.activation
-        && (lineage.current() != Some(plan.actor)
-            || !valid_lives(&plan.lives)
-            || !consent_valid(&plan.accepted)
-            || !w.control.warning.as_ref().is_some_and(|warning| {
-                warning.activation.as_ref() == Some(&plan.lives) && warning.view.actor == plan.actor
-            }))
-    {
-        return Err(fail());
-    }
-    for (id, warning) in &w.control.warnings {
-        if id.0 == 0
-            || id.0 >= s.next_id
-            || *id != warning.id
-            || !lives.contains(&warning.actor)
-            || !valid_lives(&warning.lives)
-            || warning.severity > 252
-            || warning.fatigue_per_mille > 64_000_000
-            || warning.health_harm_per_mille > 64_000_000
-            || warning.description.len() > 1_024
-        {
-            return Err(fail());
-        }
-    }
-    if let Some(p) = &w.control.warning
-        && (w.control.warnings.get(&p.view.id) != Some(&p.view)
-            || lineage.current() != Some(p.view.actor)
-            || p.activation
-                .as_ref()
-                .is_some_and(|lives| !valid_lives(lives)))
-    {
-        return Err(fail());
-    }
+    w.control.validate(
+        s.components,
+        game_invocation::ControlValidation {
+            now: s.time,
+            next_id: s.next_id,
+            current: lineage.current(),
+            incarnations: &lives,
+            archived: &w.history.keys().copied().collect(),
+        },
+    )?;
     let content_valid = |content: &RecordedMemory| match content {
         RecordedMemory::Stock { life, fact } => w.history.contains_key(life) && fact_valid(fact),
         RecordedMemory::Route {
@@ -318,7 +235,7 @@ pub struct World {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingInvocation {
     at: SimTime,
-    updates: Vec<(PersonId, Burden)>,
+    updates: Option<game_invocation::PreparedAdvance>,
     reached_cost: bool,
     event_demand: u64,
 }
@@ -433,16 +350,8 @@ impl Simulation {
                 .history
                 .insert(person, snapshot);
         }
-        let dead = self
-            .host
-            .state
-            .invocation
-            .as_ref()
-            .unwrap()
-            .control
-            .people
-            .keys()
-            .copied()
+        let dead = game_invocation::burdens(&self.host.storage)
+            .map(|(actor, _)| actor)
             .chain(self.invocation_control_actor())
             .filter(|p| {
                 !game_physiology::body(&self.host.storage, *p)
@@ -458,7 +367,7 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .control
-            .prepare_deaths(&dead, self.host.clock().time);
+            .prepare_deaths(&self.host.storage, &dead, self.host.clock().time);
         self.apply_invocation_control(prepared)?;
         Ok(())
     }
@@ -467,7 +376,7 @@ impl Simulation {
         w.active
             .as_ref()
             .map(|a| a.actor)
-            .or_else(|| w.warning.as_ref().map(|p| p.view.actor))
+            .or_else(|| w.pending_warning(&self.host.storage).map(|view| view.actor))
             .or_else(|| w.activation.as_ref().map(|p| p.actor))
     }
     fn invocation_admission(&self, actor: PersonId) -> game_invocation::AdmissionFacts {
@@ -543,7 +452,7 @@ impl Simulation {
             .control
             .warning
             .as_ref()
-            .map(|w| w.view.id)
+            .map(|w| w.id)
     }
     fn reconcile_invocation_control(&mut self) -> Result<(), Error> {
         let Some(actor) = self.invocation_control_actor() else {
@@ -557,7 +466,11 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .control
-            .prepare_review(&facts, Some(WarningId(self.host.next_id())))?;
+            .prepare_review(
+                &self.host.storage,
+                &facts,
+                Some(WarningId(self.host.next_id())),
+            )?;
         self.apply_invocation_control(prepared)
     }
     pub(crate) fn invocation_command(
@@ -588,6 +501,7 @@ impl Simulation {
             }
             let facts = self.invocation_admission(actor);
             let prepared = w.control.prepare_action(
+                &self.host.storage,
                 actor,
                 &action,
                 &facts,
@@ -628,6 +542,7 @@ impl Simulation {
                 .as_ref()
                 .ok_or(Error::Unavailable)?
                 .control,
+            &self.host.storage,
         )?;
         let warning = prepared.warning_id();
         if let Some(id) = warning {
@@ -670,26 +585,40 @@ impl Simulation {
                 return Err(Error::Unavailable);
             }
         }
-        for effect in &prepared.effects {
-            if let ControlEffect::FatigueCharge { actor, quantity } = effect {
-                let body =
-                    game_physiology::body(&self.host.storage, *actor).ok_or(Error::Unavailable)?;
-                if body.vitals.fatigue.checked_add(*quantity).is_none_or(|n| {
-                    n > self
-                        .host
-                        .state
-                        .physical
-                        .as_ref()
-                        .unwrap()
-                        .rules
-                        .fatigue_limit
-                }) {
-                    return Err(Error::Unavailable);
+        let charges = prepared
+            .effects
+            .iter()
+            .filter_map(|effect| {
+                if let ControlEffect::FatigueCharge { actor, quantity } = effect {
+                    Some(game_physiology::prepare_fatigue_charge(
+                        &self.host.storage,
+                        *actor,
+                        *quantity,
+                        self.host
+                            .state
+                            .physical
+                            .as_ref()
+                            .unwrap()
+                            .rules
+                            .fatigue_limit,
+                    ))
+                } else {
+                    None
                 }
-            }
-        }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let effects = prepared.effects.clone();
-        prepared.commit(&mut self.host.state.invocation.as_mut().unwrap().control)?;
+        let mut batch = game_ecs::Batch::new();
+        let finish = prepared.stage_into(
+            &self.host.state.invocation.as_ref().unwrap().control,
+            &self.host.storage,
+            &mut batch,
+        )?;
+        for charge in charges {
+            charge.stage_into(&self.host.storage, &mut batch)?;
+        }
+        self.host.storage.apply_batch(batch)?;
+        finish.finish(&mut self.host.state.invocation.as_mut().unwrap().control);
         if warning.is_some() {
             self.host.allocate_ids(1)?;
         }
@@ -702,12 +631,7 @@ impl Simulation {
                 ControlEffect::WarningAccepted { warning, actor } => {
                     self.emit(EventKind::InvocationCostAccepted { warning, actor })
                 }
-                ControlEffect::FatigueCharge { actor, quantity } => {
-                    game_physiology::body_mut(&mut self.host.storage, actor)
-                        .unwrap()
-                        .vitals
-                        .fatigue += quantity
-                }
+                ControlEffect::FatigueCharge { .. } => {}
                 ControlEffect::Started { actor, lives } => {
                     if self
                         .host
@@ -809,7 +733,7 @@ impl Simulation {
             .state
             .invocation
             .as_ref()
-            .and_then(|w| w.control.people.get(&actor))
+            .and_then(|_| game_invocation::burden(&self.host.storage, actor))
             .map_or(0, |b| b.lifespan_loss)
     }
 
@@ -825,7 +749,9 @@ impl Simulation {
         let Some(w) = &self.host.state.invocation else {
             return (0, 0);
         };
-        let before = w.control.people.get(&actor).cloned().unwrap_or_default();
+        let before = game_invocation::burden(&self.host.storage, actor)
+            .cloned()
+            .unwrap_or_default();
         let active = w
             .control
             .active
@@ -854,38 +780,20 @@ impl Simulation {
         let Some(w) = &self.host.state.invocation else {
             return Ok(PendingInvocation {
                 at: next,
-                updates: Vec::new(),
+                updates: None,
                 reached_cost: false,
                 event_demand: 0,
             });
         };
-        let mut updates = Vec::new();
-        for (actor, before) in &w.control.people {
-            if !game_physiology::body(&self.host.storage, *actor)
-                .unwrap()
-                .vitals
-                .alive
-            {
-                continue;
-            }
-            let active = w
-                .control
-                .active
-                .as_ref()
-                .filter(|active| active.actor == *actor)
-                .map(Self::cost_input);
-            let advanced = game_invocation::advance_burden(game_invocation::AdvanceInput {
-                rules: &w.control.rules,
-                before,
-                actor: *actor,
-                now: self.host.clock().time,
-                next,
-                alive: true,
-                active,
-            })?;
-            let b = advanced.burden;
-            updates.push((*actor, b));
-        }
+        let updates = Some(w.control.prepare_advance(
+            &self.host.storage,
+            self.host.clock().time,
+            next,
+            |actor| {
+                game_physiology::body(&self.host.storage, actor)
+                    .is_some_and(|body| body.vitals.alive)
+            },
+        )?);
         self.host
             .next_id()
             .checked_add(self.invocation_allocation_bound(next))
@@ -940,15 +848,11 @@ impl Simulation {
             return Ok(());
         }
         debug_assert_eq!(pending.at, self.host.clock().time);
-        for (actor, b) in pending.updates {
-            self.host
-                .state
-                .invocation
-                .as_mut()
-                .unwrap()
-                .control
-                .people
-                .insert(actor, b);
+        if let Some(updates) = pending.updates {
+            updates.commit(
+                &self.host.state.invocation.as_ref().unwrap().control,
+                &mut self.host.storage,
+            )?;
         }
         if pending.reached_cost {
             self.reconcile_invocation_control()?;
@@ -959,7 +863,9 @@ impl Simulation {
     }
     fn next_cost_after(&self, actor: PersonId, lives: &BTreeSet<PersonId>) -> Option<SimDuration> {
         let w = self.host.state.invocation.as_ref()?;
-        let before = w.control.people.get(&actor).cloned().unwrap_or_default();
+        let before = game_invocation::burden(&self.host.storage, actor)
+            .cloned()
+            .unwrap_or_default();
         let next_loss = w
             .control
             .active
@@ -972,11 +878,8 @@ impl Simulation {
         let Some(w) = &self.host.state.invocation else {
             return limit;
         };
-        let alive = w
-            .control
-            .people
-            .keys()
-            .copied()
+        let alive = game_invocation::burdens(&self.host.storage)
+            .map(|(actor, _)| actor)
             .filter(|p| {
                 game_physiology::body(&self.host.storage, *p)
                     .unwrap()
@@ -984,7 +887,9 @@ impl Simulation {
                     .alive
             })
             .collect();
-        let mut next = w.control.boundary(self.host.clock().time, limit, &alive);
+        let mut next =
+            w.control
+                .boundary(&self.host.storage, self.host.clock().time, limit, &alive);
         for action in w.actions.values() {
             if action.completes > self.host.clock().time {
                 next = next.min(action.completes);
@@ -1034,7 +939,9 @@ impl Simulation {
         let Some(w) = &self.host.state.invocation else {
             return own;
         };
-        let state = w.control.people.get(&actor).cloned().unwrap_or_default();
+        let state = game_invocation::burden(&self.host.storage, actor)
+            .cloned()
+            .unwrap_or_default();
         let bonus = self
             .host
             .state
@@ -1060,10 +967,12 @@ impl Simulation {
         actor: PersonId,
         base: u64,
     ) -> Result<u64, Error> {
-        let Some(w) = &self.host.state.invocation else {
+        let Some(_) = &self.host.state.invocation else {
             return Ok(base);
         };
-        let state = w.control.people.get(&actor).cloned().unwrap_or_default();
+        let state = game_invocation::burden(&self.host.storage, actor)
+            .cloned()
+            .unwrap_or_default();
         let own = self.own_skill_level(actor, Skill::Combat);
         let borrowed = self.borrowed_skill_level(actor, Skill::Combat);
         let bonus = self
@@ -1120,7 +1029,7 @@ impl Simulation {
         let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
         let life = a.dominant.or_else(|| a.lives.iter().next().copied())?;
         let empty = game_invocation::Burden::default();
-        let burden = w.control.people.get(&actor).unwrap_or(&empty);
+        let burden = game_invocation::burden(&self.host.storage, actor).unwrap_or(&empty);
         Some(game_invocation::controller_personality(
             &w.history[&life].mind.personality,
             burden,
@@ -1131,7 +1040,7 @@ impl Simulation {
             .state
             .invocation
             .as_ref()
-            .and_then(|w| w.control.people.get(&actor))
+            .and_then(|_| game_invocation::burden(&self.host.storage, actor))
             .map_or(0, |b| {
                 i64::from(b.emotional_disruption)
                     + i64::from(b.temporary_identity)
@@ -1161,7 +1070,7 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .control
-            .prepare_controller(self.host.clock().time, alive)?
+            .prepare_controller(&self.host.storage, self.host.clock().time, alive)?
         else {
             return Ok(());
         };
@@ -1173,7 +1082,10 @@ impl Simulation {
                 _ => None,
             })
             .unwrap();
-        prepared.commit(&mut self.host.state.invocation.as_mut().unwrap().control)?;
+        prepared.commit(
+            &mut self.host.state.invocation.as_mut().unwrap().control,
+            &mut self.host.storage,
+        )?;
         let controller_actor = actor;
         let active = self
             .host
@@ -1369,7 +1281,9 @@ impl Simulation {
     pub(crate) fn invocation_view(&self) -> Option<InvocationView> {
         let w = self.host.state.invocation.as_ref()?;
         let actor = self.host.state.ruler;
-        let b = w.control.people.get(&actor).cloned().unwrap_or_default();
+        let b = game_invocation::burden(&self.host.storage, actor)
+            .cloned()
+            .unwrap_or_default();
         let active = w.control.active.as_ref().filter(|a| a.actor == actor);
         let lives = active.map_or_else(BTreeSet::new, |a| a.lives.clone());
         let memories = lives
@@ -1430,7 +1344,7 @@ impl Simulation {
                     .vitals
                     .alive,
             loss_ends: active.and_then(|a| a.episode.as_ref()).map(|e| e.ends),
-            warning: w.control.warning.as_ref().map(|p| p.view.clone()),
+            warning: w.control.pending_warning(&self.host.storage).cloned(),
             preview,
             memories,
             records,
@@ -1444,18 +1358,17 @@ impl Simulation {
             return Vec::new();
         }
         let mut actions = Vec::new();
-        if let Some(warning) = &w.control.warning
-            && warning.view.actor == actor
+        if let Some(warning) = w.control.pending_warning(&self.host.storage)
+            && warning.actor == actor
         {
             actions.push(InvocationAction::AcceptWarning {
-                warning: warning.view.id,
+                warning: warning.id,
             });
         }
         if w.control.active.as_ref().is_some_and(|a| a.actor == actor)
             || w.control
-                .warning
-                .as_ref()
-                .is_some_and(|a| a.view.actor == actor)
+                .pending_warning(&self.host.storage)
+                .is_some_and(|a| a.actor == actor)
         {
             actions.push(InvocationAction::Dismiss);
         }
@@ -2369,10 +2282,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .control
-                .warning
-                .as_ref()
+                .pending_warning(&sim.host.storage)
                 .unwrap()
-                .view
                 .cost;
             assert_ne!(kind, InvocationCost::LossOfControl);
             act(sim, InvocationAction::AcceptWarning { warning }).unwrap();
@@ -2389,10 +2300,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .control
-                .warning
-                .as_ref()
+                .pending_warning(&sim.host.storage)
                 .expect("new cost must stop time")
-                .view
                 .clone();
             if warning.cost == InvocationCost::LossOfControl {
                 return warning.id;
@@ -2454,10 +2363,8 @@ mod tests {
             .as_ref()
             .unwrap()
             .control
-            .warning
-            .as_ref()
+            .pending_warning(&sim.host.storage)
             .unwrap()
-            .view
             .clone();
         assert!(warning.instant_fatigue > 0 && warning.activation_burden > 0);
         act(
@@ -2468,7 +2375,9 @@ mod tests {
         )
         .unwrap();
         assert!(sim.borrowed_skill_level(actor, Skill::Craft) > 0);
-        let burden = sim.host.state.invocation.as_ref().unwrap().control.people[&actor].burden;
+        let burden = game_invocation::burden(&sim.host.storage, actor)
+            .unwrap()
+            .burden;
         assert_eq!(
             game_physiology::body(&sim.host.storage, actor)
                 .unwrap()
@@ -2478,7 +2387,9 @@ mod tests {
         );
         act(&mut sim, InvocationAction::Dismiss).unwrap();
         assert_eq!(
-            sim.host.state.invocation.as_ref().unwrap().control.people[&actor].burden,
+            game_invocation::burden(&sim.host.storage, actor)
+                .unwrap()
+                .burden,
             burden
         );
     }
@@ -2562,14 +2473,13 @@ mod tests {
             .as_ref()
             .unwrap()
             .control
-            .warning
-            .as_ref()
+            .pending_warning(&whole.host.storage)
             .unwrap()
-            .view
             .clone();
         assert_eq!(warning.cost, InvocationCost::Strain);
         assert_eq!(
-            whole.host.state.invocation.as_ref().unwrap().control.people[&actor]
+            game_invocation::burden(&whole.host.storage, actor)
+                .unwrap()
                 .emotional_disruption,
             0
         );
@@ -2737,11 +2647,16 @@ mod tests {
         assert_eq!(sim.canonical_state(), restored.canonical_state());
         assert!(!sim.past_life_controls_actor(actor));
         assert!(
-            sim.host.state.invocation.as_ref().unwrap().control.people[&actor].permanent_identity
+            game_invocation::burden(&sim.host.storage, actor)
+                .unwrap()
+                .permanent_identity
                 > 0
         );
         assert!(
-            sim.host.state.invocation.as_ref().unwrap().control.people[&actor].lifespan_loss > 0
+            game_invocation::burden(&sim.host.storage, actor)
+                .unwrap()
+                .lifespan_loss
+                > 0
         );
     }
     #[test]
@@ -2782,14 +2697,7 @@ mod tests {
         if sim.host.state.ruler != actor {
             assert_eq!(sim.invocation_lifespan_loss(sim.host.state.ruler), 0);
             assert_eq!(
-                sim.host
-                    .state
-                    .invocation
-                    .as_ref()
-                    .unwrap()
-                    .control
-                    .people
-                    .get(&sim.host.state.ruler)
+                game_invocation::burden(&sim.host.storage, sim.host.state.ruler)
                     .map_or(0, |b| b.permanent_identity),
                 0
             );
@@ -2852,5 +2760,93 @@ mod tests {
             decisions::Aspiration::Independence
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn native_invocation_costs_and_warnings_restore_without_entity_map_shadows() {
+        let mut sim = ready(1);
+        let life = past(&sim);
+        activate(&mut sim, BTreeSet::from([life]));
+        let actor = sim.host.state.ruler;
+        assert!(game_invocation::burden(&sim.host.storage, actor).is_some());
+        assert!(
+            game_invocation::warnings(&sim.host.storage)
+                .next()
+                .is_some()
+        );
+        let saved = sim.save().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        let control = &value["state"]["state"]["invocation"]["control"];
+        assert_eq!(control.as_object().unwrap().len(), 4);
+        for field in ["people", "warnings"] {
+            assert!(control.get(field).is_none());
+            let mut forged = value.clone();
+            forged["state"]["state"]["invocation"]["control"][field] = serde_json::json!({});
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err()
+            );
+        }
+        for column in ["invocation/burden", "invocation/warning"] {
+            assert!(
+                !value["state"]["components"]["columns"][column]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let restored = Simulation::load(
+            &saved,
+            Execution {
+                workers: 2,
+                reverse_jobs: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(restored.canonical_state(), sim.canonical_state());
+        assert_eq!(restored.save().unwrap(), saved);
+    }
+
+    #[test]
+    fn invocation_restore_rejects_native_orphans_warning_identity_and_pending_shadow() {
+        let mut sim = ready(1);
+        let life = past(&sim);
+        act(
+            &mut sim,
+            InvocationAction::Activate {
+                lives: BTreeSet::from([life]),
+            },
+        )
+        .unwrap();
+        let saved = sim.save().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        let area = sim.host.state.areas[0].id.0;
+        for attack in 0..5 {
+            let mut forged = value.clone();
+            match attack {
+                0 => forged["state"]["state"]["invocation"] = serde_json::Value::Null,
+                1 => {
+                    forged["state"]["components"]["columns"]["invocation/burden"][0]["entity"] =
+                        serde_json::json!(area)
+                }
+                2 => {
+                    forged["state"]["components"]["columns"]["invocation/warning"][0]["value"]["id"] =
+                        serde_json::json!(999999)
+                }
+                3 => {
+                    forged["state"]["state"]["invocation"]["control"]["warning"]["id"] =
+                        serde_json::json!(999999)
+                }
+                _ => {
+                    forged["state"]["state"]["invocation"]["control"]["warning"]["view"] =
+                        serde_json::json!({})
+                }
+            }
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err(),
+                "invocation restore attack {attack}"
+            );
+            assert_eq!(sim.save().unwrap(), saved);
+        }
     }
 }

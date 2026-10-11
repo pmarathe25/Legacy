@@ -903,7 +903,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     .state
                     .invocation
                     .as_ref()
-                    .and_then(|world| world.control.people.get(&person.id))
+                    .and_then(|_| game_invocation::burden(state.components, person.id))
                     .map_or(0, |burden| burden.lifespan_loss),
             },
         );

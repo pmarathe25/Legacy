@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 42;
+const SAVE_VERSION: u32 = 43;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -299,11 +299,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     if let Some(world) = &s.state.invocation {
-        for id in world
-            .control
-            .warnings
-            .keys()
-            .map(|id| id.0)
+        for id in game_invocation::warnings(s.components)
+            .map(|(id, _)| id.0)
             .chain(world.records.keys().map(|id| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
@@ -1377,7 +1374,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .invocation
                         .as_ref()
-                        .is_some_and(|w| w.control.warnings.contains_key(&warning))
+                        .is_some_and(|_| game_invocation::warning(s.components, warning).is_some())
                 {
                     return Err(fail());
                 }

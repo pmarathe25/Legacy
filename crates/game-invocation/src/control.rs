@@ -1,5 +1,6 @@
 use crate::*;
 use game_core::*;
+use game_ecs::{Batch, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,6 +22,7 @@ pub struct Activation {
     pub accepted: BTreeMap<InvocationCost, Consent>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvocationWarning {
     pub id: WarningId,
     pub actor: PersonId,
@@ -39,29 +41,27 @@ pub struct InvocationWarning {
     pub description: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Warning {
-    pub view: InvocationWarning,
+    pub id: WarningId,
     pub activation: Option<BTreeSet<PersonId>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ControlState {
     pub rules: Rules,
-    pub people: BTreeMap<PersonId, Burden>,
     pub active: Option<Active>,
     pub activation: Option<Activation>,
     pub warning: Option<Warning>,
-    pub warnings: BTreeMap<WarningId, InvocationWarning>,
 }
 impl ControlState {
     pub fn new(rules: Rules) -> Result<Self, Error> {
         validate_rules(&rules)?;
         Ok(Self {
             rules,
-            people: BTreeMap::new(),
             active: None,
             activation: None,
             warning: None,
-            warnings: BTreeMap::new(),
         })
     }
 }
@@ -134,6 +134,20 @@ pub enum ControlEffect {
 /// A prepared frame copies only the one control episode and touched burdens,
 /// never archives, physical stock, recorded memories, or an entire simulation.
 #[derive(Clone, Debug)]
+pub struct ControlFinalization {
+    active: Option<Active>,
+    activation: Option<Activation>,
+    warning: Option<Warning>,
+}
+impl ControlFinalization {
+    /// Publish metadata only after the shared component batch has succeeded.
+    pub fn finish(self, state: &mut ControlState) {
+        state.active = self.active;
+        state.activation = self.activation;
+        state.warning = self.warning;
+    }
+}
+#[derive(Clone, Debug)]
 pub struct PreparedControl {
     at: SimTime,
     admission: Option<AdmissionFacts>,
@@ -141,6 +155,7 @@ pub struct PreparedControl {
     before_active: Option<Active>,
     before_activation: Option<Activation>,
     before_warning: Option<Warning>,
+    before_warning_record: Option<InvocationWarning>,
     active: Option<Active>,
     activation: Option<Activation>,
     warning: Option<Warning>,
@@ -149,7 +164,7 @@ pub struct PreparedControl {
     pub effects: Vec<ControlEffect>,
 }
 impl PreparedControl {
-    fn frame(state: &ControlState, at: SimTime) -> Self {
+    fn frame(state: &ControlState, store: &Store, at: SimTime) -> Self {
         Self {
             at,
             admission: None,
@@ -157,6 +172,7 @@ impl PreparedControl {
             before_active: state.active.clone(),
             before_activation: state.activation.clone(),
             before_warning: state.warning.clone(),
+            before_warning_record: state.pending_warning(store).cloned(),
             active: state.active.clone(),
             activation: state.activation.clone(),
             warning: state.warning.clone(),
@@ -165,35 +181,49 @@ impl PreparedControl {
             effects: Vec::new(),
         }
     }
-    pub fn check(&self, state: &ControlState) -> Result<(), Error> {
+    pub fn check(&self, state: &ControlState, store: &Store) -> Result<(), Error> {
         if state.rules != self.rules
             || state.active != self.before_active
             || state.activation != self.before_activation
             || state.warning != self.before_warning
+            || state.pending_warning(store) != self.before_warning_record.as_ref()
             || self
                 .burdens
                 .iter()
-                .any(|(p, (old, _))| state.people.get(p) != old.as_ref())
+                .any(|(p, (old, _))| burden(store, *p) != old.as_ref())
             || self
                 .new_warning
                 .as_ref()
-                .is_some_and(|w| state.warnings.contains_key(&w.id))
+                .is_some_and(|w| warning(store, w.id).is_some())
         {
             return Err(Error::Unavailable);
         }
         Ok(())
     }
-    pub fn commit(self, state: &mut ControlState) -> Result<(), Error> {
-        self.check(state)?;
-        state.active = self.active;
-        state.activation = self.activation;
-        state.warning = self.warning;
-        for (p, (_, b)) in self.burdens {
-            state.people.insert(p, b);
+    pub fn stage_into(
+        self,
+        state: &ControlState,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<ControlFinalization, Error> {
+        self.check(state, store)?;
+        for (actor, (_, value)) in self.burdens {
+            batch.insert(game_ecs::StableId(actor.0), value);
         }
-        if let Some(w) = self.new_warning {
-            state.warnings.insert(w.id, w);
+        if let Some(value) = self.new_warning {
+            batch.insert(game_ecs::StableId(value.id.0), value);
         }
+        Ok(ControlFinalization {
+            active: self.active,
+            activation: self.activation,
+            warning: self.warning,
+        })
+    }
+    pub fn commit(self, state: &mut ControlState, store: &mut Store) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        let finalization = self.stage_into(state, store, &mut batch)?;
+        store.apply_batch(batch)?;
+        finalization.finish(state);
         Ok(())
     }
     pub fn at(&self) -> SimTime {
@@ -205,33 +235,33 @@ impl PreparedControl {
     pub fn warning_id(&self) -> Option<WarningId> {
         self.new_warning.as_ref().map(|w| w.id)
     }
-    fn burden<'a>(&'a mut self, state: &ControlState, actor: PersonId) -> &'a mut Burden {
+    fn burden<'a>(&'a mut self, store: &Store, actor: PersonId) -> &'a mut Burden {
         &mut self
             .burdens
             .entry(actor)
             .or_insert_with(|| {
-                let old = state.people.get(&actor).cloned();
+                let old = burden(store, actor).cloned();
                 (old.clone(), old.unwrap_or_default())
             })
             .1
     }
-    fn refresh(&mut self, state: &ControlState, now: SimTime, alive: bool) {
+    fn refresh(&mut self, store: &Store, now: SimTime, alive: bool) {
         if let Some(a) = self.active.clone() {
             let controlled = controls_actor(a.episode.as_ref(), a.actor, now, alive);
-            let before = self.burden(state, a.actor).clone();
-            *self.burden(state, a.actor) =
+            let before = self.burden(store, a.actor).clone();
+            *self.burden(store, a.actor) =
                 refresh_temporary(&self.rules, &before, &a.accepted, controlled);
         }
     }
     fn permanent(
         &mut self,
-        state: &ControlState,
+        store: &Store,
         actor: PersonId,
         req: CostRequirement,
     ) -> Result<(), Error> {
-        let before = self.burden(state, actor).clone();
+        let before = self.burden(store, actor).clone();
         let change = apply_permanent(&self.rules, &before, req)?;
-        *self.burden(state, actor) = change.burden;
+        *self.burden(store, actor) = change.burden;
         if change.changed {
             self.effects.push(ControlEffect::CostApplied {
                 actor,
@@ -245,12 +275,7 @@ impl PreparedControl {
         }
         Ok(())
     }
-    fn episode(
-        &mut self,
-        state: &ControlState,
-        actor: PersonId,
-        now: SimTime,
-    ) -> Result<(), Error> {
+    fn episode(&mut self, store: &Store, actor: PersonId, now: SimTime) -> Result<(), Error> {
         let a = self
             .active
             .as_ref()
@@ -261,7 +286,7 @@ impl PreparedControl {
             .get(&InvocationCost::LossOfControl)
             .cloned()
             .unwrap_or_default();
-        let before = self.burden(state, actor).clone();
+        let before = self.burden(store, actor).clone();
         let start = begin_episode(&self.rules, &before, actor, now, &consent)?;
         let until = start.episode.ends;
         let a = self.active.as_mut().unwrap();
@@ -277,12 +302,12 @@ impl PreparedControl {
     }
     fn charge(
         &mut self,
-        state: &ControlState,
+        store: &Store,
         actor: PersonId,
         lives: usize,
         f: &AdmissionFacts,
     ) -> Result<ActivationCharge, Error> {
-        let before = self.burden(state, actor).clone();
+        let before = self.burden(store, actor).clone();
         let charge = activation_charge(&self.rules, &before, lives)?;
         if f.fatigue
             .checked_add(charge.fatigue)
@@ -294,7 +319,7 @@ impl PreparedControl {
     }
     fn review(
         &mut self,
-        state: &ControlState,
+        store: &Store,
         f: &AdmissionFacts,
         id: Option<WarningId>,
     ) -> Result<(), Error> {
@@ -323,9 +348,9 @@ impl PreparedControl {
                 a.next_loss_burden,
             )
         };
-        let mut projected = self.burden(state, actor).clone();
+        let mut projected = self.burden(store, actor).clone();
         let charge = if planned.is_some() {
-            Some(self.charge(state, actor, lives.len(), f)?)
+            Some(self.charge(store, actor, lives.len(), f)?)
         } else {
             None
         };
@@ -345,7 +370,7 @@ impl PreparedControl {
             false,
         ) {
             let id = id
-                .filter(|id| id.0 != 0 && !state.warnings.contains_key(id))
+                .filter(|id| id.0 != 0 && warning(store, *id).is_none())
                 .ok_or(Error::Unavailable)?;
             let mut view = warning_spec(&self.rules, actor, &lives, req)?;
             view.id = id;
@@ -356,7 +381,7 @@ impl PreparedControl {
                 view.description="Activation pays the shown fatigue and adds persistent burden before any borrowed benefit begins. Full payment is required; dismissal does not refund it.".into();
             }
             self.warning = Some(Warning {
-                view: view.clone(),
+                id,
                 activation: planned.map(|p| p.lives),
             });
             self.new_warning = Some(view);
@@ -364,7 +389,7 @@ impl PreparedControl {
                 .push(ControlEffect::WarningRaised { warning: id, actor });
         } else if let Some(p) = planned {
             let charge = charge.unwrap();
-            self.burden(state, actor).burden = projected.burden;
+            self.burden(store, actor).burden = projected.burden;
             self.activation = None;
             self.active = Some(Active {
                 actor,
@@ -390,11 +415,11 @@ impl PreparedControl {
                 severity: 0,
                 permanent: false,
             });
-            self.refresh(state, f.now, f.alive);
+            self.refresh(store, f.now, f.alive);
             for (cost, consent) in &p.accepted {
                 if consent.permanent > 0 {
                     self.permanent(
-                        state,
+                        store,
                         actor,
                         CostRequirement {
                             cost: *cost,
@@ -408,18 +433,22 @@ impl PreparedControl {
                 .get(&InvocationCost::LossOfControl)
                 .is_some_and(|c| c.temporary > 0)
             {
-                self.episode(state, actor, f.now)?;
+                self.episode(store, actor, f.now)?;
             }
         }
         Ok(())
     }
 }
 impl ControlState {
+    pub fn pending_warning<'a>(&self, store: &'a Store) -> Option<&'a InvocationWarning> {
+        warning(store, self.warning.as_ref()?.id)
+    }
     pub fn ready(&self, actor: PersonId, f: &AdmissionFacts) -> bool {
         f.current == Some(actor) && f.alive && f.independent && f.learning >= f.required_learning
     }
     pub fn prepare_action(
         &self,
+        store: &Store,
         actor: PersonId,
         action: &ControlAction,
         f: &AdmissionFacts,
@@ -438,7 +467,7 @@ impl ControlState {
         {
             return Err(Error::Unavailable);
         }
-        let mut plan = PreparedControl::frame(self, f.now);
+        let mut plan = PreparedControl::frame(self, store, f.now);
         plan.admission = Some(f.clone());
         match action {
             ControlAction::Activate { lives } => {
@@ -452,25 +481,27 @@ impl ControlState {
                 {
                     return Err(Error::Unavailable);
                 }
-                plan.charge(self, actor, lives.len(), f)?;
+                plan.charge(store, actor, lives.len(), f)?;
                 plan.activation = Some(Activation {
                     actor,
                     lives: lives.clone(),
                     accepted: BTreeMap::new(),
                 });
-                plan.review(self, f, id)?;
+                plan.review(store, f, id)?;
             }
             ControlAction::Dismiss => {
                 if !self.active.as_ref().is_some_and(|a| a.actor == actor)
-                    && !self.warning.as_ref().is_some_and(|w| w.view.actor == actor)
+                    && !self.warning.as_ref().is_some_and(|w| {
+                        warning(store, w.id).is_some_and(|view| view.actor == actor)
+                    })
                 {
                     return Err(Error::Unavailable);
                 }
                 plan.active = None;
                 plan.activation = None;
                 plan.warning = None;
-                if self.people.contains_key(&actor) {
-                    plan.burden(self, actor).uninterrupted = 0;
+                if burden(store, actor).is_some() {
+                    plan.burden(store, actor).uninterrupted = 0;
                 }
                 plan.effects.push(ControlEffect::Dismissed { actor });
             }
@@ -478,12 +509,16 @@ impl ControlState {
                 let pending = self
                     .warning
                     .as_ref()
-                    .filter(|p| p.view.id == *warning && p.view.actor == actor)
+                    .filter(|p| {
+                        p.id == *warning
+                            && crate::warning(store, p.id).is_some_and(|view| view.actor == actor)
+                    })
                     .ok_or(Error::Unavailable)?;
+                let view = crate::warning(store, pending.id).ok_or(Error::Unavailable)?;
                 let req = CostRequirement {
-                    cost: pending.view.cost,
-                    severity: pending.view.severity,
-                    permanent: pending.view.permanent,
+                    cost: view.cost,
+                    severity: view.severity,
+                    permanent: view.permanent,
                 };
                 plan.warning = None;
                 if pending.activation.is_some() {
@@ -499,7 +534,7 @@ impl ControlState {
                         warning: *warning,
                         actor,
                     });
-                    plan.review(self, f, id)?;
+                    plan.review(store, f, id)?;
                 } else {
                     let a = plan
                         .active
@@ -507,18 +542,18 @@ impl ControlState {
                         .filter(|a| a.actor == actor)
                         .ok_or(Error::Unavailable)?;
                     a.accepted = accept_requirement(&a.accepted, req);
-                    plan.refresh(self, f.now, f.alive);
+                    plan.refresh(store, f.now, f.alive);
                     plan.effects.push(ControlEffect::WarningAccepted {
                         warning: *warning,
                         actor,
                     });
                     if req.cost == InvocationCost::LossOfControl {
-                        plan.episode(self, actor, f.now)?;
+                        plan.episode(store, actor, f.now)?;
                     } else {
                         if req.permanent {
-                            plan.permanent(self, actor, req)?;
+                            plan.permanent(store, actor, req)?;
                         }
-                        plan.review(self, f, id)?;
+                        plan.review(store, f, id)?;
                     }
                 }
             }
@@ -529,6 +564,7 @@ impl ControlState {
     /// control episode authorizes all ensuing costs, without dismissal/capping.
     pub fn prepare_review(
         &self,
+        store: &Store,
         f: &AdmissionFacts,
         id: Option<WarningId>,
     ) -> Result<PreparedControl, Error> {
@@ -536,31 +572,31 @@ impl ControlState {
             .active
             .as_ref()
             .map(|a| a.actor)
-            .or_else(|| self.warning.as_ref().map(|w| w.view.actor))
+            .or_else(|| self.pending_warning(store).map(|view| view.actor))
             .or_else(|| self.activation.as_ref().map(|a| a.actor));
         if owner.is_some_and(|actor| actor != f.actor) {
             return Err(Error::Unavailable);
         }
-        let mut plan = PreparedControl::frame(self, f.now);
+        let mut plan = PreparedControl::frame(self, store, f.now);
         plan.admission = Some(f.clone());
         if let Some(a) = &self.active {
             if !f.alive {
                 plan.active = None;
                 plan.activation = None;
                 plan.warning = None;
-                plan.burden(self, a.actor).uninterrupted = 0;
+                plan.burden(store, a.actor).uninterrupted = 0;
                 plan.effects
                     .push(ControlEffect::DeathCleanup { actor: a.actor });
                 return Ok(plan);
             }
-            plan.refresh(self, f.now, true);
+            plan.refresh(store, f.now, true);
             if controls_actor(a.episode.as_ref(), a.actor, f.now, true) {
-                let before = plan.burden(self, a.actor).clone();
+                let before = plan.burden(store, a.actor).clone();
                 for req in required_bands(&self.rules, a.lives.len(), &before, a.next_loss_burden)
                     .into_iter()
                     .filter(|r| r.permanent)
                 {
-                    plan.permanent(self, a.actor, req)?;
+                    plan.permanent(store, a.actor, req)?;
                 }
             }
             if a.episode.as_ref().is_some_and(|e| f.now >= e.ends) {
@@ -579,28 +615,33 @@ impl ControlState {
             plan.warning = None;
             plan.activation = None;
             plan.effects.push(ControlEffect::DeathCleanup {
-                actor: w.view.actor,
+                actor: warning(store, w.id).ok_or(Error::Unavailable)?.actor,
             });
             return Ok(plan);
         }
-        plan.review(self, f, id)?;
+        plan.review(store, f, id)?;
         Ok(plan)
     }
     /// Actual body death is a physical-owner fact, never a player dismissal.
     /// Clears only that person's episode and continuity; permanent costs remain
     /// bound to their archived person and are never moved to a successor.
-    pub fn prepare_deaths(&self, dead: &BTreeSet<PersonId>, now: SimTime) -> PreparedControl {
-        let mut plan = PreparedControl::frame(self, now);
+    pub fn prepare_deaths(
+        &self,
+        store: &Store,
+        dead: &BTreeSet<PersonId>,
+        now: SimTime,
+    ) -> PreparedControl {
+        let mut plan = PreparedControl::frame(self, store, now);
         for actor in dead {
-            if self.people.get(actor).is_some_and(|b| b.uninterrupted > 0) {
-                plan.burden(self, *actor).uninterrupted = 0;
+            if burden(store, *actor).is_some_and(|b| b.uninterrupted > 0) {
+                plan.burden(store, *actor).uninterrupted = 0;
             }
         }
         let owner = self
             .active
             .as_ref()
             .map(|a| a.actor)
-            .or_else(|| self.warning.as_ref().map(|w| w.view.actor))
+            .or_else(|| self.pending_warning(store).map(|view| view.actor))
             .or_else(|| self.activation.as_ref().map(|a| a.actor));
         if let Some(actor) = owner
             && dead.contains(&actor)
@@ -616,6 +657,7 @@ impl ControlState {
     /// and actual physical commands remain with their respective owners.
     pub fn prepare_controller(
         &self,
+        store: &Store,
         now: SimTime,
         alive: bool,
     ) -> Result<Option<PreparedControl>, Error> {
@@ -638,7 +680,7 @@ impl ControlState {
                 .ok_or(Error::Overflow)?
                 .min(episode.ends.0),
         );
-        let mut plan = PreparedControl::frame(self, now);
+        let mut plan = PreparedControl::frame(self, store, now);
         let active = plan.active.as_mut().unwrap();
         active.dominant = Some(life);
         active.next_controller = next;
@@ -649,17 +691,23 @@ impl ControlState {
         });
         Ok(Some(plan))
     }
-    pub fn boundary(&self, now: SimTime, limit: SimTime, alive: &BTreeSet<PersonId>) -> SimTime {
+    pub fn boundary(
+        &self,
+        store: &Store,
+        now: SimTime,
+        limit: SimTime,
+        alive: &BTreeSet<PersonId>,
+    ) -> SimTime {
         let mut next = limit;
-        for (actor, b) in &self.people {
-            if alive.contains(actor) && !self.active.as_ref().is_some_and(|a| a.actor == *actor) {
+        for (actor, b) in burdens(store) {
+            if alive.contains(&actor) && !self.active.as_ref().is_some_and(|a| a.actor == actor) {
                 next = recovery_boundary(&self.rules, b, now, next);
             }
         }
         if let Some(a) = &self.active
             && alive.contains(&a.actor)
         {
-            let b = self.people.get(&a.actor).cloned().unwrap_or_default();
+            let b = burden(store, a.actor).cloned().unwrap_or_default();
             next = active_boundary(
                 &self.rules,
                 &b,

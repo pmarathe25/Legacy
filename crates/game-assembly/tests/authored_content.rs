@@ -215,10 +215,7 @@ fn edited_recipe_controls_normal_work_and_is_saved_with_the_selected_site() {
             .is_none_or(|active| active.actor != actor)
     );
     assert!(
-        invocation
-            .control
-            .people
-            .get(&actor)
+        game_invocation::burden(state.components, actor)
             .is_none_or(|person| person.temporary_identity == 0 && person.permanent_identity == 0)
     );
     let rate = game_invocation::compose_work_rate(job.rate, job.body_rate, 0, 0).unwrap();

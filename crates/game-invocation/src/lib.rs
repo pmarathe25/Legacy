@@ -16,3 +16,15 @@ mod control_tests;
 
 mod controller;
 pub use controller::*;
+
+mod components;
+pub use components::*;
+
+mod validation;
+pub use validation::*;
+
+mod advance;
+pub use advance::*;
+
+#[cfg(test)]
+mod component_tests;

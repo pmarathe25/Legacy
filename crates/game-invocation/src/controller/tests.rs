@@ -300,6 +300,9 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
     let actor = PersonId(42);
     let lives = BTreeSet::from([PersonId(1), PersonId(2)]);
     let mut control = ControlState::new(Rules::fixture()).unwrap();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
     let mut facts = AdmissionFacts {
         actor,
         now: SimTime(0),
@@ -315,6 +318,7 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
     };
     control
         .prepare_action(
+            &store,
             actor,
             &ControlAction::Activate {
                 lives: lives.clone(),
@@ -323,43 +327,45 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
             Some(WarningId(1)),
         )
         .unwrap()
-        .commit(&mut control)
+        .commit(&mut control, &mut store)
         .unwrap();
     let mut warning_id = 2;
     while let Some(warning) = control.warning.clone() {
         control
             .prepare_action(
+                &store,
                 actor,
                 &ControlAction::AcceptWarning {
-                    warning: warning.view.id,
+                    warning: warning.id,
                 },
                 &facts,
                 Some(WarningId(warning_id)),
             )
             .unwrap()
-            .commit(&mut control)
+            .commit(&mut control, &mut store)
             .unwrap();
         warning_id += 1;
     }
-    control.people.get_mut(&actor).unwrap().burden = control.rules.loss_threshold;
+    burden_mut(&mut store, actor).unwrap().burden = control.rules.loss_threshold;
     control
-        .prepare_review(&facts, Some(WarningId(warning_id)))
+        .prepare_review(&store, &facts, Some(WarningId(warning_id)))
         .unwrap()
-        .commit(&mut control)
+        .commit(&mut control, &mut store)
         .unwrap();
     warning_id += 1;
     while let Some(warning) = control.warning.clone() {
         control
             .prepare_action(
+                &store,
                 actor,
                 &ControlAction::AcceptWarning {
-                    warning: warning.view.id,
+                    warning: warning.id,
                 },
                 &facts,
                 Some(WarningId(warning_id)),
             )
             .unwrap()
-            .commit(&mut control)
+            .commit(&mut control, &mut store)
             .unwrap();
         warning_id += 1;
     }
@@ -385,7 +391,7 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
     ] {
         facts.now = SimTime(tick * control.rules.controller_quantum.0);
         let prepared = control
-            .prepare_controller(facts.now, true)
+            .prepare_controller(&store, facts.now, true)
             .unwrap()
             .unwrap();
         let changed = prepared
@@ -396,7 +402,7 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
                 _ => None,
             })
             .unwrap();
-        prepared.commit(&mut control).unwrap();
+        prepared.commit(&mut control, &mut store).unwrap();
         let chosen = control.active.as_ref().unwrap().dominant.unwrap();
         assert_eq!(chosen, expected_life);
         let memory = if chosen == PersonId(1) {

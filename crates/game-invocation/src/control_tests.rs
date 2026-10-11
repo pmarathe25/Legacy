@@ -1,4 +1,9 @@
 use crate::*;
+fn control_store() -> game_ecs::Store {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_ecs::Store::with_schema(schema)
+}
 use game_core::*;
 use std::collections::BTreeSet;
 const ACTOR: PersonId = PersonId(10);
@@ -19,16 +24,17 @@ fn facts() -> AdmissionFacts {
     }
 }
 fn execute(
+    store: &mut game_ecs::Store,
     state: &mut ControlState,
     f: &mut AdmissionFacts,
     action: ControlAction,
     id: u64,
 ) -> Vec<ControlEffect> {
     let plan = state
-        .prepare_action(ACTOR, &action, f, Some(WarningId(id)))
+        .prepare_action(store, ACTOR, &action, f, Some(WarningId(id)))
         .unwrap();
     let effects = plan.effects.clone();
-    plan.commit(state).unwrap();
+    plan.commit(state, store).unwrap();
     for effect in &effects {
         if let ControlEffect::FatigueCharge { quantity, .. } = effect {
             f.fatigue += quantity;
@@ -36,14 +42,20 @@ fn execute(
     }
     effects
 }
-fn start(state: &mut ControlState, f: &mut AdmissionFacts, lives: BTreeSet<PersonId>) -> u64 {
-    execute(state, f, ControlAction::Activate { lives }, 1);
+fn start(
+    store: &mut game_ecs::Store,
+    state: &mut ControlState,
+    f: &mut AdmissionFacts,
+    lives: BTreeSet<PersonId>,
+) -> u64 {
+    execute(store, state, f, ControlAction::Activate { lives }, 1);
     let mut next = 2;
     while let Some(w) = state.warning.clone() {
         execute(
+            store,
             state,
             f,
-            ControlAction::AcceptWarning { warning: w.view.id },
+            ControlAction::AcceptWarning { warning: w.id },
             next,
         );
         next += 1;
@@ -53,10 +65,12 @@ fn start(state: &mut ControlState, f: &mut AdmissionFacts, lives: BTreeSet<Perso
 #[test]
 fn learned_person_accepts_the_exact_activation_charge_before_any_borrowed_access() {
     let mut state = ControlState::new(Rules::fixture()).unwrap();
+    let mut store = control_store();
     let mut f = facts();
     assert!(
         state
             .prepare_action(
+                &store,
                 ACTOR,
                 &ControlAction::Activate {
                     lives: BTreeSet::from([OLD])
@@ -72,6 +86,7 @@ fn learned_person_accepts_the_exact_activation_charge_before_any_borrowed_access
     assert!(
         state
             .prepare_action(
+                &store,
                 ACTOR,
                 &ControlAction::Activate {
                     lives: BTreeSet::from([OLD])
@@ -85,6 +100,7 @@ fn learned_person_accepts_the_exact_activation_charge_before_any_borrowed_access
             .is_err()
     );
     execute(
+        &mut store,
         &mut state,
         &mut f,
         ControlAction::Activate {
@@ -93,9 +109,10 @@ fn learned_person_accepts_the_exact_activation_charge_before_any_borrowed_access
         1,
     );
     assert!(state.active.is_none());
-    assert_eq!(state.warning.as_ref().unwrap().view.instant_fatigue, 1000);
+    assert_eq!(state.pending_warning(&store).unwrap().instant_fatigue, 1000);
     assert_eq!(f.fatigue, 0);
     let effects = execute(
+        &mut store,
         &mut state,
         &mut f,
         ControlAction::AcceptWarning {
@@ -104,7 +121,7 @@ fn learned_person_accepts_the_exact_activation_charge_before_any_borrowed_access
         2,
     );
     assert_eq!(f.fatigue, 1000);
-    assert_eq!(state.people[&ACTOR].burden, 6000);
+    assert_eq!(burden(&store, ACTOR).unwrap().burden, 6000);
     assert!(state.active.is_some());
     assert!(
         effects
@@ -115,14 +132,20 @@ fn learned_person_accepts_the_exact_activation_charge_before_any_borrowed_access
 #[test]
 fn warning_before_new_cost_and_guarded_acceptance_never_partially_changes_state() {
     let mut state = ControlState::new(Rules::fixture()).unwrap();
+    let mut store = control_store();
     let mut f = facts();
-    start(&mut state, &mut f, BTreeSet::from([OLD]));
-    let boundary = state.boundary(SimTime(0), SimTime(200_000), &BTreeSet::from([ACTOR]));
+    start(&mut store, &mut state, &mut f, BTreeSet::from([OLD]));
+    let boundary = state.boundary(
+        &store,
+        SimTime(0),
+        SimTime(200_000),
+        &BTreeSet::from([ACTOR]),
+    );
     assert_eq!(boundary, SimTime(114_000));
     let a = state.active.as_ref().unwrap();
     let advanced = advance_burden(AdvanceInput {
         rules: &state.rules,
-        before: &state.people[&ACTOR],
+        before: burden(&store, ACTOR).unwrap(),
         actor: ACTOR,
         now: SimTime(0),
         next: boundary,
@@ -135,22 +158,22 @@ fn warning_before_new_cost_and_guarded_acceptance_never_partially_changes_state(
         }),
     })
     .unwrap();
-    state.people.insert(ACTOR, advanced.burden);
+    insert_burden(&mut store, ACTOR, advanced.burden).unwrap();
     f.now = boundary;
     state
-        .prepare_review(&f, Some(WarningId(3)))
+        .prepare_review(&store, &f, Some(WarningId(3)))
         .unwrap()
-        .commit(&mut state)
+        .commit(&mut state, &mut store)
         .unwrap();
     assert_eq!(
-        state.warning.as_ref().unwrap().view.cost,
+        state.pending_warning(&store).unwrap().cost,
         InvocationCost::Strain
     );
-    assert_eq!(state.warning.as_ref().unwrap().view.severity, 1);
+    assert_eq!(state.pending_warning(&store).unwrap().severity, 1);
     assert_eq!(
         body_rates(
             &state.rules,
-            &state.people[&ACTOR],
+            burden(&store, ACTOR).unwrap(),
             Some(ActiveInput {
                 life_count: 1,
                 accepted: &state.active.as_ref().unwrap().accepted,
@@ -169,6 +192,7 @@ fn warning_before_new_cost_and_guarded_acceptance_never_partially_changes_state(
     assert!(
         state
             .prepare_action(
+                &store,
                 ACTOR,
                 &ControlAction::AcceptWarning {
                     warning: WarningId(999)
@@ -181,6 +205,7 @@ fn warning_before_new_cost_and_guarded_acceptance_never_partially_changes_state(
     assert_eq!(state, before);
     let prepared = state
         .prepare_action(
+            &store,
             ACTOR,
             &ControlAction::AcceptWarning {
                 warning: WarningId(3),
@@ -189,30 +214,40 @@ fn warning_before_new_cost_and_guarded_acceptance_never_partially_changes_state(
             Some(WarningId(4)),
         )
         .unwrap();
-    execute(&mut state, &mut f, ControlAction::Dismiss, 4);
+    execute(&mut store, &mut state, &mut f, ControlAction::Dismiss, 4);
     let after = state.clone();
-    assert_eq!(prepared.commit(&mut state), Err(Error::Unavailable));
+    assert_eq!(
+        prepared.commit(&mut state, &mut store),
+        Err(Error::Unavailable)
+    );
     assert_eq!(state, after);
 }
 #[test]
 fn accepted_episode_has_no_dismissal_reconsent_or_protective_cost_cap_and_selects_competing_lives()
 {
     let mut state = ControlState::new(Rules::fixture()).unwrap();
+    let mut store = control_store();
     let mut f = facts();
-    start(&mut state, &mut f, BTreeSet::from([OLD, PersonId(12)]));
-    state.people.get_mut(&ACTOR).unwrap().burden = state.rules.loss_threshold;
+    start(
+        &mut store,
+        &mut state,
+        &mut f,
+        BTreeSet::from([OLD, PersonId(12)]),
+    );
+    burden_mut(&mut store, ACTOR).unwrap().burden = state.rules.loss_threshold;
     let mut id = 10;
     state
-        .prepare_review(&f, Some(WarningId(id)))
+        .prepare_review(&store, &f, Some(WarningId(id)))
         .unwrap()
-        .commit(&mut state)
+        .commit(&mut state, &mut store)
         .unwrap();
     id += 1;
     while let Some(w) = state.warning.clone() {
         execute(
+            &mut store,
             &mut state,
             &mut f,
-            ControlAction::AcceptWarning { warning: w.view.id },
+            ControlAction::AcceptWarning { warning: w.id },
             id,
         );
         id += 1;
@@ -221,10 +256,19 @@ fn accepted_episode_has_no_dismissal_reconsent_or_protective_cost_cap_and_select
     assert_eq!(episode.ends, SimTime(state.rules.loss_duration.0));
     assert!(
         state
-            .prepare_action(ACTOR, &ControlAction::Dismiss, &f, Some(WarningId(id)))
+            .prepare_action(
+                &store,
+                ACTOR,
+                &ControlAction::Dismiss,
+                &f,
+                Some(WarningId(id))
+            )
             .is_err()
     );
-    let tick = state.prepare_controller(f.now, true).unwrap().unwrap();
+    let tick = state
+        .prepare_controller(&store, f.now, true)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         tick.effects,
         vec![ControlEffect::ControllerSelected {
@@ -233,9 +277,12 @@ fn accepted_episode_has_no_dismissal_reconsent_or_protective_cost_cap_and_select
             changed: false
         }]
     );
-    tick.commit(&mut state).unwrap();
+    tick.commit(&mut state, &mut store).unwrap();
     f.now = SimTime(state.rules.controller_quantum.0);
-    let tick = state.prepare_controller(f.now, true).unwrap().unwrap();
+    let tick = state
+        .prepare_controller(&store, f.now, true)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         tick.effects,
         vec![ControlEffect::ControllerSelected {
@@ -244,29 +291,31 @@ fn accepted_episode_has_no_dismissal_reconsent_or_protective_cost_cap_and_select
             changed: true
         }]
     );
-    tick.commit(&mut state).unwrap();
-    let b = state.people.get_mut(&ACTOR).unwrap();
+    tick.commit(&mut state, &mut store).unwrap();
+    let b = burden_mut(&mut store, ACTOR).unwrap();
     b.burden = state.rules.permanent_burden;
     b.exposure = state.rules.permanent_exposure.0;
     state
-        .prepare_review(&f, Some(WarningId(id)))
+        .prepare_review(&store, &f, Some(WarningId(id)))
         .unwrap()
-        .commit(&mut state)
+        .commit(&mut state, &mut store)
         .unwrap();
     assert!(state.warning.is_none());
-    assert!(state.people[&ACTOR].permanent_identity > 0);
-    assert!(state.people[&ACTOR].lifespan_loss > 0);
+    assert!(burden(&store, ACTOR).unwrap().permanent_identity > 0);
+    assert!(burden(&store, ACTOR).unwrap().lifespan_loss > 0);
 }
 #[test]
 fn dismissal_and_reactivation_preserve_burden_without_creating_protracted_exposure() {
     let mut state = ControlState::new(Rules::fixture()).unwrap();
+    let mut store = control_store();
     let mut f = facts();
-    start(&mut state, &mut f, BTreeSet::from([OLD]));
-    state.people.get_mut(&ACTOR).unwrap().uninterrupted = 10;
-    execute(&mut state, &mut f, ControlAction::Dismiss, 3);
-    assert_eq!(state.people[&ACTOR].burden, 6000);
-    assert_eq!(state.people[&ACTOR].uninterrupted, 0);
+    start(&mut store, &mut state, &mut f, BTreeSet::from([OLD]));
+    burden_mut(&mut store, ACTOR).unwrap().uninterrupted = 10;
+    execute(&mut store, &mut state, &mut f, ControlAction::Dismiss, 3);
+    assert_eq!(burden(&store, ACTOR).unwrap().burden, 6000);
+    assert_eq!(burden(&store, ACTOR).unwrap().uninterrupted, 0);
     execute(
+        &mut store,
         &mut state,
         &mut f,
         ControlAction::Activate {
@@ -275,6 +324,7 @@ fn dismissal_and_reactivation_preserve_burden_without_creating_protracted_exposu
         4,
     );
     execute(
+        &mut store,
         &mut state,
         &mut f,
         ControlAction::AcceptWarning {
@@ -282,27 +332,28 @@ fn dismissal_and_reactivation_preserve_burden_without_creating_protracted_exposu
         },
         5,
     );
-    assert_eq!(state.people[&ACTOR].burden, 12000);
+    assert_eq!(burden(&store, ACTOR).unwrap().burden, 12000);
     assert_eq!(f.fatigue, 2000);
-    assert_eq!(state.people[&ACTOR].exposure, 0);
-    assert_eq!(state.people[&ACTOR].permanent_identity, 0);
+    assert_eq!(burden(&store, ACTOR).unwrap().exposure, 0);
+    assert_eq!(burden(&store, ACTOR).unwrap().permanent_identity, 0);
 }
 #[test]
 fn actual_death_clears_control_while_successor_does_not_inherit_direct_penalties() {
     let mut state = ControlState::new(Rules::fixture()).unwrap();
+    let mut store = control_store();
     let mut f = facts();
-    start(&mut state, &mut f, BTreeSet::from([OLD]));
-    let b = state.people.get_mut(&ACTOR).unwrap();
+    start(&mut store, &mut state, &mut f, BTreeSet::from([OLD]));
+    let b = burden_mut(&mut store, ACTOR).unwrap();
     b.permanent_identity = 10;
     b.lifespan_loss = 60_000;
     b.uninterrupted = 10;
     state
-        .prepare_deaths(&BTreeSet::from([ACTOR]), f.now)
-        .commit(&mut state)
+        .prepare_deaths(&store, &BTreeSet::from([ACTOR]), f.now)
+        .commit(&mut state, &mut store)
         .unwrap();
     assert!(state.active.is_none());
-    assert_eq!(state.people[&ACTOR].uninterrupted, 0);
-    assert_eq!(state.people[&ACTOR].lifespan_loss, 60_000);
+    assert_eq!(burden(&store, ACTOR).unwrap().uninterrupted, 0);
+    assert_eq!(burden(&store, ACTOR).unwrap().lifespan_loss, 60_000);
     let successor = AdmissionFacts {
         actor: PersonId(20),
         current: Some(PersonId(20)),
@@ -311,6 +362,7 @@ fn actual_death_clears_control_while_successor_does_not_inherit_direct_penalties
     };
     state
         .prepare_action(
+            &store,
             PersonId(20),
             &ControlAction::Activate {
                 lives: BTreeSet::from([OLD]),
@@ -319,9 +371,9 @@ fn actual_death_clears_control_while_successor_does_not_inherit_direct_penalties
             Some(WarningId(3)),
         )
         .unwrap()
-        .commit(&mut state)
+        .commit(&mut state, &mut store)
         .unwrap();
-    assert_eq!(state.people[&PersonId(20)].permanent_identity, 0);
+    assert_eq!(burden(&store, PersonId(20)).unwrap().permanent_identity, 0);
     let json = serde_json::to_string(&state).unwrap();
     assert_eq!(serde_json::from_str::<ControlState>(&json).unwrap(), state);
 }

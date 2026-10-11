@@ -638,6 +638,8 @@ version = "0.1.0"
 dependencies = [
  "game-characters",
  "game-core",
+ "game-ecs",
+ "game-physiology",
  "serde",
  "serde_json",
 ]
