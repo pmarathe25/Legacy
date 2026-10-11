@@ -6,6 +6,13 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod storage;
+pub use storage::{
+    insert_inventory, inventories, inventory, inventory_mut, register_components, remove_inventory,
+};
+#[cfg(test)]
+mod storage_tests;
+
 mod planning_projection;
 pub use planning_projection::{
     Reservation, ReservationTotals, ToolAllocations, ToolSlots, ToolUse,

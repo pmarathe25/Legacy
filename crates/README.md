@@ -46,6 +46,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | --- | --- | --- |
 | `game-agriculture` | `game-ecs`, `game-land`; `game-content` (optional) | Field, crop, soil and cultivation joins; crop-definition loading |
 | `game-armies` | `game-missions` | Objectives for autonomous leaders |
+| `game-cargo` | `game-ecs` | Inventory components, conserved loading and transfer effects, and typed stock access |
 | `game-characters` | `game-ecs`, `game-logistics`; `game-genetics` (optional) | Personal mind and temperament components; material goals; opaque inheritable temperament loci |
 | `game-conflict` | `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
 | `game-ecology` | `game-ecs`, `game-land` | Natural resources, plots, gathering, personal knowledge and request components; shared soil; sparse daily renewal effects |
@@ -62,7 +63,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
 | `game-workshop` | `game-ecs`, `game-cargo`, `game-skills` | Site and optional job components; material inputs and outputs; work rates and craft practice effects |
 
-`game-agreements`, `game-cargo`, `game-invocation`, `game-logistics`, `game-property`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
+`game-agreements`, `game-invocation`, `game-logistics`, `game-property`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
 
 ## Components and systems
 
