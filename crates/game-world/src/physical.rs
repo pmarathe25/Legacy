@@ -29,6 +29,8 @@ pub(crate) struct Outcome {
     opening_activity: Activity,
     opening_job: Option<Job>,
     opening_location: Location,
+    opening_development: Option<game_physiology::traits::Development>,
+    opening_phenotype: Option<game_physiology::traits::Phenotype>,
     vitals: Vitals,
     fatigue_remainder: u16,
     health_remainder: u16,
@@ -1198,6 +1200,8 @@ impl Simulation {
                         .location(id)
                         .ok_or(Error::Unavailable)?
                         .clone(),
+                    opening_development: self.state.components.trait_development_row(id).copied(),
+                    opening_phenotype: self.genetic_phenotype(id),
                     vitals,
                     fatigue_remainder,
                     health_remainder,
@@ -1215,6 +1219,13 @@ impl Simulation {
                     || self.state.components.activity(outcome.id) != Some(&outcome.opening_activity)
                     || self.state.components.job(outcome.id) != outcome.opening_job.as_ref()
                     || self.state.components.location(outcome.id) != Some(&outcome.opening_location)
+                    || self
+                        .state
+                        .components
+                        .trait_development_row(outcome.id)
+                        .copied()
+                        != outcome.opening_development
+                    || self.genetic_phenotype(outcome.id) != outcome.opening_phenotype
             })
         {
             return Err(Error::InvalidSave("stale physical component batch".into()));

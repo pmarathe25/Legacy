@@ -125,9 +125,9 @@ pub struct CanonicalState {
     pub armies: Option<armies::World>,
     pub realm: Option<realm::World>,
     pub transport: Option<game_transport::World>,
-    pub genetics: Option<game_genetics::World>,
-    pub physical_traits: Option<game_physiology::traits::World>,
-    pub temperament: Option<game_characters::temperament::World>,
+    pub genetics: Option<game_genetics::Runtime>,
+    pub physical_traits: Option<game_physiology::traits::Runtime>,
+    pub temperament: Option<game_characters::temperament::Runtime>,
     pub heredity: Option<game_lifecycle::heredity::Definition>,
     pub content: BTreeMap<String, game_content::Stamp>,
     pub scenario: ScenarioInfo,
@@ -1611,8 +1611,8 @@ impl Simulation {
         {
             world.prepare_refresh_time(next)?;
             if let Some(lives) = &self.state.development {
-                for actor in world.people.keys() {
-                    lives.lives[actor].age_at(next)?;
+                for (actor, _) in self.state.components.trait_developments() {
+                    lives.lives[&actor].age_at(next)?;
                 }
             }
         }

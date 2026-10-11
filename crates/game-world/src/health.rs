@@ -2354,7 +2354,7 @@ mod integration_tests {
                 .genetics
                 .as_mut()
                 .unwrap()
-                .set_alleles(actor, &locus, [1_000; 2])
+                .set_alleles(&mut sim.state.components, actor, &locus, [1_000; 2])
                 .unwrap();
         }
         sim

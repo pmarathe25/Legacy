@@ -1,6 +1,7 @@
 //! Temperament predisposition and experience. Genes are optional raw evidence;
 //! acquired offsets and the interpretation of that evidence belong to characters.
 use game_core::{Error, PersonId};
+use game_ecs::{Schema, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -189,61 +190,118 @@ pub struct PersonTemperament {
     pub baseline: Temperament,
     pub learned_offsets: [i16; 4],
 }
+impl PersonTemperament {
+    pub fn validate(&self) -> Result<(), Error> {
+        if !self.baseline.valid()
+            || self
+                .learned_offsets
+                .iter()
+                .any(|offset| offset.unsigned_abs() > 1_000)
+        {
+            return Err(Error::InvalidConfiguration(
+                "invalid personal temperament".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
+    schema.register::<PersonTemperament>("characters/temperament", PersonTemperament::validate)
+}
+pub fn person_temperament(store: &Store, person: PersonId) -> Option<&PersonTemperament> {
+    store.get(StableId(person.0))
+}
+pub fn person_temperament_mut(
+    store: &mut Store,
+    person: PersonId,
+) -> Option<&mut PersonTemperament> {
+    store.get_mut(StableId(person.0))
+}
+pub fn all_person_temperaments(
+    store: &Store,
+) -> impl Iterator<Item = (PersonId, &PersonTemperament)> {
+    store
+        .iter::<PersonTemperament>()
+        .map(|(id, row)| (PersonId(id.0), row))
+}
+pub fn insert_person_temperament(
+    store: &mut Store,
+    person: PersonId,
+    temperament: PersonTemperament,
+) -> Result<(), Error> {
+    temperament.validate()?;
+    store.insert_or_spawn(StableId(person.0), temperament)
+}
+pub fn remove_person_temperament(
+    store: &mut Store,
+    person: PersonId,
+) -> Result<Option<PersonTemperament>, Error> {
+    if !store.contains(StableId(person.0)) {
+        return Ok(None);
+    }
+    store.remove(StableId(person.0))
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct World {
+pub struct Runtime {
     pub definitions: Definitions,
-    pub people: BTreeMap<PersonId, PersonTemperament>,
 }
-impl World {
+impl Runtime {
     pub fn new(definitions: Definitions) -> Result<Self, Error> {
         definitions.validate()?;
-        Ok(Self {
-            definitions,
-            people: BTreeMap::new(),
-        })
+        Ok(Self { definitions })
     }
-    pub fn register(&mut self, person: PersonId, baseline: Temperament) -> Result<(), Error> {
+    pub fn register(
+        &self,
+        store: &mut Store,
+        person: PersonId,
+        baseline: Temperament,
+    ) -> Result<(), Error> {
         if !baseline.valid() {
             return Err(Error::InvalidConfiguration(
                 "invalid temperament baseline".into(),
             ));
         }
-        if self.people.contains_key(&person) {
+        if person_temperament(store, person).is_some() {
             return Err(Error::Unavailable);
         }
-        self.people.insert(
+        insert_person_temperament(
+            store,
             person,
             PersonTemperament {
                 baseline,
                 learned_offsets: [0; 4],
             },
-        );
+        )?;
         Ok(())
     }
     pub fn register_newborn(
-        &mut self,
+        &self,
+        store: &mut Store,
         person: PersonId,
     ) -> Result<crate::decisions::Personality, Error> {
         let personality = self.definitions.newborn_personality.clone();
-        self.register(person, Temperament::from(&personality))?;
+        self.register(store, person, Temperament::from(&personality))?;
         Ok(personality)
     }
     pub fn express(
         &self,
+        store: &Store,
         person: PersonId,
         scores: &BTreeMap<String, i32>,
     ) -> Result<Temperament, Error> {
-        self.express_with(person, |locus| {
+        self.express_with(store, person, |locus| {
             scores.get(locus).copied().ok_or(Error::Unavailable)
         })
     }
     fn express_with(
         &self,
+        store: &Store,
         person: PersonId,
         mut score: impl FnMut(&str) -> Result<i32, Error>,
     ) -> Result<Temperament, Error> {
-        let record = self.people.get(&person).ok_or(Error::Unavailable)?;
+        let record = person_temperament(store, person).ok_or(Error::Unavailable)?;
         let mut values = record.baseline.values().map(i32::from);
         for t in &self.definitions.traits {
             let score = score(&t.inheritance.locus)?;
@@ -262,15 +320,21 @@ impl World {
     #[cfg(feature = "genetics")]
     pub fn express_from_genes(
         &self,
+        store: &Store,
         person: PersonId,
-        genes: &game_genetics::World,
+        genes: &impl game_genetics::AlleleSource,
     ) -> Result<Temperament, Error> {
-        self.express_with(person, |locus| {
+        self.express_with(store, person, |locus| {
             let alleles = genes.alleles_named(person, locus)?;
             Ok(((i64::from(alleles[0]) + i64::from(alleles[1])) / 2) as i32)
         })
     }
-    pub fn learn(&mut self, person: PersonId, experience: &str) -> Result<(), Error> {
+    pub fn learn(
+        &self,
+        store: &mut Store,
+        person: PersonId,
+        experience: &str,
+    ) -> Result<(), Error> {
         let deltas = self
             .definitions
             .learning
@@ -278,16 +342,19 @@ impl World {
             .find(|l| l.id == experience)
             .ok_or(Error::Unavailable)?
             .deltas;
-        let record = self.people.get_mut(&person).ok_or(Error::Unavailable)?;
+        let mut record = person_temperament(store, person)
+            .ok_or(Error::Unavailable)?
+            .clone();
         let bound = i32::from(self.definitions.learned_limit);
         for (offset, delta) in record.learned_offsets.iter_mut().zip(deltas) {
             *offset = (i32::from(*offset) + i32::from(delta)).clamp(-bound, bound) as i16;
         }
+        insert_person_temperament(store, person, record)?;
         Ok(())
     }
-    pub fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self, store: &Store) -> Result<(), Error> {
         if self.definitions.validate().is_err()
-            || self.people.values().any(|p| {
+            || all_person_temperaments(store).any(|(_, p)| {
                 !p.baseline.valid()
                     || p.learned_offsets
                         .iter()
@@ -302,6 +369,13 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn store() -> Store {
+        let mut schema = Schema::new();
+        register_components(&mut schema).unwrap();
+        #[cfg(feature = "genetics")]
+        game_genetics::register_components(&mut schema).unwrap();
+        Store::with_schema(schema)
+    }
     fn definitions() -> Definitions {
         Definitions {
             newborn_personality: crate::decisions::Personality::industrious(),
@@ -328,27 +402,43 @@ mod tests {
     }
     #[test]
     fn experience_is_bounded_and_does_not_rewrite_inherited_evidence() {
-        let mut world = World::new(definitions()).unwrap();
-        world.register(PersonId(1), Temperament::default()).unwrap();
+        let mut store = store();
+        let world = Runtime::new(definitions()).unwrap();
+        world
+            .register(&mut store, PersonId(1), Temperament::default())
+            .unwrap();
         let scores = BTreeMap::from([("temperament.test".into(), 1_000)]);
-        assert_eq!(world.express(PersonId(1), &scores).unwrap().empathy, 700);
+        assert_eq!(
+            world.express(&store, PersonId(1), &scores).unwrap().empathy,
+            700
+        );
         for _ in 0..10 {
-            world.learn(PersonId(1), "care").unwrap();
+            world.learn(&mut store, PersonId(1), "care").unwrap();
         }
-        assert_eq!(world.express(PersonId(1), &scores).unwrap().empathy, 702);
-        assert_eq!(world.people[&PersonId(1)].learned_offsets, [2, 0, 2, 0]);
+        assert_eq!(
+            world.express(&store, PersonId(1), &scores).unwrap().empathy,
+            702
+        );
+        assert_eq!(
+            person_temperament(&store, PersonId(1))
+                .unwrap()
+                .learned_offsets,
+            [2, 0, 2, 0]
+        );
         assert_eq!(scores["temperament.test"], 1_000);
-        world.validate().unwrap();
+        world.validate(&store).unwrap();
     }
     #[test]
     fn noninherited_dispositions_remain_with_the_character() {
-        let mut world = World::new(Definitions {
+        let mut store = store();
+        let world = Runtime::new(Definitions {
             traits: vec![],
             ..definitions()
         })
         .unwrap();
         world
             .register(
+                &mut store,
                 PersonId(1),
                 Temperament {
                     empathy: 900,
@@ -358,7 +448,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             world
-                .express(PersonId(1), &BTreeMap::new())
+                .express(&store, PersonId(1), &BTreeMap::new())
                 .unwrap()
                 .empathy,
             900
@@ -366,7 +456,7 @@ mod tests {
         let mut personality = crate::decisions::Personality::industrious();
         let ambition = personality.ambition;
         world
-            .express(PersonId(1), &BTreeMap::new())
+            .express(&store, PersonId(1), &BTreeMap::new())
             .unwrap()
             .apply_to(&mut personality);
         assert_eq!(personality.empathy, 900);
@@ -374,56 +464,216 @@ mod tests {
     }
     #[test]
     fn newborn_baseline_comes_from_character_content() {
+        let mut store = store();
         let mut definitions = definitions();
         definitions.newborn_personality.ambition = 123;
         definitions.newborn_personality.empathy = 456;
-        let mut world = World::new(definitions).unwrap();
-        let personality = world.register_newborn(PersonId(7)).unwrap();
+        let world = Runtime::new(definitions).unwrap();
+        let personality = world.register_newborn(&mut store, PersonId(7)).unwrap();
         assert_eq!(personality.ambition, 123);
-        assert_eq!(world.people[&PersonId(7)].baseline.empathy, 456);
-        assert_eq!(world.people[&PersonId(7)].learned_offsets, [0; 4]);
+        assert_eq!(
+            person_temperament(&store, PersonId(7))
+                .unwrap()
+                .baseline
+                .empathy,
+            456
+        );
+        assert_eq!(
+            person_temperament(&store, PersonId(7))
+                .unwrap()
+                .learned_offsets,
+            [0; 4]
+        );
     }
     #[cfg(feature = "genetics")]
     #[test]
     fn optional_genetics_and_experience_have_separate_state() {
+        let mut store = store();
         use game_genetics::HeritableCharacteristic;
         let definitions = definitions();
         let mut genes =
-            game_genetics::World::new(game_genetics::Rules::default(), definitions.loci()).unwrap();
-        genes.seed_person(7, PersonId(1)).unwrap();
+            game_genetics::Runtime::new(game_genetics::Rules::default(), definitions.loci())
+                .unwrap();
+        genes.seed_person(&mut store, 7, PersonId(1)).unwrap();
         genes
             .set_alleles(
+                &mut store,
                 PersonId(1),
                 &game_genetics::LocusId("temperament.test".into()),
                 [1_000, 1_000],
             )
             .unwrap();
         let before = genes.clone();
-        let mut mind = World::new(definitions).unwrap();
-        mind.register(PersonId(1), Temperament::default()).unwrap();
+        let genome_before = game_genetics::person_genome(&store, PersonId(1))
+            .unwrap()
+            .clone();
+        let mind = Runtime::new(definitions).unwrap();
+        mind.register(&mut store, PersonId(1), Temperament::default())
+            .unwrap();
         assert_eq!(
-            mind.express_from_genes(PersonId(1), &genes)
+            mind.express_from_genes(&store, PersonId(1), &genes.allele_source(&store))
                 .unwrap()
                 .empathy,
             700
         );
-        mind.learn(PersonId(1), "care").unwrap();
+        mind.learn(&mut store, PersonId(1), "care").unwrap();
         assert_eq!(
-            mind.express_from_genes(PersonId(1), &genes)
+            mind.express_from_genes(&store, PersonId(1), &genes.allele_source(&store))
                 .unwrap()
                 .empathy,
             701
         );
         assert_eq!(genes, before);
+        assert_eq!(
+            game_genetics::person_genome(&store, PersonId(1)),
+            Some(&genome_before)
+        );
+        let acquired_before = person_temperament(&store, PersonId(1)).unwrap().clone();
+        genes
+            .set_alleles(
+                &mut store,
+                PersonId(1),
+                &game_genetics::LocusId("temperament.test".into()),
+                [0, 0],
+            )
+            .unwrap();
+        assert_eq!(
+            person_temperament(&store, PersonId(1)),
+            Some(&acquired_before)
+        );
     }
     #[test]
     fn unknown_experience_is_inert_and_save_round_trips() {
-        let mut world = World::new(definitions()).unwrap();
-        world.register(PersonId(1), Temperament::default()).unwrap();
-        let before = world.clone();
-        assert!(world.learn(PersonId(1), "missing").is_err());
-        assert_eq!(world, before);
+        let mut store = store();
+        let world = Runtime::new(definitions()).unwrap();
+        world
+            .register(&mut store, PersonId(1), Temperament::default())
+            .unwrap();
+        let before = (world.clone(), store.clone());
+        assert!(world.learn(&mut store, PersonId(1), "missing").is_err());
+        assert_eq!((world.clone(), store.clone()), before);
         let bytes = serde_json::to_vec(&world).unwrap();
-        assert_eq!(serde_json::from_slice::<World>(&bytes).unwrap(), world);
+        assert_eq!(serde_json::from_slice::<Runtime>(&bytes).unwrap(), world);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct Foreign(u64);
+
+    #[test]
+    fn component_schema_roundtrip_and_removal_preserve_other_owner_columns() {
+        let mut schema = Schema::new();
+        register_components(&mut schema).unwrap();
+        assert_eq!(
+            schema.keys().collect::<Vec<_>>(),
+            vec!["characters/temperament"]
+        );
+        assert!(register_components(&mut schema).is_err());
+        schema
+            .register::<Foreign>("other/column", |_| Ok(()))
+            .unwrap();
+        let mut store = Store::with_schema(schema.clone());
+        store.insert_or_spawn(StableId(1), Foreign(77)).unwrap();
+        let runtime = Runtime::new(definitions()).unwrap();
+        runtime
+            .register(&mut store, PersonId(1), Temperament::default())
+            .unwrap();
+        runtime.learn(&mut store, PersonId(1), "care").unwrap();
+        assert_eq!(all_person_temperaments(&store).count(), 1);
+        let restored_runtime: Runtime =
+            serde_json::from_slice(&serde_json::to_vec(&runtime).unwrap()).unwrap();
+        let restored = Store::restore(
+            schema,
+            serde_json::from_slice(&serde_json::to_vec(&store.snapshot().unwrap()).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored, store);
+        restored_runtime.validate(&restored).unwrap();
+        assert!(
+            remove_person_temperament(&mut store, PersonId(1))
+                .unwrap()
+                .is_some()
+        );
+        assert!(store.contains(StableId(1)));
+        assert_eq!(store.get::<Foreign>(StableId(1)), Some(&Foreign(77)));
+        assert!(
+            remove_person_temperament(&mut store, PersonId(99))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn intrinsic_and_contextual_temperament_validation_remain_separate() {
+        let runtime = Runtime::new(definitions()).unwrap();
+        let mut store = store();
+        let before = store.clone();
+        assert!(
+            insert_person_temperament(
+                &mut store,
+                PersonId(1),
+                PersonTemperament {
+                    baseline: Temperament::default(),
+                    learned_offsets: [1_001; 4],
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            runtime
+                .register(&mut store, PersonId(0), Temperament::default())
+                .is_err()
+        );
+        assert_eq!(store, before);
+        insert_person_temperament(
+            &mut store,
+            PersonId(1),
+            PersonTemperament {
+                baseline: Temperament::default(),
+                learned_offsets: [3; 4],
+            },
+        )
+        .unwrap();
+        let restored = Store::restore(store.schema().clone(), store.snapshot().unwrap()).unwrap();
+        assert!(matches!(
+            runtime.validate(&restored),
+            Err(Error::InvalidSave(_))
+        ));
+        person_temperament_mut(&mut store, PersonId(1))
+            .unwrap()
+            .baseline
+            .empathy = 1_001;
+        assert!(Store::restore(store.schema().clone(), store.snapshot().unwrap()).is_err());
+        let mut json = serde_json::to_value(runtime).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .insert("people".into(), serde_json::json!({}));
+        assert!(serde_json::from_value::<Runtime>(json).is_err());
+    }
+
+    #[test]
+    fn schema_rejection_of_learning_is_atomic() {
+        let mut schema = Schema::new();
+        schema
+            .register::<PersonTemperament>("characters/temperament", |row| {
+                row.validate()?;
+                if row.learned_offsets != [0; 4] {
+                    Err(Error::Unavailable)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        let mut store = Store::with_schema(schema);
+        let runtime = Runtime::new(definitions()).unwrap();
+        runtime
+            .register(&mut store, PersonId(1), Temperament::default())
+            .unwrap();
+        let before = (runtime.clone(), store.clone());
+        assert_eq!(
+            runtime.learn(&mut store, PersonId(1), "care"),
+            Err(Error::Unavailable)
+        );
+        assert_eq!((runtime, store), before);
     }
 }

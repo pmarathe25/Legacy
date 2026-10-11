@@ -11,6 +11,9 @@ fn schema() -> Result<Schema, Error> {
     game_workshop::register_components(&mut schema)?;
     game_skills::register_components(&mut schema)?;
     game_health::register_components(&mut schema)?;
+    game_genetics::register_components(&mut schema)?;
+    game_physiology::traits::register_components(&mut schema)?;
+    game_characters::temperament::register_components(&mut schema)?;
     game_spatial::register_components(&mut schema)?;
     game_environment::register_components(&mut schema)?;
     game_ecology::register_components(&mut schema)?;
@@ -47,6 +50,73 @@ impl Components {
             ));
         }
         Ok(())
+    }
+    pub fn person_genome(&self, id: game_api::PersonId) -> Option<&game_genetics::PersonGenome> {
+        game_genetics::person_genome(&self.0, id)
+    }
+    pub fn person_genome_mut(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Option<&mut game_genetics::PersonGenome> {
+        game_genetics::person_genome_mut(&mut self.0, id)
+    }
+    pub fn person_genomes(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_genetics::PersonGenome)> {
+        game_genetics::all_person_genomes(&self.0)
+    }
+    pub fn inheritance(&self, id: game_api::PregnancyId) -> Option<&game_genetics::Inheritance> {
+        game_genetics::inheritance(&self.0, id)
+    }
+    pub fn inheritance_mut(
+        &mut self,
+        id: game_api::PregnancyId,
+    ) -> Option<&mut game_genetics::Inheritance> {
+        game_genetics::inheritance_mut(&mut self.0, id)
+    }
+    pub fn inheritances(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PregnancyId, &game_genetics::Inheritance)> {
+        game_genetics::all_inheritances(&self.0)
+    }
+    pub fn trait_development_row(
+        &self,
+        id: game_api::PersonId,
+    ) -> Option<&game_physiology::traits::Development> {
+        game_physiology::traits::development(&self.0, id)
+    }
+    pub fn trait_development_row_mut(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Option<&mut game_physiology::traits::Development> {
+        game_physiology::traits::development_mut(&mut self.0, id)
+    }
+    pub fn trait_developments(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_physiology::traits::Development)> {
+        game_physiology::traits::all_developments(&self.0)
+    }
+    pub fn person_temperament(
+        &self,
+        id: game_api::PersonId,
+    ) -> Option<&game_characters::temperament::PersonTemperament> {
+        game_characters::temperament::person_temperament(&self.0, id)
+    }
+    pub fn person_temperament_mut(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Option<&mut game_characters::temperament::PersonTemperament> {
+        game_characters::temperament::person_temperament_mut(&mut self.0, id)
+    }
+    pub fn person_temperaments(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            game_api::PersonId,
+            &game_characters::temperament::PersonTemperament,
+        ),
+    > {
+        game_characters::temperament::all_person_temperaments(&self.0)
     }
     pub fn clinical(&self, actor: game_api::PersonId) -> Option<&game_health::Clinical> {
         game_health::clinical(&self.0, actor)
@@ -297,6 +367,134 @@ mod tests {
         saved["state"]["physical"]["actors"] = serde_json::json!({});
         assert!(
             Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()).is_err()
+        );
+    }
+
+    #[test]
+    fn stale_physical_trait_development_fails_before_publication() {
+        let mut sim = Simulation::genetics_fixture(85, Execution::default()).unwrap();
+        sim.physical_query.refresh(&sim.state.components).unwrap();
+        let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
+        let actor = sim.state.ruler;
+        sim.state
+            .components
+            .trait_development_row_mut(actor)
+            .unwrap()
+            .physical_training_milli += 1;
+        let before = sim.canonical_state().clone();
+        assert!(sim.commit_prepared_step(prepared).is_err());
+        assert_eq!(&before, sim.canonical_state());
+    }
+
+    #[test]
+    fn stale_expressed_alleles_fail_before_publication() {
+        let mut sim = Simulation::genetics_fixture(86, Execution::default()).unwrap();
+        let actor = sim.state.ruler;
+        let locus = game_genetics::LocusId(
+            sim.state
+                .physical_traits
+                .as_ref()
+                .unwrap()
+                .definitions
+                .traits
+                .iter()
+                .find(|t| t.kind == game_physiology::traits::PhysicalTrait::Metabolism)
+                .unwrap()
+                .inheritance
+                .locus
+                .clone(),
+        );
+        let opening = sim
+            .state
+            .genetics
+            .as_ref()
+            .unwrap()
+            .alleles(&sim.state.components, actor, &locus)
+            .unwrap();
+        sim.physical_query.refresh(&sim.state.components).unwrap();
+        let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
+        let new_value = if opening == [0; 2] { 1_000 } else { 0 };
+        sim.state
+            .genetics
+            .as_mut()
+            .unwrap()
+            .set_alleles(&mut sim.state.components, actor, &locus, [new_value; 2])
+            .unwrap();
+        let before = sim.canonical_state().clone();
+        assert!(sim.commit_prepared_step(prepared).is_err());
+        assert_eq!(&before, sim.canonical_state());
+    }
+
+    #[test]
+    fn invalid_final_founder_traits_leave_admission_inert() {
+        let mut sim = Simulation::skills_fixture(87, Execution::default()).unwrap();
+        let last = sim.state.people.last().unwrap().id;
+        sim.state
+            .decisions
+            .as_mut()
+            .unwrap()
+            .minds
+            .get_mut(&last)
+            .unwrap()
+            .personality
+            .empathy = 1_001;
+        let before = sim.canonical_state().clone();
+        let content =
+            crate::genetics::Content::read(crate::genetics::Config::default().content_dir).unwrap();
+        assert!(sim.initialize_trait_content(content).is_err());
+        assert_eq!(&before, sim.canonical_state());
+    }
+
+    #[test]
+    fn genetic_and_trait_rows_are_authoritative_and_orphans_fail_restore() {
+        let sim = Simulation::genetics_fixture(84, Execution::default()).unwrap();
+        let saved = sim.save().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        for header in ["genetics", "physical_traits", "temperament"] {
+            assert!(json["state"][header].get("people").is_none());
+        }
+        assert!(json["state"]["genetics"].get("pregnancies").is_none());
+        for column in [
+            "genetics/genome",
+            "physiology/development",
+            "characters/temperament",
+        ] {
+            assert_eq!(
+                json["state"]["components"]["columns"][column]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                sim.state.people.len()
+            );
+            let mut malformed = json.clone();
+            malformed["state"]["components"]["columns"][column]
+                .as_array_mut()
+                .unwrap()
+                .remove(0);
+            assert!(
+                Simulation::load(
+                    &serde_json::to_vec(&malformed).unwrap(),
+                    Execution::default()
+                )
+                .is_err()
+            );
+        }
+        let mut orphaned = json;
+        for header in ["genetics", "physical_traits", "temperament", "heredity"] {
+            orphaned["state"][header] = serde_json::Value::Null;
+        }
+        assert!(
+            Simulation::load(
+                &serde_json::to_vec(&orphaned).unwrap(),
+                Execution::default()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            sim.canonical_state(),
+            Simulation::load(&saved, Execution::default())
+                .unwrap()
+                .canonical_state()
         );
     }
 

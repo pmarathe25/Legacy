@@ -132,12 +132,9 @@ impl Definition {
     pub fn interpret_genes(
         &self,
         person: game_core::PersonId,
-        genes: &game_genetics::World,
+        genes: &impl game_genetics::AlleleSource,
     ) -> Result<Reproduction, Error> {
-        self.interpret(genes.alleles(
-            person,
-            &game_genetics::LocusId(self.inheritance.locus.clone()),
-        )?)
+        self.interpret(genes.alleles_named(person, &self.inheritance.locus)?)
     }
 }
 fn ordered(mut alleles: [i32; 2]) -> [i32; 2] {
@@ -244,13 +241,20 @@ mod tests {
     #[cfg(feature = "genetics")]
     #[test]
     fn optional_inheritance_remains_ignorant_of_reproductive_roles() {
+        let mut schema = game_ecs::Schema::new();
+        game_genetics::register_components(&mut schema).unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
         use game_genetics::HeritableCharacteristic;
         let definition = definition();
         let mut genes =
-            game_genetics::World::new(game_genetics::Rules::default(), definition.loci()).unwrap();
-        genes.seed_person(9, game_core::PersonId(1)).unwrap();
+            game_genetics::Runtime::new(game_genetics::Rules::default(), definition.loci())
+                .unwrap();
+        genes
+            .seed_person(&mut store, 9, game_core::PersonId(1))
+            .unwrap();
         genes
             .set_alleles(
+                &mut store,
                 game_core::PersonId(1),
                 &game_genetics::LocusId("reproduction.test".into()),
                 [1, 0],
@@ -258,12 +262,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             definition
-                .interpret_genes(game_core::PersonId(1), &genes)
+                .interpret_genes(game_core::PersonId(1), &genes.allele_source(&store))
                 .unwrap(),
             Reproduction::SuppliesSeed
         );
         genes
             .set_alleles(
+                &mut store,
                 game_core::PersonId(1),
                 &game_genetics::LocusId("reproduction.test".into()),
                 [1, 1],
@@ -271,7 +276,7 @@ mod tests {
             .unwrap();
         assert!(
             definition
-                .interpret_genes(game_core::PersonId(1), &genes)
+                .interpret_genes(game_core::PersonId(1), &genes.allele_source(&store))
                 .is_err()
         );
     }

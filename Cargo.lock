@@ -486,6 +486,7 @@ name = "game-characters"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "game-genetics",
  "game-logistics",
  "serde",
@@ -568,6 +569,7 @@ name = "game-genetics"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "serde",
  "serde_json",
 ]
@@ -606,6 +608,7 @@ name = "game-lifecycle"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "game-genetics",
  "serde",
  "serde_json",

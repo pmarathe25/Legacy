@@ -91,6 +91,10 @@ impl Simulation {
             || self.state.development.is_none()
             || self.state.decisions.is_none()
             || self.state.physical.is_none()
+            || self.state.components.person_genomes().next().is_some()
+            || self.state.components.inheritances().next().is_some()
+            || self.state.components.trait_developments().next().is_some()
+            || self.state.components.person_temperaments().next().is_some()
         {
             return Err(Error::InvalidConfiguration(
                 "trait composition requires fresh human domains".into(),
@@ -116,33 +120,52 @@ impl Simulation {
         let mut loci = content.physiology.data.loci();
         loci.extend(content.temperament.data.loci());
         loci.extend(content.heredity.data.loci());
-        let mut genes = game_genetics::World::new(content.genetics.data, loci)?;
-        let mut traits =
-            game_physiology::traits::World::new(content.physiology.data, self.state.time)?;
-        let mut temperament = game_characters::temperament::World::new(content.temperament.data)?;
+        let mut genes = game_genetics::Runtime::new(content.genetics.data, loci)?;
+        let traits =
+            game_physiology::traits::Runtime::new(content.physiology.data, self.state.time)?;
+        let temperament = game_characters::temperament::Runtime::new(content.temperament.data)?;
         let heredity = content.heredity.data;
+        // Stage plain new rows; no founder is visible until the whole batch is valid.
+        let mut batch = game_ecs::Batch::new();
         for person in &self.state.people {
             let life = &self.state.development.as_ref().unwrap().lives[&person.id];
-            genes.seed_person(self.state.seed, person.id)?;
-            genes.set_alleles(
+            let founder = genes.prepare_founder(
+                self.state.seed,
                 person.id,
-                &game_genetics::LocusId(heredity.inheritance.locus.clone()),
-                heredity.founder_alleles(life.reproduction)?,
+                &[(
+                    game_genetics::LocusId(heredity.inheritance.locus.clone()),
+                    heredity.founder_alleles(life.reproduction)?,
+                )],
             )?;
+            genes.apply_founder_variants(&founder)?;
+            if heredity
+                .interpret_genes(person.id, &genes.genome_source(person.id, &founder.genome))?
+                != life.reproduction
+                && life.reproduction != development::Reproduction::Neither
+            {
+                return Err(Error::InvalidConfiguration(
+                    "founder reproductive substrate disagrees with its role".into(),
+                ));
+            }
             let mut development = self.trait_development(person.id)?;
             development.physical_training_milli = traits.training_from_levels(
                 [Skill::Craft, Skill::Farming, Skill::Combat]
                     .into_iter()
                     .map(|skill| self.own_skill_level(person.id, skill)),
             );
-            traits.register(person.id, development)?;
-            temperament.register(
-                person.id,
-                (&self.state.decisions.as_ref().unwrap().minds[&person.id].personality).into(),
-            )?;
-            traits.phenotype_from_genes(person.id, &genes)?;
-            temperament.express_from_genes(person.id, &genes)?;
+            development.validate()?;
+            let record = game_characters::temperament::PersonTemperament {
+                baseline: (&self.state.decisions.as_ref().unwrap().minds[&person.id].personality)
+                    .into(),
+                learned_offsets: [0; 4],
+            };
+            record.validate()?;
+            let id = game_ecs::StableId(person.id.0);
+            batch.insert(id, founder.genome);
+            batch.insert(id, development);
+            batch.insert(id, record);
         }
+        self.state.components.apply_batch(batch)?;
         self.state.genetics = Some(genes);
         self.state.physical_traits = Some(traits);
         self.state.temperament = Some(temperament);
@@ -164,6 +187,7 @@ impl Simulation {
         };
         let conceived = &self.state.development.as_ref().unwrap().pregnancies[&pregnancy];
         world.conceive(
+            &mut self.state.components,
             self.state.seed,
             pregnancy,
             [conceived.gestator, conceived.partner],
@@ -178,13 +202,18 @@ impl Simulation {
         let Some(genes) = &mut self.state.genetics else {
             return Ok(());
         };
-        genes.born(pregnancy, child, self.state.time)?;
+        genes.born(
+            &mut self.state.components,
+            pregnancy,
+            child,
+            self.state.time,
+        )?;
         let role = self
             .state
             .heredity
             .as_ref()
             .unwrap()
-            .interpret_genes(child, genes)?;
+            .interpret_genes(child, &genes.allele_source(&self.state.components))?;
         self.state
             .development
             .as_mut()
@@ -194,6 +223,7 @@ impl Simulation {
             .unwrap()
             .reproduction = role;
         self.state.physical_traits.as_mut().unwrap().register(
+            &mut self.state.components,
             child,
             game_physiology::traits::Development {
                 maturity_milli: 0,
@@ -205,7 +235,7 @@ impl Simulation {
             .temperament
             .as_mut()
             .unwrap()
-            .register_newborn(child)?;
+            .register_newborn(&mut self.state.components, child)?;
         self.state
             .decisions
             .as_mut()
@@ -221,7 +251,15 @@ impl Simulation {
     fn apply_trait_temperament(&mut self, actor: PersonId) {
         let Some(temperament) = self.state.temperament.as_ref().and_then(|world| {
             world
-                .express_from_genes(actor, self.state.genetics.as_ref()?)
+                .express_from_genes(
+                    &self.state.components,
+                    actor,
+                    &self
+                        .state
+                        .genetics
+                        .as_ref()?
+                        .allele_source(&self.state.components),
+                )
                 .ok()
         }) else {
             return;
@@ -242,7 +280,15 @@ impl Simulation {
         self.state
             .physical_traits
             .as_ref()?
-            .phenotype_from_genes(actor, self.state.genetics.as_ref()?)
+            .phenotype_from_genes(
+                &self.state.components,
+                actor,
+                &self
+                    .state
+                    .genetics
+                    .as_ref()?
+                    .allele_source(&self.state.components),
+            )
             .ok()
     }
     pub(crate) fn inherited_traits_view(&self, actor: PersonId) -> Option<game_api::TraitsView> {
@@ -252,7 +298,15 @@ impl Simulation {
                 .state
                 .temperament
                 .as_ref()?
-                .express_from_genes(actor, self.state.genetics.as_ref()?)
+                .express_from_genes(
+                    &self.state.components,
+                    actor,
+                    &self
+                        .state
+                        .genetics
+                        .as_ref()?
+                        .allele_source(&self.state.components),
+                )
                 .ok()?,
         })
     }
@@ -303,10 +357,11 @@ impl Simulation {
             return Ok(());
         }
         let next = traits.prepare_refresh_time(self.state.time)?;
-        let pending = traits
-            .people
-            .keys()
-            .copied()
+        let pending = self
+            .state
+            .components
+            .trait_developments()
+            .map(|(actor, _)| actor)
             .map(|actor| {
                 self.trait_development(actor)
                     .map(|d| (actor, d, self.genetic_health_milli(actor)))
@@ -314,6 +369,7 @@ impl Simulation {
             .collect::<Result<Vec<_>, _>>()?;
         for (actor, d, before) in pending {
             self.state.physical_traits.as_mut().unwrap().develop(
+                &mut self.state.components,
                 actor,
                 d.maturity_milli,
                 d.physical_training_milli,
@@ -354,11 +410,11 @@ impl Simulation {
             } => vec![(teacher, "guidance"), (student, "guidance")],
             EventKind::Struck { target, .. } => vec![(target, "experienced_harm")],
             EventKind::PregnancyEnded { pregnancy } => {
-                self.state
-                    .genetics
-                    .as_mut()
-                    .unwrap()
-                    .end_pregnancy(pregnancy, self.state.time);
+                self.state.genetics.as_mut().unwrap().end_pregnancy(
+                    &mut self.state.components,
+                    pregnancy,
+                    self.state.time,
+                );
                 Vec::new()
             }
             _ => Vec::new(),
@@ -371,7 +427,7 @@ impl Simulation {
                 .temperament
                 .as_mut()
                 .unwrap()
-                .learn(actor, experience)
+                .learn(&mut self.state.components, actor, experience)
                 .is_ok()
             {
                 self.apply_trait_temperament(actor);
@@ -387,7 +443,11 @@ pub(crate) fn phenotype(
     state
         .physical_traits
         .as_ref()?
-        .phenotype_from_genes(actor, state.genetics.as_ref()?)
+        .phenotype_from_genes(
+            &state.components,
+            actor,
+            &state.genetics.as_ref()?.allele_source(&state.components),
+        )
         .ok()
 }
 
@@ -397,18 +457,22 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         return if state.physical_traits.is_none()
             && state.temperament.is_none()
             && state.heredity.is_none()
+            && state.components.person_genomes().next().is_none()
+            && state.components.inheritances().next().is_none()
+            && state.components.trait_developments().next().is_none()
+            && state.components.person_temperaments().next().is_none()
         {
             Ok(())
         } else {
             Err(fail())
         };
     };
-    game_genetics::validate(genes, state.time)?;
+    game_genetics::validate(genes, &state.components, state.time)?;
     let traits = state.physical_traits.as_ref().ok_or_else(fail)?;
     let temperament = state.temperament.as_ref().ok_or_else(fail)?;
     let heredity = state.heredity.as_ref().ok_or_else(fail)?;
-    traits.validate(state.time)?;
-    temperament.validate()?;
+    traits.validate(&state.components, state.time)?;
+    temperament.validate(&state.components)?;
     heredity.validate().map_err(|_| fail())?;
     fn check<T: Serialize>(state: &CanonicalState, feature: &str, data: &T) -> Result<(), Error> {
         let stamp = state
@@ -434,21 +498,32 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     check(state, "temperament", &temperament.definitions)?;
     check(state, "heredity", heredity)?;
     let development = state.development.as_ref().ok_or_else(fail)?;
-    if genes.people.len() != state.people.len()
-        || traits.people.len() != genes.people.len()
-        || temperament.people.len() != genes.people.len()
-        || state.people.iter().any(|p| {
-            !genes.people.contains_key(&p.id)
-                || !traits.people.contains_key(&p.id)
-                || !temperament.people.contains_key(&p.id)
-        })
+    let people: BTreeSet<_> = state.people.iter().map(|person| person.id).collect();
+    if state
+        .components
+        .person_genomes()
+        .map(|(id, _)| id)
+        .collect::<BTreeSet<_>>()
+        != people
+        || state
+            .components
+            .trait_developments()
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>()
+            != people
+        || state
+            .components
+            .person_temperaments()
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>()
+            != people
     {
         return Err(fail());
     }
     let mut loci = traits.definitions.loci();
     loci.extend(temperament.definitions.loci());
     loci.extend(heredity.loci());
-    if game_genetics::World::new(genes.rules.clone(), loci)
+    if game_genetics::Runtime::new(genes.rules.clone(), loci)
         .map_err(|_| fail())?
         .definitions
         != genes.definitions
@@ -457,20 +532,28 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     for (actor, life) in &development.lives {
         let role = heredity
-            .interpret_genes(*actor, genes)
+            .interpret_genes(*actor, &genes.allele_source(&state.components))
             .map_err(|_| fail())?;
         if life.reproduction != development::Reproduction::Neither && life.reproduction != role {
             return Err(fail());
         }
         traits
-            .phenotype_from_genes(*actor, genes)
+            .phenotype_from_genes(
+                &state.components,
+                *actor,
+                &genes.allele_source(&state.components),
+            )
             .map_err(|_| fail())?;
         temperament
-            .express_from_genes(*actor, genes)
+            .express_from_genes(
+                &state.components,
+                *actor,
+                &genes.allele_source(&state.components),
+            )
             .map_err(|_| fail())?;
     }
-    for (id, inheritance) in &genes.pregnancies {
-        let pregnancy = development.pregnancies.get(id).ok_or_else(fail)?;
+    for (id, inheritance) in state.components.inheritances() {
+        let pregnancy = development.pregnancies.get(&id).ok_or_else(fail)?;
         if inheritance.parents != [pregnancy.gestator, pregnancy.partner] {
             return Err(fail());
         }
@@ -488,7 +571,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         if !matches!(
             pregnancy.state,
             development::PregnancyState::Conceiving { .. } | development::PregnancyState::Ended
-        ) && !genes.pregnancies.contains_key(id)
+        ) && state.components.inheritance(*id).is_none()
         {
             return Err(fail());
         }
@@ -558,7 +641,7 @@ mod tests {
             .genetics
             .as_mut()
             .unwrap()
-            .set_alleles(actor, &locus, [1_000; 2])
+            .set_alleles(&mut original.state.components, actor, &locus, [1_000; 2])
             .unwrap();
         let original_capacity = original.body_rules(actor).carrying_capacity;
         let save = original.save().unwrap();
@@ -576,7 +659,7 @@ mod tests {
             .genetics
             .as_mut()
             .unwrap()
-            .set_alleles(actor, &locus, [1_000; 2])
+            .set_alleles(&mut edited.state.components, actor, &locus, [1_000; 2])
             .unwrap();
         assert!(edited.body_rules(actor).carrying_capacity > original_capacity);
         assert_ne!(
@@ -694,7 +777,7 @@ mod tests {
         let mut sim = fixture(1);
         let player = sim.state.ruler;
         let (mother, pregnancy) = conceive_with_player(&mut sim);
-        assert!(sim.state.genetics.as_ref().unwrap().pregnancies.is_empty());
+        assert!(sim.state.components.inheritances().next().is_none());
         sim.advance(SimDuration(30_000)).unwrap();
         let before = sim.save().unwrap();
         let mut restored = Simulation::load(
@@ -708,12 +791,16 @@ mod tests {
         sim.advance(SimDuration(30_000)).unwrap();
         restored.advance(SimDuration(30_000)).unwrap();
         assert_eq!(sim.state, restored.state);
-        let frozen = sim.state.genetics.as_ref().unwrap().pregnancies[&pregnancy]
+        let frozen = sim
+            .state
+            .components
+            .inheritance(pregnancy)
+            .unwrap()
             .genome
             .clone()
             .unwrap();
         assert_eq!(
-            sim.state.genetics.as_ref().unwrap().pregnancies[&pregnancy].parents,
+            sim.state.components.inheritance(pregnancy).unwrap().parents,
             [mother, player]
         );
         sim.debug_injure(player, sim.body_rules(player).max_health)
@@ -722,13 +809,13 @@ mod tests {
             .temperament
             .as_mut()
             .unwrap()
-            .learn(mother, "gave_care")
+            .learn(&mut sim.state.components, mother, "gave_care")
             .unwrap();
         sim.state
             .physical_traits
             .as_mut()
             .unwrap()
-            .develop(mother, 1_000, 200)
+            .develop(&mut sim.state.components, mother, 1_000, 200)
             .unwrap();
         let mid = sim.save().unwrap();
         let mut restored = Simulation::load(
@@ -743,11 +830,15 @@ mod tests {
         let b = restored.advance(SimDuration(180_000)).unwrap();
         assert_eq!(a.reason, b.reason);
         assert_eq!(sim.state, restored.state);
-        let child = sim.state.genetics.as_ref().unwrap().pregnancies[&pregnancy]
+        let child = sim
+            .state
+            .components
+            .inheritance(pregnancy)
+            .unwrap()
             .born
             .unwrap();
         assert_eq!(
-            sim.state.genetics.as_ref().unwrap().people[&child].genome,
+            sim.state.components.person_genome(child).unwrap().genome,
             frozen
         );
         assert_eq!(
@@ -811,12 +902,9 @@ mod tests {
         assert!(
             whole
                 .state
-                .genetics
-                .as_ref()
-                .unwrap()
-                .pregnancies
-                .values()
-                .any(|pregnancy| pregnancy.born.is_some())
+                .components
+                .inheritances()
+                .any(|(_, pregnancy)| pregnancy.born.is_some())
         );
     }
     #[test]
@@ -844,6 +932,7 @@ mod tests {
                 .as_mut()
                 .unwrap()
                 .set_alleles(
+                    &mut sim.state.components,
                     actor,
                     &game_genetics::LocusId(locus),
                     [if high { 1_000 } else { 0 }; 2],

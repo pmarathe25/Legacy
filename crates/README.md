@@ -42,10 +42,11 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | --- | --- | --- |
 | `game-agriculture` | `game-ecs`, `game-land`; `game-content` (optional) | Typed component stores and joins; crop-definition loading |
 | `game-armies` | `game-missions` | Objectives for autonomous leaders |
-| `game-characters` | `game-logistics`; `game-genetics` (optional) | Material goals; opaque inheritable temperament loci |
+| `game-characters` | `game-ecs`, `game-logistics`; `game-genetics` (optional) | Personal temperament components; material goals; opaque inheritable temperament loci |
 | `game-conflict` | `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
 | `game-ecology` | `game-ecs`, `game-land` | Natural resource and plot components; shared soil; sparse daily renewal effects |
 | `game-environment` | `game-ecs`; `game-content` (optional) | Local climate and weather components; typed calendar and climate loading |
+| `game-genetics` | `game-ecs` | Genomes and frozen inheritance components; opaque allele readers |
 | `game-health` | `game-ecs` | Clinical and health work components; guarded action and interval effects |
 | `game-lifecycle` | `game-genetics` (optional) | Opaque inheritable reproductive characteristics |
 | `game-lineage` | `game-logistics` | Care provision delivery requirements and receipts |
@@ -57,13 +58,13 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
 | `game-workshop` | `game-ecs`, `game-cargo`, `game-skills` | Site and optional job components; material inputs and outputs; work rates and craft practice effects |
 
-`game-agreements`, `game-cargo`, `game-genetics`, `game-invocation`, `game-logistics`, `game-property`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Existing optional integrations remain available; making every feature optional is no longer an architecture requirement.
+`game-agreements`, `game-cargo`, `game-invocation`, `game-logistics`, `game-property`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Existing optional integrations remain available; making every feature optional is no longer an architecture requirement.
 
 ## Components and systems
 
 **Storage boundary:** `game-ecs` hides the chosen ECS engine. Feature data uses ordinary Rust types, stable game IDs, registered save schemas, and typed joins. Native entity handles, engine derives, and query internals remain in its private adapter. `game-sim` retains logical scheduling and per-simulation bounded execution.
 
-**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Agriculture, physiology bodies, clinical state and health work, personal skills, workshop sites and jobs, shared locations, local weather, natural deposits, and plots use this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
+**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Agriculture, physiology bodies and development, genomes and inheritance, personal temperament, clinical state and health work, personal skills, workshop sites and jobs, shared locations, local weather, natural deposits, and plots use this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
 
 **Engine independence:** Feature interfaces expose plain values, borrowed component rows, and typed prepared changes. They do not expose engine entity handles, derives, query types, or schedules. Replacing the engine changes the private `game-ecs` adapter; its callers keep the same interfaces. Systems order authoritative results by stable game IDs because engine iteration order is unspecified.
 
@@ -77,7 +78,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 
 **Parallel work:** The bounded executor evaluates independently keyed jobs from immutable inputs and merges results in logical-key order. Agriculture's growth batch is one example: each matched crop, soil, definition, and local weather input can be evaluated separately. Prepared changes retain the affected rows and validate their opening values before publication. Worker completion order does not determine game outcomes.
 
-**Inherited traits:** Physiology, characters, and lifecycle implement genetics' `HeritableCharacteristic` interface to declare opaque loci. Genetics owns inheritance, crossover, and mutation. Trait owners interpret alleles and apply development or experience; genetics does not encode their trait meanings.
+**Inherited traits:** Physiology, characters, and lifecycle implement genetics' `HeritableCharacteristic` interface to declare opaque loci. Genetics owns inheritance, crossover, and mutation. Its `AlleleSource` interface supplies raw allele values from shared genomes or prepared founder rows. Trait owners interpret those values and apply their own development or experience; genetics does not encode their trait meanings.
 
 ## Authored content
 

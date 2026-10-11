@@ -1,6 +1,7 @@
 //! Physical characteristic definitions and acquired development. Inheritance
 //! supplies raw alleles; this module alone interprets them as body properties.
 use game_core::{Error, PersonId, SimTime};
+use game_ecs::{Schema, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -131,6 +132,48 @@ pub struct Development {
     pub maturity_milli: u16,
     pub physical_training_milli: u16,
 }
+impl Development {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.maturity_milli > 1_000 || self.physical_training_milli > 10_000 {
+            return Err(Error::InvalidConfiguration(
+                "invalid physical development".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
+    schema.register::<Development>("physiology/development", Development::validate)
+}
+pub fn development(store: &Store, person: PersonId) -> Option<&Development> {
+    store.get(StableId(person.0))
+}
+pub fn development_mut(store: &mut Store, person: PersonId) -> Option<&mut Development> {
+    store.get_mut(StableId(person.0))
+}
+pub fn all_developments(store: &Store) -> impl Iterator<Item = (PersonId, &Development)> {
+    store
+        .iter::<Development>()
+        .map(|(id, row)| (PersonId(id.0), row))
+}
+pub fn insert_development(
+    store: &mut Store,
+    person: PersonId,
+    development: Development,
+) -> Result<(), Error> {
+    development.validate()?;
+    store.insert_or_spawn(StableId(person.0), development)
+}
+pub fn remove_development(
+    store: &mut Store,
+    person: PersonId,
+) -> Result<Option<Development>, Error> {
+    if !store.contains(StableId(person.0)) {
+        return Ok(None);
+    }
+    store.remove(StableId(person.0))
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Phenotype {
     pub strength_milli: u16,
@@ -163,12 +206,11 @@ pub fn rescale_health(
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct World {
+pub struct Runtime {
     pub definitions: Definitions,
-    pub people: BTreeMap<PersonId, Development>,
     pub next_expression: SimTime,
 }
-impl World {
+impl Runtime {
     pub fn reset_epoch(&mut self, now: SimTime) -> Result<(), Error> {
         let next = SimTime(
             now.0
@@ -187,16 +229,20 @@ impl World {
         );
         Ok(Self {
             definitions,
-            people: BTreeMap::new(),
             next_expression,
         })
     }
-    pub fn register(&mut self, person: PersonId, development: Development) -> Result<(), Error> {
-        if self.people.contains_key(&person) {
+    pub fn register(
+        &self,
+        store: &mut Store,
+        person: PersonId,
+        development: Development,
+    ) -> Result<(), Error> {
+        if store.get::<Development>(StableId(person.0)).is_some() {
             return Err(Error::Unavailable);
         }
         self.check_development(development)?;
-        self.people.insert(person, development);
+        insert_development(store, person, development)?;
         Ok(())
     }
     fn check_development(&self, development: Development) -> Result<(), Error> {
@@ -209,30 +255,41 @@ impl World {
         }
         Ok(())
     }
-    pub fn develop(&mut self, person: PersonId, maturity: u16, training: u16) -> Result<(), Error> {
+    pub fn develop(
+        &self,
+        store: &mut Store,
+        person: PersonId,
+        maturity: u16,
+        training: u16,
+    ) -> Result<(), Error> {
         let development = Development {
             maturity_milli: maturity,
             physical_training_milli: training,
         };
         self.check_development(development)?;
-        *self.people.get_mut(&person).ok_or(Error::Unavailable)? = development;
+        store
+            .get::<Development>(StableId(person.0))
+            .ok_or(Error::Unavailable)?;
+        insert_development(store, person, development)?;
         Ok(())
     }
     pub fn phenotype(
         &self,
+        store: &Store,
         person: PersonId,
         scores: &BTreeMap<String, i32>,
     ) -> Result<Phenotype, Error> {
-        self.phenotype_with(person, |locus| {
+        self.phenotype_with(store, person, |locus| {
             scores.get(locus).copied().ok_or(Error::Unavailable)
         })
     }
     fn phenotype_with(
         &self,
+        store: &Store,
         person: PersonId,
         mut score: impl FnMut(&str) -> Result<i32, Error>,
     ) -> Result<Phenotype, Error> {
-        let d = self.people.get(&person).ok_or(Error::Unavailable)?;
+        let d = development(store, person).ok_or(Error::Unavailable)?;
         let mut result = Phenotype {
             strength_milli: 1_000,
             max_health_milli: 1_000,
@@ -273,10 +330,11 @@ impl World {
     #[cfg(feature = "genetics")]
     pub fn phenotype_from_genes(
         &self,
+        store: &Store,
         person: PersonId,
-        genes: &game_genetics::World,
+        genes: &impl game_genetics::AlleleSource,
     ) -> Result<Phenotype, Error> {
-        self.phenotype_with(person, |locus| {
+        self.phenotype_with(store, person, |locus| {
             let alleles = genes.alleles_named(person, locus)?;
             Ok(((i64::from(alleles[0]) + i64::from(alleles[1])) / 2) as i32)
         })
@@ -310,13 +368,10 @@ impl World {
         self.next_expression = next;
         Ok(next)
     }
-    pub fn validate(&self, now: SimTime) -> Result<(), Error> {
+    pub fn validate(&self, store: &Store, now: SimTime) -> Result<(), Error> {
         if self.definitions.validate().is_err()
             || self.next_expression <= now
-            || self
-                .people
-                .values()
-                .any(|d| self.check_development(*d).is_err())
+            || all_developments(store).any(|(_, d)| self.check_development(*d).is_err())
         {
             return Err(Error::InvalidSave(
                 "inconsistent physical trait state".into(),
@@ -329,6 +384,13 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn store() -> Store {
+        let mut schema = Schema::new();
+        register_components(&mut schema).unwrap();
+        #[cfg(feature = "genetics")]
+        game_genetics::register_components(&mut schema).unwrap();
+        Store::with_schema(schema)
+    }
     #[test]
     fn body_growth_preserves_injury_fraction_and_cannot_revive_a_dead_body() {
         assert_eq!(rescale_health(50, 500, true, 1_000, 1_200), (60, 600));
@@ -337,7 +399,7 @@ mod tests {
     }
     #[test]
     fn delayed_refresh_keeps_its_original_cadence_and_overflow_preserves_the_epoch() {
-        let mut world = World::new(definitions(), SimTime(0)).unwrap();
+        let mut world = Runtime::new(definitions(), SimTime(0)).unwrap();
         assert_eq!(world.refresh_time(SimTime(25)).unwrap(), SimTime(30));
         let before = world.clone();
         assert_eq!(world.reset_epoch(SimTime(u64::MAX)), Err(Error::Overflow));
@@ -372,9 +434,11 @@ mod tests {
     }
     #[test]
     fn development_and_training_change_expression_without_changing_alleles() {
-        let mut world = World::new(definitions(), SimTime(0)).unwrap();
+        let mut store = store();
+        let world = Runtime::new(definitions(), SimTime(0)).unwrap();
         world
             .register(
+                &mut store,
                 PersonId(1),
                 Development {
                     maturity_milli: 0,
@@ -385,15 +449,15 @@ mod tests {
         let scores = BTreeMap::from([("body.test".into(), 1_000)]);
         assert_eq!(
             world
-                .phenotype(PersonId(1), &scores)
+                .phenotype(&store, PersonId(1), &scores)
                 .unwrap()
                 .strength_milli,
             600
         );
-        world.develop(PersonId(1), 1_000, 100).unwrap();
+        world.develop(&mut store, PersonId(1), 1_000, 100).unwrap();
         assert_eq!(
             world
-                .phenotype(PersonId(1), &scores)
+                .phenotype(&store, PersonId(1), &scores)
                 .unwrap()
                 .strength_milli,
             1_300
@@ -401,7 +465,7 @@ mod tests {
         assert_eq!(scores["body.test"], 1_000);
         assert_eq!(
             world
-                .phenotype(PersonId(1), &scores)
+                .phenotype(&store, PersonId(1), &scores)
                 .unwrap()
                 .max_health_milli,
             1_000
@@ -409,9 +473,11 @@ mod tests {
     }
     #[test]
     fn missing_evidence_and_invalid_development_are_inert() {
-        let mut world = World::new(definitions(), SimTime(0)).unwrap();
+        let mut store = store();
+        let world = Runtime::new(definitions(), SimTime(0)).unwrap();
         world
             .register(
+                &mut store,
                 PersonId(1),
                 Development {
                     maturity_milli: 1_000,
@@ -419,14 +485,19 @@ mod tests {
                 },
             )
             .unwrap();
-        let before = world.clone();
-        assert!(world.develop(PersonId(1), 1_001, 0).is_err());
-        assert!(world.phenotype(PersonId(1), &BTreeMap::new()).is_err());
-        assert_eq!(world, before);
+        let before = (world.clone(), store.clone());
+        assert!(world.develop(&mut store, PersonId(1), 1_001, 0).is_err());
+        assert!(
+            world
+                .phenotype(&store, PersonId(1), &BTreeMap::new())
+                .is_err()
+        );
+        assert_eq!((world.clone(), store.clone()), before);
     }
     #[test]
     fn refresh_deadline_and_training_are_owned_and_overflow_is_inert() {
-        let mut world = World::new(definitions(), SimTime(0)).unwrap();
+        let store = store();
+        let mut world = Runtime::new(definitions(), SimTime(0)).unwrap();
         assert_eq!(
             world.next_boundary(SimTime(0), SimTime(20)),
             Some(SimTime(10))
@@ -437,26 +508,33 @@ mod tests {
         assert!(world.refresh_time(SimTime(u64::MAX)).is_err());
         assert_eq!(world, before);
         assert_eq!(world.refresh_time(SimTime(10)).unwrap(), SimTime(20));
-        world.validate(SimTime(10)).unwrap();
+        world.validate(&store, SimTime(10)).unwrap();
     }
     #[cfg(feature = "genetics")]
     #[test]
     fn optional_genetics_supplies_only_alleles_and_development_stays_local() {
+        let mut store = store();
         use game_genetics::HeritableCharacteristic;
         let definitions = definitions();
         let mut genes =
-            game_genetics::World::new(game_genetics::Rules::default(), definitions.loci()).unwrap();
-        genes.seed_person(7, PersonId(1)).unwrap();
+            game_genetics::Runtime::new(game_genetics::Rules::default(), definitions.loci())
+                .unwrap();
+        genes.seed_person(&mut store, 7, PersonId(1)).unwrap();
         genes
             .set_alleles(
+                &mut store,
                 PersonId(1),
                 &game_genetics::LocusId("body.test".into()),
                 [1_000, 1_000],
             )
             .unwrap();
         let before = genes.clone();
-        let mut body = World::new(definitions, SimTime(0)).unwrap();
+        let genome_before = game_genetics::person_genome(&store, PersonId(1))
+            .unwrap()
+            .clone();
+        let body = Runtime::new(definitions, SimTime(0)).unwrap();
         body.register(
+            &mut store,
             PersonId(1),
             Development {
                 maturity_milli: 0,
@@ -465,30 +543,187 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            body.phenotype_from_genes(PersonId(1), &genes)
+            body.phenotype_from_genes(&store, PersonId(1), &genes.allele_source(&store))
                 .unwrap()
                 .strength_milli,
             600
         );
-        body.develop(PersonId(1), 1_000, 100).unwrap();
+        body.develop(&mut store, PersonId(1), 1_000, 100).unwrap();
         assert_eq!(
-            body.phenotype_from_genes(PersonId(1), &genes)
+            body.phenotype_from_genes(&store, PersonId(1), &genes.allele_source(&store))
                 .unwrap()
                 .strength_milli,
             1_300
         );
         assert_eq!(genes, before);
+        assert_eq!(
+            game_genetics::person_genome(&store, PersonId(1)),
+            Some(&genome_before)
+        );
+        let acquired_before = *development(&store, PersonId(1)).unwrap();
+        genes
+            .set_alleles(
+                &mut store,
+                PersonId(1),
+                &game_genetics::LocusId("body.test".into()),
+                [0, 0],
+            )
+            .unwrap();
+        assert_eq!(development(&store, PersonId(1)), Some(&acquired_before));
     }
     #[test]
     fn state_round_trips_and_rejects_unknown_definition_fields() {
-        let world = World::new(definitions(), SimTime(0)).unwrap();
+        let world = Runtime::new(definitions(), SimTime(0)).unwrap();
         let bytes = serde_json::to_vec(&world).unwrap();
-        assert_eq!(serde_json::from_slice::<World>(&bytes).unwrap(), world);
+        assert_eq!(serde_json::from_slice::<Runtime>(&bytes).unwrap(), world);
         let mut value = serde_json::to_value(definitions()).unwrap();
         value
             .as_object_mut()
             .unwrap()
             .insert("misspelled_growth".into(), 1.into());
         assert!(serde_json::from_value::<Definitions>(value).is_err());
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct Foreign(u64);
+
+    #[test]
+    fn development_schema_roundtrip_and_removal_preserve_other_owner_columns() {
+        let mut schema = Schema::new();
+        register_components(&mut schema).unwrap();
+        assert_eq!(
+            schema.keys().collect::<Vec<_>>(),
+            vec!["physiology/development"]
+        );
+        assert!(register_components(&mut schema).is_err());
+        schema
+            .register::<Foreign>("other/column", |_| Ok(()))
+            .unwrap();
+        let mut store = Store::with_schema(schema.clone());
+        store.insert_or_spawn(StableId(1), Foreign(77)).unwrap();
+        let runtime = Runtime::new(definitions(), SimTime(0)).unwrap();
+        runtime
+            .register(
+                &mut store,
+                PersonId(1),
+                Development {
+                    maturity_milli: 0,
+                    physical_training_milli: 0,
+                },
+            )
+            .unwrap();
+        runtime
+            .develop(&mut store, PersonId(1), 1_000, 100)
+            .unwrap();
+        assert_eq!(all_developments(&store).count(), 1);
+        let restored_runtime: Runtime =
+            serde_json::from_slice(&serde_json::to_vec(&runtime).unwrap()).unwrap();
+        let restored = Store::restore(
+            schema,
+            serde_json::from_slice(&serde_json::to_vec(&store.snapshot().unwrap()).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored, store);
+        restored_runtime.validate(&restored, SimTime(0)).unwrap();
+        assert!(
+            remove_development(&mut store, PersonId(1))
+                .unwrap()
+                .is_some()
+        );
+        assert!(store.contains(StableId(1)));
+        assert_eq!(store.get::<Foreign>(StableId(1)), Some(&Foreign(77)));
+        assert!(
+            remove_development(&mut store, PersonId(99))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn intrinsic_and_contextual_development_validation_remain_separate() {
+        let runtime = Runtime::new(definitions(), SimTime(0)).unwrap();
+        let mut store = store();
+        let before = store.clone();
+        assert!(
+            insert_development(
+                &mut store,
+                PersonId(1),
+                Development {
+                    maturity_milli: 1_001,
+                    physical_training_milli: 0
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            runtime
+                .register(
+                    &mut store,
+                    PersonId(0),
+                    Development {
+                        maturity_milli: 0,
+                        physical_training_milli: 0
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(store, before);
+        insert_development(
+            &mut store,
+            PersonId(1),
+            Development {
+                maturity_milli: 1_000,
+                physical_training_milli: 201,
+            },
+        )
+        .unwrap();
+        let restored = Store::restore(store.schema().clone(), store.snapshot().unwrap()).unwrap();
+        assert!(matches!(
+            runtime.validate(&restored, SimTime(0)),
+            Err(Error::InvalidSave(_))
+        ));
+        development_mut(&mut store, PersonId(1))
+            .unwrap()
+            .maturity_milli = 1_001;
+        assert!(Store::restore(store.schema().clone(), store.snapshot().unwrap()).is_err());
+        let mut json = serde_json::to_value(runtime).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .insert("people".into(), serde_json::json!({}));
+        assert!(serde_json::from_value::<Runtime>(json).is_err());
+    }
+
+    #[test]
+    fn schema_rejection_of_development_is_atomic() {
+        let mut schema = Schema::new();
+        schema
+            .register::<Development>("physiology/development", |row| {
+                row.validate()?;
+                if row.physical_training_milli > 0 {
+                    Err(Error::Unavailable)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        let mut store = Store::with_schema(schema);
+        let runtime = Runtime::new(definitions(), SimTime(0)).unwrap();
+        runtime
+            .register(
+                &mut store,
+                PersonId(1),
+                Development {
+                    maturity_milli: 0,
+                    physical_training_milli: 0,
+                },
+            )
+            .unwrap();
+        let before = (runtime.clone(), store.clone());
+        assert_eq!(
+            runtime.develop(&mut store, PersonId(1), 1_000, 100),
+            Err(Error::Unavailable)
+        );
+        assert_eq!((runtime, store), before);
     }
 }
