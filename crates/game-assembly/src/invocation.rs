@@ -35,9 +35,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         KnowledgeSource::Recorded(record) => w.records.contains_key(record),
     };
     let fact_valid = |fact: &StockKnowledge| {
-        s.state
-            .inventories
-            .get(&fact.inventory)
+        game_cargo::inventory(s.components, fact.inventory)
             .is_some_and(|inventory| inventory.good == fact.good)
             && areas.contains(&fact.area)
             && fact.observed_at <= fact.learned_at
@@ -186,11 +184,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     };
     let mut totals: BTreeMap<InventoryId, u64> = BTreeMap::new();
     for (id, record) in &w.records {
-        let stock = s
-            .state
-            .inventories
-            .get(&record.inventory)
-            .ok_or_else(fail)?;
+        let stock = game_cargo::inventory(s.components, record.inventory).ok_or_else(fail)?;
         if id.0 == 0
             || id.0 >= s.next_id
             || *id != record.id
@@ -206,10 +200,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             *totals.entry(record.inventory).or_default() += 1_000;
         }
     }
-    for stock in s
-        .state
-        .inventories
-        .values()
+    for stock in game_cargo::inventories(s.components)
+        .map(|(_, row)| row)
         .filter(|stock| stock.good == Good::Record)
     {
         if stock.quantity.0 != totals.get(&stock.id).copied().unwrap_or(0) {
@@ -236,13 +228,9 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 tool,
             } => {
                 content_valid(content)
-                    && s.state
-                        .inventories
-                        .get(material)
+                    && game_cargo::inventory(s.components, *(material))
                         .is_some_and(|i| i.good == Good::Timber)
-                    && s.state
-                        .inventories
-                        .get(tool)
+                    && game_cargo::inventory(s.components, *(tool))
                         .is_some_and(|i| i.good == Good::Tool)
                     && matches!(activity,Activity::WritingMemory {completes}if *completes==action.completes)
             }
@@ -1490,7 +1478,7 @@ impl Simulation {
                 }
             })
             .collect();
-        let records=w.records.values().filter_map(|record|{let inventory=self.host.state.inventories.get(&record.inventory)?;let local=game_spatial::location(&self.host.storage,game_ecs::StableId((actor).0)).expect("location exists");let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
+        let records=w.records.values().filter_map(|record|{let inventory=game_cargo::inventory(&self.host.storage, record.inventory)?;let local=game_spatial::location(&self.host.storage,game_ecs::StableId((actor).0)).expect("location exists");let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
         let preview_lives = w
             .control
             .activation
@@ -1594,18 +1582,14 @@ impl Simulation {
         good: Good,
         quantity: u64,
     ) -> bool {
-        self.host
-            .state
-            .inventories
-            .get(&inventory)
-            .is_some_and(|stock| {
-                stock.good == good
-                    && stock.quantity.0 >= quantity
-                    && (good != Good::Timber || self.unreserved_stock(inventory, actor) >= quantity)
-                    && (good != Good::Tool || self.tool_available_for(actor, inventory))
-                    && self.has_stock_access(actor, stock)
-                    && self.inventory_area(stock) == self.memory_area(actor).ok()
-            })
+        game_cargo::inventory(&self.host.storage, inventory).is_some_and(|stock| {
+            stock.good == good
+                && stock.quantity.0 >= quantity
+                && (good != Good::Timber || self.unreserved_stock(inventory, actor) >= quantity)
+                && (good != Good::Tool || self.tool_available_for(actor, inventory))
+                && self.has_stock_access(actor, stock)
+                && self.inventory_area(stock) == self.memory_area(actor).ok()
+        })
     }
     pub(crate) fn invocation_selected_tool(&self, actor: PersonId) -> Option<InventoryId> {
         match &self
@@ -1656,7 +1640,7 @@ impl Simulation {
         let Some(record) = w.records.get(&record).filter(|r| r.intact) else {
             return false;
         };
-        let Some(stock) = self.host.state.inventories.get(&record.inventory) else {
+        let Some(stock) = game_cargo::inventory(&self.host.storage, record.inventory) else {
             return false;
         };
         game_physiology::body(&self.host.storage, actor)
@@ -1773,7 +1757,8 @@ impl Simulation {
                     _ => {}
                 }
                 let record_data = &self.host.state.invocation.as_ref().unwrap().records[record];
-                let source = &self.host.state.inventories[&record_data.inventory];
+                let source = game_cargo::inventory(&self.host.storage, record_data.inventory)
+                    .expect("inventory exists");
                 let desired = match destination {
                     StockPosition::Area(area) => InventoryLocation::Area(*area),
                     StockPosition::Carried(actor) => InventoryLocation::Carried(*actor),
@@ -1790,7 +1775,14 @@ impl Simulation {
                         .get(&InventoryLocation::Carried(carrier))
                         .into_iter()
                         .flatten()
-                        .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+                        .map(|id| {
+                            u128::from(
+                                game_cargo::inventory(&self.host.storage, *(id))
+                                    .expect("inventory exists")
+                                    .quantity
+                                    .0,
+                            )
+                        })
                         .sum();
                     if held + 1_000
                         > u128::from(
@@ -1869,10 +1861,7 @@ impl Simulation {
         );
         self.interrupt_actor_activity(actor);
         if let MemoryWork::Write { material, .. } = work {
-            self.host
-                .state
-                .inventories
-                .get_mut(&material)
+            game_cargo::inventory_mut(&mut self.host.storage, material)
                 .unwrap()
                 .quantity
                 .0 -= 1_000;
@@ -2041,7 +2030,14 @@ impl Simulation {
                         .get(&InventoryLocation::Carried(actor))
                         .into_iter()
                         .flatten()
-                        .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+                        .map(|id| {
+                            u128::from(
+                                game_cargo::inventory(&self.host.storage, *(id))
+                                    .expect("inventory exists")
+                                    .quantity
+                                    .0,
+                            )
+                        })
                         .sum();
                     if self
                         .host
@@ -2170,7 +2166,12 @@ impl Simulation {
                                         .into_iter()
                                         .flatten()
                                         .map(|id| {
-                                            u128::from(self.host.state.inventories[id].quantity.0)
+                                            u128::from(
+                                                game_cargo::inventory(&self.host.storage, *(id))
+                                                    .expect("inventory exists")
+                                                    .quantity
+                                                    .0,
+                                            )
                                         })
                                         .sum::<u128>()
                                         + 1_000
@@ -2187,7 +2188,10 @@ impl Simulation {
                             }
                         };
                         if valid {
-                            let mut access = self.host.state.inventories[&source].access.clone();
+                            let mut access = game_cargo::inventory(&self.host.storage, source)
+                                .expect("inventory exists")
+                                .access
+                                .clone();
                             if let StockPosition::Carried(carrier) = destination {
                                 access.insert(*carrier);
                             }
@@ -2198,17 +2202,11 @@ impl Simulation {
                                 Quantity(10_000),
                                 access,
                             )?;
-                            self.host
-                                .state
-                                .inventories
-                                .get_mut(&source)
+                            game_cargo::inventory_mut(&mut self.host.storage, source)
                                 .unwrap()
                                 .quantity
                                 .0 -= 1_000;
-                            self.host
-                                .state
-                                .inventories
-                                .get_mut(&target)
+                            game_cargo::inventory_mut(&mut self.host.storage, target)
                                 .unwrap()
                                 .quantity
                                 .0 += 1_000;
@@ -2254,11 +2252,7 @@ impl Simulation {
     }
     pub(crate) fn record_quantity_increment(&self, source: InventoryId) -> Quantity {
         Quantity(
-            if self
-                .host
-                .state
-                .inventories
-                .get(&source)
+            if game_cargo::inventory(&self.host.storage, source)
                 .is_some_and(|stock| stock.good == Good::Record)
             {
                 1_000
@@ -2268,7 +2262,7 @@ impl Simulation {
         )
     }
     pub(crate) fn record_transfer_allowed(&self, source: InventoryId, quantity: Quantity) -> bool {
-        let Some(stock) = self.host.state.inventories.get(&source) else {
+        let Some(stock) = game_cargo::inventory(&self.host.storage, source) else {
             return false;
         };
         if stock.good != Good::Record {
@@ -2292,12 +2286,7 @@ impl Simulation {
         destination: InventoryId,
         quantity: Quantity,
     ) {
-        if self
-            .host
-            .state
-            .inventories
-            .get(&source)
-            .is_none_or(|s| s.good != Good::Record)
+        if game_cargo::inventory(&self.host.storage, source).is_none_or(|s| s.good != Good::Record)
         {
             return;
         }
@@ -2403,13 +2392,13 @@ mod tests {
         }
         // The fixture's living custodians explicitly permit this person to work;
         // birth itself never supplied these rights or transferred the estate.
-        for inventory in sim
-            .host
-            .state
-            .inventories
-            .values_mut()
-            .filter(|i| matches!(i.location, InventoryLocation::Area(_)))
+        for __stock_id in game_cargo::inventories(&sim.host.storage)
+            .filter(|(_, i)| matches!(i.location, InventoryLocation::Area(_)))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
         {
+            let inventory = game_cargo::inventory_mut(&mut sim.host.storage, __stock_id)
+                .expect("inventory exists");
             inventory.access.insert(actor);
         }
         let sites: Vec<_> = game_workshop::sites(&sim.host.storage)
@@ -2648,7 +2637,7 @@ mod tests {
             }
             sliced.advance(SimDuration(7_919)).unwrap();
         }
-        assert_eq!(whole.host.state, sliced.host.state);
+        assert_eq!(whole.canonical_state(), sliced.canonical_state());
         let warning = whole
             .host
             .state
@@ -2681,7 +2670,7 @@ mod tests {
         for amount in [3, 11_117, 28_893] {
             sliced.advance(SimDuration(amount)).unwrap();
         }
-        assert_eq!(whole.host.state, sliced.host.state);
+        assert_eq!(whole.canonical_state(), sliced.canonical_state());
     }
     #[test]
     fn a_written_record_requires_material_time_and_reading_after_dismissal() {
@@ -2731,7 +2720,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sim.host.state.inventories[&material].quantity,
+            game_cargo::inventory(&sim.host.storage, material)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1_000)
         );
         sim.advance(SimDuration(59_999)).unwrap();
@@ -2826,7 +2817,7 @@ mod tests {
                 ))
                 .unwrap();
         }
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
         assert!(!sim.past_life_controls_actor(actor));
         assert!(
             sim.host.state.invocation.as_ref().unwrap().control.people[&actor].permanent_identity

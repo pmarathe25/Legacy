@@ -47,10 +47,8 @@ fn command(sim: &mut Simulation, command: Command) {
     .unwrap();
 }
 fn food(sim: &Simulation) -> InventoryId {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
         .unwrap()
         .id
@@ -114,9 +112,16 @@ fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_deli
         deadline: SimTime(300_000),
     };
     let id = propose(&mut sim, vec![term], None);
-    let before = sim.canonical_state().state.inventories.clone();
+    let before = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     accept(&mut sim, id);
-    assert_eq!(sim.canonical_state().state.inventories, before);
+    assert_eq!(
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+    );
     assert_eq!(
         sim.agreement_view(ruler(&sim))[0].obligations[0].performed,
         0
@@ -170,7 +175,9 @@ fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_deli
         AgreementStatus::Fulfilled
     );
     assert_eq!(
-        restored.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(restored.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
 }
@@ -204,11 +211,15 @@ fn default_preserves_debt_and_undelivered_goods() {
     assert!(view.obligations[0].defaulted);
     assert_eq!(view.obligations[0].performed, 0);
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(100_000)
     );
 }
@@ -378,11 +389,14 @@ fn permission_is_chosen_by_the_actual_custodian_without_relocating_goods() {
     let owner = ruler(&sim);
     let recipient = citizen(&sim);
     assert!(
-        !sim.canonical_state().state.inventories[&source]
+        !game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
             .access
             .contains(&recipient)
     );
-    let before = sim.canonical_state().state.inventories[&source].clone();
+    let before = game_cargo::inventory(sim.canonical_state().components, source)
+        .expect("stock exists")
+        .clone();
     let id = propose(
         &mut sim,
         vec![AgreementTerm::Access {
@@ -394,7 +408,8 @@ fn permission_is_chosen_by_the_actual_custodian_without_relocating_goods() {
         None,
     );
     accept(&mut sim, id);
-    let after = &sim.canonical_state().state.inventories[&source];
+    let after =
+        game_cargo::inventory(sim.canonical_state().components, source).expect("stock exists");
     assert!(after.access.contains(&recipient));
     assert_eq!(before.quantity, after.quantity);
     assert_eq!(before.location, after.location);

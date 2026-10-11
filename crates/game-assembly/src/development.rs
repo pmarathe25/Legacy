@@ -583,8 +583,8 @@ impl Simulation {
             .entry(cargo.clone())
             .or_default()
             .push(inventory);
-        self.host.state.inventories.insert(
-            inventory,
+        game_cargo::insert_inventory(
+            &mut self.host.storage,
             Inventory {
                 id: inventory,
                 location: cargo,
@@ -595,7 +595,8 @@ impl Simulation {
                 good: Good::Food,
                 spoils_at: None,
             },
-        );
+        )
+        .expect("valid newborn inventory");
         let max_health = self.host.state.physical.as_ref().unwrap().rules.max_health;
         game_physiology::insert_body(
             &mut self.host.storage,

@@ -56,10 +56,11 @@ impl Simulation {
     ) {
         let owner_now = self.host.clock().time;
         assert!(contamination <= 1_000);
-        let stock = &self.host.state.inventories[&inventory];
+        let stock = game_cargo::inventory(&self.host.storage, inventory).expect("inventory exists");
         assert_eq!(stock.good, Good::Water);
         assert!(stock.quantity >= amount);
         let quantity = stock.quantity.0;
+        let location = stock.location.clone();
         self.host.state.health.get_or_insert_with(Runtime::default);
         let existing =
             game_health::water_lot(&self.host.storage, inventory).map_or(0, WaterLot::load);
@@ -72,7 +73,7 @@ impl Simulation {
         .expect("validated physical collection");
         game_health::insert_water_lot(&mut self.host.storage, inventory, lot)
             .expect("validated water lot");
-        if let InventoryLocation::Carried(actor) = stock.location {
+        if let InventoryLocation::Carried(actor) = location {
             let old = game_health::knowledge(&self.host.storage, actor)
                 .and_then(|k| k.water.get(&inventory))
                 .cloned();
@@ -103,10 +104,21 @@ impl Simulation {
                 destination,
                 quantity,
                 ..
-            } if self.host.state.inventories[&source].good == Good::Water => {
-                let source_before = self.host.state.inventories[&source].quantity.0 + quantity.0;
-                let destination_before =
-                    self.host.state.inventories[&destination].quantity.0 - quantity.0;
+            } if game_cargo::inventory(&self.host.storage, source)
+                .expect("inventory exists")
+                .good
+                == Good::Water =>
+            {
+                let source_before = game_cargo::inventory(&self.host.storage, source)
+                    .expect("inventory exists")
+                    .quantity
+                    .0
+                    + quantity.0;
+                let destination_before = game_cargo::inventory(&self.host.storage, destination)
+                    .expect("inventory exists")
+                    .quantity
+                    .0
+                    - quantity.0;
                 let a = game_health::water_lot(&self.host.storage, source)
                     .cloned()
                     .unwrap_or_else(|| WaterLot::new(source_before, 0));
@@ -133,8 +145,16 @@ impl Simulation {
             }
             | EventKind::Cared {
                 source, quantity, ..
-            } if self.host.state.inventories[&source].good == Good::Water => {
-                let before = self.host.state.inventories[&source].quantity.0 + quantity.0;
+            } if game_cargo::inventory(&self.host.storage, source)
+                .expect("inventory exists")
+                .good
+                == Good::Water =>
+            {
+                let before = game_cargo::inventory(&self.host.storage, source)
+                    .expect("inventory exists")
+                    .quantity
+                    .0
+                    + quantity.0;
                 let lot = game_health::water_lot(&self.host.storage, source)
                     .cloned()
                     .unwrap_or_else(|| WaterLot::new(before, 0));
@@ -145,8 +165,15 @@ impl Simulation {
             }
             EventKind::Produced {
                 output, quantity, ..
-            } if self.host.state.inventories[&output].good == Good::Water => {
-                let quantity_now = self.host.state.inventories[&output].quantity.0;
+            } if game_cargo::inventory(&self.host.storage, output)
+                .expect("inventory exists")
+                .good
+                == Good::Water =>
+            {
+                let quantity_now = game_cargo::inventory(&self.host.storage, output)
+                    .expect("inventory exists")
+                    .quantity
+                    .0;
                 let load =
                     game_health::water_lot(&self.host.storage, output).map_or(0, WaterLot::load);
                 let _ = quantity;
@@ -158,7 +185,10 @@ impl Simulation {
                 .expect("validated water lot");
             }
             EventKind::Spoiled { inventory, .. }
-                if self.host.state.inventories[&inventory].good == Good::Water =>
+                if game_cargo::inventory(&self.host.storage, inventory)
+                    .expect("inventory exists")
+                    .good
+                    == Good::Water =>
             {
                 game_health::insert_water_lot(
                     &mut self.host.storage,
@@ -221,13 +251,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         })
         .collect::<Result<BTreeMap<_, _>, Error>>()?;
     let areas = state.state.areas.iter().map(|area| area.id).collect();
-    let inventories = state
-        .state
-        .inventories
-        .iter()
+    let inventories = game_cargo::inventories(state.components)
         .map(|(id, stock)| {
             (
-                *id,
+                id,
                 InventoryCatalog {
                     good: stock.good,
                     quantity: stock.quantity,
@@ -311,7 +338,7 @@ impl Simulation {
         good: Good,
         quantity: Quantity,
     ) -> bool {
-        self.host.state.inventories.get(&id).is_some_and(|stock| {
+        game_cargo::inventory(&self.host.storage, id).is_some_and(|stock| {
             stock.good == good
                 && self.has_stock_access(actor, stock)
                 && self.health_area(actor, true).is_ok()
@@ -374,10 +401,7 @@ impl Simulation {
         }
     }
     fn consume_health_stock(&mut self, actor: PersonId, source: InventoryId, quantity: Quantity) {
-        self.host
-            .state
-            .inventories
-            .get_mut(&source)
+        game_cargo::inventory_mut(&mut self.host.storage, source)
             .unwrap()
             .quantity
             .0 -= quantity.0;
@@ -395,7 +419,15 @@ impl Simulation {
             .as_ref()
             .and_then(|_| game_health::water_lot(&self.host.storage, source))
             .cloned()
-            .unwrap_or_else(|| WaterLot::new(self.host.state.inventories[&source].quantity.0, 0));
+            .unwrap_or_else(|| {
+                WaterLot::new(
+                    game_cargo::inventory(&self.host.storage, source)
+                        .expect("inventory exists")
+                        .quantity
+                        .0,
+                    0,
+                )
+            });
         game_health::consume_water(&lot, quantity.0)
             .expect("validated physical water quantity")
             .consumed_load
@@ -515,12 +547,7 @@ impl Simulation {
         actor: PersonId,
         id: InventoryId,
     ) -> Result<game_health::StockFacts, Error> {
-        let stock = self
-            .host
-            .state
-            .inventories
-            .get(&id)
-            .ok_or(Error::Unavailable)?;
+        let stock = game_cargo::inventory(&self.host.storage, id).ok_or(Error::Unavailable)?;
         Ok(game_health::StockFacts {
             id,
             good: stock.good,
@@ -746,10 +773,7 @@ impl Simulation {
                 .ok_or(Error::Overflow)?;
         }
         if consumed.iter().any(|(id, q)| {
-            self.host
-                .state
-                .inventories
-                .get(id)
+            game_cargo::inventory(&self.host.storage, *(id))
                 .is_none_or(|s| u128::from(s.quantity.0) < *q)
         }) {
             return Err(Error::Unavailable);
@@ -1375,16 +1399,11 @@ impl Simulation {
             || access
                 .iter()
                 .any(|person| !self.person_index.contains_key(person))
-            || !self
-                .host
-                .state
-                .inventories
-                .get(&source)
-                .is_some_and(|stock| {
-                    stock.good == Good::Timber
-                        && stock.location == InventoryLocation::Area(area)
-                        && stock.quantity >= quantity
-                })
+            || !game_cargo::inventory(&self.host.storage, source).is_some_and(|stock| {
+                stock.good == Good::Timber
+                    && stock.location == InventoryLocation::Area(area)
+                    && stock.quantity >= quantity
+            })
         {
             return Err(Error::InvalidConfiguration(
                 "invalid initial shelter history".into(),
@@ -1783,11 +1802,7 @@ impl Simulation {
                 game_health::RememberedStock {
                     fact: observed,
                     here,
-                    held: self
-                        .host
-                        .state
-                        .inventories
-                        .get(&fact.inventory)
+                    held: game_cargo::inventory(&self.host.storage, fact.inventory)
                         .is_some_and(|stock| stock.location == InventoryLocation::Carried(actor)),
                 }
             })
@@ -2052,16 +2067,15 @@ impl Simulation {
     ) -> Result<(), Error> {
         let owner_now = self.host.clock().time;
         if !self.person_index.contains_key(&observer)
-            || !self
-                .host
-                .state
-                .inventories
-                .get(&source)
+            || !game_cargo::inventory(&self.host.storage, source)
                 .is_some_and(|stock| stock.good == Good::Water)
         {
             return Err(Error::Unavailable);
         }
-        let quantity = self.host.state.inventories[&source].quantity.0;
+        let quantity = game_cargo::inventory(&self.host.storage, source)
+            .expect("inventory exists")
+            .quantity
+            .0;
         self.host.state.health.as_ref().ok_or(Error::Unavailable)?;
         let safe =
             game_health::water_lot(&self.host.storage, source).is_none_or(|lot| lot.load() == 0);
@@ -2215,7 +2229,11 @@ impl Simulation {
                 source,
                 destination,
                 quantity,
-            } if self.host.state.inventories[&source].good == Good::Water => {
+            } if game_cargo::inventory(&self.host.storage, source)
+                .expect("inventory exists")
+                .good
+                == Good::Water =>
+            {
                 let source_known = game_health::knowledge(&self.host.storage, actor)
                     .and_then(|k| k.water.get(&source))
                     .cloned();
@@ -2223,8 +2241,11 @@ impl Simulation {
                     .and_then(|k| k.water.get(&destination))
                     .cloned();
                 if let Some(source_known) = source_known {
-                    let old_quantity =
-                        self.host.state.inventories[&destination].quantity.0 - quantity.0;
+                    let old_quantity = game_cargo::inventory(&self.host.storage, destination)
+                        .expect("inventory exists")
+                        .quantity
+                        .0
+                        - quantity.0;
                     let purified = source_known.purified
                         && (old_quantity == 0
                             || destination_known.as_ref().is_some_and(|d| d.purified));
@@ -2245,7 +2266,10 @@ impl Simulation {
                 }
             }
             EventKind::Produced { actor, output, .. }
-                if self.host.state.inventories[&output].good == Good::Water =>
+                if game_cargo::inventory(&self.host.storage, output)
+                    .expect("inventory exists")
+                    .good
+                    == Good::Water =>
             {
                 game_health::ensure_knowledge(&mut self.host.storage, actor)
                     .expect("known health observer")
@@ -2421,7 +2445,12 @@ mod integration_tests {
                 .thirst,
             60_000
         );
-        assert_eq!(whole.host.state.inventories[&water].quantity, Quantity(0));
+        assert_eq!(
+            game_cargo::inventory(&whole.host.storage, water)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
         assert_eq!(whole.host.state.health.as_ref().unwrap().rules, rules);
     }
 
@@ -2613,7 +2642,12 @@ mod integration_tests {
         })
         .unwrap();
         sim.advance(SimDuration(10_000)).unwrap();
-        assert_eq!(sim.host.state.inventories[&water].quantity, Quantity(1_000));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, water)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(1_000)
+        );
         assert_eq!(
             game_health::water_lot(&sim.host.storage, water)
                 .unwrap()
@@ -2802,7 +2836,9 @@ mod integration_tests {
         let output = game_workshop::site(&sim.host.storage, site)
             .expect("site exists")
             .output;
-        let before = sim.host.state.inventories[&output].quantity;
+        let before = game_cargo::inventory(&sim.host.storage, output)
+            .expect("inventory exists")
+            .quantity;
         {
             let site = game_workshop::site_mut(&mut sim.host.storage, site).unwrap();
             site.tool = tool;
@@ -2833,7 +2869,12 @@ mod integration_tests {
         )
         .unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
-        assert_eq!(sim.host.state.inventories[&output].quantity, before);
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, output)
+                .expect("inventory exists")
+                .quantity,
+            before
+        );
         assert!(sim.host.events().iter().any(|event| event.event
             == (EventKind::WaterPurified {
                 actor,
@@ -3126,10 +3167,17 @@ mod transport_health_tests {
         for elapsed in [1, 997, 9_002] {
             sliced.advance(SimDuration(elapsed)).unwrap();
         }
-        assert_eq!(sim.host.state, sliced.host.state);
-        assert_eq!(sim.host.state.inventories[&water].quantity, Quantity(1_000));
+        assert_eq!(sim.canonical_state(), sliced.canonical_state());
         assert_eq!(
-            sim.host.state.inventories[&endpoint].quantity,
+            game_cargo::inventory(&sim.host.storage, water)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(1_000)
+        );
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, endpoint)
+                .expect("inventory exists")
+                .quantity,
             Quantity(2_000)
         );
         sim.host.state.health.as_mut().unwrap().rules.treatment_time = SimDuration(10_000);
@@ -3190,15 +3238,25 @@ mod transport_health_tests {
         for elapsed in [503, 4_997, 4_500] {
             sliced.advance(SimDuration(elapsed)).unwrap();
         }
-        assert_eq!(sim.host.state, sliced.host.state);
+        assert_eq!(sim.canonical_state(), sliced.canonical_state());
         assert!(
             game_health::clinical(&sim.host.storage, passenger)
                 .unwrap()
                 .treatment
                 .is_some()
         );
-        assert_eq!(sim.host.state.inventories[&herbs].quantity, Quantity(0));
-        assert_eq!(sim.host.state.inventories[&water].quantity, Quantity(0));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, herbs)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, water)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
     }
     #[test]
     fn carried_battle_body_is_not_a_strategic_area_contact_or_remote_patient() {
@@ -3645,13 +3703,13 @@ mod supply_composition_tests {
             sim.debug_set_personality(person.id, traits, decisions::Aspiration::Comfort)
                 .unwrap();
         }
-        for stock in sim
-            .host
-            .state
-            .inventories
-            .values_mut()
-            .filter(|stock| stock.good == Good::Water)
+        for __stock_id in game_cargo::inventories(&sim.host.storage)
+            .filter(|(_, stock)| stock.good == Good::Water)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
         {
+            let stock = game_cargo::inventory_mut(&mut sim.host.storage, __stock_id)
+                .expect("inventory exists");
             stock.quantity = Quantity(0);
         }
         sim.initialize_health(Rules::fixture()).unwrap();
@@ -3711,7 +3769,7 @@ mod supply_composition_tests {
         restored
             .advance(SimDuration(duration - duration / 2))
             .unwrap();
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
         assert_eq!(
             sim.host
                 .state
@@ -3749,8 +3807,13 @@ mod supply_composition_tests {
         let duration = sim.host.state.health.as_ref().unwrap().rules.drinking_time;
         sim.advance(duration).unwrap();
         restored.advance(duration).unwrap();
-        assert_eq!(sim.host.state, restored.host.state);
-        assert_eq!(sim.host.state.inventories[&water].quantity, Quantity(0));
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, water)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
         assert!(
             game_health::clinical(&sim.host.storage, actor)
                 .unwrap()

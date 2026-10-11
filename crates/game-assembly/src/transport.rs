@@ -145,8 +145,13 @@ impl Simulation {
                     .into_iter()
                     .flatten()
                     .try_fold(0_u64, |sum, id| {
-                        sum.checked_add(self.host.state.inventories[id].quantity.0)
-                            .ok_or(Error::Overflow)
+                        sum.checked_add(
+                            game_cargo::inventory(&self.host.storage, *(id))
+                                .expect("inventory exists")
+                                .quantity
+                                .0,
+                        )
+                        .ok_or(Error::Overflow)
                     })?;
                 let can_walk = body.vitals.alive
                     && body.vitals.health > 0
@@ -1746,7 +1751,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let physical = state.state.physical.as_ref().ok_or_else(fail)?;
     let resolved = resolved_locations_for(state)?;
     let mut cargo_by_actor: BTreeMap<PersonId, u64> = BTreeMap::new();
-    for stock in state.state.inventories.values() {
+    for stock in game_cargo::inventories(state.components).map(|(_, row)| row) {
         if let InventoryLocation::Carried(actor) = stock.location {
             let quantity = cargo_by_actor.entry(actor).or_default();
             *quantity = quantity
@@ -1915,11 +1920,18 @@ mod connected_tests {
         )
         .unwrap();
         assert_eq!(
-            sim.host.state.inventories[&source].quantity,
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1_000)
         );
         sim.advance(sim.body_rules(actor).loading_time).unwrap();
-        assert_eq!(sim.host.state.inventories[&source].quantity, Quantity(0));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
         assert!(sim.host.events().iter().any(|event| matches!(event.event,
             EventKind::Transferred { source: actual, quantity: Quantity(1_000), .. }
                 if actual == source)));
@@ -2079,7 +2091,7 @@ mod connected_tests {
             0
         );
         let loaded = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
-        assert_eq!(loaded.host.state, sim.host.state);
+        assert_eq!(loaded.canonical_state(), sim.canonical_state());
     }
     #[test]
     fn a_carrier_dies_at_an_exact_road_position_with_body_passenger_and_cargo_preserved() {
@@ -2116,11 +2128,16 @@ mod connected_tests {
             stopped
         );
         assert_eq!(sim.resolved_location(child), stopped);
-        assert_eq!(sim.host.state.inventories[&cargo].quantity, Quantity(1_000));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, cargo)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(1_000)
+        );
         sim.advance(SimDuration(20_003)).unwrap();
         assert_eq!(sim.resolved_location(child), stopped);
         let loaded = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
-        assert_eq!(loaded.host.state, sim.host.state);
+        assert_eq!(loaded.canonical_state(), sim.canonical_state());
     }
     #[test]
     fn real_timed_lift_requires_the_adult_passengers_personal_acceptance() {
@@ -2179,7 +2196,7 @@ mod connected_tests {
             split.advance(SimDuration(dt)).unwrap();
             let _ = split.observe();
         }
-        assert_eq!(whole.host.state, split.host.state);
+        assert_eq!(whole.canonical_state(), split.canonical_state());
         for sim in [&mut whole, &mut split] {
             sim.transport_command(mother, &Action::Stop).unwrap();
         }
@@ -2191,13 +2208,13 @@ mod connected_tests {
         for dt in [7_003, 4_004] {
             split.advance(SimDuration(dt)).unwrap();
         }
-        assert_eq!(whole.host.state, split.host.state);
+        assert_eq!(whole.canonical_state(), split.canonical_state());
         let mut restored = Simulation::load(&split.save().unwrap(), Execution::default()).unwrap();
         split.transport_command(mother, &Action::Resume).unwrap();
         restored.transport_command(mother, &Action::Resume).unwrap();
         split.advance(SimDuration(19_003)).unwrap();
         restored.advance(SimDuration(19_003)).unwrap();
-        assert_eq!(restored.host.state, split.host.state);
+        assert_eq!(restored.canonical_state(), split.canonical_state());
     }
     #[test]
     fn a_stopped_roadside_child_can_signal_and_receive_real_carried_food() {
@@ -2230,13 +2247,18 @@ mod connected_tests {
             *sim.host.storage.activity(child).unwrap()
         );
         assert!(sim.transport_same_place(mother, child));
-        assert!(sim.has_stock_access(mother, &sim.host.state.inventories[&source]));
+        assert!(sim.has_stock_access(
+            mother,
+            game_cargo::inventory(&sim.host.storage, source).expect("inventory exists")
+        ));
         assert!(!sim.care_index.contains_key(&child));
         sim.debug_actor_command(mother, Command::Care { child, source })
             .unwrap();
         sim.advance(SimDuration(60_000)).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&source].quantity,
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1_000)
         );
         assert_eq!(
@@ -2313,22 +2335,34 @@ mod connected_tests {
         .unwrap();
         sim.advance(SimDuration(6_000)).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&source].quantity,
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
             Quantity(3_000)
         );
         assert_eq!(
-            sim.host.state.inventories[&destinations[0]].quantity,
+            game_cargo::inventory(&sim.host.storage, destinations[0])
+                .expect("inventory exists")
+                .quantity,
             Quantity(3_000)
         );
         assert_eq!(
-            sim.host.state.inventories[&destinations[1]].quantity,
+            game_cargo::inventory(&sim.host.storage, destinations[1])
+                .expect("inventory exists")
+                .quantity,
             Quantity(0)
         );
         assert_eq!(
-            sim.host.state.inventories[&source].quantity.0
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity
+                .0
                 + destinations
                     .iter()
-                    .map(|id| sim.host.state.inventories[id].quantity.0)
+                    .map(|id| game_cargo::inventory(&sim.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0)
                     .sum::<u64>(),
             6_000
         );
@@ -2386,11 +2420,15 @@ mod connected_tests {
         );
         sim.advance(SimDuration(60_000)).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&carried].quantity,
+            game_cargo::inventory(&sim.host.storage, carried)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1_000)
         );
         assert_eq!(
-            sim.host.state.inventories[&endpoint].quantity,
+            game_cargo::inventory(&sim.host.storage, endpoint)
+                .expect("inventory exists")
+                .quantity,
             Quantity(20_000)
         );
     }

@@ -434,21 +434,13 @@ impl Simulation {
             || policy.spending.iter().any(|(source, q)| {
                 q.0 == 0
                     || !judge.inventories.contains(source)
-                    || self
-                        .host
-                        .state
-                        .inventories
-                        .get(source)
+                    || game_cargo::inventory(&self.host.storage, *(source))
                         .is_none_or(|i| q > &i.capacity)
             })
             || policy.supplies.iter().any(|(source, q)| {
                 q.0 == 0
                     || !enforcer.inventories.contains(source)
-                    || self
-                        .host
-                        .state
-                        .inventories
-                        .get(source)
+                    || game_cargo::inventory(&self.host.storage, *(source))
                         .is_none_or(|i| q > &i.capacity)
             })
         {
@@ -537,12 +529,8 @@ impl Simulation {
                                 quantity,
                                 ..
                             } = term
-                                && self
-                                    .host
-                                    .state
-                                    .inventories
-                                    .get(source)
-                                    .zip(self.host.state.inventories.get(destination))
+                                && game_cargo::inventory(&self.host.storage, *(source))
+                                    .zip(game_cargo::inventory(&self.host.storage, *(destination)))
                                     .is_none_or(|(a, b)| {
                                         a.good != b.good
                                             || a.id == b.id
@@ -2057,7 +2045,7 @@ impl Simulation {
             .supplies
             .iter()
             .filter_map(|(source, cap)| {
-                let good = self.host.state.inventories.get(source)?.good;
+                let good = game_cargo::inventory(&self.host.storage, *(source))?.good;
                 let desired = match good {
                     Good::Food => rules.meal_size.0.saturating_mul(2),
                     Good::Tool | Good::Binding => 1_000,
@@ -2075,10 +2063,7 @@ impl Simulation {
             .spending
             .iter()
             .find(|(source, _)| {
-                self.host
-                    .state
-                    .inventories
-                    .get(source)
+                game_cargo::inventory(&self.host.storage, **source)
                     .is_some_and(|i| i.good == Good::Food)
             })
             .map(|(source, cap)| AgreementTerm::Delivery {
@@ -2443,7 +2428,7 @@ impl Simulation {
         let area = |id| self.host.state.areas.iter().any(|a| a.id == id);
         let evidence_valid = |e: &EnforcementEvidence| {
             match e {
-            EnforcementEvidence::Incident(i)=>self.host.state.property.as_ref().is_some_and(|w|w.incidents.contains_key(&i.id)) && people.contains(&i.actor) && self.host.state.inventories.contains_key(&i.source) && self.host.state.inventories.contains_key(&i.destination) && area(i.area) && i.started_at<=i.changed_at && i.changed_at<=i.learned_at && i.learned_at<=self.host.clock().time && i.quantity.0>0,
+            EnforcementEvidence::Incident(i)=>self.host.state.property.as_ref().is_some_and(|w|w.incidents.contains_key(&i.id)) && people.contains(&i.actor) && game_cargo::inventory(&self.host.storage, i.source).is_some() && game_cargo::inventory(&self.host.storage, i.destination).is_some() && area(i.area) && i.started_at<=i.changed_at && i.changed_at<=i.learned_at && i.learned_at<=self.host.clock().time && i.quantity.0>0,
             EnforcementEvidence::Assault(a)=>people.contains(&a.attacker) && people.contains(&a.target) && area(a.area) && a.observed_at<=self.host.clock().time && self.host.events().iter().any(|e|EventId(e.sequence)==a.event && e.at==a.observed_at && matches!(e.event,EventKind::Struck {actor,target,damage,..} if actor==a.attacker && target==a.target && damage==a.damage)),
             EnforcementEvidence::Default(o)=>self.host.state.agreements.as_ref().is_some_and(|w|w.obligations.contains_key(&o.id)) && o.defaulted && o.performed<o.amount() && o.observed_at<=o.learned_at && o.learned_at<=self.host.clock().time && o.term.parties().iter().all(|p|people.contains(p)),
             EnforcementEvidence::Social(c)=>institutions.cases.get(&c.id)==Some(c),
@@ -2768,11 +2753,8 @@ mod atomic_tests {
         let target = actor(sim, 5);
         travel(sim, filer, AreaId(3));
         travel(sim, target, AreaId(3));
-        let source = sim
-            .canonical_state()
-            .state
-            .inventories
-            .values()
+        let source = game_cargo::inventories(sim.canonical_state().components)
+            .map(|(_, row)| row)
             .find(|i| {
                 i.good == Good::Food
                     && i.location == InventoryLocation::Area(AreaId(3))

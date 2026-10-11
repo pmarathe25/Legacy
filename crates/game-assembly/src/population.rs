@@ -130,11 +130,8 @@ impl Simulation {
             let creditor = settlement.residents[3];
             // This authored, local promise is a voluntary delivery, not an
             // automatic settlement duty. Its subsequent fulfillment is physical.
-            let source = sim
-                .host
-                .state
-                .inventories
-                .values()
+            let source = game_cargo::inventories(&sim.host.storage)
+                .map(|(_, row)| row)
                 .find(|stock| {
                     stock.good == Good::Timber
                         && stock.location == InventoryLocation::Area(settlement.wood)
@@ -142,11 +139,8 @@ impl Simulation {
                 })
                 .unwrap()
                 .id;
-            let destination = sim
-                .host
-                .state
-                .inventories
-                .values()
+            let destination = game_cargo::inventories(&sim.host.storage)
+                .map(|(_, row)| row)
                 .find(|stock| {
                     stock.good == Good::Timber
                         && stock.location == InventoryLocation::Area(settlement.center)
@@ -200,7 +194,7 @@ impl Simulation {
             .collect::<BTreeSet<_>>();
         let steward = settlement.residents[3];
         let healer = settlement.residents[6];
-        let lots:Vec<_>=self.host.state.inventories.values().filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).map(|stock|stock.id).collect();
+        let lots:Vec<_>=game_cargo::inventories(&self.host.storage).map(|(_, row)| row).filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).map(|stock|stock.id).collect();
         for id in &lots {
             self.host
                 .state
@@ -298,8 +292,13 @@ impl Simulation {
         let timber = lots
             .iter()
             .find(|id| {
-                self.host.state.inventories[id].good == Good::Timber
-                    && self.host.state.inventories[id].location
+                game_cargo::inventory(&self.host.storage, **id)
+                    .expect("inventory exists")
+                    .good
+                    == Good::Timber
+                    && game_cargo::inventory(&self.host.storage, **id)
+                        .expect("inventory exists")
+                        .location
                         == InventoryLocation::Area(settlement.center)
             })
             .copied()
@@ -307,8 +306,13 @@ impl Simulation {
         let tool = lots
             .iter()
             .find(|id| {
-                self.host.state.inventories[id].good == Good::Tool
-                    && self.host.state.inventories[id].location
+                game_cargo::inventory(&self.host.storage, **id)
+                    .expect("inventory exists")
+                    .good
+                    == Good::Tool
+                    && game_cargo::inventory(&self.host.storage, **id)
+                        .expect("inventory exists")
+                        .location
                         == InventoryLocation::Area(settlement.center)
             })
             .copied()
@@ -392,10 +396,7 @@ impl Simulation {
         );
         // Existing workshops have an actual material cost in their initial
         // history; subsequent recipes consume their own real input lots.
-        self.host
-            .state
-            .inventories
-            .get_mut(&timber)
+        game_cargo::inventory_mut(&mut self.host.storage, timber)
             .unwrap()
             .quantity
             .0 -= rules.construction_timber.0;
@@ -458,7 +459,7 @@ impl Simulation {
                 }
             }
         }
-        let reported:Vec<_>=self.host.state.inventories.values().filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
+        let reported:Vec<_>=game_cargo::inventories(&self.host.storage).map(|(_, row)| row).filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
         for actor in &settlement.residents {
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
                 &mut self.host.storage,
@@ -721,7 +722,10 @@ impl Simulation {
             crop_document,
             weather_day,
         )?);
-        let first_food = *sim.host.state.inventories.keys().next_back().unwrap();
+        let first_food = game_cargo::inventories(&sim.host.storage)
+            .map(|(id, _)| id)
+            .last()
+            .unwrap();
         let work_concept = sim.host.state.decisions.as_ref().unwrap().work_concept;
         for (index, settlement) in settlements.iter().enumerate() {
             let access = settlement
@@ -735,7 +739,7 @@ impl Simulation {
                 3_000_000
             };
             let food = if index == 0 {
-                let stock = sim.host.state.inventories.get_mut(&first_food).unwrap();
+                let stock = game_cargo::inventory_mut(&mut sim.host.storage, first_food).unwrap();
                 stock.quantity = Quantity(reserve);
                 stock.capacity = Quantity(reserve * 4);
                 stock.access = access.clone();
@@ -887,7 +891,7 @@ impl Simulation {
             // Initial existing residents remember their own settlement's public
             // supplies. No global inventory/map broadcast is performed.
             let reporter = settlement.residents[3];
-            let visible:Vec<_>=sim.host.state.inventories.values().filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
+            let visible:Vec<_>=game_cargo::inventories(&sim.host.storage).map(|(_, row)| row).filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
             let observed_at = sim.time();
             for actor in &settlement.residents {
                 let mind = game_characters::decisions::mind_mut::<game_api::Command>(
@@ -1117,9 +1121,9 @@ mod tests {
             }
         }
         let portions = &one.host.state.property.as_ref().unwrap().portions;
-        for (inventory, stock) in &one.host.state.inventories {
+        for (inventory, stock) in game_cargo::inventories(&one.host.storage) {
             assert_eq!(
-                portions[inventory]
+                portions[&inventory]
                     .values()
                     .map(|quantity| u128::from(*quantity))
                     .sum::<u128>(),

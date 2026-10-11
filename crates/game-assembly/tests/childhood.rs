@@ -137,7 +137,9 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
             interest: ChildhoodInterest::Craft,
         },
     );
-    let opening_stocks = sim.canonical_state().state.inventories.clone();
+    let opening_stocks = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let work = sim
         .canonical_state()
         .state
@@ -169,7 +171,9 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
     {
         assert_eq!(
             i.quantity,
-            sim.canonical_state().state.inventories[&i.id].quantity
+            game_cargo::inventory(sim.canonical_state().components, i.id)
+                .expect("stock exists")
+                .quantity
         );
     }
     submit(

@@ -347,6 +347,27 @@ impl Production {
         Ok(())
     }
 
+    /// Publishes the authoritative job, site and output stock together. All
+    /// opening guards and registered component validators run before any write.
+    pub fn commit_stocks(self, store: &mut game_ecs::Store) -> Result<(), Error> {
+        let declaration = site(store, self.site).ok_or(Error::Unavailable)?;
+        let output = game_cargo::inventory(store, self.output).ok_or(Error::Unavailable)?;
+        self.validate(job(store, self.actor), declaration, output)?;
+        let mut after_site = declaration.clone();
+        let mut after_output = output.clone();
+        after_site.last_granted = Some(self.actor);
+        after_output.quantity.0 = after_output
+            .quantity
+            .0
+            .checked_add(self.quantity.0)
+            .ok_or(Error::Overflow)?;
+        let mut batch = game_ecs::Batch::new();
+        batch.remove::<Job>(game_ecs::StableId(self.actor.0));
+        batch.insert(game_ecs::StableId(self.site.0), after_site);
+        batch.insert(game_ecs::StableId(self.output.0), after_output);
+        store.apply_batch(batch)
+    }
+
     /// Completes a job and updates its site in the host's shared store. The
     /// output stock remains a cargo-owned row supplied by the host.
     pub fn commit_components(

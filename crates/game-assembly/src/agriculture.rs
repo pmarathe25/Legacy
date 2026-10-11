@@ -178,11 +178,15 @@ impl Simulation {
             Quantity(10_000_000),
             people.clone(),
         )?;
-        for stock in
-            sim.host.state.inventories.values_mut().filter(|i| {
+        for __stock_id in game_cargo::inventories(&sim.host.storage)
+            .filter(|(_, i)| {
                 i.good == Good::Food && matches!(i.location, InventoryLocation::Area(_))
             })
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
         {
+            let stock = game_cargo::inventory_mut(&mut sim.host.storage, __stock_id)
+                .expect("inventory exists");
             stock.capacity = Quantity(10_000_000);
             stock.quantity = Quantity(3_000_000);
         }
@@ -274,11 +278,10 @@ impl Simulation {
         let crop = world.rules_for(&sim.host.storage, id)?;
         let food_capacity = 10_000_000.max(3_000_000 + crop.food_yield.0);
         let seed_capacity = 1_000_000.max(10_000 + crop.seed_yield.0);
-        sim.host.state.inventories.get_mut(&food).unwrap().capacity = Quantity(food_capacity);
-        sim.host
-            .state
-            .inventories
-            .get_mut(&seed_stock)
+        game_cargo::inventory_mut(&mut sim.host.storage, food)
+            .unwrap()
+            .capacity = Quantity(food_capacity);
+        game_cargo::inventory_mut(&mut sim.host.storage, seed_stock)
             .unwrap()
             .capacity = Quantity(seed_capacity);
         sim.review_decisions()?;
@@ -399,10 +402,7 @@ impl Simulation {
             )
         });
         let available = |id: InventoryId, good: Good| {
-            self.host
-                .state
-                .inventories
-                .get(&id)
+            game_cargo::inventory(&self.host.storage, id)
                 .filter(|stock| {
                     stock.good == good
                         && self.has_stock_access(actor, stock)
@@ -411,13 +411,9 @@ impl Simulation {
                 .map(|_| Quantity(self.unreserved_stock_for_planning(id, actor, resources)))
         };
         let room = |id: InventoryId| {
-            self.host
-                .state
-                .inventories
-                .get(&id)
-                .map_or(Quantity(0), |stock| {
-                    Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))
-                })
+            game_cargo::inventory(&self.host.storage, id).map_or(Quantity(0), |stock| {
+                Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))
+            })
         };
         Ok(game_agriculture::BeginFacts {
             actor,
@@ -489,10 +485,7 @@ impl Simulation {
         self.commit_project_input(project_input)?;
         self.interrupt_actor_activity(actor);
         if let Some(input) = plan.consumed {
-            self.host
-                .state
-                .inventories
-                .get_mut(&input.inventory)
+            game_cargo::inventory_mut(&mut self.host.storage, input.inventory)
                 .unwrap()
                 .quantity
                 .0 -= input.quantity.0;
@@ -560,7 +553,7 @@ impl Simulation {
             .field(&self.host.storage, job.field)
             .expect("component exists");
         let room = |id: InventoryId| {
-            let stock = &self.host.state.inventories[&id];
+            let stock = game_cargo::inventory(&self.host.storage, id).expect("inventory exists");
             Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))
         };
         let plan = game_agriculture::prepare_completion(
@@ -589,17 +582,11 @@ impl Simulation {
         )
         .expect("validated cultivation completion");
         let harvested = plan.harvest.map(|output| {
-            self.host
-                .state
-                .inventories
-                .get_mut(&output.food_inventory)
+            game_cargo::inventory_mut(&mut self.host.storage, output.food_inventory)
                 .unwrap()
                 .quantity
                 .0 += output.food.0;
-            self.host
-                .state
-                .inventories
-                .get_mut(&output.seed_inventory)
+            game_cargo::inventory_mut(&mut self.host.storage, output.seed_inventory)
                 .unwrap()
                 .quantity
                 .0 += output.seed.0;
@@ -780,7 +767,7 @@ impl Simulation {
             let mut unique = BTreeSet::new();
             for (stock, good) in refs {
                 if !unique.insert(stock)
-                    || self.host.state.inventories.get(&stock).is_none_or(|i| {
+                    || game_cargo::inventory(&self.host.storage, stock).is_none_or(|i| {
                         i.good != good || self.inventory_area(i) != Some(field.area)
                     })
                 {

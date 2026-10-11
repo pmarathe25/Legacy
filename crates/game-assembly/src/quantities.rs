@@ -41,15 +41,19 @@ impl Simulation {
                     .get(&site.input)
                     .is_some_and(|stock| stock.good == good)
                 {
-                    let quantity =
-                        if destination == Some(site.input) {
-                            // The caller supplies only freshly visible local destinations.
-                            Quantity(site.input_quantity.0.saturating_sub(
-                                self.host.state.inventories[&site.input].quantity.0,
-                            ))
-                        } else {
-                            site.input_quantity
-                        };
+                    let quantity = if destination == Some(site.input) {
+                        // The caller supplies only freshly visible local destinations.
+                        Quantity(
+                            site.input_quantity.0.saturating_sub(
+                                game_cargo::inventory(&self.host.storage, site.input)
+                                    .expect("inventory exists")
+                                    .quantity
+                                    .0,
+                            ),
+                        )
+                    } else {
+                        site.input_quantity
+                    };
                     add(quantity);
                 }
             }
@@ -137,7 +141,14 @@ impl Simulation {
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
             .flatten()
-            .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+            .map(|id| {
+                u128::from(
+                    game_cargo::inventory(&self.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0,
+                )
+            })
             .sum();
         let body_room = Quantity(u128::from(capacity.0).saturating_sub(held) as u64);
         let mut opportunities = Vec::new();
@@ -146,7 +157,8 @@ impl Simulation {
             .iter()
             .filter(|stock| stock.can_access && stock.quantity.0 > 0)
         {
-            let from = &self.host.state.inventories[&source.id];
+            let from =
+                game_cargo::inventory(&self.host.storage, source.id).expect("inventory exists");
             let increment = self.record_quantity_increment(source.id);
             let supply = self.cargo_source_facts(actor, from, increment);
             if from.location != InventoryLocation::Carried(actor)
@@ -178,7 +190,8 @@ impl Simulation {
                 }
             }
             for destination in &view.local_stocks {
-                let to = &self.host.state.inventories[&destination.id];
+                let to = game_cargo::inventory(&self.host.storage, destination.id)
+                    .expect("inventory exists");
                 if source.id == destination.id
                     || from.good != to.good
                     || (from.location != InventoryLocation::Carried(actor)
@@ -313,7 +326,9 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(250)
         );
         assert_eq!(
@@ -342,7 +357,9 @@ mod tests {
             .get_mut(&site)
             .unwrap()
             .input_quantity = Quantity(250);
-        sim.host.state.inventories.get_mut(&input).unwrap().quantity = Quantity(0);
+        game_cargo::inventory_mut(&mut sim.host.storage, input)
+            .unwrap()
+            .quantity = Quantity(0);
         let source = sim
             .debug_add_inventory(
                 Good::Timber,
@@ -369,7 +386,12 @@ mod tests {
         })
         .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.host.state.inventories[&source].quantity, Quantity(250));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(250)
+        );
         assert!(sim.host.events().iter().any(|event| matches!(event.event,
             EventKind::Transferred { source: from, destination: to, quantity: Quantity(250), .. }
             if from == source && to == input)));

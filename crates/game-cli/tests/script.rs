@@ -372,14 +372,21 @@ fn agreement_text_commands_record_promises_and_deliver_actual_cargo() {
         }],
         procedure: None,
     };
-    let stocks = sim.canonical_state().state.inventories.clone();
+    let stocks = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     game_cli::execute(
         &mut sim,
         &format!("agreement {}", serde_json::to_string(&proposal).unwrap()),
         &execution,
     )
     .unwrap();
-    assert_eq!(&stocks, &sim.canonical_state().state.inventories);
+    assert_eq!(
+        &stocks,
+        &game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    );
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
     let view: PlayerView =
         serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
@@ -495,7 +502,9 @@ fn text_client_exposes_refusal_and_resistance_without_granting_goods() {
             .unwrap()
             .can_access
     );
-    let stock = sim.canonical_state().state.inventories[&source].quantity;
+    let stock = game_cargo::inventory(sim.canonical_state().components, source)
+        .expect("stock exists")
+        .quantity;
     game_cli::execute(
         &mut sim,
         &format!("take {} {} 1000", source.0, cargo.0),
@@ -510,11 +519,15 @@ fn text_client_exposes_refusal_and_resistance_without_granting_goods() {
     );
     assert!(view.combat.is_some());
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         stock
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&cargo].quantity,
+        game_cargo::inventory(sim.canonical_state().components, cargo)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
@@ -626,14 +639,21 @@ fn institution_charters_and_supported_offices_have_real_access_effects_through_c
         charter,
         origin: None,
     };
-    let before = sim.canonical_state().state.inventories.clone();
+    let before = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     game_cli::execute(
         &mut sim,
         &format!("institution {}", serde_json::to_string(&action).unwrap()),
         &execution,
     )
     .unwrap();
-    assert_eq!(sim.canonical_state().state.inventories, before);
+    assert_eq!(
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+    );
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
     let view: PlayerView =
         serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
@@ -699,7 +719,9 @@ fn carrying_a_new_good_creates_only_an_empty_compartment_then_loads_real_stock()
     );
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&tool].quantity,
+        game_cargo::inventory(sim.canonical_state().components, tool)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(
@@ -761,11 +783,8 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
         )
         .unwrap();
     }
-    let tool = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let tool = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| {
             i.good == Good::Tool && i.location == game_assembly::InventoryLocation::Area(AreaId(1))
         })
@@ -910,17 +929,17 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         )
         .unwrap();
     }
-    let source = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let source = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| {
             i.good == Good::Food && i.location == game_assembly::InventoryLocation::Area(AreaId(1))
         })
         .unwrap()
         .id;
-    let stock = sim.canonical_state().state.inventories[&source].quantity.0;
+    let stock = game_cargo::inventory(sim.canonical_state().components, source)
+        .expect("stock exists")
+        .quantity
+        .0;
     let cargo = sim
         .canonical_state()
         .state
@@ -929,7 +948,10 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         .find(|p| p.id == ruler)
         .unwrap()
         .inventory;
-    let held = sim.canonical_state().state.inventories[&cargo].quantity.0;
+    let held = game_cargo::inventory(sim.canonical_state().components, cargo)
+        .expect("stock exists")
+        .quantity
+        .0;
     game_cli::execute(
         &mut sim,
         &format!("guardian {} supply food {} 1000", guardian.0, source.0),
@@ -937,15 +959,27 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
     )
     .unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity.0,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity
+            .0,
         stock
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&cargo].quantity.0,
+        game_cargo::inventory(sim.canonical_state().components, cargo)
+            .expect("stock exists")
+            .quantity
+            .0,
         held
     );
     game_cli::execute(&mut sim, "run 2m", &execution).unwrap();
-    assert!(sim.canonical_state().state.inventories[&source].quantity.0 <= stock - 1000);
+    assert!(
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity
+            .0
+            <= stock - 1000
+    );
     let loaded: u64 = sim
         .canonical_state()
         .events
@@ -962,7 +996,10 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         .sum();
     assert_eq!(loaded, 1000);
     assert_eq!(
-        sim.canonical_state().state.inventories[&cargo].quantity.0,
+        game_cargo::inventory(sim.canonical_state().components, cargo)
+            .expect("stock exists")
+            .quantity
+            .0,
         held + 1000
     );
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.event, EventKind::GuardianAccepted { guardian: actor, requester } if actor == guardian && requester == ruler)));
@@ -1042,7 +1079,9 @@ fn roadside_transport_is_playable_with_carried_food_through_the_text_client() {
     game_cli::execute(&mut sim, &format!("eat {}", food.0), &execution).unwrap();
     game_cli::execute(&mut sim, "run 60000ms", &execution).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&food].quantity,
+        game_cargo::inventory(sim.canonical_state().components, food)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000)
     );
     let mut restored = Simulation::load(&sim.save().unwrap(), execution.clone()).unwrap();

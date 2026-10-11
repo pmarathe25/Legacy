@@ -784,3 +784,78 @@ fn a_registered_stricter_job_validator_cannot_leave_partial_entities() {
     );
     assert_eq!(store.snapshot().unwrap(), before);
 }
+
+#[test]
+fn native_stock_production_is_atomic_with_schema_guards_and_replay() {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_cargo::register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    let declaration = site();
+    insert_site(&mut store, declaration.clone()).unwrap();
+    let mut work = start().job;
+    work.remaining = 0;
+    insert_job(&mut store, PersonId(1), work.clone()).unwrap();
+    let output = stock(3, Good::Food, 0);
+    game_cargo::insert_inventory(&mut store, output.clone()).unwrap();
+    let production = work
+        .prepare_completion(&declaration, &output, closing(1, true))
+        .unwrap()
+        .unwrap();
+    game_cargo::inventory_mut(&mut store, InventoryId(3))
+        .unwrap()
+        .quantity = Quantity(1);
+    let before = store.clone();
+    assert_eq!(
+        production.clone().commit_stocks(&mut store),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store, before);
+    game_cargo::inventory_mut(&mut store, InventoryId(3))
+        .unwrap()
+        .quantity = Quantity(0);
+    production.clone().commit_stocks(&mut store).unwrap();
+    assert!(job(&store, PersonId(1)).is_none());
+    assert_eq!(
+        game_cargo::inventory(&store, InventoryId(3))
+            .unwrap()
+            .quantity,
+        Quantity(4000)
+    );
+    assert_eq!(
+        crate::site(&store, SiteId(5)).unwrap().last_granted,
+        Some(PersonId(1))
+    );
+    let completed = store.clone();
+    assert_eq!(
+        production.commit_stocks(&mut store),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store, completed);
+
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<Inventory>("cargo/inventory", |row| {
+            row.validate()?;
+            if row.quantity.0 > 0 {
+                return Err(Error::Unavailable);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    insert_site(&mut store, declaration.clone()).unwrap();
+    insert_job(&mut store, PersonId(1), work.clone()).unwrap();
+    game_cargo::insert_inventory(&mut store, output.clone()).unwrap();
+    let production = work
+        .prepare_completion(&declaration, &output, closing(1, true))
+        .unwrap()
+        .unwrap();
+    let before = store.clone();
+    assert_eq!(
+        production.commit_stocks(&mut store),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store, before);
+}

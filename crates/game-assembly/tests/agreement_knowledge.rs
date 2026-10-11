@@ -46,19 +46,15 @@ fn citizen(sim: &Simulation) -> PersonId {
         .id
 }
 fn timber(sim: &Simulation, area: AreaId) -> InventoryId {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| stock.good == Good::Timber && stock.location == InventoryLocation::Area(area))
         .unwrap()
         .id
 }
 fn cargo(sim: &Simulation, actor: PersonId) -> InventoryId {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Timber && stock.location == InventoryLocation::Carried(actor)
         })
@@ -378,7 +374,9 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
     );
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(known(&sim, creditor, id).obligations[0].defaulted);
-    let stocks = sim.canonical_state().state.inventories.clone();
+    let stocks = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     sim.debug_agreement_action(
         creditor,
         AgreementAction::Amend {
@@ -409,7 +407,12 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
     assert_eq!(view.status, AgreementStatus::Fulfilled);
     assert_eq!(view.obligations[0].term.amount(), 0);
     assert!(!view.obligations[0].defaulted);
-    assert_eq!(sim.canonical_state().state.inventories, stocks);
+    assert_eq!(
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        stocks
+    );
     Simulation::load(
         &sim.save().unwrap(),
         Execution {

@@ -44,10 +44,8 @@ fn owner(sim: &Simulation) -> PersonId {
     sim.canonical_state().state.people[3].id
 }
 fn food(sim: &Simulation) -> InventoryId {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.location == InventoryLocation::Area(AreaId(1)) && i.good == Good::Food)
         .unwrap()
         .id
@@ -225,11 +223,14 @@ fn ordered_rules_change_access_while_other_permissions_remain_independent() {
         };
         let charter = charter(&sim, rules);
         found(&mut sim, charter);
-        let before = sim.canonical_state().state.inventories[&food(&sim)].quantity;
+        let before = game_cargo::inventory(sim.canonical_state().components, food(&sim))
+            .expect("stock exists")
+            .quantity;
         sim.advance(MINUTE).unwrap();
         assert_eq!(can_eat(&sim), last_allowed);
         assert!(
-            sim.canonical_state().state.inventories[&food(&sim)]
+            game_cargo::inventory(sim.canonical_state().components, food(&sim))
+                .expect("stock exists")
                 .access
                 .contains(&owner(&sim))
         );
@@ -238,7 +239,10 @@ fn ordered_rules_change_access_while_other_permissions_remain_independent() {
             command(&mut sim, Command::Eat { source }).unwrap();
             sim.advance(MINUTE).unwrap();
             assert_eq!(
-                sim.canonical_state().state.inventories[&source].quantity.0,
+                game_cargo::inventory(sim.canonical_state().components, source)
+                    .expect("stock exists")
+                    .quantity
+                    .0,
                 before.0 - 1_000
             );
         } else {
@@ -288,7 +292,8 @@ fn withdrawing_support_removes_office_power_without_removing_the_person() {
     action(&mut sim, InstitutionAction::Leave { institution: id }).unwrap();
     assert!(!can_eat(&sim));
     assert!(
-        sim.canonical_state().state.inventories[&food(&sim)]
+        game_cargo::inventory(sim.canonical_state().components, food(&sim))
+            .expect("stock exists")
             .access
             .contains(&owner(&sim))
     );
@@ -323,7 +328,9 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
     let id = found(&mut sim, charter);
     let agreement = sim.institution_view(actor)[0].funding[0];
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(
@@ -359,7 +366,9 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
     assert_eq!(

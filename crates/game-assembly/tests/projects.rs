@@ -43,29 +43,20 @@ fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
         stock.location == InventoryLocation::Area(AreaId(1))
             && custodians.get(&stock.id) == Some(&maker)
     };
-    let materials = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let materials = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .filter(owned)
         .find(|stock| stock.good == Good::Timber)
         .unwrap()
         .id;
-    let tool = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let tool = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .filter(owned)
         .find(|stock| stock.good == Good::Tool && stock.quantity.0 > 0)
         .unwrap()
         .id;
-    let output = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let output = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .filter(owned)
         .find(|stock| stock.good == Good::Tool && stock.quantity.0 == 0)
         .unwrap()
@@ -94,11 +85,8 @@ fn propose(sim: &mut Simulation, finish_by: SimTime, workers: BTreeSet<PersonId>
 fn supply(sim: &mut Simulation, quantity: u64) {
     let financier = actor(sim, 5);
     let (destination, _, _) = maker_assets(sim);
-    let source = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let source = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Timber
                 && stock.location == InventoryLocation::Area(AreaId(1))
@@ -106,11 +94,8 @@ fn supply(sim: &mut Simulation, quantity: u64) {
         })
         .unwrap()
         .id;
-    let cargo = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let cargo = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Timber && stock.location == InventoryLocation::Carried(financier)
         })
@@ -226,7 +211,8 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
     sim.debug_project_action(maker, ProjectAction::Work { project: plan })
         .unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&materials]
+        game_cargo::inventory(sim.canonical_state().components, materials)
+            .expect("stock exists")
             .quantity
             .0,
         0
@@ -266,7 +252,8 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
         sites + 1
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&materials]
+        game_cargo::inventory(sim.canonical_state().components, materials)
+            .expect("stock exists")
             .quantity
             .0,
         0
@@ -278,12 +265,19 @@ fn shortages_leave_stocks_untouched_and_fail_at_exact_deadline() {
     quiet(&mut sim);
     let maker = actor(&sim, 3);
     let plan = propose(&mut sim, SimTime(180_123), BTreeSet::from([maker]));
-    let before = sim.canonical_state().state.inventories.clone();
+    let before = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     assert_eq!(
         sim.debug_project_action(maker, ProjectAction::Work { project: plan }),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.canonical_state().state.inventories, before);
+    assert_eq!(
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+    );
     sim.advance(SimDuration(180_122)).unwrap();
     assert_ne!(
         sim.canonical_state()
@@ -306,7 +300,12 @@ fn shortages_leave_stocks_untouched_and_fail_at_exact_deadline() {
             .status,
         ProjectStatus::Failed
     );
-    assert_eq!(sim.canonical_state().state.inventories, before);
+    assert_eq!(
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+    );
 }
 #[test]
 fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_payment() {
@@ -325,11 +324,8 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     );
     supply(&mut sim, 5_000);
     let (materials, tool, _) = maker_assets(&sim);
-    let provisions = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let provisions = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Food
                 && stock.location == InventoryLocation::Area(AreaId(1))
@@ -421,7 +417,8 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
             .contributions[&helper],
         120_000
     );
-    let before = sim.canonical_state().state.inventories[&destination]
+    let before = game_cargo::inventory(sim.canonical_state().components, destination)
+        .expect("stock exists")
         .quantity
         .0;
     let cargo = sim.canonical_state().state.people[3].inventory;
@@ -446,7 +443,8 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination]
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
             .quantity
             .0,
         before + 3_000
@@ -511,11 +509,8 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
         .enterprises[&enterprise]
         .site;
     let (materials, tool, _) = maker_assets(&sim);
-    let provisions = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let provisions = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Food
                 && stock.location == InventoryLocation::Area(AreaId(1))
@@ -650,7 +645,9 @@ fn cautious_financier_refuses_startup_risk_without_any_stock_transfer() {
     cautious.risk_tolerance = 0;
     sim.debug_set_personality(financier, cautious, Aspiration::Independence)
         .unwrap();
-    let before = sim.canonical_state().state.inventories.clone();
+    let before = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     sim.advance(SimDuration(200_000)).unwrap();
     assert!(
         sim.canonical_state()
@@ -662,7 +659,12 @@ fn cautious_financier_refuses_startup_risk_without_any_stock_transfer() {
             .values()
             .any(|agreement| agreement.status == AgreementStatus::Rejected)
     );
-    assert_eq!(sim.canonical_state().state.inventories, before);
+    assert_eq!(
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+    );
     assert!(
         sim.canonical_state()
             .state
@@ -679,11 +681,8 @@ fn procurement_uses_personal_hints_then_real_loading_travel_and_unloading() {
     let mut sim = fixture(2);
     sim.advance(SimDuration(3_600_000)).unwrap();
     let maker = actor(&sim, 3);
-    let forest = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let forest = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Timber
                 && stock.location == InventoryLocation::Area(AreaId(3))

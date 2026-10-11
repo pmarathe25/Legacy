@@ -339,10 +339,8 @@ fn main() {
                 );
                 // Diagnostic state is never supplied to the client policy.
                 let state = sim.canonical_state();
-                let carried = state
-                    .state
-                    .inventories
-                    .values()
+                let carried = game_cargo::inventories(state.components)
+                    .map(|(_, inventory)| inventory)
                     .filter(|stock| {
                         stock.location == game_assembly::InventoryLocation::Carried(view.ruler)
                     })

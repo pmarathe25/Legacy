@@ -68,7 +68,12 @@ fn fixture(seed: u64) -> (Simulation, Context) {
         *institutions.institutions[&institution].charter.offices[0]
             .inventories
             .iter()
-            .find(|id| sim.canonical_state().state.inventories[id].good == good)
+            .find(|id| {
+                game_cargo::inventory(sim.canonical_state().components, **id)
+                    .expect("stock exists")
+                    .good
+                    == good
+            })
             .unwrap()
     };
     let ctx = Context {
@@ -347,16 +352,23 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
         .unwrap()
         .inventory;
     assert_eq!(
-        sim.canonical_state().state.inventories[&c.food_b].quantity,
+        game_cargo::inventory(sim.canonical_state().components, c.food_b)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
-    let total = sim.canonical_state().state.inventories[&c.food_a]
+    let total = game_cargo::inventory(sim.canonical_state().components, c.food_a)
+        .expect("stock exists")
         .quantity
         .0
-        + sim.canonical_state().state.inventories[&c.food_b]
+        + game_cargo::inventory(sim.canonical_state().components, c.food_b)
+            .expect("stock exists")
             .quantity
             .0
-        + sim.canonical_state().state.inventories[&cargo].quantity.0;
+        + game_cargo::inventory(sim.canonical_state().components, cargo)
+            .expect("stock exists")
+            .quantity
+            .0;
     command(
         &mut sim,
         Command::Load {
@@ -368,7 +380,9 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     sim.advance(MINUTE).unwrap();
     travel(&mut sim, ruler, AreaId(3));
     assert_eq!(
-        sim.canonical_state().state.inventories[&c.food_b].quantity,
+        game_cargo::inventory(sim.canonical_state().components, c.food_b)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     command(
@@ -381,13 +395,18 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     );
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&c.food_a]
+        game_cargo::inventory(sim.canonical_state().components, c.food_a)
+            .expect("stock exists")
             .quantity
             .0
-            + sim.canonical_state().state.inventories[&c.food_b]
+            + game_cargo::inventory(sim.canonical_state().components, c.food_b)
+                .expect("stock exists")
                 .quantity
                 .0
-            + sim.canonical_state().state.inventories[&cargo].quantity.0,
+            + game_cargo::inventory(sim.canonical_state().components, cargo)
+                .expect("stock exists")
+                .quantity
+                .0,
         total
     );
     let r = &sim
@@ -658,7 +677,9 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
             .progress,
         Progress::AwaitingWork
     );
-    let stock = sim.canonical_state().state.inventories[&c.food_a].quantity;
+    let stock = game_cargo::inventory(sim.canonical_state().components, c.food_a)
+        .expect("stock exists")
+        .quantity;
     sim.debug_actor_command(
         c.mayor,
         Command::Agreement {
@@ -681,11 +702,15 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
         Progress::Refused
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&c.food_a].quantity,
+        game_cargo::inventory(sim.canonical_state().components, c.food_a)
+            .expect("stock exists")
+            .quantity,
         stock
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&c.food_b].quantity,
+        game_cargo::inventory(sim.canonical_state().components, c.food_b)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();

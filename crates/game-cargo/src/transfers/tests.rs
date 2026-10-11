@@ -37,22 +37,24 @@ fn request(actor: u64, source: u64, destination: u64, quantity: u64) -> Transfer
     }
 }
 fn plan(
-    stocks: &BTreeMap<InventoryId, Inventory>,
+    stocks: &Store,
     opening: Option<&BTreeMap<InventoryId, u64>>,
     requests: Vec<TransferRequest>,
     room: Option<&BTreeMap<PersonId, u64>>,
 ) -> PreparedTransfers {
-    prepare_transfers(
-        &stocks.iter().map(|(id, stock)| (*id, stock)).collect(),
-        opening,
-        requests,
-        room,
-        |_| true,
-    )
-    .unwrap()
+    prepare_transfers(stocks, opening, requests, room, |_| true).unwrap()
 }
-fn stocks(rows: Vec<Inventory>) -> BTreeMap<InventoryId, Inventory> {
-    rows.into_iter().map(|stock| (stock.id, stock)).collect()
+fn stocks(rows: Vec<Inventory>) -> Store {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<String>("test/receipt", |_| Ok(()))
+        .unwrap();
+    let mut store = Store::with_schema(schema);
+    for row in rows {
+        insert_inventory(&mut store, row).unwrap();
+    }
+    store
 }
 #[test]
 fn incoming_goods_cannot_be_spent_in_the_same_phase_in_any_request_order() {
@@ -82,10 +84,15 @@ fn incoming_goods_cannot_be_spent_in_the_same_phase_in_any_request_order() {
     );
     assert_eq!(forward, reverse);
     assert_eq!(
-        forward.values().map(|stock| stock.quantity.0).sum::<u64>(),
+        inventories(&forward)
+            .map(|(_, stock)| stock.quantity.0)
+            .sum::<u64>(),
         1000
     );
-    assert_eq!(forward[&InventoryId(2)].quantity, Quantity(1000));
+    assert_eq!(
+        inventory(&forward, InventoryId(2)).unwrap().quantity,
+        Quantity(1000)
+    );
 }
 #[test]
 fn opening_spend_clips_new_stock_but_current_occupied_room_is_never_forgotten() {
@@ -100,7 +107,10 @@ fn opening_spend_clips_new_stock_but_current_occupied_room_is_never_forgotten() 
         .commit(&mut rows)
         .unwrap();
     assert!(result.iter().all(|(_, yes)| !yes));
-    assert_eq!(rows[&InventoryId(2)].quantity, Quantity(1000));
+    assert_eq!(
+        inventory(&rows, InventoryId(2)).unwrap().quantity,
+        Quantity(1000)
+    );
 }
 #[test]
 fn source_cursor_fairness_is_stable_across_request_order_and_updates_actual_stock() {
@@ -109,7 +119,9 @@ fn source_cursor_fairness_is_stable_across_request_order_and_updates_actual_stoc
         stock(2, Some(1), 0, 2000),
         stock(3, Some(2), 0, 2000),
     ]);
-    rows.get_mut(&InventoryId(1)).unwrap().last_granted = Some(PersonId(1));
+    inventory_mut(&mut rows, InventoryId(1))
+        .unwrap()
+        .last_granted = Some(PersonId(1));
     let grants = plan(
         &rows,
         None,
@@ -120,7 +132,10 @@ fn source_cursor_fairness_is_stable_across_request_order_and_updates_actual_stoc
     .unwrap();
     assert_eq!(grants[0], (request(2, 1, 3, 1000).intent, true));
     assert!(!grants[1].1);
-    assert_eq!(rows[&InventoryId(1)].last_granted, Some(PersonId(2)));
+    assert_eq!(
+        inventory(&rows, InventoryId(1)).unwrap().last_granted,
+        Some(PersonId(2))
+    );
 }
 #[test]
 fn same_holder_consolidation_at_full_capacity_never_reserves_incoming_bearer_room() {
@@ -128,10 +143,9 @@ fn same_holder_consolidation_at_full_capacity_never_reserves_incoming_bearer_roo
         stock(1, Some(1), 1000, 1000),
         stock(2, Some(1), 0, 1000),
     ]);
-    let refs = rows.iter().map(|(id, stock)| (*id, stock)).collect();
     let room = BTreeMap::from([(PersonId(1), 0)]);
     let prepared = prepare_transfers(
-        &refs,
+        &rows,
         None,
         vec![request(1, 1, 2, 1000)],
         Some(&room),
@@ -139,7 +153,10 @@ fn same_holder_consolidation_at_full_capacity_never_reserves_incoming_bearer_roo
     )
     .unwrap();
     assert!(prepared.commit(&mut rows).unwrap()[0].1);
-    assert_eq!(rows[&InventoryId(2)].quantity, Quantity(1000));
+    assert_eq!(
+        inventory(&rows, InventoryId(2)).unwrap().quantity,
+        Quantity(1000)
+    );
 }
 #[test]
 fn incoming_compartments_share_room_and_outgoing_does_not_release_it_early() {
@@ -167,9 +184,14 @@ fn incoming_compartments_share_room_and_outgoing_does_not_release_it_early() {
         result.iter().map(|(_, yes)| *yes).collect::<Vec<_>>(),
         vec![true, true, false]
     );
-    assert_eq!(rows[&InventoryId(12)].quantity, Quantity(0));
     assert_eq!(
-        rows.values().map(|stock| stock.quantity.0).sum::<u64>(),
+        inventory(&rows, InventoryId(12)).unwrap().quantity,
+        Quantity(0)
+    );
+    assert_eq!(
+        inventories(&rows)
+            .map(|(_, stock)| stock.quantity.0)
+            .sum::<u64>(),
         4000
     );
 }
@@ -181,10 +203,9 @@ fn distinct_carried_people_share_only_the_explicit_bearer_reservation_snapshot()
         stock(3, Some(2), 0, 2000),
     ]);
     let room = BTreeMap::from([(PersonId(1), 2000), (PersonId(2), 2000)]);
-    let refs = rows.iter().map(|(id, stock)| (*id, stock)).collect();
     let mut reserved = 0;
     let prepared = prepare_transfers(
-        &refs,
+        &rows,
         None,
         vec![request(1, 1, 2, 1000), request(2, 1, 3, 1000)],
         Some(&room),
@@ -222,7 +243,7 @@ fn stale_quantity_access_location_or_cursor_rejects_all_effects_before_any_debit
             vec![request(1, 1, 2, 1000), request(2, 1, 3, 1000)],
             None,
         );
-        let slot = rows.get_mut(&InventoryId(3)).unwrap();
+        let slot = inventory_mut(&mut rows, InventoryId(3)).unwrap();
         match mutation {
             0 => slot.quantity = Quantity(1),
             1 => slot.access.clear(),
@@ -302,14 +323,20 @@ fn checked_extreme_quantities_conserve_without_wrapping() {
             .unwrap()[0]
             .1
     );
-    assert_eq!(rows[&InventoryId(1)].quantity, Quantity(0));
-    assert_eq!(rows[&InventoryId(2)].quantity, Quantity(u64::MAX));
+    assert_eq!(
+        inventory(&rows, InventoryId(1)).unwrap().quantity,
+        Quantity(0)
+    );
+    assert_eq!(
+        inventory(&rows, InventoryId(2)).unwrap().quantity,
+        Quantity(u64::MAX)
+    );
 }
 
 #[test]
 fn malformed_self_zero_missing_and_wrong_good_requests_are_inert() {
     let mut rows = stocks(vec![stock(1, None, 1000, 1000), stock(2, Some(1), 0, 1000)]);
-    rows.get_mut(&InventoryId(2)).unwrap().good = Good::Water;
+    inventory_mut(&mut rows, InventoryId(2)).unwrap().good = Good::Water;
     let before = rows.clone();
     let decisions = plan(
         &rows,
@@ -344,13 +371,13 @@ fn guarded_ordered_effects_expose_each_real_post_movement_balance_before_the_nex
     .begin(&rows)
     .unwrap();
     let mut publications = Vec::new();
-    while let Some((intent, granted)) = phase.apply_next(&mut rows) {
+    while let Some((intent, granted)) = phase.apply_next(&mut rows).unwrap() {
         assert!(granted);
         publications.push((
             intent.actor,
-            rows[&InventoryId(1)].quantity,
-            rows[&InventoryId(2)].quantity,
-            rows[&InventoryId(3)].quantity,
+            inventory(&rows, InventoryId(1)).unwrap().quantity,
+            inventory(&rows, InventoryId(2)).unwrap().quantity,
+            inventory(&rows, InventoryId(3)).unwrap().quantity,
         ));
     }
     assert_eq!(
@@ -360,5 +387,76 @@ fn guarded_ordered_effects_expose_each_real_post_movement_balance_before_the_nex
             (PersonId(2), Quantity(0), Quantity(1000), Quantity(1000))
         ]
     );
-    assert!(phase.apply_next(&mut rows).is_none());
+    assert!(phase.apply_next(&mut rows).unwrap().is_none());
+}
+
+#[test]
+fn later_prefix_schema_rejection_is_atomic_even_when_final_balances_are_valid() {
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<Inventory>("cargo/inventory", |row| {
+            row.validate()?;
+            if row.quantity == Quantity(1500) {
+                return Err(Error::Unavailable);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let mut store = Store::with_schema(schema);
+    for row in [
+        stock(1, None, 1000, 2000),
+        stock(2, None, 1000, 2000),
+        stock(3, None, 0, 2000),
+    ] {
+        insert_inventory(&mut store, row).unwrap();
+    }
+    let before = store.clone();
+    let requests = vec![request(1, 1, 2, 500), request(2, 2, 3, 500)];
+    assert!(
+        plan(&store, None, requests.clone(), None)
+            .begin(&store)
+            .is_err()
+    );
+    assert_eq!(
+        plan(&store, None, requests, None).commit(&mut store),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store, before);
+}
+#[test]
+fn receipt_can_publish_foreign_components_and_touched_stock_changes_reject_next_debit() {
+    let mut store = stocks(vec![
+        stock(1, None, 2000, 3000),
+        stock(2, None, 0, 3000),
+        stock(3, None, 0, 3000),
+    ]);
+    let mut phase = plan(
+        &store,
+        None,
+        vec![request(1, 1, 2, 1000), request(2, 1, 3, 1000)],
+        None,
+    )
+    .begin(&store)
+    .unwrap();
+    assert!(phase.apply_next(&mut store).unwrap().unwrap().1);
+    store
+        .insert(game_ecs::StableId(2), "receipt".to_string())
+        .unwrap();
+    inventory_mut(&mut store, InventoryId(3))
+        .unwrap()
+        .access
+        .clear();
+    let before = store.clone();
+    assert_eq!(phase.apply_next(&mut store), Err(Error::Unavailable));
+    assert_eq!(store, before);
+    assert_eq!(
+        inventory(&store, InventoryId(1)).unwrap().quantity,
+        Quantity(1000)
+    );
+    assert_eq!(
+        store
+            .get::<String>(game_ecs::StableId(2))
+            .map(String::as_str),
+        Some("receipt")
+    );
 }

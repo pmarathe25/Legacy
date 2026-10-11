@@ -22,10 +22,8 @@ fn move_to(sim: &mut Simulation, sequence: u64, area: u64) -> Result<CommandRece
 }
 fn contested(sim: &mut Simulation) -> InventoryId {
     let state = sim.canonical_state();
-    let source = state
-        .state
-        .inventories
-        .values()
+    let source = game_cargo::inventories(state.components)
+        .map(|(_, inventory)| inventory)
         .find(|i| matches!(i.location, InventoryLocation::Area(_)))
         .unwrap()
         .id;
@@ -93,12 +91,15 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
     let source = contested(&mut sim);
     sim.advance(MINUTE).unwrap();
     let state = sim.canonical_state();
-    assert_eq!(state.state.inventories[&source].quantity, Quantity(0));
     assert_eq!(
-        state
-            .state
-            .inventories
-            .values()
+        game_cargo::inventory(state.components, source)
+            .expect("stock exists")
+            .quantity,
+        Quantity(0)
+    );
+    assert_eq!(
+        game_cargo::inventories(state.components)
+            .map(|(_, inventory)| inventory)
             .map(|i| i.quantity.0)
             .sum::<u64>(),
         1_000
@@ -106,7 +107,10 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
     assert_eq!(
         state.state.people[3..5]
             .iter()
-            .filter(|p| state.state.inventories[&p.inventory].quantity == Quantity(1_000))
+            .filter(|p| game_cargo::inventory(state.components, p.inventory)
+                .expect("stock exists")
+                .quantity
+                == Quantity(1_000))
             .count(),
         1
     );
@@ -119,7 +123,9 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
         1
     );
     assert_eq!(
-        state.state.inventories[&source].last_granted,
+        game_cargo::inventory(state.components, source)
+            .expect("stock exists")
+            .last_granted,
         Some(state.state.people[3].id)
     );
 }

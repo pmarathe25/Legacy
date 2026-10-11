@@ -207,7 +207,10 @@ impl Simulation {
             .iter()
             .copied()
             .find(|id| {
-                self.host.state.inventories[id].good == Good::Tool
+                game_cargo::inventory(&self.host.storage, *(id))
+                    .expect("inventory exists")
+                    .good
+                    == Good::Tool
                     && self.tool_available_for_planning(actor, *id, resources)
             })
     }
@@ -373,7 +376,14 @@ impl Simulation {
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
             .flatten()
-            .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+            .map(|id| {
+                u128::from(
+                    game_cargo::inventory(&self.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0,
+                )
+            })
             .sum::<u128>();
         let plan =
             self.host.state.ecology.as_ref().unwrap().prepare_gather(
@@ -407,9 +417,18 @@ impl Simulation {
             .into_iter()
             .flatten()
             .find(|id| {
-                self.host.state.inventories[id].good == good
-                    && self.host.state.inventories[id].capacity.0
-                        - self.host.state.inventories[id].quantity.0
+                game_cargo::inventory(&self.host.storage, **id)
+                    .expect("inventory exists")
+                    .good
+                    == good
+                    && game_cargo::inventory(&self.host.storage, **id)
+                        .expect("inventory exists")
+                        .capacity
+                        .0
+                        - game_cargo::inventory(&self.host.storage, **id)
+                            .expect("inventory exists")
+                            .quantity
+                            .0
                         >= quantity.0
             })
             .copied();
@@ -518,10 +537,7 @@ impl Simulation {
                 .resource_mut(&mut self.host.storage, plan.resource)
                 .unwrap()
                 .remaining = plan.remaining;
-            self.host
-                .state
-                .inventories
-                .get_mut(&plan.destination)
+            game_cargo::inventory_mut(&mut self.host.storage, plan.destination)
                 .unwrap()
                 .quantity
                 .0 += plan.quantity.0;
@@ -708,7 +724,14 @@ impl Simulation {
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
             .flatten()
-            .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+            .map(|id| {
+                u128::from(
+                    game_cargo::inventory(&self.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0,
+                )
+            })
             .sum::<u128>();
         let facts = game_ecology::GatherFacts {
             now: self.host.clock().time,
@@ -969,12 +992,8 @@ impl Simulation {
             let source = world
                 .resource(&self.host.storage, job.resource)
                 .ok_or_else(bad)?;
-            let destination = self
-                .host
-                .state
-                .inventories
-                .get(&job.destination)
-                .ok_or_else(bad)?;
+            let destination =
+                game_cargo::inventory(&self.host.storage, job.destination).ok_or_else(bad)?;
             if !people.contains(actor)
                 || job.quantity.0 == 0
                 || job.completes <= self.host.clock().time
@@ -982,7 +1001,7 @@ impl Simulation {
                 || destination.location != InventoryLocation::Carried(*actor)
                 || destination.capacity.0 - destination.quantity.0 < job.quantity.0
                 || job.tool.is_some_and(|id| {
-                    self.host.state.inventories.get(&id).is_none_or(|tool| {
+                    game_cargo::inventory(&self.host.storage, id).is_none_or(|tool| {
                         tool.good != Good::Tool
                             || tool.location != InventoryLocation::Carried(*actor)
                     })
@@ -1138,7 +1157,9 @@ mod tests {
             .unwrap()
             .destination;
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(0)
         );
         sim.advance(SimDuration(59_999)).unwrap();
@@ -1155,7 +1176,9 @@ mod tests {
         );
         sim.advance(SimDuration(1)).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1_000)
         );
         assert_eq!(
@@ -1205,7 +1228,7 @@ mod tests {
         .unwrap();
         split.advance(SimDuration(42_999)).unwrap();
         whole.advance(MINUTE).unwrap();
-        assert_eq!(whole.host.state, split.host.state);
+        assert_eq!(whole.canonical_state(), split.canonical_state());
         let state = split.canonical_snapshot().unwrap();
         for _ in 0..10 {
             let _ = split.ecology_view(actor);
@@ -1237,7 +1260,9 @@ mod tests {
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(0)
         );
         assert_eq!(

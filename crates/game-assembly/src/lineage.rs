@@ -1259,11 +1259,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     plan.delivery.destination != game_logistics::Destination::Contact(target)
                 })
                 || plan.delivery.last_receipt >= state.next_event
-                || plan
-                    .delivery
-                    .requirement
-                    .source
-                    .is_some_and(|source| !state.state.inventories.contains_key(&source))
+                || plan.delivery.requirement.source.is_some_and(|source| {
+                    !game_cargo::inventory(state.components, source).is_some()
+                })
                 || plan.observed_at > state.time
         }) {
             return Err(fail());
@@ -1275,10 +1273,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 || requested.last_event >= state.next_event
                 || delivery.last_receipt >= state.next_event
                 || delivery.requirement.source.is_none_or(|source| {
-                    !state
-                        .state
-                        .inventories
-                        .get(&source)
+                    !game_cargo::inventory(state.components, source)
                         .is_some_and(|stock| stock.good == delivery.requirement.good)
                 })
                 || world.current().is_none_or(|target| {
@@ -1286,11 +1281,13 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 })
                 || requested.cargo.iter().any(|(inventory, quantity)| {
                     *quantity == 0
-                        || !state.state.inventories.get(inventory).is_some_and(|stock| {
-                            stock.good == delivery.requirement.good
-                                && stock.location == InventoryLocation::Carried(*guardian_id)
-                                && *quantity <= stock.quantity.0
-                        })
+                        || !game_cargo::inventory(state.components, *(inventory)).is_some_and(
+                            |stock| {
+                                stock.good == delivery.requirement.good
+                                    && stock.location == InventoryLocation::Carried(*guardian_id)
+                                    && *quantity <= stock.quantity.0
+                            },
+                        )
                 })
             {
                 return Err(fail());
@@ -1329,7 +1326,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     GuardianRequest::Rest => false,
                     GuardianRequest::Supply {
                         source, quantity, ..
-                    } => !state.state.inventories.contains_key(&source) || quantity.0 == 0,
+                    } => {
+                        !game_cargo::inventory(state.components, source).is_some()
+                            || quantity.0 == 0
+                    }
                 })
         {
             return Err(fail());

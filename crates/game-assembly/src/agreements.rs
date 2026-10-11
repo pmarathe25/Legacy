@@ -102,7 +102,13 @@ fn output_source(state: &CanonicalState, site: SiteId, good: Good) -> Option<Inv
                 .physical
                 .as_ref()
                 .and_then(|_| game_workshop::site(state.components, site))
-                .and_then(|s| (state.state.inventories[&s.output].good == good).then_some(s.output))
+                .and_then(|s| {
+                    (game_cargo::inventory(state.components, s.output)
+                        .expect("inventory exists")
+                        .good
+                        == good)
+                        .then_some(s.output)
+                })
         })
 }
 fn output_share_valid(state: &CanonicalState, term: &AgreementTerm) -> bool {
@@ -124,11 +130,7 @@ fn output_share_valid(state: &CanonicalState, term: &AgreementTerm) -> bool {
         && numerator <= denominator
         && pay_by >= ends_at
         && output_source(state, *site, *good).is_some_and(|source| source != *destination)
-        && state
-            .state
-            .inventories
-            .get(destination)
-            .is_some_and(|i| i.good == *good)
+        && game_cargo::inventory(state.components, *(destination)).is_some_and(|i| i.good == *good)
 }
 
 fn refresh_known_status(view: &mut AgreementView) {
@@ -206,7 +208,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         || w.last_event >= s.next_event
         || w.last_observation_event >= s.next_event
         || w.custodians.iter().any(|(inventory, actor)| {
-            !s.state.inventories.contains_key(inventory) || !people.contains(actor)
+            !game_cargo::inventory(s.components, *(inventory)).is_some() || !people.contains(actor)
         })
         || w.next_search.keys().any(|id| !people.contains(id))
     {
@@ -223,11 +225,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 destination,
                 quantity,
                 ..
-            } => s
-                .state
-                .inventories
-                .get(source)
-                .zip(s.state.inventories.get(destination))
+            } => game_cargo::inventory(s.components, *(source))
+                .zip(game_cargo::inventory(s.components, *(destination)))
                 .is_some_and(|(a, b)| {
                     a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
                 }),
@@ -245,9 +244,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 grantor, inventory, ..
             } => {
                 w.custodians.get(inventory) == Some(grantor)
-                    || s.state
-                        .inventories
-                        .get(inventory)
+                    || game_cargo::inventory(s.components, *(inventory))
                         .is_some_and(|i| i.location == InventoryLocation::Carried(*grantor))
             }
         }
@@ -364,10 +361,13 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 } => (debtor, output_source(s, site, good).ok_or_else(fail)?),
                 _ => return Err(fail()),
             };
-            let stock = s.state.inventories.get(inventory).ok_or_else(fail)?;
+            let stock = game_cargo::inventory(s.components, *(inventory)).ok_or_else(fail)?;
             if *quantity == 0
                 || stock.location != InventoryLocation::Carried(debtor)
-                || stock.good != s.state.inventories[&source].good
+                || stock.good
+                    != game_cargo::inventory(s.components, source)
+                        .expect("inventory exists")
+                        .good
             {
                 return Err(fail());
             }
@@ -379,10 +379,13 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
-    if cargo_totals
-        .iter()
-        .any(|(id, quantity)| *quantity > s.state.inventories[id].quantity.0)
-    {
+    if cargo_totals.iter().any(|(id, quantity)| {
+        *quantity
+            > game_cargo::inventory(s.components, *(id))
+                .expect("inventory exists")
+                .quantity
+                .0
+    }) {
         return Err(fail());
     }
     for (id, m) in &w.amendments {
@@ -464,8 +467,8 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
                 ..
             } => {
                 source != destination
-                    && state.state.inventories.contains_key(source)
-                    && state.state.inventories.contains_key(destination)
+                    && game_cargo::inventory(state.components, *(source)).is_some()
+                    && game_cargo::inventory(state.components, *(destination)).is_some()
             }
             AgreementTerm::Labor { site, .. } => site_exists(state, *site),
             AgreementTerm::SiteAccess { site, .. } => site_exists(state, *site),
@@ -476,7 +479,7 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
                 .as_ref()
                 .is_some_and(|w| w.projects.contains_key(project)),
             AgreementTerm::Access { inventory, .. } => {
-                state.state.inventories.contains_key(inventory)
+                game_cargo::inventory(state.components, *(inventory)).is_some()
             }
         }
     };
@@ -515,10 +518,9 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
                     .term
                     .deadline()
                     .is_some_and(|at| at <= obligation.observed_at)
-            || obligation
-                .cargo
-                .iter()
-                .any(|(id, qty)| !state.state.inventories.contains_key(id) || *qty == 0)
+            || obligation.cargo.iter().any(|(id, qty)| {
+                !game_cargo::inventory(state.components, *(id)).is_some() || *qty == 0
+            })
             || obligation
                 .cargo
                 .values()
@@ -593,16 +595,18 @@ impl Simulation {
             })
             .unwrap()
             .id;
-        let custodians = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let custodians = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .filter(|i| i.location == InventoryLocation::Area(local))
             .map(|i| (i.id, if i.good == Good::Food { ruler } else { citizen }))
             .collect();
         // This fixture authors one controlled store; sharing is negotiated below.
-        for inventory in sim.host.state.inventories.values_mut() {
+        for __stock_id in game_cargo::inventories(&sim.host.storage)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+        {
+            let inventory = game_cargo::inventory_mut(&mut sim.host.storage, __stock_id)
+                .expect("inventory exists");
             if inventory.location == InventoryLocation::Area(local) && inventory.good == Good::Food
             {
                 inventory.access = BTreeSet::from([ruler]);
@@ -1235,7 +1239,7 @@ impl Simulation {
         let Some(w) = &self.host.state.agreements else {
             return false;
         };
-        let Some(inventory) = self.host.state.inventories.get(&destination) else {
+        let Some(inventory) = game_cargo::inventory(&self.host.storage, destination) else {
             return false;
         };
         let Ok(area) = self.agreement_actor_area(actor) else {
@@ -1626,7 +1630,9 @@ impl Simulation {
                 } => receipts.push(game_agreements::ClosingReceipt::Production {
                     actor: Some(actor),
                     site,
-                    good: self.host.state.inventories[&output].good,
+                    good: game_cargo::inventory(&self.host.storage, output)
+                        .expect("inventory exists")
+                        .good,
                 }),
                 EventKind::CropHarvested { actor, field, .. } => {
                     for good in [Good::Food, Good::Seed] {
@@ -1783,7 +1789,7 @@ impl Simulation {
                 _ => Vec::new(),
             };
             for id in inventories {
-                if let Some(stock) = self.host.state.inventories.get(&id) {
+                if let Some(stock) = game_cargo::inventory(&self.host.storage, id) {
                     context.inventories.insert(
                         id,
                         InventoryTerms {
@@ -1813,23 +1819,17 @@ impl Simulation {
                 AgreementTerm::Access {
                     grantor, inventory, ..
                 } => {
-                    if self
-                        .host
-                        .state
-                        .inventories
-                        .get(&inventory)
-                        .is_some_and(|i| {
-                            self.host
-                                .state
-                                .agreements
-                                .as_ref()
-                                .unwrap()
-                                .custodians
-                                .get(&inventory)
-                                == Some(&grantor)
-                                || i.location == InventoryLocation::Carried(grantor)
-                        })
-                    {
+                    if game_cargo::inventory(&self.host.storage, inventory).is_some_and(|i| {
+                        self.host
+                            .state
+                            .agreements
+                            .as_ref()
+                            .unwrap()
+                            .custodians
+                            .get(&inventory)
+                            == Some(&grantor)
+                            || i.location == InventoryLocation::Carried(grantor)
+                    }) {
                         context
                             .grants
                             .insert((PermissionAsset::Inventory(inventory), grantor));
@@ -1856,11 +1856,7 @@ impl Simulation {
         use game_agreements::PermissionAsset;
         let access = match effect.asset {
             PermissionAsset::Inventory(inventory) => Some(
-                &mut self
-                    .host
-                    .state
-                    .inventories
-                    .get_mut(&inventory)
+                &mut game_cargo::inventory_mut(&mut self.host.storage, inventory)
                     .unwrap()
                     .access,
             ),
@@ -2045,7 +2041,9 @@ impl Simulation {
                 } => vec![(
                     actor,
                     site,
-                    self.host.state.inventories[&output].good,
+                    game_cargo::inventory(&self.host.storage, output)
+                        .expect("inventory exists")
+                        .good,
                     quantity,
                 )],
                 EventKind::CropHarvested {
@@ -2089,7 +2087,9 @@ impl Simulation {
                     destination,
                     quantity,
                 } => {
-                    let carried_to_actor = self.host.state.inventories[&destination].location
+                    let carried_to_actor = game_cargo::inventory(&self.host.storage, destination)
+                        .expect("inventory exists")
+                        .location
                         == InventoryLocation::Carried(actor);
                     let mut unallocated = quantity.0;
                     let world = self.host.state.agreements.as_mut().unwrap();
@@ -2172,7 +2172,10 @@ impl Simulation {
             }
         }
         for (inventory, attributed) in totals {
-            let physical = self.host.state.inventories[&inventory].quantity.0;
+            let physical = game_cargo::inventory(&self.host.storage, inventory)
+                .expect("inventory exists")
+                .quantity
+                .0;
             if attributed > physical {
                 self.lose_agreement_cargo(inventory, attributed - physical);
             }

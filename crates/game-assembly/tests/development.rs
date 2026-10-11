@@ -69,10 +69,8 @@ fn first_child(sim: &Simulation) -> PersonId {
         .id
 }
 fn food(sim: &Simulation) -> InventoryId {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
         .unwrap()
         .id
@@ -135,11 +133,14 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
     );
     let inventory = sim.canonical_state().state.people.last().unwrap().inventory;
     assert_eq!(
-        sim.canonical_state().state.inventories[&inventory].quantity,
+        game_cargo::inventory(sim.canonical_state().components, inventory)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert!(
-        !sim.canonical_state().state.inventories[&inventory]
+        !game_cargo::inventory(sim.canonical_state().components, inventory)
+            .expect("stock exists")
             .access
             .contains(&life.parents[0])
     );
@@ -271,7 +272,10 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
     let child = first_child(&sim);
     let caregiver = sim.canonical_state().state.people[5].id;
     let source = food(&sim);
-    let before = sim.canonical_state().state.inventories[&source].quantity.0;
+    let before = game_cargo::inventory(sim.canonical_state().components, source)
+        .expect("stock exists")
+        .quantity
+        .0;
     sim.debug_actor_command(caregiver, Command::Care { child, source })
         .unwrap();
     let second = sim.canonical_state().state.people[6].id;
@@ -280,7 +284,13 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
         Err(Error::Unavailable)
     );
     sim.advance(MINUTE).unwrap();
-    assert!(sim.canonical_state().state.inventories[&source].quantity.0 <= before - 1_000);
+    assert!(
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity
+            .0
+            <= before - 1_000
+    );
     let life = &game_lifecycle::life(sim.canonical_state().components, child).expect("life exists");
     assert!(life.caregivers.contains(&caregiver));
     assert!(!life.parents.contains(&caregiver));
@@ -349,7 +359,9 @@ fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
         .unwrap();
         sim.advance(SimDuration(duration.0 / 2)).unwrap();
         assert_eq!(
-            sim.canonical_state().state.inventories[&source].quantity,
+            game_cargo::inventory(sim.canonical_state().components, source)
+                .expect("stock exists")
+                .quantity,
             dose
         );
         let mut loaded = Simulation::load(
@@ -367,7 +379,9 @@ fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
             .unwrap();
         same(&sim, &loaded);
         assert_eq!(
-            sim.canonical_state().state.inventories[&source].quantity,
+            game_cargo::inventory(sim.canonical_state().components, source)
+                .expect("stock exists")
+                .quantity,
             Quantity(0)
         );
         assert_eq!(
@@ -452,10 +466,11 @@ fn mortals_age_and_die_without_deleting_goods_while_guardians_remain() {
         );
     }
     assert!(
-        sim.canonical_state()
-            .state
-            .inventories
-            .contains_key(&sim.canonical_state().state.people[0].inventory)
+        game_cargo::inventory(
+            sim.canonical_state().components,
+            sim.canonical_state().state.people[0].inventory,
+        )
+        .is_some()
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
 }
@@ -513,11 +528,8 @@ fn saving_mid_conception_and_gestation_preserves_continuation_and_new_ids() {
         .iter()
         .map(|p| p.id.0)
         .chain(
-            original
-                .canonical_state()
-                .state
-                .inventories
-                .keys()
+            game_cargo::inventories(original.canonical_state().components)
+                .map(|(id, _)| id)
                 .map(|id| id.0),
         )
         .chain(

@@ -367,7 +367,9 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
         serde_json::json!(false);
     let mut restricted =
         Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
-    let stocks = restricted.canonical_state().state.inventories.clone();
+    let stocks = game_cargo::inventories(restricted.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     send(
         &mut restricted,
         Command::RequestGuardian {
@@ -375,7 +377,12 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
             request: GuardianRequest::Work { site },
         },
     );
-    assert_eq!(restricted.canonical_state().state.inventories, stocks);
+    assert_eq!(
+        game_cargo::inventories(restricted.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        stocks
+    );
     assert!(
         matches!(restricted.canonical_state().events.last().unwrap().event, EventKind::GuardianRefused { guardian: person, .. } if person == guardian)
     );
@@ -734,11 +741,8 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
             .current(),
         None
     );
-    let possessions: Vec<_> = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let possessions: Vec<_> = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .filter(|i| i.location == InventoryLocation::Carried(predecessor))
         .cloned()
         .collect();
@@ -761,7 +765,8 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
     assert_eq!(world.incarnations[0].died_at, Some(SimTime(0)));
     assert_eq!(world.incarnations[1].bound_at, SimTime(300_000));
     for original in possessions {
-        let now = &sim.canonical_state().state.inventories[&original.id];
+        let now = game_cargo::inventory(sim.canonical_state().components, original.id)
+            .expect("stock exists");
         assert_eq!(now, &original);
         assert!(!now.access.contains(&child));
     }
@@ -773,7 +778,9 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
         .find(|p| p.id == child)
         .unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&newborn.inventory].quantity,
+        game_cargo::inventory(sim.canonical_state().components, newborn.inventory)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert!(

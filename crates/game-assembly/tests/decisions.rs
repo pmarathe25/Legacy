@@ -135,8 +135,12 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
         game_workshop::sites(without_learning.canonical_state().components).collect::<Vec<_>>()
     );
     assert_eq!(
-        reference.canonical_state().state.inventories,
-        without_learning.canonical_state().state.inventories
+        game_cargo::inventories(reference.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        game_cargo::inventories(without_learning.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
     );
     // Let both copies recover and eat under identical physical conditions before
     // comparing the learned preference at the next nonurgent decision.
@@ -192,7 +196,9 @@ fn distant_facts_require_a_timed_report_and_keep_their_original_age() {
     sim.debug_spoil_at(remote, SimTime(30_000)).unwrap();
     sim.advance(SimDuration(30_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&remote].quantity,
+        game_cargo::inventory(sim.canonical_state().components, remote)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert!(
@@ -279,11 +285,8 @@ fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() 
     peaceful(&mut sim);
     let ruler = sim.canonical_state().state.ruler;
     let receiver = sim.canonical_state().state.people[4].id;
-    let source = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let source = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
         .unwrap()
         .id;
@@ -331,16 +334,13 @@ fn remote_supply(spoils: bool, workers: usize) -> (Simulation, PersonId, Invento
     let mut sim = sim(workers);
     peaceful(&mut sim);
     let actor = sim.canonical_state().state.people[3].id;
-    let village_food = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let village_food = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
         .unwrap()
         .id;
     let mut data: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    data["state"]["state"]["inventories"][village_food.0.to_string()]["quantity"] = 0.into();
+    support::component_id(&mut data, "cargo/inventory", village_food.0)["quantity"] = 0.into();
     let mut sim = Simulation::load(
         &serde_json::to_vec(&data).unwrap(),
         Execution {
@@ -411,7 +411,9 @@ fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplie
     );
     assert_eq!(sim.canonical_state().state.people[index].work_units, 0);
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.event, EventKind::Ate { actor: id, source: inventory, .. } if id == actor && inventory == source)));
@@ -422,7 +424,9 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
     let (mut sim, actor, source) = remote_supply(true, 1);
     sim.advance(SimDuration(420_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(

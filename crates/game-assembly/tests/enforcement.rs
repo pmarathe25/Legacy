@@ -35,11 +35,8 @@ fn theft(sim: &mut Simulation) -> IncidentId {
     let target = actor(sim, 5);
     travel(sim, filer, AreaId(3));
     travel(sim, target, AreaId(3));
-    let source = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let source = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| {
             i.good == Good::Food
                 && i.location == InventoryLocation::Area(AreaId(3))
@@ -241,7 +238,9 @@ fn an_officer_can_refuse_a_funded_order_without_physical_capture_or_spending() {
         })
         .unwrap();
     let source = proposal.supplies[0].source;
-    let quantity = sim.canonical_state().state.inventories[&source].quantity;
+    let quantity = game_cargo::inventory(sim.canonical_state().components, source)
+        .expect("stock exists")
+        .quantity;
     sim.debug_enforcement_action(judge, EnforcementAction::Dispatch { case, proposal })
         .unwrap();
     sim.advance(MINUTE).unwrap();
@@ -275,7 +274,9 @@ fn an_officer_can_refuse_a_funded_order_without_physical_capture_or_spending() {
             .is_empty()
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         quantity
     );
 }
@@ -365,7 +366,9 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
         .keys()
         .last()
         .unwrap();
-    let assets = sim.canonical_state().state.inventories[&source].quantity;
+    let assets = game_cargo::inventory(sim.canonical_state().components, source)
+        .expect("stock exists")
+        .quantity;
     decide(
         &mut sim,
         case,
@@ -388,7 +391,9 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
         filer
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         assets
     );
     assert_eq!(
@@ -472,10 +477,17 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     let binding_source = proposal
         .supplies
         .iter()
-        .find(|s| sim.canonical_state().state.inventories[&s.source].good == Good::Binding)
+        .find(|s| {
+            game_cargo::inventory(sim.canonical_state().components, s.source)
+                .expect("stock exists")
+                .good
+                == Good::Binding
+        })
         .unwrap()
         .source;
-    let original_bindings = sim.canonical_state().state.inventories[&binding_source].quantity;
+    let original_bindings = game_cargo::inventory(sim.canonical_state().components, binding_source)
+        .expect("stock exists")
+        .quantity;
     let payment = proposal.compensation[&officer][0].clone();
     sim.debug_enforcement_action(judge, EnforcementAction::Dispatch { case, proposal })
         .unwrap();
@@ -629,13 +641,16 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     assert_eq!(captive.captor, officer);
     assert_eq!(captive.area, AreaId(3));
     assert_eq!(
-        sim.canonical_state().state.inventories[&binding_source]
+        game_cargo::inventory(sim.canonical_state().components, binding_source)
+            .expect("stock exists")
             .quantity
             .0,
         original_bindings.0 - 1_000
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&captive.binding].quantity,
+        game_cargo::inventory(sim.canonical_state().components, captive.binding)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000)
     );
     assert!(sim.canonical_state().events.iter().any(

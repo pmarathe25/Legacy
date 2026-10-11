@@ -423,7 +423,7 @@ mod tests {
         for duration in [1, 14_999, 20_000, 10_000] {
             b.advance(SimDuration(duration)).unwrap();
         }
-        assert_eq!(a.host.state, b.host.state);
+        assert_eq!(a.canonical_state(), b.canonical_state());
         assert_eq!(
             a.host
                 .state
@@ -671,11 +671,8 @@ mod tests {
             .find(|person| person.role == Role::Citizen)
             .unwrap()
             .id;
-        let stock = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let stock = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.location == InventoryLocation::Area(AreaId(1)) && stock.good == Good::Food
             })
@@ -715,7 +712,12 @@ mod tests {
         );
         sim.debug_agreement_action(citizen, AgreementAction::Accept { agreement })
             .unwrap();
-        assert!(sim.host.state.inventories[&stock].access.contains(&citizen));
+        assert!(
+            game_cargo::inventory(&sim.host.storage, stock)
+                .expect("inventory exists")
+                .access
+                .contains(&citizen)
+        );
         assert_eq!(
             sim.host.state.skills.as_ref().unwrap().practice(
                 &sim.host.storage,

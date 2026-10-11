@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 mod storage;
 pub use storage::{
     insert_inventory, inventories, inventory, inventory_mut, register_components, remove_inventory,
+    validate_storage,
 };
 #[cfg(test)]
 mod storage_tests;
@@ -24,6 +25,7 @@ pub enum InventoryLocation {
     Carried(PersonId),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Inventory {
     pub id: InventoryId,
     pub location: InventoryLocation,

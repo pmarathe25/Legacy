@@ -212,26 +212,13 @@ impl Simulation {
         // The reports predate control; newborns acquire their own knowledge later.
         let reporter = self.host.state.people[3].id;
         for person in &self.host.state.people {
-            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.host.storage,
-                person.id,
-            )
-            .unwrap();
-            mind.plan = None;
-            mind.retry_after = owner_now;
-            for stock in self
-                .host
-                .state
-                .inventories
-                .values()
-                .filter(|stock| matches!(stock.location, InventoryLocation::Area(_)))
-            {
-                let InventoryLocation::Area(area) = stock.location else {
-                    unreachable!()
-                };
-                mind.knowledge.insert(
-                    stock.id,
-                    StockKnowledge {
+            let known: Vec<_> = game_cargo::inventories(&self.host.storage)
+                .map(|(_, row)| row)
+                .filter_map(|stock| {
+                    let InventoryLocation::Area(area) = stock.location else {
+                        return None;
+                    };
+                    Some(StockKnowledge {
                         inventory: stock.id,
                         area,
                         good: stock.good,
@@ -240,8 +227,18 @@ impl Simulation {
                         observed_at: owner_now,
                         learned_at: owner_now,
                         source: KnowledgeSource::Reported(reporter),
-                    },
-                );
+                    })
+                })
+                .collect();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.host.storage,
+                person.id,
+            )
+            .unwrap();
+            mind.plan = None;
+            mind.retry_after = owner_now;
+            for fact in known {
+                mind.knowledge.insert(fact.inventory, fact);
             }
         }
         let parents = [self.host.state.people[3].id, self.host.state.people[4].id];
@@ -269,10 +266,8 @@ impl Simulation {
         for id in fields {
             let field = world.field_mut(&mut self.host.storage, id).unwrap();
             field.access = residents.clone();
-            self.host
-                .state
-                .inventories
-                .get_mut(&field.tool)
+            let tool = field.tool;
+            game_cargo::inventory_mut(&mut self.host.storage, tool)
                 .unwrap()
                 .access = residents.clone();
         }
@@ -380,11 +375,8 @@ impl Simulation {
             encounters: BTreeMap::new(),
             captivity: BTreeMap::new(),
         });
-        let custodians = self
-            .host
-            .state
-            .inventories
-            .values()
+        let custodians = game_cargo::inventories(&self.host.storage)
+            .map(|(_, row)| row)
             .map(|stock| {
                 (
                     stock.id,
@@ -427,11 +419,8 @@ impl Simulation {
                     )
                 })
                 .collect(),
-            portions: self
-                .host
-                .state
-                .inventories
-                .values()
+            portions: game_cargo::inventories(&self.host.storage)
+                .map(|(_, row)| row)
                 .map(|stock| {
                     (
                         stock.id,
@@ -507,27 +496,23 @@ impl Simulation {
         let area = self.host.state.areas[0].id;
         let ruler = self.host.state.ruler;
         let residents: BTreeSet<_> = self.host.state.people.iter().map(|p| p.id).collect();
-        let timber = self
-            .host
-            .state
-            .inventories
-            .values()
+        let timber = game_cargo::inventories(&self.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Timber && stock.location == InventoryLocation::Area(area)
             })
             .unwrap()
             .id;
-        let tool = self
-            .host
-            .state
-            .inventories
-            .values()
+        let tool = game_cargo::inventories(&self.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Tool && stock.location == InventoryLocation::Area(area)
             })
             .unwrap()
             .id;
-        self.host.state.inventories.get_mut(&tool).unwrap().quantity = Quantity(3_000);
+        game_cargo::inventory_mut(&mut self.host.storage, tool)
+            .unwrap()
+            .quantity = Quantity(3_000);
         self.host
             .state
             .property
@@ -671,10 +656,7 @@ impl Simulation {
                 ..self.host.clock()
             });
             self.ensure_event_capacity(18)?;
-            self.host
-                .state
-                .inventories
-                .get_mut(&materials)
+            game_cargo::inventory_mut(&mut self.host.storage, materials)
                 .unwrap()
                 .quantity = Quantity(0);
             self.emit(EventKind::Consumed {
@@ -694,10 +676,7 @@ impl Simulation {
             });
             for _ in 0..5 {
                 self.host.clock().time.0 += rules.recipe_time.0;
-                self.host
-                    .state
-                    .inventories
-                    .get_mut(&timber)
+                game_cargo::inventory_mut(&mut self.host.storage, timber)
                     .unwrap()
                     .quantity
                     .0 -= rules.recipe_timber.0;
@@ -711,10 +690,7 @@ impl Simulation {
                     site,
                     quantity: rules.recipe_timber,
                 });
-                self.host
-                    .state
-                    .inventories
-                    .get_mut(&output)
+                game_cargo::inventory_mut(&mut self.host.storage, output)
                     .unwrap()
                     .quantity
                     .0 += rules.recipe_tools.0;
@@ -964,17 +940,16 @@ impl Simulation {
         let ruler = self.host.state.ruler;
         let steward = self.host.state.people[4].id;
         let village = self.host.state.areas[0].id;
-        let food = self
-            .host
-            .state
-            .inventories
-            .values()
+        let food = game_cargo::inventories(&self.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Food && stock.location == InventoryLocation::Area(village)
             })
             .unwrap()
             .id;
-        self.host.state.inventories.get_mut(&food).unwrap().access = BTreeSet::from([ruler]);
+        game_cargo::inventory_mut(&mut self.host.storage, food)
+            .unwrap()
+            .access = BTreeSet::from([ruler]);
         let fund = self.add_inventory(
             Good::Food,
             InventoryLocation::Area(village),
@@ -1401,11 +1376,8 @@ impl Simulation {
             .collect();
         // Residents remember this maintained source's history; later arrivals
         // and newborns still learn water safety through observation or reports.
-        let potable: Vec<_> = self
-            .host
-            .state
-            .inventories
-            .values()
+        let potable: Vec<_> = game_cargo::inventories(&self.host.storage)
+            .map(|(_, row)| row)
             .filter(|stock| stock.good == Good::Water && stock.quantity.0 > 0)
             .map(|stock| stock.id)
             .collect();
@@ -1583,7 +1555,11 @@ mod tests {
                 .filter_map(|event| match event.event {
                     EventKind::Consumed {
                         source, quantity, ..
-                    } if sim.host.state.inventories[&source].good == Good::Timber => {
+                    } if game_cargo::inventory(&sim.host.storage, source)
+                        .expect("inventory exists")
+                        .good
+                        == Good::Timber =>
+                    {
                         Some(quantity.0)
                     }
                     _ => None,
@@ -1598,11 +1574,8 @@ mod tests {
             );
             let healer = sim.host.state.people[6].id;
             assert!(sim.own_skill_level(healer, Skill::Medicine) > 0);
-            let water = sim
-                .host
-                .state
-                .inventories
-                .values()
+            let water = game_cargo::inventories(&sim.host.storage)
+                .map(|(_, row)| row)
                 .find(|stock| stock.good == Good::Water && stock.quantity.0 > 0)
                 .unwrap()
                 .id;
@@ -1613,10 +1586,8 @@ mod tests {
                     .purified
             );
             assert!(
-                sim.host
-                    .state
-                    .inventories
-                    .values()
+                game_cargo::inventories(&sim.host.storage)
+                    .map(|(_, row)| row)
                     .any(|stock| stock.good == Good::Herb && stock.quantity.0 >= 20_000)
             );
             let ruler = sim.host.state.ruler;
@@ -1808,7 +1779,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a.host.state.scenario.id, choose(11));
-        assert_eq!(a.host.state, b.host.state);
+        assert_eq!(a.canonical_state(), b.canonical_state());
         assert_eq!(
             a.host.state.environment.as_ref().unwrap().climate,
             config.environment.climate

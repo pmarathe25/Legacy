@@ -68,11 +68,8 @@ impl Simulation {
             version: 1,
             debug_fixture: true,
         };
-        let custodians = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let custodians = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .map(|stock| {
                 (
                     stock.id,
@@ -169,7 +166,7 @@ impl Simulation {
                     ..
                 } => {
                     for id in [source, destination] {
-                        if let Some(stock) = self.host.state.inventories.get(id) {
+                        if let Some(stock) = game_cargo::inventory(&self.host.storage, *(id)) {
                             facts.terms.inventories.insert(
                                 *id,
                                 game_agreements::InventoryTerms {
@@ -187,7 +184,7 @@ impl Simulation {
             .filter(|id| self.host.state.areas.iter().any(|a| a.id == *id))
             .collect();
         for supply in supplies {
-            if let Some(stock) = self.host.state.inventories.get(&supply.source) {
+            if let Some(stock) = game_cargo::inventory(&self.host.storage, supply.source) {
                 facts.terms.inventories.insert(
                     supply.source,
                     game_agreements::InventoryTerms {
@@ -831,7 +828,7 @@ impl Simulation {
             return;
         }
         if body.vitals.hunger >= rules.meal_relief {
-            if let Some(food)=mind.knowledge.values().filter(|k|k.good==Good::Food&&k.accessible&&k.quantity>=rules.meal_size&&k.area==area).min_by_key(|k|(!matches!(self.host.state.inventories[&k.inventory].location,InventoryLocation::Carried(carrier)if carrier==actor),k.inventory)){let source=food.inventory;let _=self.debug_actor_command(actor,Command::Eat {source});return;}
+            if let Some(food)=mind.knowledge.values().filter(|k|k.good==Good::Food&&k.accessible&&k.quantity>=rules.meal_size&&k.area==area).min_by_key(|k|(!matches!(game_cargo::inventory(&self.host.storage, k.inventory).expect("inventory exists").location,InventoryLocation::Carried(carrier)if carrier==actor),k.inventory)){let source=food.inventory;let _=self.debug_actor_command(actor,Command::Eat {source});return;}
             return;
         }
         if body.vitals.fatigue >= rules.fatigue_limit / 2
@@ -1504,12 +1501,12 @@ impl Simulation {
                     quantity,
                 } => {
                     let destination_carrier =
-                        self.host.state.inventories.get(&destination).and_then(|i| {
-                            match i.location {
+                        game_cargo::inventory(&self.host.storage, destination).and_then(
+                            |i| match i.location {
                                 InventoryLocation::Carried(person) => Some(person),
                                 _ => None,
-                            }
-                        });
+                            },
+                        );
                     Some(MissionReceipt::Transferred {
                         actor,
                         source,
@@ -2297,10 +2294,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             quantity,
         } => {
             quantity.0 > 0
-                && s.state
-                    .inventories
-                    .get(source)
-                    .zip(s.state.inventories.get(destination))
+                && game_cargo::inventory(s.components, *(source))
+                    .zip(game_cargo::inventory(s.components, *(destination)))
                     .is_some_and(|(a, b)| {
                         a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
                     })
@@ -2359,16 +2354,13 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                                 destination,
                                 quantity,
                                 ..
-                            } => !s
-                                .state
-                                .inventories
-                                .get(source)
-                                .zip(s.state.inventories.get(destination))
+                            } => !game_cargo::inventory(s.components, *(source))
+                                .zip(game_cargo::inventory(s.components, *(destination)))
                                 .is_some_and(|(a, b)| {
                                     a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
                                 }),
                             AgreementTerm::Access { inventory, .. } => {
-                                !s.state.inventories.contains_key(inventory)
+                                !game_cargo::inventory(s.components, *(inventory)).is_some()
                             }
                             _ => true,
                         }
@@ -2379,7 +2371,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
         for supply in &m.proposal.supplies {
             if !m.members.contains_key(&supply.carrier)
-                || !s.state.inventories.contains_key(&supply.source)
+                || !game_cargo::inventory(s.components, supply.source).is_some()
                 || supply.quantity.0 == 0
                 || supply.quantity > physical.rules.carrying_capacity
             {
@@ -2431,14 +2423,16 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .filter(|supply| supply.carrier == *person && supply.source == *source)
                     .max_by_key(|supply| supply.quantity)
                     .ok_or_else(fail)?;
-                let good = s.state.inventories.get(source).ok_or_else(fail)?.good;
+                let good = game_cargo::inventory(s.components, *(source))
+                    .ok_or_else(fail)?
+                    .good;
                 let mut total = 0u128;
                 if tags.is_empty() {
                     return Err(fail());
                 }
                 for (inventory, quantity) in tags {
                     if *quantity == 0
-                        || !s.state.inventories.get(inventory).is_some_and(|stock| {
+                        || !game_cargo::inventory(s.components, *(inventory)).is_some_and(|stock| {
                             stock.good == good
                                 && stock.location == InventoryLocation::Carried(*person)
                         })
@@ -2452,15 +2446,19 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
             }
-            if attributed
-                .iter()
-                .any(|(inventory, q)| *q > u128::from(s.state.inventories[inventory].quantity.0))
-            {
+            if attributed.iter().any(|(inventory, q)| {
+                *q > u128::from(
+                    game_cargo::inventory(s.components, *(inventory))
+                        .expect("inventory exists")
+                        .quantity
+                        .0,
+                )
+            }) {
                 return Err(fail());
             }
             for (inventory, quantity) in &member.cargo {
                 if *quantity == 0
-                    || !s.state.inventories.get(inventory).is_some_and(|i| {
+                    || !game_cargo::inventory(s.components, *(inventory)).is_some_and(|i| {
                         i.location == InventoryLocation::Carried(*person)
                             && i.quantity.0 >= *quantity
                     })
@@ -2508,13 +2506,13 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     source,
                     destination,
                     ..
-                } if !s.state.inventories.contains_key(source)
-                    || !s.state.inventories.contains_key(destination) =>
+                } if !game_cargo::inventory(s.components, *(source)).is_some()
+                    || !game_cargo::inventory(s.components, *(destination)).is_some() =>
                 {
                     return Err(fail());
                 }
                 AgreementTerm::Access { inventory, .. }
-                    if !s.state.inventories.contains_key(inventory) =>
+                    if !game_cargo::inventory(s.components, *(inventory)).is_some() =>
                 {
                     return Err(fail());
                 }
@@ -2725,10 +2723,8 @@ mod tests {
             .unwrap();
     }
     fn public_food(sim: &Simulation) -> InventoryId {
-        sim.host
-            .state
-            .inventories
-            .values()
+        game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|i| i.good == Good::Food && matches!(i.location, InventoryLocation::Area(_)))
             .unwrap()
             .id
@@ -2766,16 +2762,28 @@ mod tests {
             }],
         );
         accept(&mut sim, id, leader);
-        assert_eq!(sim.host.state.inventories[&carried].quantity, Quantity(0));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, carried)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
         sim.advance(MINUTE).unwrap();
         assert!(matches!(
             *sim.host.storage.activity(leader).expect("body exists"),
             Activity::Load { .. }
         ));
-        assert_eq!(sim.host.state.inventories[&carried].quantity, Quantity(0));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, carried)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&carried].quantity,
+            game_cargo::inventory(&sim.host.storage, carried)
+                .expect("inventory exists")
+                .quantity,
             Quantity(2_000)
         );
         assert!(matches!(
@@ -2828,7 +2836,9 @@ mod tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let opening = sim.host.state.inventories[&source].quantity;
+        let opening = game_cargo::inventory(&sim.host.storage, source)
+            .expect("inventory exists")
+            .quantity;
         let forest = sim.host.state.areas[2].id;
         let id = propose(
             &mut sim,
@@ -2847,7 +2857,12 @@ mod tests {
         assert!(
             matches!(*sim.host.storage.activity(actor).expect("body exists"), Activity::Load { source: from, .. } if from == source)
         );
-        assert_eq!(sim.host.state.inventories[&source].quantity, opening);
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
+            opening
+        );
         assert!(
             sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor]
                 .supply_cargo
@@ -2855,11 +2870,15 @@ mod tests {
         );
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&source].quantity,
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
             Quantity(opening.0 - 2000)
         );
         assert_eq!(
-            sim.host.state.inventories[&unqualified].quantity,
+            game_cargo::inventory(&sim.host.storage, unqualified)
+                .expect("inventory exists")
+                .quantity,
             Quantity(2000)
         );
         let tags = &sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor]
@@ -2914,7 +2933,9 @@ mod tests {
             )
             .unwrap();
         sim.review_decisions().unwrap();
-        let opening = sim.host.state.inventories[&source].quantity;
+        let opening = game_cargo::inventory(&sim.host.storage, source)
+            .expect("inventory exists")
+            .quantity;
         let id = propose(
             &mut sim,
             actor,
@@ -2928,10 +2949,17 @@ mod tests {
         accept(&mut sim, id, actor);
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(0)
         );
-        assert_eq!(sim.host.state.inventories[&source].quantity, opening);
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
+            opening
+        );
         let mut sliced = Simulation::load(
             &sim.save().unwrap(),
             Execution {
@@ -2944,17 +2972,23 @@ mod tests {
         for elapsed in [17000, 43000, 111000, 9000] {
             sliced.advance(SimDuration(elapsed)).unwrap();
         }
-        assert_eq!(sim.host.state, sliced.host.state);
+        assert_eq!(sim.canonical_state(), sliced.canonical_state());
         assert_eq!(
-            sim.host.state.inventories[&source].quantity,
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity,
             Quantity(opening.0 - 1000)
         );
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1000)
         );
         assert_eq!(
-            sim.host.state.inventories[&carried].quantity,
+            game_cargo::inventory(&sim.host.storage, carried)
+                .expect("inventory exists")
+                .quantity,
             Quantity(2000)
         );
         assert_eq!(
@@ -3161,11 +3195,8 @@ mod tests {
         let mut sim = fixture();
         let actor = sim.host.state.ruler;
         let area = sim.host.state.areas[0].id;
-        let source = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let source = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|i| i.good == Good::Timber && i.location == InventoryLocation::Area(area))
             .unwrap()
             .id;
@@ -3178,11 +3209,8 @@ mod tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let carried = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let carried = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|i| i.good == Good::Timber && i.location == InventoryLocation::Carried(actor))
             .unwrap()
             .id;
@@ -3231,7 +3259,9 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1_000)
         );
         assert_eq!(
@@ -3400,7 +3430,7 @@ mod tests {
             b.mission_view(leader);
             b.advance(SimDuration(duration)).unwrap();
         }
-        assert_eq!(a.host.state, b.host.state);
+        assert_eq!(a.canonical_state(), b.canonical_state());
     }
     #[test]
     fn ruler_order_spends_own_action_and_companion_takes_its_own_turn() {
@@ -3594,11 +3624,8 @@ mod tests {
                 knowledge: BTreeMap::new(),
                 last_observation_event: sim.host.next_event() - 1,
             },
-            custodians: sim
-                .host
-                .state
-                .inventories
-                .values()
+            custodians: game_cargo::inventories(&sim.host.storage)
+                .map(|(_, row)| row)
                 .map(|i| {
                     (
                         i.id,
@@ -3714,14 +3741,15 @@ mod tests {
             game_ecs::StableId((sim.host.state.people[sim.person_index[&target]].id).0),
         )
         .expect("location exists") = Location::AtArea(home);
-        for stock in sim
-            .host
-            .state
-            .inventories
-            .values_mut()
-            .filter(|stock| stock.good == Good::Tool)
-        {
-            stock.access.remove(&target);
+        let tools: Vec<_> = game_cargo::inventories(&sim.host.storage)
+            .filter(|(_, stock)| stock.good == Good::Tool)
+            .map(|(id, _)| id)
+            .collect();
+        for id in tools {
+            game_cargo::inventory_mut(&mut sim.host.storage, id)
+                .unwrap()
+                .access
+                .remove(&target);
         }
         let until = SimTime(30_000);
         let id = propose(

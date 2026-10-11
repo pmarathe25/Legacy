@@ -196,8 +196,15 @@ impl Simulation {
             .iter()
             .copied()
             .find(|id| {
-                self.host.state.inventories[id].good == Good::Tool
-                    && self.host.state.inventories[id].quantity.0 >= 1_000
+                game_cargo::inventory(&self.host.storage, *(id))
+                    .expect("inventory exists")
+                    .good
+                    == Good::Tool
+                    && game_cargo::inventory(&self.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0
+                        >= 1_000
             })
     }
     fn force_binding(&self, actor: PersonId) -> Option<InventoryId> {
@@ -206,8 +213,15 @@ impl Simulation {
             .iter()
             .copied()
             .find(|id| {
-                self.host.state.inventories[id].good == Good::Binding
-                    && self.host.state.inventories[id].quantity.0 >= 1_000
+                game_cargo::inventory(&self.host.storage, *(id))
+                    .expect("inventory exists")
+                    .good
+                    == Good::Binding
+                    && game_cargo::inventory(&self.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0
+                        >= 1_000
             })
     }
     fn force_restrainable(&self, actor: PersonId, target: PersonId) -> bool {
@@ -634,9 +648,9 @@ impl Simulation {
         let binding = InventoryId(self.host.allocate_id().expect("preflight confinement ID").0);
         debug_assert_eq!(binding, receipt.binding);
         let receipt = validated.apply(
-            &mut self.host.state.inventories,
+            &mut self.host.storage,
             &mut self.host.state.combat.as_mut().unwrap().captivity,
-        );
+        )?;
         self.inventory_index
             .entry(InventoryLocation::Carried(receipt.target))
             .or_default()
@@ -675,7 +689,7 @@ impl Simulation {
         match activity {
             Activity::Escape { tool, .. } => {
                 let successful = self.force_body_ready(actor)
-                    && self.host.state.inventories.get(&tool).is_some_and(|stock| {
+                    && game_cargo::inventory(&self.host.storage, tool).is_some_and(|stock| {
                         stock.good == Good::Tool
                             && stock.location == InventoryLocation::Carried(actor)
                             && stock.quantity.0 >= 1_000
@@ -742,11 +756,7 @@ impl Simulation {
                         self.transport_same_place(actor, target),
                         Some(&attempt.location),
                     )?;
-                    let source = self
-                        .host
-                        .state
-                        .inventories
-                        .get(&binding)
+                    let source = game_cargo::inventory(&self.host.storage, binding)
                         .ok_or(Error::Unavailable)?;
                     let plan = game_conflict::prepare_confinement(
                         &self.host.state.combat.as_ref().unwrap().rules,
@@ -761,7 +771,7 @@ impl Simulation {
                         self.host.clock().time,
                     )?;
                     let validated = plan.begin(
-                        &self.host.state.inventories,
+                        &self.host.storage,
                         &self.host.state.combat.as_ref().unwrap().captivity,
                         &facts,
                     )?;
@@ -1134,14 +1144,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             || !body.vitals.alive
             || locations[actor] != attempt.location
             || locations[&attempt.target] != attempt.location
-            || state
-                .state
-                .inventories
-                .get(&attempt.binding)
-                .is_none_or(|stock| {
-                    stock.good != Good::Binding
-                        || stock.location != InventoryLocation::Carried(*actor)
-                })
+            || game_cargo::inventory(state.components, attempt.binding).is_none_or(|stock| {
+                stock.good != Good::Binding || stock.location != InventoryLocation::Carried(*actor)
+            })
             || *state.components.activity(*actor).ok_or_else(fail)?
                 != (Activity::Restrain {
                     target: attempt.target,
@@ -1172,7 +1177,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         if let Some(tool) = attempt.tool
-            && state.state.inventories.get(&tool).is_none_or(|stock| {
+            && game_cargo::inventory(state.components, tool).is_none_or(|stock| {
                 stock.good != Good::Tool
                     || stock.location != InventoryLocation::Carried(attempt.actor)
             })
@@ -1241,10 +1246,8 @@ mod tests {
         sim
     }
     fn tool(sim: &Simulation) -> InventoryId {
-        sim.host
-            .state
-            .inventories
-            .values()
+        game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Tool && stock.location == InventoryLocation::Area(AreaId(1))
             })
@@ -1274,15 +1277,23 @@ mod tests {
         assert_eq!(sim.start_restraint(captor, target), Err(Error::Unavailable));
         assert_eq!(sim.canonical_snapshot().unwrap(), before);
         let source = sim.force_binding(captor).unwrap();
-        let opening = sim.host.state.inventories[&source].quantity;
+        let opening = game_cargo::inventory(&sim.host.storage, source)
+            .expect("inventory exists")
+            .quantity;
         capture_by_yield(&mut sim, captor, target);
         let captive = &sim.host.state.combat.as_ref().unwrap().captivity[&target];
         assert_eq!(
-            sim.host.state.inventories[&source].quantity.0,
+            game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity
+                .0,
             opening.0 - 1_000
         );
         assert_eq!(
-            sim.host.state.inventories[&captive.binding].quantity.0,
+            game_cargo::inventory(&sim.host.storage, captive.binding)
+                .expect("inventory exists")
+                .quantity
+                .0,
             1_000
         );
         assert_eq!(captive.position, Point { x: 6_000, y: 8_000 });
@@ -1308,7 +1319,8 @@ mod tests {
                 .contains_key(&target)
         );
         assert_eq!(
-            sim.host.state.inventories[&sim.force_binding(captor).unwrap()]
+            game_cargo::inventory(&sim.host.storage, sim.force_binding(captor).unwrap())
+                .expect("inventory exists")
                 .quantity
                 .0,
             1_000
@@ -1356,7 +1368,13 @@ mod tests {
                 .captivity
                 .contains_key(&target)
         );
-        assert_eq!(sim.host.state.inventories[&binding].quantity.0, 1_000);
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, binding)
+                .expect("inventory exists")
+                .quantity
+                .0,
+            1_000
+        );
         let mut no_tool = fixture();
         let captor = no_tool.host.state.ruler;
         let target = no_tool.host.state.people[1].id;
@@ -1470,7 +1488,7 @@ mod tests {
         )
         .unwrap();
         b.advance(SimDuration(4_267)).unwrap();
-        assert_eq!(a.host.state, b.host.state);
+        assert_eq!(a.canonical_state(), b.canonical_state());
     }
     #[test]
     fn closing_health_can_prevent_binding_or_an_escape_at_its_deadline() {
@@ -1625,7 +1643,9 @@ mod transport_force_tests {
         let (mut sim, captor, captive) = carried_captive(false);
         let binding = sim.host.state.combat.as_ref().unwrap().captivity[&captive].binding;
         assert_eq!(
-            sim.host.state.inventories[&binding].location,
+            game_cargo::inventory(&sim.host.storage, binding)
+                .expect("inventory exists")
+                .location,
             InventoryLocation::Carried(captive)
         );
         assert!(matches!(
@@ -1671,12 +1691,14 @@ mod transport_force_tests {
                 }
             ));
             assert_eq!(
-                world.host.state.inventories[&binding].quantity,
+                game_cargo::inventory(&world.host.storage, binding)
+                    .expect("inventory exists")
+                    .quantity,
                 Quantity(1_000)
             );
             Simulation::load(&world.save().unwrap(), Execution::default()).unwrap();
         }
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
     }
 
     #[test]
@@ -1729,6 +1751,6 @@ mod transport_force_tests {
             Location::StoppedOnRoad { .. }
         ));
         let restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
     }
 }

@@ -19,10 +19,8 @@ fn command(sim: &mut Simulation, command: Command) -> Result<CommandReceipt, Err
     })
 }
 fn food(sim: &Simulation) -> InventoryId {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
         .unwrap()
         .id
@@ -31,10 +29,8 @@ fn actor(sim: &Simulation) -> PersonId {
     sim.canonical_state().state.ruler
 }
 fn food_total(sim: &Simulation) -> u64 {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .filter(|i| i.good == Good::Food)
         .map(|i| i.quantity.0)
         .sum()
@@ -115,11 +111,15 @@ fn inaccessible_abundance_does_not_prevent_mortal_death_and_goods_remain() {
     sim.advance(SimDuration(1)).unwrap();
     assert!(!sim.observe().physical.unwrap().vitals.alive);
     assert_eq!(
-        sim.canonical_state().state.inventories[&locked].quantity,
+        game_cargo::inventory(sim.canonical_state().components, locked)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000_000)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&remote].quantity,
+        game_cargo::inventory(sim.canonical_state().components, remote)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000_000)
     );
     assert!(sim.observe().available_commands.is_empty());
@@ -170,7 +170,9 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&carried].quantity,
+        game_cargo::inventory(sim.canonical_state().components, carried)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
     command(
@@ -182,11 +184,15 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     .unwrap();
     sim.advance(SimDuration(119_999)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&carried].location,
+        game_cargo::inventory(sim.canonical_state().components, carried)
+            .expect("stock exists")
+            .location,
         InventoryLocation::Carried(ruler)
     );
     sim.advance(SimDuration(1)).unwrap();
@@ -202,11 +208,15 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     sim.advance(SimDuration(30_000)).unwrap();
     command(&mut sim, Command::Cancel).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&carried].quantity,
+        game_cargo::inventory(sim.canonical_state().components, carried)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     command(&mut sim, Command::Rest).unwrap();
@@ -222,7 +232,9 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
     assert_eq!(food_total(&sim), before);
@@ -237,15 +249,18 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
         .find(|s| s.area == AreaId(1))
         .unwrap()
         .clone();
-    let input = sim.canonical_state().state.inventories[&site.input]
+    let input = game_cargo::inventory(sim.canonical_state().components, site.input)
+        .expect("stock exists")
         .quantity
         .0;
-    let output = sim.canonical_state().state.inventories[&site.output]
+    let output = game_cargo::inventory(sim.canonical_state().components, site.output)
+        .expect("stock exists")
         .quantity
         .0;
     command(&mut sim, Command::Work { site: site.id }).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&site.input]
+        game_cargo::inventory(sim.canonical_state().components, site.input)
+            .expect("stock exists")
             .quantity
             .0,
         input - 1_000
@@ -254,7 +269,8 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
     command(&mut sim, Command::Rest).unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&site.output]
+        game_cargo::inventory(sim.canonical_state().components, site.output)
+            .expect("stock exists")
             .quantity
             .0,
         output
@@ -262,13 +278,15 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
     command(&mut sim, Command::Work { site: site.id }).unwrap();
     sim.advance(SimDuration(36_544)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&site.input]
+        game_cargo::inventory(sim.canonical_state().components, site.input)
+            .expect("stock exists")
             .quantity
             .0,
         input - 1_000
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&site.output]
+        game_cargo::inventory(sim.canonical_state().components, site.output)
+            .expect("stock exists")
             .quantity
             .0,
         output + 1_000
@@ -277,13 +295,15 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
     command(&mut sim, Command::Work { site: site.id }).unwrap();
     command(&mut sim, Command::Cancel).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&site.input]
+        game_cargo::inventory(sim.canonical_state().components, site.input)
+            .expect("stock exists")
             .quantity
             .0,
         input - 2_000
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&site.output]
+        game_cargo::inventory(sim.canonical_state().components, site.output)
+            .expect("stock exists")
             .quantity
             .0,
         output + 1_000
@@ -307,11 +327,15 @@ fn spoilage_invalidates_loading_without_duplicating_reserved_food() {
     sim.debug_spoil_at(source, SimTime(30_000)).unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&carried].quantity,
+        game_cargo::inventory(sim.canonical_state().components, carried)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(sim.observe().physical.unwrap().activity, Activity::Idle);
@@ -399,19 +423,13 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
     let ruler = actor(&sim);
     let source = food(&sim);
     let carried = sim.canonical_state().state.people[0].inventory;
-    let timber_source = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let timber_source = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Timber && i.location == InventoryLocation::Area(AreaId(1)))
         .unwrap()
         .id;
-    let timber_carried = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let timber_carried = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Timber && i.location == InventoryLocation::Carried(ruler))
         .unwrap()
         .id;
@@ -435,10 +453,8 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .inventories
-            .values()
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(_, inventory)| inventory)
             .filter(|i| i.location == InventoryLocation::Carried(ruler))
             .map(|i| i.quantity.0)
             .sum::<u64>(),
@@ -492,11 +508,15 @@ fn existing_physical_completion_and_debug_transfer_cannot_consume_the_same_units
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&carried].quantity,
+        game_cargo::inventory(sim.canonical_state().components, carried)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(

@@ -135,7 +135,6 @@ pub struct AssemblyState {
     pub ruler: PersonId,
     pub areas: Vec<Area>,
     pub people: Vec<Person>,
-    pub inventories: BTreeMap<InventoryId, Inventory>,
     pub physical: Option<physical::World>,
     pub decisions: Option<decisions::Runtime>,
     #[serde(default)]
@@ -467,7 +466,6 @@ impl Simulation {
             ruler: PersonId(0),
             areas: Vec::new(),
             people: Vec::new(),
-            inventories: BTreeMap::new(),
             due: BTreeMap::new(),
             accepted: BTreeMap::new(),
             next_command: 1,
@@ -541,8 +539,8 @@ impl Simulation {
                 game_ecs::StableId((id).0),
                 Location::AtArea(village),
             )?;
-            host.state.inventories.insert(
-                inventory,
+            game_cargo::insert_inventory(
+                &mut host.storage,
                 Inventory {
                     id: inventory,
                     location: InventoryLocation::Carried(id),
@@ -553,11 +551,11 @@ impl Simulation {
                     good: Good::Food,
                     spoils_at: None,
                 },
-            );
+            )?;
         }
         let store = InventoryId(host.allocate_id()?.0);
-        host.state.inventories.insert(
-            store,
+        game_cargo::insert_inventory(
+            &mut host.storage,
             Inventory {
                 id: store,
                 location: InventoryLocation::Area(village),
@@ -568,7 +566,7 @@ impl Simulation {
                 good: Good::Food,
                 spoils_at: None,
             },
-        );
+        )?;
         host.state.due.insert(SimTime(60_000), vec![Due::Review]);
         Self::from_host(host, execution)
     }
@@ -588,7 +586,7 @@ impl Simulation {
             .map(|(i, p)| (p.id, i))
             .collect();
         let mut inventory_index = BTreeMap::<_, Vec<_>>::new();
-        for i in host.state.inventories.values() {
+        for i in game_cargo::inventories(&host.storage).map(|(_, row)| row) {
             inventory_index
                 .entry(i.location.clone())
                 .or_default()
@@ -1619,7 +1617,15 @@ impl Simulation {
             .collect();
         let opening_stock: BTreeMap<_, _> = transfers
             .iter()
-            .map(|i| (i.source, self.host.state.inventories[&i.source].quantity.0))
+            .map(|i| {
+                (
+                    i.source,
+                    game_cargo::inventory(&self.host.storage, i.source)
+                        .expect("inventory exists")
+                        .quantity
+                        .0,
+                )
+            })
             .collect();
         let arbitration_ns = started.elapsed().as_nanos();
         Ok(engine_adapter::PreparedWorldStep {
@@ -1863,7 +1869,8 @@ impl Simulation {
                     }
                 }
                 Due::Spoil(inventory) => {
-                    let stock = self.host.state.inventories.get_mut(&inventory).unwrap();
+                    let stock =
+                        game_cargo::inventory_mut(&mut self.host.storage, inventory).unwrap();
                     let quantity = stock.quantity;
                     stock.quantity = Quantity(0);
                     stock.spoils_at = None;
@@ -1877,9 +1884,9 @@ impl Simulation {
         let arbitration_started = Instant::now();
         let mut resolved = self
             .prepare_cargo_transfers(transfers, Some(&opening_stock))?
-            .begin(&self.host.state.inventories)?;
+            .begin(&self.host.storage)?;
         self.profile.arbitration_ns += arbitration_started.elapsed().as_nanos();
-        while let Some((intent, granted)) = resolved.apply_next(&mut self.host.state.inventories) {
+        while let Some((intent, granted)) = resolved.apply_next(&mut self.host.storage)? {
             if granted {
                 self.emit(EventKind::Transferred {
                     actor: intent.actor,
@@ -2054,8 +2061,8 @@ impl Simulation {
     }
 
     fn cargo_closing_facts(&self, intent: &TransferIntent) -> game_cargo::ClosingFacts {
-        let source = self.host.state.inventories.get(&intent.source);
-        let destination = self.host.state.inventories.get(&intent.destination);
+        let source = game_cargo::inventory(&self.host.storage, intent.source);
+        let destination = game_cargo::inventory(&self.host.storage, intent.destination);
         let body = self
             .host
             .state
@@ -2107,24 +2114,15 @@ impl Simulation {
         opening: Option<&BTreeMap<InventoryId, u64>>,
     ) -> Result<game_cargo::PreparedTransfers, Error> {
         if requests.is_empty() {
-            return game_cargo::prepare_transfers(&BTreeMap::new(), None, requests, None, |_| true);
+            return game_cargo::prepare_transfers(&self.host.storage, None, requests, None, |_| {
+                true
+            });
         }
-        let stocks = requests
-            .iter()
-            .flat_map(|request| [request.intent.source, request.intent.destination])
-            .filter_map(|id| {
-                self.host
-                    .state
-                    .inventories
-                    .get(&id)
-                    .map(|stock| (id, stock))
-            })
-            .collect();
         let free = self.host.state.physical.as_ref().map(|_| {
             let holders: BTreeSet<_> = requests
                 .iter()
                 .flat_map(|request| [request.intent.source, request.intent.destination])
-                .filter_map(|id| self.host.state.inventories.get(&id))
+                .filter_map(|id| game_cargo::inventory(&self.host.storage, id))
                 .filter_map(|stock| match stock.location {
                     InventoryLocation::Carried(holder) => Some(holder),
                     InventoryLocation::Area(_) => None,
@@ -2138,7 +2136,14 @@ impl Simulation {
                         .get(&InventoryLocation::Carried(holder))
                         .into_iter()
                         .flatten()
-                        .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+                        .map(|id| {
+                            u128::from(
+                                game_cargo::inventory(&self.host.storage, *(id))
+                                    .expect("inventory exists")
+                                    .quantity
+                                    .0,
+                            )
+                        })
                         .sum();
                     (
                         holder,
@@ -2159,35 +2164,48 @@ impl Simulation {
         } else {
             None
         };
-        game_cargo::prepare_transfers(&stocks, opening, requests, free.as_ref(), |intent| {
-            let Some(world) = &self.host.state.transport else {
-                return true;
-            };
-            if world.groups.is_empty() {
-                return true;
-            }
-            let InventoryLocation::Carried(holder) =
-                self.host.state.inventories[&intent.destination].location
-            else {
-                return true;
-            };
-            let Some(bodies) = &mut transport_bodies else {
-                return false;
-            };
-            if !game_transport::transfer_capacity(&world.groups, bodies, holder, intent.quantity)
+        game_cargo::prepare_transfers(
+            &self.host.storage,
+            opening,
+            requests,
+            free.as_ref(),
+            |intent| {
+                let Some(world) = &self.host.state.transport else {
+                    return true;
+                };
+                if world.groups.is_empty() {
+                    return true;
+                }
+                let InventoryLocation::Carried(holder) =
+                    game_cargo::inventory(&self.host.storage, intent.destination)
+                        .expect("inventory exists")
+                        .location
+                else {
+                    return true;
+                };
+                let Some(bodies) = &mut transport_bodies else {
+                    return false;
+                };
+                if !game_transport::transfer_capacity(
+                    &world.groups,
+                    bodies,
+                    holder,
+                    intent.quantity,
+                )
                 .unwrap_or(false)
-            {
-                return false;
-            }
-            let Some(body) = bodies.get_mut(&holder) else {
-                return false;
-            };
-            let Some(quantity) = body.cargo.0.checked_add(intent.quantity.0) else {
-                return false;
-            };
-            body.cargo = Quantity(quantity);
-            true
-        })
+                {
+                    return false;
+                }
+                let Some(body) = bodies.get_mut(&holder) else {
+                    return false;
+                };
+                let Some(quantity) = body.cargo.0.checked_add(intent.quantity.0) else {
+                    return false;
+                };
+                body.cargo = Quantity(quantity);
+                true
+            },
+        )
     }
 
     pub fn debug_schedule_transfers(
@@ -2205,8 +2223,8 @@ impl Simulation {
             if i.quantity.0 == 0
                 || i.source == i.destination
                 || !self.person_index.contains_key(&i.actor)
-                || !self.host.state.inventories.contains_key(&i.source)
-                || !self.host.state.inventories.contains_key(&i.destination)
+                || !game_cargo::inventory(&self.host.storage, i.source).is_some()
+                || !game_cargo::inventory(&self.host.storage, i.destination).is_some()
             {
                 return Err(Error::InvalidFixture(
                     "invalid transfer identity or amount".into(),

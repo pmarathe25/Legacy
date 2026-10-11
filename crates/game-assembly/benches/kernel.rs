@@ -43,7 +43,10 @@ fn main() {
                 )
                 .unwrap();
                 let state = sim.canonical_state();
-                let source = *state.state.inventories.keys().next_back().unwrap();
+                let source = game_cargo::inventories(state.components)
+                    .map(|(id, _)| id)
+                    .last()
+                    .unwrap();
                 let intents = state.state.people[3..]
                     .iter()
                     .map(|p| TransferIntent {
@@ -67,10 +70,8 @@ fn main() {
                 }
                 profile = sim.profile().clone();
                 assert_eq!(
-                    sim.canonical_state()
-                        .state
-                        .inventories
-                        .values()
+                    game_cargo::inventories(sim.canonical_state().components)
+                        .map(|(_, inventory)| inventory)
                         .map(|i| i.quantity.0)
                         .sum::<u64>(),
                     1_000

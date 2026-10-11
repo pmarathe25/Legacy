@@ -44,3 +44,17 @@ pub fn remove_inventory(store: &mut Store, id: InventoryId) -> Result<Option<Inv
     }
     store.remove(StableId(id.0))
 }
+
+/// Validate this owner's rows and their stable identity. Foreign entity
+/// references and clock constraints belong to the composed save validator.
+pub fn validate_storage(store: &Store) -> Result<(), Error> {
+    for (id, row) in inventories(store) {
+        row.validate()?;
+        if row.id != id {
+            return Err(Error::InvalidSave(
+                "inventory component identity differs from entity".into(),
+            ));
+        }
+    }
+    Ok(())
+}

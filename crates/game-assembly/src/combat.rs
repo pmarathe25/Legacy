@@ -832,8 +832,15 @@ impl Simulation {
             .flatten()
             .copied()
             .find(|id| {
-                self.host.state.inventories[id].good == Good::Binding
-                    && self.host.state.inventories[id].quantity.0 >= 1_000
+                game_cargo::inventory(&self.host.storage, *(id))
+                    .expect("inventory exists")
+                    .good
+                    == Good::Binding
+                    && game_cargo::inventory(&self.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0
+                        >= 1_000
             })
     }
     fn execute_turn(
@@ -1018,13 +1025,13 @@ impl Simulation {
             let plan = game_conflict::prepare_confinement(
                 &w.rules,
                 facts.clone(),
-                &self.host.state.inventories[&source],
+                game_cargo::inventory(&self.host.storage, source).expect("inventory exists"),
                 InventoryId(self.host.next_id()),
                 context,
                 game_conflict::ConfinementMode::Tactical { encounter: id },
                 self.host.clock().time,
             )?;
-            Some(plan.begin(&self.host.state.inventories, &w.captivity, &facts)?)
+            Some(plan.begin(&self.host.storage, &w.captivity, &facts)?)
         } else {
             None
         };
@@ -1597,8 +1604,15 @@ impl Simulation {
                     .into_iter()
                     .flatten()
                     .any(|id| {
-                        self.host.state.inventories[id].good == Good::Tool
-                            && self.host.state.inventories[id].quantity.0 >= 1_000
+                        game_cargo::inventory(&self.host.storage, *(id))
+                            .expect("inventory exists")
+                            .good
+                            == Good::Tool
+                            && game_cargo::inventory(&self.host.storage, *(id))
+                                .expect("inventory exists")
+                                .quantity
+                                .0
+                                >= 1_000
                     }))
     }
     pub(crate) fn release_captive(&mut self, actor: PersonId, target: PersonId) {
@@ -1813,7 +1827,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             || !w
                 .map(c.map)
                 .is_some_and(|m| m.area == c.area && m.contains(c.position))
-            || !s.state.inventories.get(&c.binding).is_some_and(|i| {
+            || !game_cargo::inventory(s.components, c.binding).is_some_and(|i| {
                 i.good == Good::Binding
                     && i.quantity.0 == 1_000
                     && i.location == InventoryLocation::Carried(*actor)
@@ -1994,7 +2008,9 @@ mod confinement_tests {
             let target = sim.host.state.people[3].id;
             full_target(&mut sim, target);
             let source = sim.binding_stock(actor).unwrap();
-            let opening = sim.host.state.inventories[&source].quantity;
+            let opening = game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .quantity;
             let expected_position = if tactical {
                 let (encounter, movement, position) =
                     surrendered_encounter(&mut sim, actor, target);
@@ -2008,9 +2024,12 @@ mod confinement_tests {
                 Point { x: 6000, y: 8000 }
             };
             let captive = sim.host.state.combat.as_ref().unwrap().captivity[&target].clone();
-            let stock = &sim.host.state.inventories[&captive.binding];
+            let stock = game_cargo::inventory(&sim.host.storage, captive.binding)
+                .expect("inventory exists");
             assert_eq!(
-                sim.host.state.inventories[&source].quantity,
+                game_cargo::inventory(&sim.host.storage, source)
+                    .expect("inventory exists")
+                    .quantity,
                 Quantity(opening.0 - 1000)
             );
             assert_eq!(stock.good, Good::Binding);
@@ -2019,7 +2038,14 @@ mod confinement_tests {
             assert_eq!(stock.access, BTreeSet::from([actor]));
             let held: u128 = sim.inventory_index[&InventoryLocation::Carried(target)]
                 .iter()
-                .map(|id| u128::from(sim.host.state.inventories[id].quantity.0))
+                .map(|id| {
+                    u128::from(
+                        game_cargo::inventory(&sim.host.storage, *(id))
+                            .expect("inventory exists")
+                            .quantity
+                            .0,
+                    )
+                })
                 .sum();
             assert_eq!(
                 held,

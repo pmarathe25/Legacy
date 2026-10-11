@@ -247,11 +247,8 @@ impl Simulation {
                 BTreeSet::from([actor]),
             )?;
         }
-        let timber = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let timber = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Timber
                     && stock.location == InventoryLocation::Area(area)
@@ -259,7 +256,9 @@ impl Simulation {
             })
             .unwrap()
             .id;
-        sim.host.state.inventories.get_mut(&timber).unwrap().access = BTreeSet::from([financier]);
+        game_cargo::inventory_mut(&mut sim.host.storage, timber)
+            .unwrap()
+            .access = BTreeSet::from([financier]);
         let custodians = &mut sim.host.state.agreements.as_mut().unwrap().custodians;
         for inventory in [materials, tool, output, provisions] {
             custodians.insert(inventory, sponsor);
@@ -291,11 +290,8 @@ impl Simulation {
         });
         // Fresh authored knowledge includes these physically present stocks.
         for person in people {
-            let inventories = sim
-                .host
-                .state
-                .inventories
-                .values()
+            let inventories = game_cargo::inventories(&sim.host.storage)
+                .map(|(_, row)| row)
                 .filter(|stock| sim.inventory_area(stock) == Some(area))
                 .cloned()
                 .collect::<Vec<_>>();
@@ -365,18 +361,13 @@ impl Simulation {
         quantity: u64,
         resources: Option<&equipment::RankingResources>,
     ) -> bool {
-        self.host
-            .state
-            .inventories
-            .get(&inventory)
-            .is_some_and(|stock| {
-                stock.good == good
-                    && stock.access.contains(&actor)
-                    && self.inventory_area(stock) == self.project_area(actor)
-                    && (quantity == 0
-                        || self.unreserved_stock_for_planning(inventory, actor, resources)
-                            >= quantity)
-            })
+        game_cargo::inventory(&self.host.storage, inventory).is_some_and(|stock| {
+            stock.good == good
+                && stock.access.contains(&actor)
+                && self.inventory_area(stock) == self.project_area(actor)
+                && (quantity == 0
+                    || self.unreserved_stock_for_planning(inventory, actor, resources) >= quantity)
+        })
     }
     pub(crate) fn project_is_known(&self, actor: PersonId, project: ProjectId) -> bool {
         self.host
@@ -498,7 +489,7 @@ impl Simulation {
                 let stocks = stock_ids
                     .into_iter()
                     .filter_map(|id| {
-                        self.host.state.inventories.get(&id).map(|stock| {
+                        game_cargo::inventory(&self.host.storage, id).map(|stock| {
                             (
                                 id,
                                 game_projects::StockFact {
@@ -670,10 +661,7 @@ impl Simulation {
             }
         }
         if consumed.iter().any(|(id, quantity)| {
-            self.host
-                .state
-                .inventories
-                .get(id)
+            game_cargo::inventory(&self.host.storage, *(id))
                 .is_none_or(|s| u128::from(s.quantity.0) < *quantity)
         }) {
             return Err(Error::Unavailable);
@@ -730,10 +718,7 @@ impl Simulation {
                     source,
                     quantity,
                 } => {
-                    self.host
-                        .state
-                        .inventories
-                        .get_mut(&source)
+                    game_cargo::inventory_mut(&mut self.host.storage, source)
                         .unwrap()
                         .quantity
                         .0 -= quantity.0;
@@ -991,7 +976,13 @@ impl Simulation {
             .projects
             .as_ref()
             .map(|world| {
-                world.prepare_input(site, self.host.state.inventories[&source].good, quantity)
+                world.prepare_input(
+                    site,
+                    game_cargo::inventory(&self.host.storage, source)
+                        .expect("inventory exists")
+                        .good,
+                    quantity,
+                )
             })
             .transpose()
     }
@@ -1102,9 +1093,11 @@ impl Simulation {
             .map(|id| {
                 let obligation = &agreements.obligations[id];
                 let delivery_good = match obligation.term {
-                    AgreementTerm::Delivery { source, .. } => {
-                        Some(self.host.state.inventories[&source].good)
-                    }
+                    AgreementTerm::Delivery { source, .. } => Some(
+                        game_cargo::inventory(&self.host.storage, source)
+                            .expect("inventory exists")
+                            .good,
+                    ),
                     _ => None,
                 };
                 game_projects::AccountObligation {
@@ -1149,7 +1142,13 @@ impl Simulation {
                     output,
                     quantity,
                     ..
-                } => vec![(site, self.host.state.inventories[&output].good, quantity)],
+                } => vec![(
+                    site,
+                    game_cargo::inventory(&self.host.storage, output)
+                        .expect("inventory exists")
+                        .good,
+                    quantity,
+                )],
                 EventKind::CropHarvested {
                     field, food, seed, ..
                 } => vec![(field, Good::Food, food), (field, Good::Seed, seed)],
@@ -1207,7 +1206,7 @@ impl Simulation {
                 }
                 ProjectKind::Workshop=>{
                     let site=&game_workshop::site(&self.host.storage,asset.site).expect("site exists");
-                    let output=&self.host.state.inventories[&site.output];
+                    let output=game_cargo::inventory(&self.host.storage, site.output).expect("inventory exists");
                     (self.host.storage.activities().any(|(_,activity)|matches!(activity,Activity::Work {site:id} if *id==site.id)),false,
                         Quantity(output.capacity.0.saturating_sub(output.quantity.0)),site.input_quantity,site.output_quantity)
                 }
@@ -1465,7 +1464,11 @@ impl Simulation {
             else {
                 continue;
             };
-            if self.host.state.inventories[&plan.materials].quantity >= needed {
+            if game_cargo::inventory(&self.host.storage, plan.materials)
+                .expect("inventory exists")
+                .quantity
+                >= needed
+            {
                 continue;
             }
             let donor = mind
@@ -1493,11 +1496,8 @@ impl Simulation {
             let Some((financier, source)) = donor else {
                 continue;
             };
-            let recipient = self
-                .host
-                .state
-                .inventories
-                .values()
+            let recipient = game_cargo::inventories(&self.host.storage)
+                .map(|(_, row)| row)
                 .find(|stock| {
                     stock.good == Good::Tool
                         && stock.location == InventoryLocation::Area(plan.area)
@@ -1614,7 +1614,10 @@ impl Simulation {
         let available = if destination.observed_at == self.host.clock().time
             && destination.location == self.delivery_observed_location(actor)
         {
-            self.host.state.inventories[&target].quantity.0
+            game_cargo::inventory(&self.host.storage, target)
+                .expect("inventory exists")
+                .quantity
+                .0
         } else {
             fact.quantity.0
         };
@@ -1724,8 +1727,14 @@ impl Simulation {
                 site.input_quantity.0,
                 resources,
             ) && self.project_usable_for_planning(actor, site.tool, Good::Tool, 1_000, resources)
-                && self.host.state.inventories[&site.output].capacity.0
-                    - self.host.state.inventories[&site.output].quantity.0
+                && game_cargo::inventory(&self.host.storage, site.output)
+                    .expect("inventory exists")
+                    .capacity
+                    .0
+                    - game_cargo::inventory(&self.host.storage, site.output)
+                        .expect("inventory exists")
+                        .quantity
+                        .0
                     >= site.output_quantity.0
             {
                 opportunities.push(Command::Work { site: site.id });
@@ -1749,11 +1758,7 @@ impl Simulation {
         let area = self.project_area(actor).unwrap();
         let own = |fact: &&StockKnowledge| {
             fact.area == area
-                && self
-                    .host
-                    .state
-                    .inventories
-                    .get(&fact.inventory)
+                && game_cargo::inventory(&self.host.storage, fact.inventory)
                     .is_some_and(|stock| stock.location == InventoryLocation::Area(area))
                 && self
                     .host
@@ -2111,7 +2116,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 },
             ),
         ] {
-            if state.state.inventories.get(&inventory).is_none_or(|stock| {
+            if game_cargo::inventory(state.components, inventory).is_none_or(|stock| {
                 stock.good != good || stock.location != InventoryLocation::Area(plan.area)
             }) {
                 return Err(fail());
@@ -2137,7 +2142,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                         && enterprise.area == plan.area
                         && matches!(enterprise.kind, ProjectKind::Farm { plot: source, .. } if source == plot)
                 });
-            if state.state.inventories.get(&water).is_none_or(|i| {
+            if game_cargo::inventory(state.components, water).is_none_or(|i| {
                 i.good != Good::Water || i.location != InventoryLocation::Area(plan.area)
             }) || plan.enterprise.is_none() && !live_plot && !historical_conversion
             {
@@ -2462,10 +2467,8 @@ mod farm_tests {
             .unwrap()
             .0;
         let stock = |good| {
-            sim.host
-                .state
-                .inventories
-                .values()
+            game_cargo::inventories(&sim.host.storage)
+                .map(|(_, row)| row)
                 .find(|i| {
                     i.good == good
                         && i.location == InventoryLocation::Area(area)
@@ -2771,7 +2774,9 @@ mod farm_tests {
         assert!(project.enterprise.is_none());
         assert!(!project.materials_consumed);
         assert_eq!(
-            sim.host.state.inventories[&project.materials].quantity,
+            game_cargo::inventory(&sim.host.storage, project.materials)
+                .expect("inventory exists")
+                .quantity,
             Quantity(0)
         );
         assert!(
@@ -2965,7 +2970,9 @@ mod farm_tests {
             AgreementStatus::Fulfilled
         );
         assert_eq!(
-            sim.host.state.inventories[&destination].quantity,
+            game_cargo::inventory(&sim.host.storage, destination)
+                .expect("inventory exists")
+                .quantity,
             Quantity(1)
         );
     }

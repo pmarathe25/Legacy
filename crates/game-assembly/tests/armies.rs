@@ -79,19 +79,13 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
         .map(|p| p.id)
         .collect();
     assert_eq!(people.len(), 65);
-    let food = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let food = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(village))
         .unwrap()
         .id;
-    let binding = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let binding = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Binding && i.location == InventoryLocation::Area(village))
         .unwrap()
         .id;
@@ -380,10 +374,8 @@ fn sixty_five_real_recruits_carry_provisions_travel_and_share_one_initiative_clo
                 .any(|e| matches!(e.event,EventKind::Arrived {actor,..} if actor==*person))
         );
         assert_eq!(
-            state
-                .state
-                .inventories
-                .values()
+            game_cargo::inventories(state.components)
+                .map(|(_, inventory)| inventory)
                 .filter(
                     |i| i.good == Good::Food && i.location == InventoryLocation::Carried(*person)
                 )
@@ -470,11 +462,15 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
         .expect("a real NPC surrender permits the supplied leader to capture");
     assert!(people.contains(&captive.captor));
     assert_eq!(
-        state.state.inventories[&captive.binding].quantity,
+        game_cargo::inventory(state.components, captive.binding)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000)
     );
     assert_eq!(
-        state.state.inventories[&captive.binding].location,
+        game_cargo::inventory(state.components, captive.binding)
+            .expect("stock exists")
+            .location,
         InventoryLocation::Carried(enemy)
     );
     assert!(

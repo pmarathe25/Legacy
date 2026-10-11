@@ -203,7 +203,12 @@ impl Simulation {
                 .collect();
             let accessible_stocks: BTreeSet<_> = visible_stocks
                 .iter()
-                .filter(|id| self.has_stock_access(p.id, &self.host.state.inventories[id]))
+                .filter(|id| {
+                    self.has_stock_access(
+                        p.id,
+                        game_cargo::inventory(&self.host.storage, **id).expect("inventory exists"),
+                    )
+                })
                 .copied()
                 .collect();
             let visible_children = cohorts.get(
@@ -306,6 +311,23 @@ impl Simulation {
                     access: site.access.contains(&p.id),
                 });
             }
+            let observed_stocks: Vec<_> = visible_stocks
+                .iter()
+                .map(|id| {
+                    let inventory =
+                        game_cargo::inventory(&self.host.storage, *id).expect("inventory exists");
+                    StockKnowledge {
+                        inventory: *id,
+                        area,
+                        good: inventory.good,
+                        quantity: inventory.quantity,
+                        accessible: accessible_stocks.contains(id),
+                        observed_at: owner_now,
+                        learned_at: owner_now,
+                        source: KnowledgeSource::Observed(p.id),
+                    }
+                })
+                .collect();
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
                 &mut self.host.storage,
                 p.id,
@@ -325,22 +347,12 @@ impl Simulation {
                     .collect();
                 mind.routes.insert(area, actual_routes);
             }
-            for id in &visible_stocks {
-                let inventory = &self.host.state.inventories[id];
+            for fact in observed_stocks {
                 mind.observe_stock(
                     owner_now,
                     area,
                     self.host.state.physical.as_ref().unwrap().rules.meal_size,
-                    StockKnowledge {
-                        inventory: *id,
-                        area,
-                        good: inventory.good,
-                        quantity: inventory.quantity,
-                        accessible: accessible_stocks.contains(id),
-                        observed_at: owner_now,
-                        learned_at: owner_now,
-                        source: KnowledgeSource::Observed(p.id),
-                    },
+                    fact,
                 );
             }
             mind.child_signals
@@ -442,9 +454,12 @@ impl Simulation {
         // Equal claims use the same persistent rotating cursor as physical transfers.
         intentions.sort_by_key(|i| {
             let (resource, cursor) = match i.decision.plan.as_ref().map(|plan| &plan.action) {
-                Some(Command::Eat { source }) | Some(Command::Care { source, .. }) => {
-                    (source.0, self.host.state.inventories[source].last_granted)
-                }
+                Some(Command::Eat { source }) | Some(Command::Care { source, .. }) => (
+                    source.0,
+                    game_cargo::inventory(&self.host.storage, *(source))
+                        .expect("inventory exists")
+                        .last_granted,
+                ),
                 Some(Command::Work { site }) => (
                     site.0,
                     game_workshop::site(&self.host.storage, *site)
@@ -1066,12 +1081,8 @@ impl Simulation {
         else {
             return;
         };
-        let Some(good) = self
-            .host
-            .state
-            .inventories
-            .get(source)
-            .map(|stock| stock.good)
+        let Some(good) =
+            game_cargo::inventory(&self.host.storage, *(source)).map(|stock| stock.good)
         else {
             return;
         };
@@ -1131,7 +1142,7 @@ impl Simulation {
 
     /// Explicit setup of an authored belief for false/stale-information scenarios.
     pub fn debug_set_knowledge(&mut self, id: PersonId, fact: StockKnowledge) -> Result<(), Error> {
-        if !self.host.state.inventories.contains_key(&fact.inventory)
+        if !game_cargo::inventory(&self.host.storage, fact.inventory).is_some()
             || fact.observed_at > self.host.clock().time
             || fact.learned_at > self.host.clock().time
         {

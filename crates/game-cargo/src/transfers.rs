@@ -1,7 +1,8 @@
 //! Closing cargo rules over scoped borrowed actual stocks. Opening spending
 //! budgets are separate from current occupied receiving space. Effects commit
-//! once to the same authoritative map; observations/receipts belong to callers.
+//! once to the same authoritative component store; observations/receipts belong to callers.
 use crate::*;
+use game_ecs::{Batch, StableId, Store};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -64,8 +65,28 @@ impl LoadJob {
 struct TransferEffect {
     intent: TransferIntent,
     granted: bool,
-    source_after: Quantity,
-    destination_after: Quantity,
+    rows: Option<([Inventory; 2], [Inventory; 2])>,
+}
+impl TransferEffect {
+    fn batch(&self) -> Batch {
+        let mut batch = Batch::new();
+        if let Some((_, after)) = &self.rows {
+            for row in after {
+                batch.insert(StableId(row.id.0), row.clone());
+            }
+        }
+        batch
+    }
+    fn validate_opening(&self, store: &Store) -> Result<(), Error> {
+        if self.rows.as_ref().is_some_and(|(before, _)| {
+            before
+                .iter()
+                .any(|row| inventory(store, row.id) != Some(row))
+        }) {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
 }
 #[derive(Debug)]
 pub struct PreparedTransfers {
@@ -73,9 +94,9 @@ pub struct PreparedTransfers {
     guards: BTreeMap<InventoryId, Inventory>,
     effects: Vec<TransferEffect>,
 }
-/// A guarded ordered phase. The coordinator retains its foreign epoch and may
-/// publish each receipt between effects; it must not change the touched stocks.
-/// Only this owner mutates balances, and each effect is consumed exactly once.
+/// Guarded ordered effects. Foreign receipts may update other components, but
+/// must not change the phase's touched Inventory rows. Every receipt follows
+/// its own consumed stock effect; later effects verify their expected prefix.
 #[derive(Debug)]
 pub struct ValidatedTransfers {
     remaining: std::vec::IntoIter<TransferEffect>,
@@ -83,52 +104,61 @@ pub struct ValidatedTransfers {
 impl ValidatedTransfers {
     pub fn apply_next(
         &mut self,
-        stocks: &mut BTreeMap<InventoryId, Inventory>,
-    ) -> Option<(TransferIntent, bool)> {
-        let effect = self.remaining.next()?;
+        store: &mut Store,
+    ) -> Result<Option<(TransferIntent, bool)>, Error> {
+        let Some(effect) = self.remaining.as_slice().first() else {
+            return Ok(None);
+        };
+        effect.validate_opening(store)?;
         if effect.granted {
-            let source = stocks
-                .get_mut(&effect.intent.source)
-                .expect("phase source was guarded");
-            source.quantity = effect.source_after;
-            source.last_granted = Some(effect.intent.actor);
-            stocks
-                .get_mut(&effect.intent.destination)
-                .expect("phase destination was guarded")
-                .quantity = effect.destination_after;
+            store.apply_batch(effect.batch())?;
         }
-        Some((effect.intent, effect.granted))
+        let effect = self.remaining.next().expect("checked phase effect");
+        Ok(Some((effect.intent, effect.granted)))
     }
 }
 impl PreparedTransfers {
     pub fn decisions(&self) -> &[(TransferIntent, bool)] {
         &self.decisions
     }
-    /// Guard every referenced actual stock before any mutation. The caller
-    /// separately guards its foreign body/permission epoch through publication.
-    pub fn begin(
-        self,
-        stocks: &BTreeMap<InventoryId, Inventory>,
-    ) -> Result<ValidatedTransfers, Error> {
+    fn validate(&self, store: &Store) -> Result<(), Error> {
         if self
             .guards
             .iter()
-            .any(|(id, stock)| stocks.get(id) != Some(stock))
+            .any(|(id, row)| inventory(store, *id) != Some(row))
         {
             return Err(Error::Unavailable);
         }
+        // Validate every intermediate prefix, not only the final balances.
+        // This invokes the actual schema's callbacks before the first debit.
+        for effect in &self.effects {
+            store.validate_batch(&effect.batch())?;
+        }
+        Ok(())
+    }
+    pub fn begin(self, store: &Store) -> Result<ValidatedTransfers, Error> {
+        self.validate(store)?;
         Ok(ValidatedTransfers {
             remaining: self.effects.into_iter(),
         })
     }
-    /// A phase without foreign receipt interleaving uses the same ordered owner
-    /// effects. There is no separate arithmetic or alternate admission path.
-    pub fn commit(
-        self,
-        stocks: &mut BTreeMap<InventoryId, Inventory>,
-    ) -> Result<Vec<(TransferIntent, bool)>, Error> {
-        let mut phase = self.begin(stocks)?;
-        Ok(std::iter::from_fn(|| phase.apply_next(stocks)).collect())
+    /// Without receipt interleaving, publish all final rows atomically.
+    pub fn commit(self, store: &mut Store) -> Result<Vec<(TransferIntent, bool)>, Error> {
+        self.validate(store)?;
+        let mut final_rows = BTreeMap::new();
+        for effect in &self.effects {
+            if let Some((_, after)) = &effect.rows {
+                for row in after {
+                    final_rows.insert(row.id, row.clone());
+                }
+            }
+        }
+        let mut batch = Batch::new();
+        for (id, row) in final_rows {
+            batch.insert(StableId(id.0), row);
+        }
+        store.apply_batch(batch)?;
+        Ok(self.decisions)
     }
 }
 /// Only referenced stock rows are borrowed. `free_body_room` is the current
@@ -136,12 +166,17 @@ impl PreparedTransfers {
 /// not replenish it. None means the fixture has no physical carrying model.
 /// The reserve callback operates only on a temporary transport-capacity frame.
 pub fn prepare_transfers(
-    stocks: &BTreeMap<InventoryId, &Inventory>,
+    store: &Store,
     opening: Option<&BTreeMap<InventoryId, u64>>,
     requests: Vec<TransferRequest>,
     free_body_room: Option<&BTreeMap<PersonId, u64>>,
     mut reserve_transport: impl FnMut(&TransferIntent) -> bool,
 ) -> Result<PreparedTransfers, Error> {
+    let stocks: BTreeMap<_, _> = requests
+        .iter()
+        .flat_map(|request| [request.intent.source, request.intent.destination])
+        .filter_map(|id| inventory(store, id).map(|row| (id, row)))
+        .collect();
     let balances: BTreeMap<_, _> = stocks
         .iter()
         .map(|(id, stock)| {
@@ -214,6 +249,11 @@ pub fn prepare_transfers(
             })
         },
     );
+    // A sparse planned prefix, never a second authoritative ledger.
+    let mut prefix: BTreeMap<_, Inventory> = stocks
+        .iter()
+        .map(|(id, row)| (*id, (*row).clone()))
+        .collect();
     let mut decisions = Vec::with_capacity(resolved.len());
     let mut ordered_effects = Vec::with_capacity(resolved.len());
     for (r, granted) in resolved {
@@ -240,15 +280,22 @@ pub fn prepare_transfers(
                 .checked_add(r.amount)
                 .ok_or(Error::Overflow)?;
         }
+        let rows = if granted {
+            let before = [prefix[&r.source].clone(), prefix[&r.destination].clone()];
+            let mut after = before.clone();
+            after[0].quantity = effects[&r.source].0;
+            after[0].last_granted = Some(r.actor);
+            after[1].quantity = effects[&r.destination].0;
+            prefix.insert(r.source, after[0].clone());
+            prefix.insert(r.destination, after[1].clone());
+            Some((before, after))
+        } else {
+            None
+        };
         ordered_effects.push(TransferEffect {
             intent: intent.clone(),
             granted,
-            source_after: effects
-                .get(&r.source)
-                .map_or(Quantity(0), |effect| effect.0),
-            destination_after: effects
-                .get(&r.destination)
-                .map_or(Quantity(0), |effect| effect.0),
+            rows,
         });
         decisions.push((intent, granted));
     }

@@ -42,18 +42,24 @@ fn drinking_requires_time_and_real_water_and_does_not_feed_the_body() {
     let before = sim.observe();
     drink(&mut sim, source);
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
     sim.advance(SimDuration(9_999)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
     sim.advance(SimDuration(1)).unwrap();
     let after = sim.observe();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000)
     );
     assert_eq!(after.health.as_ref().unwrap().thirst, 0);
@@ -75,7 +81,9 @@ fn an_interrupted_or_removed_drink_cannot_deliver_water() {
     .unwrap();
     sim.advance(SimDuration(5_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(2_000)
     );
     assert_eq!(sim.observe().health.unwrap().thirst, 10_000);
@@ -103,7 +111,9 @@ fn an_interrupted_or_removed_drink_cannot_deliver_water() {
     drink(&mut sim, source);
     sim.advance(SimDuration(10_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(sim.observe().health.unwrap().thirst, 10_000);
@@ -207,7 +217,9 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         })
         .unwrap();
     assert_eq!(
-        whole.canonical_state().state.inventories[&water].quantity,
+        game_cargo::inventory(whole.canonical_state().components, water)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000)
     );
     assert!(
@@ -228,8 +240,12 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
     else {
         unreachable!()
     };
-    let original_fuel = whole.canonical_state().state.inventories[&fuel].quantity;
-    let original_tool = whole.canonical_state().state.inventories[&tool].quantity;
+    let original_fuel = game_cargo::inventory(whole.canonical_state().components, fuel)
+        .expect("stock exists")
+        .quantity;
+    let original_tool = game_cargo::inventory(whole.canonical_state().components, tool)
+        .expect("stock exists")
+        .quantity;
     let fuel_cost = whole
         .canonical_state()
         .state
@@ -253,11 +269,15 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         })
         .unwrap();
     assert_eq!(
-        whole.canonical_state().state.inventories[&fuel].quantity,
+        game_cargo::inventory(whole.canonical_state().components, fuel)
+            .expect("stock exists")
+            .quantity,
         Quantity(original_fuel.0 - fuel_cost.0)
     );
     assert_eq!(
-        whole.canonical_state().state.inventories[&water].quantity,
+        game_cargo::inventory(whole.canonical_state().components, water)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000)
     );
     assert!(
@@ -295,11 +315,15 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         0
     );
     assert_eq!(
-        whole.canonical_state().state.inventories[&water].quantity,
+        game_cargo::inventory(whole.canonical_state().components, water)
+            .expect("stock exists")
+            .quantity,
         Quantity(1_000)
     );
     assert_eq!(
-        whole.canonical_state().state.inventories[&tool].quantity,
+        game_cargo::inventory(whole.canonical_state().components, tool)
+            .expect("stock exists")
+            .quantity,
         original_tool
     );
     let command = Command::Health {
@@ -326,11 +350,15 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
     restored.advance(duration).unwrap();
     assert_eq!(whole.canonical_state(), restored.canonical_state());
     assert_eq!(
-        whole.canonical_state().state.inventories[&water].quantity,
+        game_cargo::inventory(whole.canonical_state().components, water)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(
-        whole.canonical_state().state.inventories[&fuel].quantity,
+        game_cargo::inventory(whole.canonical_state().components, fuel)
+            .expect("stock exists")
+            .quantity,
         Quantity(original_fuel.0 - fuel_cost.0)
     );
     assert!(

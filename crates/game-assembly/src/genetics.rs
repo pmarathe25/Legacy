@@ -700,7 +700,7 @@ mod tests {
             let _ = restored.observe();
             restored.advance(SimDuration(1_000)).unwrap();
         }
-        assert_eq!(original.host.state, restored.host.state);
+        assert_eq!(original.canonical_state(), restored.canonical_state());
     }
 
     #[test]
@@ -811,7 +811,7 @@ mod tests {
         .unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
         restored.advance(SimDuration(30_000)).unwrap();
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
         let frozen = game_genetics::inheritance(&sim.host.storage, pregnancy)
             .unwrap()
             .genome
@@ -851,7 +851,7 @@ mod tests {
         let a = sim.advance(SimDuration(180_000)).unwrap();
         let b = restored.advance(SimDuration(180_000)).unwrap();
         assert_eq!(a.reason, b.reason);
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
         let child = game_genetics::inheritance(&sim.host.storage, pregnancy)
             .unwrap()
             .born
@@ -885,9 +885,13 @@ mod tests {
                             .born)
         );
         assert_eq!(
-            sim.host.state.inventories[&sim.host.state.people[sim.person_index[&child]].inventory]
-                .quantity
-                .0,
+            game_cargo::inventory(
+                &sim.host.storage,
+                sim.host.state.people[sim.person_index[&child]].inventory
+            )
+            .expect("inventory exists")
+            .quantity
+            .0,
             0
         );
         assert_eq!(
@@ -923,7 +927,7 @@ mod tests {
         }
         let whole = run(1, false);
         let sliced = run(4, true);
-        assert_eq!(whole.host.state, sliced.host.state);
+        assert_eq!(whole.canonical_state(), sliced.canonical_state());
         assert!(
             game_genetics::all_inheritances(&whole.host.storage)
                 .any(|(_, pregnancy)| pregnancy.born.is_some())
@@ -970,11 +974,8 @@ mod tests {
         assert!(
             strong.body_rules(actor).carrying_capacity > weak.body_rules(actor).carrying_capacity
         );
-        let food = weak
-            .host
-            .state
-            .inventories
-            .values()
+        let food = game_cargo::inventories(&weak.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Food
                     && stock.quantity.0 >= 9_000

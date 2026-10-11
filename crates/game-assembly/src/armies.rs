@@ -121,8 +121,13 @@ impl Simulation {
             loading_time: MINUTE,
             carrying_capacity: Quantity(10_000),
         })?;
-        let food = *sim.host.state.inventories.keys().next_back().unwrap();
-        sim.host.state.inventories.get_mut(&food).unwrap().quantity = Quantity(200_000);
+        let food = game_cargo::inventories(&sim.host.storage)
+            .map(|(id, _)| id)
+            .last()
+            .unwrap();
+        game_cargo::inventory_mut(&mut sim.host.storage, food)
+            .unwrap()
+            .quantity = Quantity(200_000);
         let routes = decisions::fixture_routes(&sim.host.state.areas);
         let minds = sim
             .host
@@ -217,11 +222,8 @@ impl Simulation {
                 next_search: BTreeMap::new(),
                 pending_work: BTreeMap::new(),
             },
-            custodians: sim
-                .host
-                .state
-                .inventories
-                .values()
+            custodians: game_cargo::inventories(&sim.host.storage)
+                .map(|(_, row)| row)
                 .map(|i| {
                     (
                         i.id,
@@ -1722,10 +1724,8 @@ fn army_saved_objective_valid(s: &CanonicalState, objective: &MissionObjective) 
         } => {
             quantity.0 > 0
                 && source != destination
-                && s.state
-                    .inventories
-                    .get(source)
-                    .zip(s.state.inventories.get(destination))
+                && game_cargo::inventory(s.components, *(source))
+                    .zip(game_cargo::inventory(s.components, *(destination)))
                     .is_some_and(|(a, b)| a.good == b.good)
         }
         MissionObjective::Defeat { person: p } | MissionObjective::Confine { person: p, .. } => {
@@ -1813,11 +1813,11 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
                             destination,
                             ..
                         } => {
-                            !s.state.inventories.contains_key(source)
-                                || !s.state.inventories.contains_key(destination)
+                            !game_cargo::inventory(s.components, *(source)).is_some()
+                                || !game_cargo::inventory(s.components, *(destination)).is_some()
                         }
                         AgreementTerm::Access { inventory, .. } => {
-                            !s.state.inventories.contains_key(inventory)
+                            !game_cargo::inventory(s.components, *(inventory)).is_some()
                         }
                         _ => true,
                     }
@@ -1828,7 +1828,7 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
     }
     if v.supplies.iter().any(|supply| {
         !people.contains(&supply.carrier)
-            || !s.state.inventories.contains_key(&supply.source)
+            || !game_cargo::inventory(s.components, supply.source).is_some()
             || supply.quantity.0 == 0
     }) {
         return Err(bad());

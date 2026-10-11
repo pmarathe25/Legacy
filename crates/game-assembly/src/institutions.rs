@@ -17,21 +17,23 @@ impl Simulation {
         };
         let owner = sim.host.state.people[3].id;
         let area = sim.host.state.areas[0].id;
-        for inventory in sim
-            .host
-            .state
-            .inventories
-            .values_mut()
-            .filter(|i| i.location == InventoryLocation::Area(area) && i.good == Good::Food)
-        {
-            inventory.access = BTreeSet::from([owner]);
+        let stocks: Vec<_> = game_cargo::inventories(&sim.host.storage)
+            .filter(|(_, row)| {
+                row.location == InventoryLocation::Area(area) && row.good == Good::Food
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for id in stocks {
+            game_cargo::inventory_mut(&mut sim.host.storage, id)
+                .unwrap()
+                .access = BTreeSet::from([owner]);
             sim.host
                 .state
                 .agreements
                 .as_mut()
                 .unwrap()
                 .custodians
-                .insert(inventory.id, owner);
+                .insert(id, owner);
         }
         sim.debug_set_personality(
             owner,
@@ -312,7 +314,10 @@ impl Simulation {
                     AgreementTerm::Labor { site, .. } => Some(CaseReceipt::Labor { actor, site }),
                     AgreementTerm::Delivery { destination, .. }
                         if self
-                            .inventory_area(&self.host.state.inventories[&destination])
+                            .inventory_area(
+                                game_cargo::inventory(&self.host.storage, destination)
+                                    .expect("inventory exists"),
+                            )
                             .is_some() =>
                     {
                         Some(CaseReceipt::Ledger)
@@ -368,8 +373,13 @@ impl Simulation {
                     source,
                     destination,
                     ..
-                } if self.host.state.inventories[&source].good == Good::Food
-                    && self.host.state.inventories[&destination].location
+                } if game_cargo::inventory(&self.host.storage, source)
+                    .expect("inventory exists")
+                    .good
+                    == Good::Food
+                    && game_cargo::inventory(&self.host.storage, destination)
+                        .expect("inventory exists")
+                        .location
                         == InventoryLocation::Carried(actor)
                     && world
                         .exclusions
@@ -539,7 +549,7 @@ impl Simulation {
                 .stocks
                 .iter()
                 .filter_map(|id| {
-                    self.host.state.inventories.get(id).map(|stock| {
+                    game_cargo::inventory(&self.host.storage, *(id)).map(|stock| {
                         (
                             *id,
                             StockReference {
@@ -1151,12 +1161,15 @@ impl Simulation {
                                 .expect("site exists");
                             (
                                 site.area,
-                                self.host.state.inventories[&site.output].good,
+                                game_cargo::inventory(&self.host.storage, site.output)
+                                    .expect("inventory exists")
+                                    .good,
                                 Some(site.output),
                             )
                         }
                         AgreementTerm::Delivery { destination, .. } => {
-                            let inventory = &self.host.state.inventories[&destination];
+                            let inventory = game_cargo::inventory(&self.host.storage, destination)
+                                .expect("inventory exists");
                             let Some(area) = self.inventory_area(inventory) else {
                                 continue;
                             };
@@ -1210,7 +1223,9 @@ impl Simulation {
                             counterpart,
                             area: site.area,
                             inventory: Some(output),
-                            good: self.host.state.inventories[&output].good,
+                            good: game_cargo::inventory(&self.host.storage, output)
+                                .expect("inventory exists")
+                                .good,
                             need_band: self.case_need_band(actor),
                             reciprocal: true,
                             outcome: SocialOutcome::Contributed,
@@ -1261,7 +1276,9 @@ impl Simulation {
                             counterpart,
                             area,
                             inventory: Some(inventory),
-                            good: self.host.state.inventories[&inventory].good,
+                            good: game_cargo::inventory(&self.host.storage, inventory)
+                                .expect("inventory exists")
+                                .good,
                             need_band: self.case_need_band(actor),
                             reciprocal: self.known_case_count(
                                 actor,
@@ -1283,9 +1300,14 @@ impl Simulation {
                     source,
                     destination,
                     ..
-                } if self.host.state.inventories[&destination].location
+                } if game_cargo::inventory(&self.host.storage, destination)
+                    .expect("inventory exists")
+                    .location
                     == InventoryLocation::Carried(actor)
-                    && self.host.state.inventories[&source].good == Good::Food =>
+                    && game_cargo::inventory(&self.host.storage, source)
+                        .expect("inventory exists")
+                        .good
+                        == Good::Food =>
                 {
                     self.record_received_support(actor, source)?
                 }
@@ -2104,9 +2126,9 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             RuleExpression::Fact(SocialCondition::KnownStockAtLeast {
                 inventory,
                 quantity,
-            }) => s.state.inventories.contains_key(inventory) && quantity.0 > 0,
+            }) => game_cargo::inventory(s.components, *(inventory)).is_some() && quantity.0 > 0,
             RuleExpression::Fact(SocialCondition::Excluded { inventory }) => {
-                s.state.inventories.contains_key(inventory)
+                game_cargo::inventory(s.components, *(inventory)).is_some()
             }
             RuleExpression::Fact(SocialCondition::HungerAtLeast(n)) => *n > 0,
             RuleExpression::Fact(
@@ -2138,7 +2160,9 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             Beneficiary::Office(_) => true,
         };
         match &rule.effect {
-            SocialEffect::Access { inventory, .. } => s.state.inventories.contains_key(inventory),
+            SocialEffect::Access { inventory, .. } => {
+                game_cargo::inventory(s.components, *(inventory)).is_some()
+            }
             SocialEffect::Labor {
                 site,
                 millis,
@@ -2160,10 +2184,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 source != destination
                     && quantity.0 > 0
                     && due_after.0 >= 120_000
-                    && s.state
-                        .inventories
-                        .get(source)
-                        .zip(s.state.inventories.get(destination))
+                    && game_cargo::inventory(s.components, *(source))
+                        .zip(game_cargo::inventory(s.components, *(destination)))
                         .is_some_and(|(a, b)| a.good == b.good && quantity.0 <= b.capacity.0)
                     && beneficiary(b)
             }
@@ -2213,7 +2235,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 || office
                     .inventories
                     .iter()
-                    .any(|id| !s.state.inventories.contains_key(id))
+                    .any(|id| !game_cargo::inventory(s.components, *(id)).is_some())
                 || office
                     .sites
                     .iter()
@@ -2334,7 +2356,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             || !areas.contains(&case.area)
             || case
                 .inventory
-                .is_some_and(|id| !s.state.inventories.contains_key(&id))
+                .is_some_and(|id| !game_cargo::inventory(s.components, id).is_some())
             || case.need_band > 3
             || case.observed_at > s.time
         {
@@ -2396,11 +2418,8 @@ mod closing_resource_tests {
         let debtor = sim.host.state.ruler;
         let creditor = sim.host.state.people[3].id;
         let area = sim.host.state.areas[0].id;
-        let source = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let source = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Timber && stock.location == InventoryLocation::Area(area)
             })

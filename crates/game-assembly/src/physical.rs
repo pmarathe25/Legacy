@@ -80,12 +80,7 @@ impl Simulation {
             .as_ref()
             .and_then(|_| game_physiology::body(&self.host.storage, child))
             .ok_or(Error::Unavailable)?;
-        let stock = self
-            .host
-            .state
-            .inventories
-            .get(&source)
-            .ok_or(Error::Unavailable)?;
+        let stock = game_cargo::inventory(&self.host.storage, source).ok_or(Error::Unavailable)?;
         let quantity = self.care_dose(stock.good).ok_or(Error::Unavailable)?;
         if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
             || actor == child
@@ -177,8 +172,13 @@ impl Simulation {
             carrying_capacity: Quantity(10_000),
         };
         sim.initialize_physical_people(rules)?;
-        let food = *sim.host.state.inventories.keys().next_back().unwrap();
-        sim.host.state.inventories.get_mut(&food).unwrap().quantity = Quantity(100_000);
+        let food = game_cargo::inventories(&sim.host.storage)
+            .map(|(id, _)| id)
+            .last()
+            .unwrap();
+        game_cargo::inventory_mut(&mut sim.host.storage, food)
+            .unwrap()
+            .quantity = Quantity(100_000);
         let timber = sim.debug_add_inventory(
             Good::Timber,
             InventoryLocation::Area(village),
@@ -291,7 +291,9 @@ impl Simulation {
                         .into_iter()
                         .flatten(),
                 )
-                .map(|id| &self.host.state.inventories[id])
+                .map(|id| {
+                    game_cargo::inventory(&self.host.storage, *(id)).expect("inventory exists")
+                })
                 .map(|i| StockView {
                     id: i.id,
                     good: i.good,
@@ -533,7 +535,7 @@ impl Simulation {
                     })
                     .and_then(|m| m.knowledge.get(&inventory))
                     .cloned();
-                let visible = self.host.state.inventories.get(&inventory).filter(|i| {
+                let visible = game_cargo::inventory(&self.host.storage, inventory).filter(|i| {
                     i.location == InventoryLocation::Area(area)
                         || i.location == InventoryLocation::Carried(actor)
                 });
@@ -587,12 +589,8 @@ impl Simulation {
                 )
             }
             Command::Eat { source } => {
-                let inventory = self
-                    .host
-                    .state
-                    .inventories
-                    .get(&source)
-                    .ok_or(Error::Unavailable)?;
+                let inventory =
+                    game_cargo::inventory(&self.host.storage, source).ok_or(Error::Unavailable)?;
                 if inventory.good != Good::Food
                     || !self.can_use(actor, inventory)
                     || self.unreserved_stock(source, actor) < rules.meal_size.0
@@ -623,12 +621,13 @@ impl Simulation {
                 let tool_id = self
                     .select_work_tool(actor, site)
                     .ok_or(Error::Unavailable)?;
-                let input = &self.host.state.inventories[&site_record.input];
+                let input = game_cargo::inventory(&self.host.storage, site_record.input)
+                    .expect("inventory exists");
                 let start = site_record.prepare_start(
                     game_workshop::job(&self.host.storage,actor),
                     input,
-                    &self.host.state.inventories[&tool_id],
-                    &self.host.state.inventories[&site_record.output],
+                    game_cargo::inventory(&self.host.storage, tool_id).expect("inventory exists"),
+                    game_cargo::inventory(&self.host.storage, site_record.output).expect("inventory exists"),
                     game_workshop::StartFacts {
                         actor,
                         area,
@@ -643,7 +642,7 @@ impl Simulation {
                         }),
                         input_usable: self.can_use(actor, input),
                         input_unreserved: Quantity(self.unreserved_stock(site_record.input, actor)),
-                        tool_usable: self.can_use(actor, &self.host.state.inventories[&tool_id]),
+                        tool_usable: self.can_use(actor, game_cargo::inventory(&self.host.storage, tool_id).expect("inventory exists")),
                         rate: self.effective_work_rate(actor, Skill::Craft),
                         body_rate: SkillRate {
                             numerator: u64::from(self.genetic_strength_milli(actor)),
@@ -684,11 +683,7 @@ impl Simulation {
             .record_phase("physical.interrupt_actor_activity", phase_started);
         if let Some(consumption) = consume {
             consumption.commit(
-                self.host
-                    .state
-                    .inventories
-                    .get_mut(&consumption.source)
-                    .unwrap(),
+                game_cargo::inventory_mut(&mut self.host.storage, consumption.source).unwrap(),
             )?;
             self.emit(EventKind::Consumed {
                 actor,
@@ -817,7 +812,14 @@ impl Simulation {
                     .get(&InventoryLocation::Carried(holder))
                     .into_iter()
                     .flatten()
-                    .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+                    .map(|id| {
+                        u128::from(
+                            game_cargo::inventory(&self.host.storage, *(id))
+                                .expect("inventory exists")
+                                .quantity
+                                .0,
+                        )
+                    })
                     .sum();
                 (
                     Quantity(
@@ -845,18 +847,9 @@ impl Simulation {
         destination: InventoryId,
         quantity: Quantity,
     ) -> Result<game_cargo::LoadJob, Error> {
-        let from = self
-            .host
-            .state
-            .inventories
-            .get(&source)
-            .ok_or(Error::Unavailable)?;
-        let to = self
-            .host
-            .state
-            .inventories
-            .get(&destination)
-            .ok_or(Error::Unavailable)?;
+        let from = game_cargo::inventory(&self.host.storage, source).ok_or(Error::Unavailable)?;
+        let to =
+            game_cargo::inventory(&self.host.storage, destination).ok_or(Error::Unavailable)?;
         game_cargo::prepare_load(
             self.cargo_actor_facts(actor)?,
             from,
@@ -923,8 +916,12 @@ impl Simulation {
                     Activity::Eat { source, .. } => (source, physical.rules.meal_size),
                     Activity::Care { source, .. } => (
                         source,
-                        self.care_dose(self.host.state.inventories[&source].good)
-                            .unwrap_or(Quantity(0)),
+                        self.care_dose(
+                            game_cargo::inventory(&self.host.storage, source)
+                                .expect("inventory exists")
+                                .good,
+                        )
+                        .unwrap_or(Quantity(0)),
                     ),
                     Activity::Load {
                         source, quantity, ..
@@ -975,7 +972,9 @@ impl Simulation {
         excluding: PersonId,
         resources: Option<&equipment::RankingResources>,
     ) -> u64 {
-        let quantity = self.host.state.inventories[&source].quantity;
+        let quantity = game_cargo::inventory(&self.host.storage, source)
+            .expect("inventory exists")
+            .quantity;
         if let Some(resources) = resources {
             return resources
                 .reservations
@@ -990,14 +989,22 @@ impl Simulation {
         if self.host.state.physical.is_none() {
             return true;
         }
-        let inventory = &self.host.state.inventories[&destination];
+        let inventory =
+            game_cargo::inventory(&self.host.storage, destination).expect("inventory exists");
         if let InventoryLocation::Carried(actor) = inventory.location {
             let carried: u128 = self
                 .inventory_index
                 .get(&InventoryLocation::Carried(actor))
                 .into_iter()
                 .flatten()
-                .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+                .map(|id| {
+                    u128::from(
+                        game_cargo::inventory(&self.host.storage, *(id))
+                            .expect("inventory exists")
+                            .quantity
+                            .0,
+                    )
+                })
                 .sum();
             carried + u128::from(amount) <= u128::from(self.body_rules(actor).carrying_capacity.0)
                 && self.transport_transfer_capacity(actor, amount)
@@ -1447,10 +1454,15 @@ impl Simulation {
             }
             Activity::Eat { source, .. } => {
                 let quantity = self.host.state.physical.as_ref().unwrap().rules.meal_size;
-                if self.can_use(actor, &self.host.state.inventories[&source])
-                    && self.host.state.inventories[&source].quantity >= quantity
+                if self.can_use(
+                    actor,
+                    game_cargo::inventory(&self.host.storage, source).expect("inventory exists"),
+                ) && game_cargo::inventory(&self.host.storage, source)
+                    .expect("inventory exists")
+                    .quantity
+                    >= quantity
                 {
-                    let stock = self.host.state.inventories.get_mut(&source).unwrap();
+                    let stock = game_cargo::inventory_mut(&mut self.host.storage, source).unwrap();
                     stock.quantity.0 -= quantity.0;
                     stock.last_granted = Some(actor);
                     self.emit(EventKind::Ate {
@@ -1484,7 +1496,7 @@ impl Simulation {
                     job.closing_request(self.host.clock().time, self.cargo_closing_facts(&intent))?;
                 let resolved = self
                     .prepare_cargo_requests(vec![request], None)?
-                    .commit(&mut self.host.state.inventories)?;
+                    .commit(&mut self.host.storage)?;
                 if resolved[0].1 {
                     self.emit(EventKind::Transferred {
                         actor,
@@ -1542,21 +1554,35 @@ impl Simulation {
                 let recipient =
                     &game_physiology::body(&self.host.storage, child).expect("body exists");
                 let quantity = self
-                    .care_dose(self.host.state.inventories[&source].good)
+                    .care_dose(
+                        game_cargo::inventory(&self.host.storage, source)
+                            .expect("inventory exists")
+                            .good,
+                    )
                     .ok_or(Error::Unavailable)?;
                 if recipient.vitals.alive
                     && self.transport_same_place(child, actor)
-                    && self.can_use(actor, &self.host.state.inventories[&source])
-                    && self.host.state.inventories[&source].quantity >= quantity
+                    && self.can_use(
+                        actor,
+                        game_cargo::inventory(&self.host.storage, source)
+                            .expect("inventory exists"),
+                    )
+                    && game_cargo::inventory(&self.host.storage, source)
+                        .expect("inventory exists")
+                        .quantity
+                        >= quantity
                 {
-                    if self.host.state.inventories[&source].good == Good::Water
+                    if game_cargo::inventory(&self.host.storage, source)
+                        .expect("inventory exists")
+                        .good
+                        == Good::Water
                         && self.health_water_given(child, source, quantity).is_err()
                     {
                         self.emit(EventKind::Interrupted { actor });
                         *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
                         return Ok(());
                     }
-                    let food = self.host.state.inventories.get_mut(&source).unwrap();
+                    let food = game_cargo::inventory_mut(&mut self.host.storage, source).unwrap();
                     food.quantity.0 -= quantity.0;
                     food.last_granted = Some(actor);
                     game_lifecycle::life_mut(&mut self.host.storage, child)
@@ -1621,7 +1647,7 @@ impl Simulation {
                 .take_while(|e| e.at == self.host.clock().time)
                 .any(|e| {
                     matches!(e.event, EventKind::Ate { actor: id, .. } if id == actor)
-                        || matches!(e.event, EventKind::Cared { child: id, source, .. } if id == actor && self.host.state.inventories[&source].good == Good::Food)
+                        || matches!(e.event, EventKind::Cared { child: id, source, .. } if id == actor && game_cargo::inventory(&self.host.storage, source).expect("inventory exists").good == Good::Food)
                 });
             if ate {
                 vitals.hunger = vitals.hunger.saturating_sub(rules.meal_relief);
@@ -1677,7 +1703,8 @@ impl Simulation {
                     .unwrap()
                     .prepare_completion(
                         site,
-                        &self.host.state.inventories[&site.output],
+                        game_cargo::inventory(&self.host.storage, site.output)
+                            .expect("inventory exists"),
                         game_workshop::CompletionFacts {
                             actor,
                             active: true,
@@ -1685,7 +1712,6 @@ impl Simulation {
                             equipped: equipment.get(&actor).copied().unwrap_or(false),
                         },
                     )?;
-                let output_id = site.output;
                 if let Some(production) = production {
                     let receipt = EventKind::Produced {
                         actor: production.actor,
@@ -1693,10 +1719,7 @@ impl Simulation {
                         output: production.output,
                         quantity: production.quantity,
                     };
-                    production.commit_components(
-                        &mut self.host.storage,
-                        self.host.state.inventories.get_mut(&output_id).unwrap(),
-                    )?;
+                    production.commit_stocks(&mut self.host.storage)?;
                     *self
                         .host
                         .storage
@@ -1759,7 +1782,9 @@ impl Simulation {
                         remainder: out.work_remainder?,
                     },
                     site,
-                    self.host.state.inventories[&site.output].good,
+                    game_cargo::inventory(&self.host.storage, site.output)
+                        .expect("inventory exists")
+                        .good,
                 )
             })
             .collect()
@@ -1806,7 +1831,14 @@ impl Simulation {
                 .get(&InventoryLocation::Carried(actor))
                 .into_iter()
                 .flatten()
-                .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+                .map(|id| {
+                    u128::from(
+                        game_cargo::inventory(&self.host.storage, *(id))
+                            .expect("inventory exists")
+                            .quantity
+                            .0,
+                    )
+                })
                 .sum();
             if self.host.state.physical.as_ref().is_some_and(|_| {
                 quantity.0 > 0
@@ -1822,8 +1854,8 @@ impl Simulation {
             .entry(location.clone())
             .or_default()
             .push(id);
-        self.host.state.inventories.insert(
-            id,
+        game_cargo::insert_inventory(
+            &mut self.host.storage,
             Inventory {
                 id,
                 location,
@@ -1834,16 +1866,12 @@ impl Simulation {
                 good,
                 spoils_at: None,
             },
-        );
+        )?;
         Ok(id)
     }
 
     pub fn debug_spoil_at(&mut self, inventory: InventoryId, at: SimTime) -> Result<(), Error> {
-        let stock = self
-            .host
-            .state
-            .inventories
-            .get(&inventory)
+        let stock = game_cargo::inventory(&self.host.storage, inventory)
             .ok_or_else(|| Error::InvalidFixture("unknown stock".into()))?;
         if stock.good != Good::Food || at <= self.host.clock().time {
             return Err(Error::InvalidFixture("invalid spoilage".into()));
@@ -1852,10 +1880,7 @@ impl Simulation {
             due.retain(|d| !matches!(d, Due::Spoil(id) if *id == inventory));
         }
         self.host.state.due.retain(|_, due| !due.is_empty());
-        self.host
-            .state
-            .inventories
-            .get_mut(&inventory)
+        game_cargo::inventory_mut(&mut self.host.storage, inventory)
             .unwrap()
             .spoils_at = Some(at);
         self.host

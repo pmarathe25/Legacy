@@ -12,11 +12,8 @@ impl Simulation {
             version: 1,
             debug_fixture: true,
         };
-        let custodians = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let custodians = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .map(|stock| {
                 (
                     stock.id,
@@ -41,18 +38,17 @@ impl Simulation {
             custodians,
         });
         let custodian = sim.host.state.people[3].id;
-        let food = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let food = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Food
                     && stock.location == InventoryLocation::Area(sim.host.state.areas[0].id)
             })
             .unwrap()
             .id;
-        sim.host.state.inventories.get_mut(&food).unwrap().access = BTreeSet::from([custodian]);
+        game_cargo::inventory_mut(&mut sim.host.storage, food)
+            .unwrap()
+            .access = BTreeSet::from([custodian]);
         sim.host
             .state
             .agreements
@@ -77,11 +73,8 @@ impl Simulation {
                 )
             })
             .collect();
-        let portions = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let portions = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .map(|stock| {
                 (
                     stock.id,
@@ -147,7 +140,7 @@ impl Simulation {
         }
     }
     fn property_custodian(&self, inventory: InventoryId) -> Option<PersonId> {
-        let stock = self.host.state.inventories.get(&inventory)?;
+        let stock = game_cargo::inventory(&self.host.storage, inventory)?;
         match stock.location {
             InventoryLocation::Carried(actor) => Some(actor),
             InventoryLocation::Area(_) => self
@@ -203,12 +196,7 @@ impl Simulation {
         actor: PersonId,
         id: InventoryId,
     ) -> Result<game_property::StockFacts, Error> {
-        let stock = self
-            .host
-            .state
-            .inventories
-            .get(&id)
-            .ok_or(Error::Unavailable)?;
+        let stock = game_cargo::inventory(&self.host.storage, id).ok_or(Error::Unavailable)?;
         Ok(game_property::StockFacts {
             id,
             area: self.inventory_area(stock),
@@ -267,11 +255,7 @@ impl Simulation {
         let local = self.property_area(observer) == Some(incident.area);
         let custody = local && self.property_custodian(incident.source) == Some(observer);
         let allowed = custody
-            && self
-                .host
-                .state
-                .inventories
-                .get(&incident.source)
+            && game_cargo::inventory(&self.host.storage, incident.source)
                 .is_some_and(|stock| stock.access.contains(&incident.actor));
         game_property::ObserverFacts {
             actor: observer,
@@ -433,17 +417,9 @@ impl Simulation {
                     quantity,
                     ..
                 } => {
-                    let from = self
-                        .host
-                        .state
-                        .inventories
-                        .get(source)
+                    let from = game_cargo::inventory(&self.host.storage, *(source))
                         .ok_or(Error::Unavailable)?;
-                    let to = self
-                        .host
-                        .state
-                        .inventories
-                        .get(destination)
+                    let to = game_cargo::inventory(&self.host.storage, *(destination))
                         .ok_or(Error::Unavailable)?;
                     if from.quantity < *quantity
                         || to.capacity.0.saturating_sub(to.quantity.0) < quantity.0
@@ -571,11 +547,7 @@ impl Simulation {
                     recipient,
                     allowed,
                 } => {
-                    let access = &mut self
-                        .host
-                        .state
-                        .inventories
-                        .get_mut(&inventory)
+                    let access = &mut game_cargo::inventory_mut(&mut self.host.storage, inventory)
                         .unwrap()
                         .access;
                     if allowed {
@@ -647,24 +619,15 @@ impl Simulation {
                     destination,
                     quantity,
                 } => {
-                    self.host
-                        .state
-                        .inventories
-                        .get_mut(&source)
+                    game_cargo::inventory_mut(&mut self.host.storage, source)
                         .unwrap()
                         .quantity
                         .0 -= quantity.0;
-                    self.host
-                        .state
-                        .inventories
-                        .get_mut(&destination)
+                    game_cargo::inventory_mut(&mut self.host.storage, destination)
                         .unwrap()
                         .quantity
                         .0 += quantity.0;
-                    self.host
-                        .state
-                        .inventories
-                        .get_mut(&source)
+                    game_cargo::inventory_mut(&mut self.host.storage, source)
                         .unwrap()
                         .last_granted = Some(actor);
                     self.emit(EventKind::Transferred {
@@ -861,7 +824,8 @@ impl Simulation {
             return Ok(None);
         };
         let through = self.host.next_event() - 1;
-        if world.last_event == through && world.portions.len() == self.host.state.inventories.len()
+        if world.last_event == through
+            && world.portions.len() == game_cargo::inventories(&self.host.storage).count()
         {
             return Ok(None);
         }
@@ -947,23 +911,17 @@ impl Simulation {
                 });
             }
         }
-        if world.portions.len() != self.host.state.inventories.len() {
+        if world.portions.len() != game_cargo::inventories(&self.host.storage).count() {
             touched.extend(
-                self.host
-                    .state
-                    .inventories
-                    .keys()
-                    .filter(|id| !world.portions.contains_key(id))
-                    .copied(),
+                game_cargo::inventories(&self.host.storage)
+                    .map(|(id, _)| id)
+                    .filter(|id| !world.portions.contains_key(id)),
             );
         }
         let balances = touched
             .into_iter()
             .map(|id| {
-                self.host
-                    .state
-                    .inventories
-                    .get(&id)
+                game_cargo::inventory(&self.host.storage, id)
                     .map(|stock| (id, stock.quantity))
                     .ok_or(Error::Unavailable)
             })
@@ -1000,11 +958,8 @@ impl Simulation {
         let people = self.property_present(area);
         let quantity = self.host.state.physical.as_ref().unwrap().rules.meal_size;
         let cargo = self.host.state.people[self.person_index[&actor]].inventory;
-        for stock in self
-            .host
-            .state
-            .inventories
-            .values()
+        for stock in game_cargo::inventories(&self.host.storage)
+            .map(|(_, row)| row)
             .filter(|stock| stock.quantity.0 > 0 && self.inventory_area(stock) == Some(area))
             .take(16)
         {
@@ -1146,7 +1101,7 @@ impl Simulation {
             .into_iter()
             .flatten()
         {
-            let stock = &self.host.state.inventories[id];
+            let stock = game_cargo::inventory(&self.host.storage, *(id)).expect("inventory exists");
             destinations
                 .entry(stock.good)
                 .and_modify(|existing| *existing = (*existing).min(*id))
@@ -1222,11 +1177,8 @@ impl Simulation {
                 continue;
             }
             let recipients = self.property_present(area);
-            let stores = self
-                .host
-                .state
-                .inventories
-                .values()
+            let stores = game_cargo::inventories(&self.host.storage)
+                .map(|(_, row)| row)
                 .filter(|stock| {
                     self.inventory_area(stock) == Some(area)
                         && self.property_custodian(stock.id) == Some(actor)
@@ -1275,14 +1227,14 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             .keys()
             .chain(world.next_search.keys())
             .any(|actor| !people.contains_key(actor))
-        || world.portions.len() != state.state.inventories.len()
+        || world.portions.len() != game_cargo::inventories(state.components).count()
     {
         return Err(fail());
     }
     for (id, claim) in &world.claims {
         if id.0 >= state.next_id
             || !people.contains_key(&claim.claimant)
-            || !state.state.inventories.contains_key(&claim.inventory)
+            || !game_cargo::inventory(state.components, claim.inventory).is_some()
             || claim
                 .recognized_by
                 .iter()
@@ -1293,7 +1245,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         }
     }
     for (inventory, portions) in &world.portions {
-        let stock = state.state.inventories.get(inventory).ok_or_else(fail)?;
+        let stock = game_cargo::inventory(state.components, *(inventory)).ok_or_else(fail)?;
         let total = portions
             .values()
             .try_fold(0u64, |total, q| total.checked_add(*q).ok_or_else(fail))?;
@@ -1316,11 +1268,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     for incident in world.incidents.values() {
         if incident.id.0 >= state.next_id
             || !people.contains_key(&incident.actor)
-            || !state
-                .state
-                .inventories
-                .get(&incident.source)
-                .zip(state.state.inventories.get(&incident.destination))
+            || !game_cargo::inventory(state.components, incident.source)
+                .zip(game_cargo::inventory(
+                    state.components,
+                    incident.destination,
+                ))
                 .is_some_and(|(source, destination)| {
                     source.good == destination.good
                         && destination.location == InventoryLocation::Carried(incident.actor)

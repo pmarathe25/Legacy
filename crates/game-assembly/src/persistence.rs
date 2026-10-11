@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 39;
+const SAVE_VERSION: u32 = 40;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -48,6 +48,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     s.components.validate_land()?;
     genetics::validate(s)?;
     let fail = || Error::InvalidSave("inconsistent committed state".into());
+    game_cargo::validate_storage(s.components)?;
     if s.components.ids().any(|id| id.0 == 0 || id.0 >= s.next_id) {
         return Err(fail());
     }
@@ -228,7 +229,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         .iter()
         .map(|a| a.id.0)
         .chain(s.state.people.iter().map(|p| p.id.0))
-        .chain(s.state.inventories.keys().map(|i| i.0))
+        .chain(
+            game_cargo::inventories(s.components)
+                .map(|(id, _)| id)
+                .map(|i| i.0),
+        )
     {
         if id == 0 || id >= s.next_id || !ids.insert(id) {
             return Err(fail());
@@ -485,8 +490,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         if i.quantity.0 == 0
                             || i.source == i.destination
                             || !people.contains_key(&i.actor)
-                            || !s.state.inventories.contains_key(&i.source)
-                            || !s.state.inventories.contains_key(&i.destination)
+                            || !game_cargo::inventory(s.components, i.source).is_some()
+                            || !game_cargo::inventory(s.components, i.destination).is_some()
                         {
                             return Err(fail());
                         }
@@ -506,10 +511,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     }
                 }
                 Due::Spoil(id) => {
-                    if !s
-                        .state
-                        .inventories
-                        .get(id)
+                    if !game_cargo::inventory(s.components, *(id))
                         .is_some_and(|i| i.good == Good::Food && i.spoils_at == Some(*time))
                         || !spoil_deadlines.insert(*id)
                     {
@@ -525,10 +527,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     for p in &s.state.people {
         if p.work_remainder >= 60_000
             || p.hunger_exempt != (p.role == Role::Guardian)
-            || !s
-                .state
-                .inventories
-                .get(&p.inventory)
+            || !game_cargo::inventory(s.components, p.inventory)
                 .is_some_and(|i| i.location == InventoryLocation::Carried(p.id))
         {
             return Err(fail());
@@ -644,14 +643,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             origin = *destination;
         }
     }
-    for (id, inventory) in &s.state.inventories {
-        if *id != inventory.id
+    for (id, inventory) in game_cargo::inventories(s.components) {
+        if id != inventory.id
             || inventory.quantity > inventory.capacity
             || inventory.access.iter().any(|p| !people.contains_key(p))
             || inventory
                 .last_granted
                 .is_some_and(|p| !people.contains_key(&p))
-            || inventory.spoils_at.is_some() != spoil_deadlines.contains(id)
+            || inventory.spoils_at.is_some() != spoil_deadlines.contains(&id)
         {
             return Err(fail());
         }
@@ -865,10 +864,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::Drank { actor, source, .. } | EventKind::WaterPurified { actor, source } => {
                 if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .inventories
-                        .get(&source)
+                    || !game_cargo::inventory(s.components, source)
                         .is_some_and(|i| i.good == Good::Water)
                 {
                     return Err(fail());
@@ -991,7 +987,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 ..
             } => {
                 if !people.contains_key(&actor)
-                    || !s.state.inventories.contains_key(&destination)
+                    || !game_cargo::inventory(s.components, destination).is_some()
                     || !s
                         .state
                         .ecology
@@ -1094,7 +1090,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&target)
-                    || !s.state.inventories.contains_key(&binding)
+                    || !game_cargo::inventory(s.components, binding).is_some()
                 {
                     return Err(fail());
                 }
@@ -1167,7 +1163,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .is_some_and(|w| w.encounters.contains_key(&encounter))
                     || !people.contains_key(&actor)
                     || !people.contains_key(&target)
-                    || !s.state.inventories.contains_key(&binding)
+                    || !game_cargo::inventory(s.components, binding).is_some()
                 {
                     return Err(fail());
                 }
@@ -1222,15 +1218,17 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 quantity,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.state.inventories.contains_key(&source)
-                    || !s.state.inventories.contains_key(&destination)
+                    || !game_cargo::inventory(s.components, source).is_some()
+                    || !game_cargo::inventory(s.components, destination).is_some()
                     || quantity.0 == 0
                 {
                     return Err(fail());
                 }
             }
             EventKind::TransferFailed { actor, source } => {
-                if !people.contains_key(&actor) || !s.state.inventories.contains_key(&source) {
+                if !people.contains_key(&actor)
+                    || !game_cargo::inventory(s.components, source).is_some()
+                {
                     return Err(fail());
                 }
             }
@@ -1245,14 +1243,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 quantity,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.state.inventories.contains_key(&source)
+                    || !game_cargo::inventory(s.components, source).is_some()
                     || quantity.0 == 0
                 {
                     return Err(fail());
                 }
             }
             EventKind::Spoiled { inventory, .. } => {
-                if !s.state.inventories.contains_key(&inventory) {
+                if !game_cargo::inventory(s.components, inventory).is_some() {
                     return Err(fail());
                 }
             }
@@ -1268,7 +1266,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .physical
                         .as_ref()
                         .is_some_and(|_| game_workshop::site(s.components, site).is_some())
-                    || !s.state.inventories.contains_key(&output)
+                    || !game_cargo::inventory(s.components, output).is_some()
                     || quantity.0 == 0
                 {
                     return Err(fail());
@@ -1288,7 +1286,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&sender)
                     || !people.contains_key(&recipient)
-                    || !s.state.inventories.contains_key(&inventory)
+                    || !game_cargo::inventory(s.components, inventory).is_some()
                 {
                     return Err(fail());
                 }
@@ -1343,7 +1341,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&caregiver)
                     || !people.contains_key(&child)
-                    || !s.state.inventories.contains_key(&source)
+                    || !game_cargo::inventory(s.components, source).is_some()
                     || quantity.0 == 0
                 {
                     return Err(fail());
@@ -1385,7 +1383,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 inventory,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.state.inventories.contains_key(&inventory)
+                    || !game_cargo::inventory(s.components, inventory).is_some()
                     || !s
                         .state
                         .invocation
@@ -1603,7 +1601,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 inventory,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.state.inventories.contains_key(&inventory)
+                    || !game_cargo::inventory(s.components, inventory).is_some()
                     || !s
                         .state
                         .property
@@ -1642,7 +1640,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&recipient)
-                    || !s.state.inventories.contains_key(&inventory)
+                    || !game_cargo::inventory(s.components, inventory).is_some()
                 {
                     return Err(fail());
                 }
@@ -1663,8 +1661,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if quantity.0 == 0
                     || !people.contains_key(&actor)
-                    || !s.state.inventories.contains_key(&source)
-                    || !s.state.inventories.contains_key(&destination)
+                    || !game_cargo::inventory(s.components, source).is_some()
+                    || !game_cargo::inventory(s.components, destination).is_some()
                     || !s
                         .state
                         .property
@@ -1876,7 +1874,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .is_some_and(|w| w.projects.contains_key(&id)),
                 };
                 let subject_exists = |subject: Subject| match subject {
-                    Subject::Inventory(id) => s.state.inventories.contains_key(&id),
+                    Subject::Inventory(id) => game_cargo::inventory(s.components, id).is_some(),
                     Subject::Site(id) => s
                         .state
                         .physical
@@ -1907,9 +1905,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     } => {
                         people.contains_key(&beneficiary)
                             && source.is_none_or(|id| {
-                                s.state
-                                    .inventories
-                                    .get(&id)
+                                game_cargo::inventory(s.components, id)
                                     .is_some_and(|stock| stock.good == good)
                             })
                     }
@@ -1927,9 +1923,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         people.contains_key(beneficiary)
                             && requirement.quantity.0 > 0
                             && requirement.source.is_none_or(|id| {
-                                s.state
-                                    .inventories
-                                    .get(&id)
+                                game_cargo::inventory(s.components, id)
                                     .is_some_and(|stock| stock.good == requirement.good)
                             })
                     }
@@ -1940,7 +1934,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || plan
                         .prospects
                         .source
-                        .is_some_and(|id| !s.state.inventories.contains_key(&id))
+                        .is_some_and(|id| !game_cargo::inventory(s.components, id).is_some())
                     || plan.prospects.site.is_some_and(|id| {
                         !s.state
                             .physical
@@ -1960,7 +1954,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             {
                 let target_exists = match delivery.destination {
                     game_logistics::Destination::Inventory(target) => {
-                        s.state.inventories.contains_key(&target)
+                        game_cargo::inventory(s.components, target).is_some()
                     }
                     game_logistics::Destination::Contact(target) => people.contains_key(&target),
                 };
@@ -1981,9 +1975,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !matches_motive
                     || delivery.last_receipt >= s.next_event
                     || delivery.requirement.source.is_some_and(|source| {
-                        !s.state
-                            .inventories
-                            .get(&source)
+                        !game_cargo::inventory(s.components, source)
                             .is_some_and(|stock| stock.good == delivery.requirement.good)
                     })
                 {
@@ -2000,13 +1992,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
             }
             if mind.last_failure.is_some_and(|(time, inventory)| {
-                time > s.time || !s.state.inventories.contains_key(&inventory)
+                time > s.time || !game_cargo::inventory(s.components, inventory).is_some()
             }) {
                 return Err(fail());
             }
             for (id, fact) in &mind.knowledge {
                 if *id != fact.inventory
-                    || !s.state.inventories.contains_key(id)
+                    || !game_cargo::inventory(s.components, *(id)).is_some()
                     || !areas.contains(&fact.area)
                     || fact.observed_at > s.time
                     || fact.learned_at > s.time
@@ -2067,8 +2059,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if *id != site.site
                     || !game_workshop::site(s.components, *id).is_some()
                     || !areas.contains(&site.area)
-                    || !s.state.inventories.contains_key(&site.input)
-                    || !s.state.inventories.contains_key(&site.tool)
+                    || !game_cargo::inventory(s.components, site.input).is_some()
+                    || !game_cargo::inventory(s.components, site.tool).is_some()
                 {
                     return Err(fail());
                 }
@@ -2130,21 +2122,22 @@ fn validate_physical(
             return Err(fail());
         }
         for inventory in [site.input, site.tool, site.output] {
-            if !s
-                .state
-                .inventories
-                .get(&inventory)
+            if !game_cargo::inventory(s.components, inventory)
                 .is_some_and(|i| i.location == InventoryLocation::Area(site.area))
             {
                 return Err(fail());
             }
         }
-        if s.state.inventories[&site.tool].good != Good::Tool {
+        if game_cargo::inventory(s.components, site.tool)
+            .expect("inventory exists")
+            .good
+            != Good::Tool
+        {
             return Err(fail());
         }
     }
     let mut cargo = BTreeMap::<PersonId, u128>::new();
-    for i in s.state.inventories.values() {
+    for i in game_cargo::inventories(s.components).map(|(_, row)| row) {
         if let InventoryLocation::Carried(p) = i.location {
             *cargo.entry(p).or_default() += u128::from(i.quantity.0);
         }
@@ -2177,10 +2170,7 @@ fn validate_physical(
         }
         if let Some(job) = job
             && (job.tool.is_some_and(|tool| {
-                !s.state
-                    .inventories
-                    .get(&tool)
-                    .is_some_and(|i| i.good == Good::Tool)
+                !game_cargo::inventory(s.components, tool).is_some_and(|i| i.good == Good::Tool)
             }) || !matches!(job.rate.denominator, 1_000 | 1_000_000)
                 || job.body_rate.denominator != 1_000
                 || !(250..=2_000).contains(&job.body_rate.numerator)
@@ -2312,10 +2302,7 @@ fn validate_physical(
                 return Err(fail());
             }
             Activity::Eat { source, .. } => {
-                if !s
-                    .state
-                    .inventories
-                    .get(&source)
+                if !game_cargo::inventory(s.components, source)
                     .is_some_and(|i| i.good == Good::Food)
                 {
                     return Err(fail());
@@ -2327,8 +2314,9 @@ fn validate_physical(
                 quantity,
                 completes,
             } => {
-                let source_stock = s.state.inventories.get(&source).ok_or_else(fail)?;
-                let destination_stock = s.state.inventories.get(&destination).ok_or_else(fail)?;
+                let source_stock = game_cargo::inventory(s.components, source).ok_or_else(fail)?;
+                let destination_stock =
+                    game_cargo::inventory(s.components, destination).ok_or_else(fail)?;
                 game_cargo::LoadJob {
                     actor: *id,
                     source,
@@ -2349,7 +2337,7 @@ fn validate_physical(
                 ref fact,
                 ..
             } if !people.contains_key(&recipient)
-                || !s.state.inventories.contains_key(&fact.inventory)
+                || !game_cargo::inventory(s.components, fact.inventory).is_some()
                 || fact.observed_at > s.time =>
             {
                 return Err(fail());
@@ -2357,7 +2345,7 @@ fn validate_physical(
             Activity::Comfort { child, .. } if !people.contains_key(&child) => return Err(fail()),
             Activity::Care { child, source, .. }
                 if !people.contains_key(&child)
-                    || !s.state.inventories.get(&source).is_some_and(|i| {
+                    || !game_cargo::inventory(s.components, source).is_some_and(|i| {
                         i.good == Good::Food || i.good == Good::Water && s.state.health.is_some()
                     }) =>
             {

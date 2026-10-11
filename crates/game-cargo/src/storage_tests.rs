@@ -72,3 +72,12 @@ fn invalid_inventory_admission_is_inert_and_schema_rejects_bad_snapshots() {
     snapshot["columns"]["cargo/inventory"][0]["value"]["quantity"] = serde_json::json!(1001);
     assert!(Store::restore(schema(), serde_json::from_value(snapshot).unwrap()).is_err());
 }
+
+#[test]
+fn intrinsic_restore_does_not_replace_owner_identity_validation() {
+    let mut store = Store::with_schema(schema());
+    store.insert_or_spawn(StableId(9), stock(3)).unwrap();
+    let restored = Store::restore(schema(), store.snapshot().unwrap()).unwrap();
+    assert!(validate_storage(&restored).is_err());
+    assert_eq!(store, restored);
+}

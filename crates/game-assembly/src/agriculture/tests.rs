@@ -109,7 +109,9 @@ fn local_crop_fixture(workers: usize) -> (Simulation, SiteId, SiteId) {
         &mut field.water,
         &mut field.food,
     ] {
-        let mut inventory = sim.host.state.inventories[&*stock].clone();
+        let mut inventory = game_cargo::inventory(&sim.host.storage, *stock)
+            .expect("inventory exists")
+            .clone();
         inventory.id = InventoryId(sim.host.allocate_id().unwrap().0);
         inventory.location = InventoryLocation::Area(cold_area);
         *stock = inventory.id;
@@ -117,7 +119,7 @@ fn local_crop_fixture(workers: usize) -> (Simulation, SiteId, SiteId) {
             .entry(inventory.location.clone())
             .or_default()
             .push(inventory.id);
-        sim.host.state.inventories.insert(inventory.id, inventory);
+        game_cargo::insert_inventory(&mut sim.host.storage, inventory).unwrap();
     }
     let world = sim.host.state.agriculture.as_mut().unwrap();
     let copied_crop = world.crop(&sim.host.storage, warm).unwrap().clone();
@@ -167,7 +169,14 @@ fn connected_crops_match_local_weather_and_soil_without_changing_field_metadata(
         .flat_map(|field| {
             [field.seed, field.tool, field.water, field.food]
                 .into_iter()
-                .map(|id| (id, sim.host.state.inventories[&id].clone()))
+                .map(|id| {
+                    (
+                        id,
+                        game_cargo::inventory(&sim.host.storage, id)
+                            .expect("inventory exists")
+                            .clone(),
+                    )
+                })
         })
         .collect();
     let environment = sim.host.state.environment.as_ref().unwrap();
@@ -220,7 +229,10 @@ fn connected_crops_match_local_weather_and_soil_without_changing_field_metadata(
         fields
     );
     for (id, stock) in stocks {
-        assert_eq!(sim.host.state.inventories[&id], stock);
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, id).expect("inventory exists"),
+            &stock
+        );
     }
     assert_eq!(
         world.crop(&sim.host.storage, cold).unwrap().contributions,
@@ -260,7 +272,7 @@ fn local_crop_components_survive_restore_and_worker_and_chunk_order_changes() {
             ))
             .unwrap();
     }
-    assert_eq!(direct.host.state, chunked.host.state);
+    assert_eq!(direct.canonical_state(), chunked.canonical_state());
 }
 
 #[test]
@@ -278,8 +290,12 @@ fn deliberate_fallow_loses_planted_seed_and_warm_wet_soil_recovers_without_harve
         .field(&sim.host.storage, field)
         .unwrap()
         .clone();
-    let consumed = sim.host.state.inventories[&land.seed].quantity;
-    let food = sim.host.state.inventories[&land.food].quantity;
+    let consumed = game_cargo::inventory(&sim.host.storage, land.seed)
+        .expect("inventory exists")
+        .quantity;
+    let food = game_cargo::inventory(&sim.host.storage, land.food)
+        .expect("inventory exists")
+        .quantity;
     sim.host
         .state
         .agriculture
@@ -289,8 +305,18 @@ fn deliberate_fallow_loses_planted_seed_and_warm_wet_soil_recovers_without_harve
         .unwrap()
         .fertility = 500;
     perform(&mut sim, field, FarmOperation::Fallow);
-    assert_eq!(sim.host.state.inventories[&land.seed].quantity, consumed);
-    assert_eq!(sim.host.state.inventories[&land.food].quantity, food);
+    assert_eq!(
+        game_cargo::inventory(&sim.host.storage, land.seed)
+            .expect("inventory exists")
+            .quantity,
+        consumed
+    );
+    assert_eq!(
+        game_cargo::inventory(&sim.host.storage, land.food)
+            .expect("inventory exists")
+            .quantity,
+        food
+    );
     assert_eq!(
         sim.host
             .state
@@ -328,15 +354,27 @@ fn full_cycle_consumes_seed_and_credits_only_real_labor_and_harvest() {
         .field(&sim.host.storage, field)
         .unwrap()
         .clone();
-    let opening_food = sim.host.state.inventories[&land.food].quantity.0;
-    let opening_seed = sim.host.state.inventories[&land.seed].quantity.0;
+    let opening_food = game_cargo::inventory(&sim.host.storage, land.food)
+        .expect("inventory exists")
+        .quantity
+        .0;
+    let opening_seed = game_cargo::inventory(&sim.host.storage, land.seed)
+        .expect("inventory exists")
+        .quantity
+        .0;
     plant(&mut sim, field);
     assert_eq!(
-        sim.host.state.inventories[&land.seed].quantity.0,
+        game_cargo::inventory(&sim.host.storage, land.seed)
+            .expect("inventory exists")
+            .quantity
+            .0,
         opening_seed - 1_000
     );
     assert_eq!(
-        sim.host.state.inventories[&land.food].quantity.0,
+        game_cargo::inventory(&sim.host.storage, land.food)
+            .expect("inventory exists")
+            .quantity
+            .0,
         opening_food
     );
     for _ in 0..4 {
@@ -357,11 +395,17 @@ fn full_cycle_consumes_seed_and_credits_only_real_labor_and_harvest() {
     );
     perform(&mut sim, field, FarmOperation::Harvest);
     assert_eq!(
-        sim.host.state.inventories[&land.food].quantity.0,
+        game_cargo::inventory(&sim.host.storage, land.food)
+            .expect("inventory exists")
+            .quantity
+            .0,
         opening_food + 27_000
     );
     assert_eq!(
-        sim.host.state.inventories[&land.seed].quantity.0,
+        game_cargo::inventory(&sim.host.storage, land.seed)
+            .expect("inventory exists")
+            .quantity
+            .0,
         opening_seed - 1_000 + 1_800
     );
     let world = sim.host.state.agriculture.as_ref().unwrap();
@@ -390,7 +434,9 @@ fn interrupted_planting_preserves_labor_and_consumed_seed() {
         .field(&sim.host.storage, field)
         .unwrap()
         .seed;
-    let opening = sim.host.state.inventories[&seed].quantity;
+    let opening = game_cargo::inventory(&sim.host.storage, seed)
+        .expect("inventory exists")
+        .quantity;
     let ruler = sim.host.state.ruler;
     sim.debug_actor_command(
         ruler,
@@ -414,12 +460,18 @@ fn interrupted_planting_preserves_labor_and_consumed_seed() {
         4_999
     );
     assert_eq!(
-        sim.host.state.inventories[&seed].quantity.0,
+        game_cargo::inventory(&sim.host.storage, seed)
+            .expect("inventory exists")
+            .quantity
+            .0,
         opening.0 - 1_000
     );
     perform(&mut sim, field, FarmOperation::Plant);
     assert_eq!(
-        sim.host.state.inventories[&seed].quantity.0,
+        game_cargo::inventory(&sim.host.storage, seed)
+            .expect("inventory exists")
+            .quantity
+            .0,
         opening.0 - 1_000
     );
     assert_eq!(
@@ -462,10 +514,16 @@ fn drought_can_kill_a_crop_and_irrigation_uses_actual_water() {
     let world = sim.host.state.agriculture.as_mut().unwrap();
     world.soil_mut(&mut sim.host.storage, field).unwrap().water = 0;
     let water = world.field(&sim.host.storage, field).unwrap().water;
-    let opening = sim.host.state.inventories[&water].quantity.0;
+    let opening = game_cargo::inventory(&sim.host.storage, water)
+        .expect("inventory exists")
+        .quantity
+        .0;
     perform(&mut sim, field, FarmOperation::Irrigate);
     assert_eq!(
-        sim.host.state.inventories[&water].quantity.0,
+        game_cargo::inventory(&sim.host.storage, water)
+            .expect("inventory exists")
+            .quantity
+            .0,
         opening - 1_000
     );
     assert_eq!(
@@ -582,10 +640,10 @@ fn farming_is_equivalent_across_partial_advances_workers_and_restore() {
         b.advance(SimDuration((1_200_000 - b.host.clock().time.0).min(17_333)))
             .unwrap();
     }
-    assert_eq!(a.host.state, b.host.state);
+    assert_eq!(a.canonical_state(), b.canonical_state());
     perform(&mut a, field, FarmOperation::Harvest);
     perform(&mut b, field, FarmOperation::Harvest);
-    assert_eq!(a.host.state, b.host.state);
+    assert_eq!(a.canonical_state(), b.canonical_state());
 }
 
 #[test]
@@ -673,7 +731,7 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
     let mut restored = Simulation::load(&bytes, Execution::default()).unwrap();
     sim.advance(SimDuration(6_000)).unwrap();
     restored.advance(SimDuration(6_000)).unwrap();
-    assert_eq!(sim.host.state, restored.host.state);
+    assert_eq!(sim.canonical_state(), restored.canonical_state());
     assert_eq!(
         sim.host
             .state
@@ -722,8 +780,11 @@ fn harvest_waits_for_real_output_capacity_and_local_queries_are_passive() {
         .field(&sim.host.storage, field)
         .unwrap()
         .food;
-    sim.host.state.inventories.get_mut(&food).unwrap().capacity =
-        sim.host.state.inventories[&food].quantity;
+    game_cargo::inventory_mut(&mut sim.host.storage, food)
+        .unwrap()
+        .capacity = game_cargo::inventory(&sim.host.storage, food)
+        .expect("inventory exists")
+        .quantity;
     let before = sim.canonical_snapshot().unwrap();
     for _ in 0..40 {
         let view = sim.observe();
@@ -741,10 +802,7 @@ fn harvest_waits_for_real_output_capacity_and_local_queries_are_passive() {
         Err(Error::Unavailable)
     );
     assert_eq!(sim.canonical_snapshot().unwrap(), before);
-    sim.host
-        .state
-        .inventories
-        .get_mut(&food)
+    game_cargo::inventory_mut(&mut sim.host.storage, food)
         .unwrap()
         .capacity
         .0 += 30_000;

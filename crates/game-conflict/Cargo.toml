@@ -7,9 +7,9 @@ license.workspace = true
 [dependencies]
 game-cargo.workspace = true
 game-core.workspace = true
+game-ecs.workspace = true
 game-skills.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-game-ecs.workspace = true
 serde_json.workspace = true

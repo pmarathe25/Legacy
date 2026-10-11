@@ -66,11 +66,15 @@ fn small_food_and_timber_loads_are_public_and_oversized_examples_are_absent() {
         );
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.canonical_state().state.inventories[&source].quantity,
+            game_cargo::inventory(sim.canonical_state().components, source)
+                .expect("stock exists")
+                .quantity,
             Quantity(0)
         );
         assert_eq!(
-            sim.canonical_state().state.inventories[&destination].quantity,
+            game_cargo::inventory(sim.canonical_state().components, destination)
+                .expect("stock exists")
+                .quantity,
             Quantity(250)
         );
     }
@@ -115,7 +119,9 @@ fn small_food_and_timber_loads_are_public_and_oversized_examples_are_absent() {
     submit_choice(&mut sim, action, Quantity(500));
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(500)
     );
 }
@@ -133,18 +139,17 @@ fn public_small_pickups_work_without_an_existing_compartment() {
     let actor = sim.canonical_state().state.ruler;
     submit_choice(&mut sim, QuantityAction::Carry { source }, Quantity(250));
     sim.advance(MINUTE).unwrap();
-    let carried = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let carried = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Herb && stock.location == InventoryLocation::Carried(actor)
         })
         .unwrap();
     assert_eq!(carried.quantity, Quantity(250));
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
 }
@@ -190,11 +195,15 @@ fn public_split_tool_consolidation_enables_a_native_small_gather() {
     );
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination].quantity,
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
+            .quantity,
         Quantity(1000)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&source].quantity,
+        game_cargo::inventory(sim.canonical_state().components, source)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     submit_choice(
@@ -308,11 +317,15 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     replay.advance(SimDuration(30_000)).unwrap();
     assert_eq!(sim.canonical_state(), replay.canonical_state());
     assert_eq!(
-        sim.canonical_state().state.inventories[&water].quantity,
+        game_cargo::inventory(sim.canonical_state().components, water)
+            .expect("stock exists")
+            .quantity,
         Quantity(250)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&bulk].quantity,
+        game_cargo::inventory(sim.canonical_state().components, bulk)
+            .expect("stock exists")
+            .quantity,
         Quantity(250)
     );
     let boil = sim.observe().available_commands.into_iter().find(|command| matches!(command, Command::Health { action: HealthAction::Boil { source, .. } } if *source == water)).unwrap();
@@ -322,7 +335,10 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     else {
         unreachable!()
     };
-    let before_fuel = sim.canonical_state().state.inventories[&fuel].quantity.0;
+    let before_fuel = game_cargo::inventory(sim.canonical_state().components, fuel)
+        .expect("stock exists")
+        .quantity
+        .0;
     for run in [&mut sim, &mut replay] {
         run.submit(Submission {
             caller_sequence: run.next_caller_sequence().unwrap(),
@@ -338,7 +354,13 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
             .load(),
         0
     );
-    assert!(sim.canonical_state().state.inventories[&fuel].quantity.0 <= before_fuel - 1000);
+    assert!(
+        game_cargo::inventory(sim.canonical_state().components, fuel)
+            .expect("stock exists")
+            .quantity
+            .0
+            <= before_fuel - 1000
+    );
     let drink = Command::Health {
         action: HealthAction::Drink { source: water },
     };
@@ -353,7 +375,9 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     }
     assert_eq!(sim.canonical_state(), replay.canonical_state());
     assert_eq!(
-        sim.canonical_state().state.inventories[&water].quantity,
+        game_cargo::inventory(sim.canonical_state().components, water)
+            .expect("stock exists")
+            .quantity,
         Quantity(0)
     );
     assert_eq!(sim.observe().health.as_ref().unwrap().thirst, 0);

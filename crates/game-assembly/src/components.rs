@@ -6,6 +6,7 @@ use std::ops::{Deref, DerefMut};
 
 pub(crate) fn schema() -> Result<Schema, Error> {
     let mut schema = Schema::new();
+    game_cargo::register_components(&mut schema)?;
     game_agriculture::register_components(&mut schema)?;
     game_physiology::register_components(&mut schema)?;
     game_workshop::register_components(&mut schema)?;
@@ -362,7 +363,12 @@ mod tests {
         let encounter = sim
             .debug_start_encounter(vec![(ruler, 0), (enemy, 1)])
             .unwrap();
-        for stock in sim.host.state.inventories.values_mut() {
+        for __stock_id in game_cargo::inventories(&sim.host.storage)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+        {
+            let stock = game_cargo::inventory_mut(&mut sim.host.storage, __stock_id)
+                .expect("inventory exists");
             if stock.good == game_api::Good::Binding
                 && stock.location == crate::InventoryLocation::Carried(enemy)
             {
@@ -1060,6 +1066,44 @@ mod tests {
             assert!(record.get("id").is_none());
             assert!(record.get("time").is_none());
             assert!(record.get("kind").is_none());
+        }
+    }
+    #[test]
+    fn native_inventory_columns_are_canonical_and_reject_identity_and_reference_forgery() {
+        let sim = Simulation::survival_fixture(31, Execution::default()).unwrap();
+        let before = sim.save().unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        assert!(saved["state"]["state"].get("inventories").is_none());
+        let rows = saved["state"]["components"]["columns"]["cargo/inventory"]
+            .as_array()
+            .unwrap();
+        assert!(!rows.is_empty());
+        let ids: Vec<_> = rows
+            .iter()
+            .map(|row| row["entity"].as_u64().unwrap())
+            .collect();
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(rows.iter().all(|row| row["entity"] == row["value"]["id"]));
+        let restored = Simulation::load(&before, Execution::default()).unwrap();
+        assert_eq!(restored.save().unwrap(), before);
+        for attack in 0..5 {
+            let mut forged = saved.clone();
+            let row = &mut forged["state"]["components"]["columns"]["cargo/inventory"][0]["value"];
+            match attack {
+                0 => row["id"] = serde_json::json!(999999),
+                1 => row["location"] = serde_json::json!({"Carried": 999999}),
+                2 => row["access"] = serde_json::json!([999999]),
+                3 => row["spoils_at"] = serde_json::json!(999999),
+                _ => {
+                    forged["state"]["state"]["inventories"] = serde_json::json!({});
+                }
+            }
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err(),
+                "stock attack {attack}"
+            );
+            assert_eq!(sim.save().unwrap(), before);
         }
     }
 }

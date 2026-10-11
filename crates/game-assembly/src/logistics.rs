@@ -211,11 +211,7 @@ impl Simulation {
         let prerequisite_room = requested.keys().map(|good| (*good, capacity)).collect();
         let mut destination = destination.clone();
         destination.direct_transfer = match destination.destination {
-            Destination::Inventory(id) => self
-                .host
-                .state
-                .inventories
-                .get(&id)
+            Destination::Inventory(id) => game_cargo::inventory(&self.host.storage, id)
                 .is_some_and(|stock| stock.location == InventoryLocation::Carried(actor)),
             Destination::Contact(_) => destination.direct_transfer,
         };
@@ -250,7 +246,7 @@ impl Simulation {
             game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
                 .knowledge
                 .get(&inventory);
-        let stock = self.host.state.inventories.get(&inventory)?;
+        let stock = game_cargo::inventory(&self.host.storage, inventory)?;
         let local = match stock.location {
             InventoryLocation::Area(area) => {
                 fact.is_some() && self.resolved_location(actor) == Location::AtArea(area)
@@ -299,7 +295,14 @@ impl Simulation {
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
             .flatten()
-            .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
+            .map(|id| {
+                u128::from(
+                    game_cargo::inventory(&self.host.storage, *(id))
+                        .expect("inventory exists")
+                        .quantity
+                        .0,
+                )
+            })
             .sum::<u128>();
         let mut upper = u128::from(self.body_rules(actor).carrying_capacity.0)
             .saturating_sub(held)
@@ -352,7 +355,8 @@ impl Simulation {
             .into_iter()
             .flatten()
             .filter_map(|id| {
-                let stock = &self.host.state.inventories[id];
+                let stock =
+                    game_cargo::inventory(&self.host.storage, *(id)).expect("inventory exists");
                 if !self.has_stock_access(actor, stock) {
                     return None;
                 }
@@ -403,17 +407,15 @@ impl Simulation {
                 // A remembered foreign inventory is never refreshed from its
                 // current holder's whereabouts. Only an actually local stock
                 // can supply current physical position/admissibility.
-                let local = self
-                    .host
-                    .state
-                    .inventories
-                    .get(&fact.inventory)
-                    .filter(|stock| match stock.location {
-                        InventoryLocation::Area(area) => {
-                            self.resolved_location(actor) == Location::AtArea(area)
-                        }
-                        InventoryLocation::Carried(holder) => {
-                            self.transport_same_place(actor, holder)
+                let local =
+                    game_cargo::inventory(&self.host.storage, fact.inventory).filter(|stock| {
+                        match stock.location {
+                            InventoryLocation::Area(area) => {
+                                self.resolved_location(actor) == Location::AtArea(area)
+                            }
+                            InventoryLocation::Carried(holder) => {
+                                self.transport_same_place(actor, holder)
+                            }
                         }
                     });
                 let location =
@@ -754,7 +756,9 @@ mod tests {
             sim.debug_actor_command(actor, command).unwrap();
             sim.advance(MINUTE).unwrap();
             assert_eq!(
-                sim.host.state.inventories[&source].quantity,
+                game_cargo::inventory(&sim.host.storage, source)
+                    .expect("inventory exists")
+                    .quantity,
                 Quantity(4_000)
             );
             let step = sim.plan_delivery(actor, &delivery, &target, Quantity(1_000));
@@ -779,8 +783,18 @@ mod tests {
                 panic!("goods must actually be held: {step:?}");
             };
             assert_eq!(quantity, Quantity(1_000));
-            assert_eq!(sim.host.state.inventories[&cargo].good, good);
-            assert_eq!(sim.host.state.inventories[&cargo].quantity, quantity);
+            assert_eq!(
+                game_cargo::inventory(&sim.host.storage, cargo)
+                    .expect("inventory exists")
+                    .good,
+                good
+            );
+            assert_eq!(
+                game_cargo::inventory(&sim.host.storage, cargo)
+                    .expect("inventory exists")
+                    .quantity,
+                quantity
+            );
             assert_eq!(delivery.remaining, Quantity(1_000));
         }
     }
@@ -815,7 +829,12 @@ mod tests {
             sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
             Step::Blocked(BlockReason::NoSupply)
         );
-        assert!(!sim.host.state.inventories[&source].access.contains(&actor));
+        assert!(
+            !game_cargo::inventory(&sim.host.storage, source)
+                .expect("inventory exists")
+                .access
+                .contains(&actor)
+        );
     }
     #[test]
     fn a_dated_remote_stock_does_not_refresh_to_its_actual_different_location() {
@@ -893,7 +912,12 @@ mod tests {
                 quantity: Quantity(1_000)
             }
         );
-        assert_eq!(sim.host.state.inventories[&cargo].quantity, Quantity(2_000));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, cargo)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(2_000)
+        );
     }
     #[test]
     fn a_known_natural_source_uses_real_collection_and_restores_through_partial_time() {
@@ -976,7 +1000,7 @@ mod tests {
         restored
             .advance(SimDuration(duration - duration / 2))
             .unwrap();
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
         assert_eq!(
             sim.host
                 .state
@@ -1050,13 +1074,13 @@ mod tests {
         }
         // This opening has a known local toolkit, but no stored timber. Its
         // physical deposit is the sole personally known timber opportunity.
-        for stock in sim
-            .host
-            .state
-            .inventories
-            .values_mut()
-            .filter(|stock| stock.good == Good::Timber)
+        for __stock_id in game_cargo::inventories(&sim.host.storage)
+            .filter(|(_, stock)| stock.good == Good::Timber)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
         {
+            let stock = game_cargo::inventory_mut(&mut sim.host.storage, __stock_id)
+                .expect("inventory exists");
             stock.quantity = Quantity(0);
         }
         let resource = sim
@@ -1094,7 +1118,12 @@ mod tests {
         else {
             panic!("missing equipment must be acquired through Carry: {step:?}");
         };
-        assert_eq!(sim.host.state.inventories[&tool].good, Good::Tool);
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, tool)
+                .expect("inventory exists")
+                .good,
+            Good::Tool
+        );
         let command = sim.delivery_command(actor, step).unwrap();
         sim.debug_actor_command(actor, command).unwrap();
         sim.advance(MINUTE).unwrap();
@@ -1241,7 +1270,9 @@ mod tests {
             .next()
             .unwrap()
             .clone();
-        let good = sim.host.state.inventories[&site.output].good;
+        let good = game_cargo::inventory(&sim.host.storage, site.output)
+            .expect("inventory exists")
+            .good;
         let offers = sim.production_acquisition_offers(actor, good);
         let offer = offers
             .iter()
@@ -1261,13 +1292,13 @@ mod tests {
         let actor = sim.host.state.ruler;
         // Collection is the only timber source; later observations must not
         // discover an easier stored supply that bypasses the tool requirement.
-        for stock in sim
-            .host
-            .state
-            .inventories
-            .values_mut()
-            .filter(|stock| stock.good == Good::Timber)
+        for __stock_id in game_cargo::inventories(&sim.host.storage)
+            .filter(|(_, stock)| stock.good == Good::Timber)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
         {
+            let stock = game_cargo::inventory_mut(&mut sim.host.storage, __stock_id)
+                .expect("inventory exists");
             stock.quantity = Quantity(0);
         }
         for person in sim.host.state.people.clone() {
@@ -1345,8 +1376,18 @@ mod tests {
         sim.debug_actor_command(actor, sim.delivery_command(actor, step).unwrap())
             .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.host.state.inventories[&first].quantity, Quantity(0));
-        assert_eq!(sim.host.state.inventories[&empty].quantity, Quantity(600));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, first)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, empty)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(600)
+        );
         let step = sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000));
         assert_eq!(
             step,
@@ -1357,13 +1398,23 @@ mod tests {
             },
             "cargo after first consolidation: {:?}; source: {:?}",
             sim.delivery_cargo(actor, &delivery, &BTreeMap::new(), None),
-            sim.host.state.inventories[&second]
+            game_cargo::inventory(&sim.host.storage, second).expect("inventory exists")
         );
         sim.debug_actor_command(actor, sim.delivery_command(actor, step).unwrap())
             .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.host.state.inventories[&empty].quantity, Quantity(1_000));
-        assert_eq!(sim.host.state.inventories[&second].quantity, Quantity(0));
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, empty)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(1_000)
+        );
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, second)
+                .expect("inventory exists")
+                .quantity,
+            Quantity(0)
+        );
         assert_eq!(
             sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
             Step::Acquire(Command::Ecology {

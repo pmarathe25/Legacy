@@ -47,21 +47,27 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
     }
     let mut snapshot: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let state = &mut snapshot["state"];
-    for stock in state["state"]["inventories"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
+    for stock in state["components"]["columns"]["cargo/inventory"]
+        .as_array_mut()
+        .expect("actual inventory column")
+        .iter_mut()
+        .map(|row| &mut row["value"])
     {
         if stock["good"] == "Water" {
             stock["quantity"] = 0.into();
         }
     }
-    let water_ids: Vec<_> = state["state"]["inventories"]
-        .as_object()
-        .unwrap()
+    let water_ids: Vec<_> = state["components"]["columns"]["cargo/inventory"]
+        .as_array()
+        .expect("actual inventory column")
         .iter()
-        .filter(|(_, stock)| stock["good"] == "Water")
-        .map(|(id, _)| id.clone())
+        .filter(|row| row["value"]["good"] == "Water")
+        .map(|row| {
+            row["entity"]
+                .as_u64()
+                .expect("inventory entity")
+                .to_string()
+        })
         .collect();
     for id in water_ids {
         state["state"]["property"]["portions"][&id] = serde_json::json!({});
@@ -208,10 +214,11 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
     let ruler = sim.canonical_state().state.ruler;
     let mut snapshot: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let state = &mut snapshot["state"];
-    for stock in state["state"]["inventories"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
+    for stock in state["components"]["columns"]["cargo/inventory"]
+        .as_array_mut()
+        .expect("actual inventory column")
+        .iter_mut()
+        .map(|row| &mut row["value"])
     {
         if stock["good"] == "Water" {
             stock["quantity"] = 0.into();
@@ -324,10 +331,8 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
         .filter(|(_, resource)| resource.kind.good() == Good::Water)
         .map(|(_, resource)| resource.remaining.0)
         .sum::<u64>();
-    let carried = state
-        .state
-        .inventories
-        .values()
+    let carried = game_cargo::inventories(state.components)
+        .map(|(_, inventory)| inventory)
         .filter(|s| s.good == Good::Water)
         .map(|s| s.quantity.0)
         .sum::<u64>();
@@ -518,7 +523,7 @@ fn normal_population_uses_the_renewable_spring_after_consuming_its_authored_stoc
         }
     )));
     assert!(state.events.iter().any(|e|matches!(e.event,
-        EventKind::Drank {source,..} if state.state.inventories[&source].location != game_assembly::InventoryLocation::Area(state.state.areas[0].id))));
+        EventKind::Drank {source,..} if game_cargo::inventory(state.components, source).expect("stock exists").location != game_assembly::InventoryLocation::Area(state.state.areas[0].id))));
     assert!(
         game_physiology::bodies(state.components)
             .filter(|(_, body)| body.vitals.alive)

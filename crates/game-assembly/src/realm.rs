@@ -276,11 +276,7 @@ impl Simulation {
             ..ProposalFacts::default()
         };
         for (id, k) in &mind.knowledge {
-            let capacity = self
-                .host
-                .state
-                .inventories
-                .get(id)
+            let capacity = game_cargo::inventory(&self.host.storage, *(id))
                 .filter(|i| {
                     self.inventory_area(i) == self.realm_area(actor)
                         && k.observed_at == self.host.clock().time
@@ -1725,7 +1721,9 @@ impl Simulation {
             people: self.person_index.keys().copied().collect(),
             areas: self.host.state.areas.iter().map(|a| a.id).collect(),
             institutions: institutions.institutions.keys().copied().collect(),
-            inventories: self.host.state.inventories.keys().copied().collect(),
+            inventories: game_cargo::inventories(&self.host.storage)
+                .map(|(id, _)| id)
+                .collect(),
             agreements: agreements.agreements.keys().copied().collect(),
             obligations: agreements.obligations.keys().copied().collect(),
             proposals: institutions.proposals.keys().copied().collect(),

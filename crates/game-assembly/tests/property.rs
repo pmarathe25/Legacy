@@ -42,10 +42,8 @@ fn actor(sim: &Simulation, index: usize) -> PersonId {
     sim.canonical_state().state.people[index].id
 }
 fn source(sim: &Simulation) -> InventoryId {
-    sim.canonical_state()
-        .state
-        .inventories
-        .values()
+    game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .find(|stock| {
             stock.good == Good::Food && stock.location == InventoryLocation::Area(AreaId(1))
         })
@@ -118,18 +116,24 @@ fn newly_created_cargo_keeps_complete_ownership_bookkeeping_after_real_loading()
     replay.advance(SimDuration(MINUTE.0 - 17_001)).unwrap();
     assert_eq!(sim.canonical_state(), replay.canonical_state());
     let state = sim.canonical_state();
-    let cargo = state
-        .state
-        .inventories
-        .values()
+    let cargo = game_cargo::inventories(state.components)
+        .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Water && i.location == InventoryLocation::Carried(ruler))
         .unwrap();
-    assert_eq!(state.state.inventories[&source].quantity, Quantity(1_000));
+    assert_eq!(
+        game_cargo::inventory(state.components, source)
+            .expect("stock exists")
+            .quantity,
+        Quantity(1_000)
+    );
     assert_eq!(cargo.quantity, Quantity(2_000));
     let portions = &state.state.property.as_ref().unwrap().portions;
-    assert_eq!(portions.len(), state.state.inventories.len());
-    for (id, inventory) in &state.state.inventories {
-        assert_eq!(portions[id].values().sum::<u64>(), inventory.quantity.0);
+    assert_eq!(
+        portions.len(),
+        game_cargo::inventories(state.components).count()
+    );
+    for (id, inventory) in game_cargo::inventories(state.components) {
+        assert_eq!(portions[&id].values().sum::<u64>(), inventory.quantity.0);
     }
     assert_eq!(
         state,
@@ -145,7 +149,10 @@ fn theft_uses_loading_time_conserves_goods_and_keeps_claims_attached_to_cargo() 
     let ruler = actor(&sim, 0);
     let origin = source(&sim);
     let destination = cargo(&sim, ruler);
-    let before = sim.canonical_state().state.inventories[&origin].quantity.0;
+    let before = game_cargo::inventory(sim.canonical_state().components, origin)
+        .expect("stock exists")
+        .quantity
+        .0;
     let claim = sim.property_view(ruler).claims[0].id;
     let assertion = sim
         .canonical_state()
@@ -158,22 +165,30 @@ fn theft_uses_loading_time_conserves_goods_and_keeps_claims_attached_to_cargo() 
     take(&mut sim, 1_000);
     sim.advance(SimDuration(59_999)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&origin].quantity.0,
+        game_cargo::inventory(sim.canonical_state().components, origin)
+            .expect("stock exists")
+            .quantity
+            .0,
         before
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination]
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
             .quantity
             .0,
         0
     );
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&origin].quantity.0,
+        game_cargo::inventory(sim.canonical_state().components, origin)
+            .expect("stock exists")
+            .quantity
+            .0,
         before - 1_000
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&destination]
+        game_cargo::inventory(sim.canonical_state().components, destination)
+            .expect("stock exists")
             .quantity
             .0,
         1_000
@@ -182,7 +197,8 @@ fn theft_uses_loading_time_conserves_goods_and_keeps_claims_attached_to_cargo() 
     assert_eq!(world.claims[&claim], assertion);
     assert_eq!(world.portions[&destination][&claim], 1_000);
     assert!(
-        !sim.canonical_state().state.inventories[&origin]
+        !game_cargo::inventory(sim.canonical_state().components, origin)
+            .expect("stock exists")
             .access
             .contains(&ruler)
     );
@@ -238,7 +254,8 @@ fn competing_claims_and_recognition_do_not_grant_custody_or_access() {
         owner
     );
     assert!(
-        !sim.canonical_state().state.inventories[&origin]
+        !game_cargo::inventory(sim.canonical_state().components, origin)
+            .expect("stock exists")
             .access
             .contains(&ruler)
     );
@@ -263,7 +280,8 @@ fn competing_claims_and_recognition_do_not_grant_custody_or_access() {
     )
     .unwrap();
     assert!(
-        sim.canonical_state().state.inventories[&origin]
+        game_cargo::inventory(sim.canonical_state().components, origin)
+            .expect("stock exists")
             .access
             .contains(&ruler)
     );
@@ -464,9 +482,16 @@ fn willing_local_custodian_uses_real_combat_and_interrupts_loading_before_transf
         },
     )
     .unwrap();
-    let before = sim.canonical_state().state.inventories.clone();
+    let before = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     take(&mut sim, 1_000);
-    assert_eq!(sim.canonical_state().state.inventories, before);
+    assert_eq!(
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+    );
     assert!(matches!(
         sim.observe().physical.unwrap().activity,
         Activity::Combat { .. }
@@ -529,17 +554,22 @@ fn taking_can_invalidate_a_lawful_reservation_without_relocating_reserved_goods_
     );
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&stock].quantity.0,
-        1_000
-    );
-    assert_eq!(
-        sim.canonical_state().state.inventories[&cargo(&sim, ruler)]
+        game_cargo::inventory(sim.canonical_state().components, stock)
+            .expect("stock exists")
             .quantity
             .0,
         1_000
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&cargo(&sim, carrier)]
+        game_cargo::inventory(sim.canonical_state().components, cargo(&sim, ruler))
+            .expect("stock exists")
+            .quantity
+            .0,
+        1_000
+    );
+    assert_eq!(
+        game_cargo::inventory(sim.canonical_state().components, cargo(&sim, carrier))
+            .expect("stock exists")
             .quantity
             .0,
         0
@@ -646,7 +676,8 @@ fn failed_taking_is_inert_and_canceling_does_not_return_or_create_cargo() {
     sim.debug_actor_command(ruler, Command::Cancel).unwrap();
     sim.advance(SimDuration(30_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&cargo(&sim, ruler)]
+        game_cargo::inventory(sim.canonical_state().components, cargo(&sim, ruler))
+            .expect("stock exists")
             .quantity
             .0,
         0
@@ -665,7 +696,8 @@ fn actual_custodians_choose_to_share_or_refuse_a_local_request() {
     let stock = source(&sim);
     action(&mut sim, PropertyAction::RequestAccess { inventory: stock });
     assert!(
-        !sim.canonical_state().state.inventories[&stock]
+        !game_cargo::inventory(sim.canonical_state().components, stock)
+            .expect("stock exists")
             .access
             .contains(&ruler)
     );
@@ -683,12 +715,16 @@ fn actual_custodians_choose_to_share_or_refuse_a_local_request() {
     .unwrap();
     action(&mut sim, PropertyAction::RequestAccess { inventory: stock });
     assert!(
-        sim.canonical_state().state.inventories[&stock]
+        game_cargo::inventory(sim.canonical_state().components, stock)
+            .expect("stock exists")
             .access
             .contains(&ruler)
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&stock].quantity.0,
+        game_cargo::inventory(sim.canonical_state().components, stock)
+            .expect("stock exists")
+            .quantity
+            .0,
         100_000
     );
 }
@@ -706,7 +742,8 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
         .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&inventory]
+        game_cargo::inventory(sim.canonical_state().components, inventory)
+            .expect("stock exists")
             .quantity
             .0,
         0
@@ -732,7 +769,10 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
     assert_eq!(world.portions[&stock][&ClaimId(0)], 1_000);
     assert_eq!(world.portions[&stock][&claim], 99_000);
     assert_eq!(
-        sim.canonical_state().state.inventories[&stock].quantity.0,
+        game_cargo::inventory(sim.canonical_state().components, stock)
+            .expect("stock exists")
+            .quantity
+            .0,
         100_000
     );
     let owner = actor(&sim, 3);
@@ -778,7 +818,8 @@ fn a_hungry_risk_taking_npc_can_steal_from_known_local_food_without_remote_aware
             .any(|event| matches!(event.event,EventKind::Taken { actor,.. } if actor == thief))
     );
     assert_eq!(
-        sim.canonical_state().state.inventories[&cargo(&sim, thief)]
+        game_cargo::inventory(sim.canonical_state().components, cargo(&sim, thief))
+            .expect("stock exists")
             .quantity
             .0,
         1_000
@@ -818,7 +859,8 @@ fn permission_granted_during_loading_does_not_stop_the_physical_transfer() {
     );
     sim.advance(SimDuration(30_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().state.inventories[&cargo(&sim, ruler)]
+        game_cargo::inventory(sim.canonical_state().components, cargo(&sim, ruler))
+            .expect("stock exists")
             .quantity
             .0,
         1_000

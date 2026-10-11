@@ -197,10 +197,7 @@ impl Simulation {
                 known.good == Good::Tool && known.accessible && known.quantity.0 >= 1_000
             })
             .find_map(|known| {
-                self.host
-                    .state
-                    .inventories
-                    .get(&known.inventory)
+                game_cargo::inventory(&self.host.storage, known.inventory)
                     .filter(|stock| {
                         self.has_stock_access(actor, stock)
                             && self.tool_available_for(actor, stock.id)
@@ -234,10 +231,7 @@ impl Simulation {
             .values()
             .filter(|known| known.good == good && known.accessible && known.quantity >= quantity)
             .find_map(|known| {
-                self.host
-                    .state
-                    .inventories
-                    .get(&known.inventory)
+                game_cargo::inventory(&self.host.storage, known.inventory)
                     .filter(|stock| {
                         stock.good == good
                             && stock.quantity >= quantity
@@ -464,10 +458,7 @@ impl Simulation {
         let actors = interaction.actors();
         let completes = interaction.completes();
         if let Some((worker, source, quantity)) = materials {
-            self.host
-                .state
-                .inventories
-                .get_mut(&source)
+            game_cargo::inventory_mut(&mut self.host.storage, source)
                 .unwrap()
                 .quantity
                 .0 -= quantity.0;
@@ -1384,20 +1375,14 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     }
                 }
                 if tool.is_some_and(|tool| {
-                    state
-                        .state
-                        .inventories
-                        .get(&tool)
+                    game_cargo::inventory(state.components, tool)
                         .is_none_or(|stock| stock.good != Good::Tool)
                 }) {
                     return Err(fail());
                 }
             }
             Interaction::Practice { tool, .. }
-                if state
-                    .state
-                    .inventories
-                    .get(tool)
+                if game_cargo::inventory(state.components, *(tool))
                     .is_none_or(|stock| stock.good != Good::Tool) =>
             {
                 return Err(fail());
@@ -1632,18 +1617,18 @@ mod tests {
         // Local observation is acquired through the ordinary simulation review.
         sim.advance(SimDuration(1)).unwrap();
         cancel(&mut sim, actor);
-        let timber = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let timber = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Timber
                     && stock.location == InventoryLocation::Area(sim.host.state.areas[0].id)
             })
             .unwrap()
             .id;
-        let before = sim.host.state.inventories[&timber].quantity.0;
+        let before = game_cargo::inventory(&sim.host.storage, timber)
+            .expect("inventory exists")
+            .quantity
+            .0;
         let prior = game_skills::skills(&sim.host.storage, actor)
             .map(|row| &row.records)
             .and_then(|records| records.get(&Skill::Craft))
@@ -1655,7 +1640,13 @@ mod tests {
                 skill: Skill::Craft,
             },
         );
-        assert_eq!(sim.host.state.inventories[&timber].quantity.0, before - 100);
+        assert_eq!(
+            game_cargo::inventory(&sim.host.storage, timber)
+                .expect("inventory exists")
+                .quantity
+                .0,
+            before - 100
+        );
         sim.advance(SimDuration(30_000)).unwrap();
         cancel(&mut sim, actor);
         assert_eq!(
@@ -1838,7 +1829,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
     }
     #[test]
     fn ordinary_interactions_are_save_chunk_worker_and_query_independent() {
@@ -2030,11 +2021,8 @@ mod generations {
                 .dream = decisions::Aspiration::SupportOthers;
             }
         }
-        let food = sim
-            .host
-            .state
-            .inventories
-            .values()
+        let food = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
             .find(|stock| {
                 stock.good == Good::Food
                     && stock.location == InventoryLocation::Area(sim.host.state.areas[0].id)
@@ -2093,7 +2081,12 @@ mod generations {
             );
             // Institutional rights may emerge independently; personal access
             // permissions are not copied from either parent.
-            assert!(!sim.host.state.inventories[&food].access.contains(child));
+            assert!(
+                !game_cargo::inventory(&sim.host.storage, food)
+                    .expect("inventory exists")
+                    .access
+                    .contains(child)
+            );
         }
         assert_ne!(
             game_lifecycle::life(&sim.host.storage, children[0])
@@ -2199,7 +2192,8 @@ mod generations {
                 .all(|progress| progress.practice_ms == 0)
         );
         assert!(
-            !sim.host.state.inventories[&food]
+            !game_cargo::inventory(&sim.host.storage, food)
+                .expect("inventory exists")
                 .access
                 .contains(&grandchild)
         );
@@ -2225,6 +2219,6 @@ mod generations {
             },
         )
         .unwrap();
-        assert_eq!(sim.host.state, restored.host.state);
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
     }
 }

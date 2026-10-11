@@ -141,11 +141,8 @@ fn capture_uses_actual_bindings_and_release_takes_time() {
     let target = sim.canonical_state().state.people[3].id;
     let ruler = sim.canonical_state().state.ruler;
     let battle = engage(&mut sim, target);
-    let bindings: u64 = sim
-        .canonical_state()
-        .state
-        .inventories
-        .values()
+    let bindings: u64 = game_cargo::inventories(sim.canonical_state().components)
+        .map(|(_, inventory)| inventory)
         .filter(|i| i.good == Good::Binding)
         .map(|i| i.quantity.0)
         .sum();
@@ -165,10 +162,8 @@ fn capture_uses_actual_bindings_and_release_takes_time() {
             .contains_key(&target)
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .inventories
-            .values()
+        game_cargo::inventories(sim.canonical_state().components)
+            .map(|(_, inventory)| inventory)
             .filter(|i| i.good == Good::Binding)
             .map(|i| i.quantity.0)
             .sum::<u64>(),
