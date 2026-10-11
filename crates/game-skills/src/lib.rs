@@ -4,6 +4,10 @@ use game_ecs::Store;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 mod storage;
+mod practice;
+pub use practice::PreparedPractice;
+#[cfg(test)]
+mod practice_tests;
 pub use storage::{
     all_skills, insert_skills, register_components, remove_skills, skills, skills_mut,
 };
