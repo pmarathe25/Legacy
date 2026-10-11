@@ -42,6 +42,24 @@ pub fn remove_soil(store: &mut Store, id: SiteId) -> Result<Option<Soil>, Error>
     store.remove(StableId(id.0))
 }
 
+/// Each soil parcel has exactly one land use. Consumers supply parcel IDs;
+/// this owner need not know whether a use is a field, plot, or another type.
+pub fn validate_uses(
+    store: &Store,
+    uses: impl IntoIterator<Item = SiteId>,
+) -> Result<(), Error> {
+    let mut expected = std::collections::BTreeSet::new();
+    for id in uses {
+        if id.0 == 0 || !expected.insert(id) {
+            return Err(Error::InvalidSave("inconsistent shared soil ownership".into()));
+        }
+    }
+    if soils(store).map(|(id, _)| id).ne(expected) {
+        return Err(Error::InvalidSave("inconsistent shared soil ownership".into()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +78,25 @@ mod tests {
             water: 75,
             capacity: 120,
         }
+    }
+
+    #[test]
+    fn land_use_validation_rejects_missing_orphan_and_duplicate_ownership() {
+        let mut store = store();
+        insert_soil(&mut store, SiteId(7), sample()).unwrap();
+        insert_soil(&mut store, SiteId(8), sample()).unwrap();
+        assert!(validate_uses(&store, [SiteId(8), SiteId(7)]).is_ok());
+        for uses in [
+            vec![SiteId(7)],
+            vec![SiteId(7), SiteId(8), SiteId(9)],
+            vec![SiteId(7), SiteId(8), SiteId(7)],
+            vec![SiteId(0), SiteId(7), SiteId(8)],
+        ] {
+            assert!(validate_uses(&store, uses).is_err());
+        }
+        // Changing a consumer's land-use type leaves this invariant intact.
+        store.insert(StableId(7), "field".to_string()).unwrap();
+        assert!(validate_uses(&store, [SiteId(7), SiteId(8)]).is_ok());
     }
 
     #[test]
