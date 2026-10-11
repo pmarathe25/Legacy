@@ -10,3 +10,5 @@ pub mod decisions;
 mod planning;
 
 pub mod proposals;
+
+pub mod resource_responses;
