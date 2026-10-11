@@ -2821,10 +2821,24 @@ mod integration_tests {
         let before = game_cargo::inventory(&sim.host.storage, output)
             .expect("inventory exists")
             .quantity;
+        let (input, input_quantity, output_quantity) = {
+            let site = game_workshop::site(&sim.host.storage, site).unwrap();
+            let recipe = sim.host.state.workshops.recipe(&site.recipe).unwrap();
+            (site.input, recipe.input_quantity, recipe.output_quantity)
+        };
+        let recipe = sim
+            .fixture_recipe(
+                input,
+                output,
+                input_quantity,
+                output_quantity,
+                SimDuration(30_000),
+            )
+            .unwrap();
         {
             let site = game_workshop::site_mut(&mut sim.host.storage, site).unwrap();
             site.tool = tool;
-            site.duration = SimDuration(30_000);
+            site.recipe = recipe;
             site.access.insert(worker);
         }
         sim.debug_actor_command(

@@ -513,7 +513,7 @@ fn normal_population_uses_the_renewable_spring_after_consuming_its_authored_stoc
         82,
         Execution::default(),
         config,
-        game_assembly::population::Plan {
+        game_openings::PopulationPlan {
             people: 100,
             settlement_size: 100,
         },

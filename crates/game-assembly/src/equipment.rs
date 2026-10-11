@@ -165,7 +165,7 @@ impl Simulation {
                     .state
                     .projects
                     .as_ref()
-                    .and_then(|world| world.projects.get(&project))
+                    .and_then(|_| game_projects::project(&self.host.storage, project))
                     .map(|plan| plan.tool),
                 Activity::WritingMemory { .. } => self.invocation_selected_tool(*actor),
                 _ => None,
@@ -373,7 +373,13 @@ impl Simulation {
                 return false;
             }
             let consumed = if resumed.is_none() && *tool == site.input {
-                site.input_quantity.0
+                self.host
+                    .state
+                    .workshops
+                    .recipe(&site.recipe)
+                    .expect("validated recipe")
+                    .input_quantity
+                    .0
             } else {
                 0
             };
@@ -903,17 +909,20 @@ mod tests {
             )
             .unwrap();
         let site = SiteId(sim.host.allocate_id().unwrap().0);
+        let chosen_recipe = sim
+            .fixture_recipe(input, output, Quantity(1_000), Quantity(1_000), MINUTE)
+            .unwrap();
         game_workshop::insert_site(
             &mut sim.host.storage,
             physical::Site {
+                recipe: chosen_recipe,
                 id: site,
                 area: field.area,
                 input,
-                input_quantity: Quantity(1_000),
+
                 tool: field.tool,
                 output,
-                output_quantity: Quantity(1_000),
-                duration: MINUTE,
+
                 access: BTreeSet::from([farmer, worker]),
                 last_granted: None,
             },

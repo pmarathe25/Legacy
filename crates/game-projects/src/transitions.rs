@@ -30,14 +30,12 @@ pub struct ProposalFacts<'a> {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkshopAsset {
+    pub recipe: game_workshop::RecipeId,
     pub site: SiteId,
     pub area: AreaId,
     pub input: InventoryId,
-    pub input_quantity: Quantity,
     pub tool: InventoryId,
     pub output: InventoryId,
-    pub output_quantity: Quantity,
-    pub duration: SimDuration,
     pub access: BTreeSet<PersonId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,102 +95,242 @@ pub enum Effect {
     },
 }
 
-/// Owned-record comparison occurs before any patch is applied. Physical effects
-/// are returned only after that commit, for the enclosing world transaction.
-#[derive(Clone, Debug)]
+/// Sparse native row edits and the exact owner read guards used to prepare them.
 pub struct PreparedChange {
     rules: Rules,
-    projects: BTreeMap<ProjectId, (Option<Project>, Option<Project>)>,
-    enterprises: BTreeMap<EnterpriseId, (Option<Enterprise>, Option<Enterprise>)>,
+    pub(crate) projects: BTreeMap<ProjectId, (Option<Project>, Option<Project>)>,
+    pub(crate) enterprises: BTreeMap<EnterpriseId, (Option<Enterprise>, Option<Enterprise>)>,
     jobs: BTreeMap<PersonId, (Option<Construction>, Option<Construction>)>,
-    project_catalog: Option<BTreeMap<ProjectId, Project>>,
-    job_catalog: Option<BTreeMap<PersonId, Construction>>,
+    job_membership: Option<Vec<(PersonId, Construction)>>,
+    project_job_membership: BTreeMap<ProjectId, Vec<PersonId>>,
+    area_slots: BTreeMap<AreaId, Vec<ProjectId>>,
+    farm_slots: BTreeMap<SiteId, Vec<ProjectId>>,
+    enterprise_sites: BTreeMap<SiteId, Vec<EnterpriseId>>,
+    recipe_reads: BTreeMap<game_workshop::RecipeId, game_workshop::Recipe>,
     cursor: Option<(u64, u64)>,
     effects: Vec<Effect>,
 }
+fn area_slots(store: &Store, area: AreaId) -> Vec<ProjectId> {
+    projects(store)
+        .filter(|(_, row)| row.area == area && row.materials_consumed)
+        .map(|(id, _)| id)
+        .collect()
+}
+fn farm_slots(store: &Store, plot: SiteId) -> Vec<ProjectId> {
+    projects(store)
+        .filter(|(_, row)| {
+            matches!(&row.kind,ProjectKind::Farm{plot:id,..} if *id==plot)
+                && !matches!(row.status, ProjectStatus::Failed | ProjectStatus::Cancelled)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+fn enterprise_sites(store: &Store, site: SiteId) -> Vec<EnterpriseId> {
+    enterprises(store)
+        .filter(|(_, row)| row.site == site)
+        .map(|(id, _)| id)
+        .collect()
+}
 impl PreparedChange {
-    fn new(world: &World) -> Self {
+    pub(crate) fn new(runtime: &Runtime) -> Self {
         Self {
-            rules: world.rules.clone(),
+            rules: runtime.rules.clone(),
             projects: BTreeMap::new(),
             enterprises: BTreeMap::new(),
             jobs: BTreeMap::new(),
-            project_catalog: None,
-            job_catalog: None,
+            job_membership: None,
+            project_job_membership: BTreeMap::new(),
+            area_slots: BTreeMap::new(),
+            farm_slots: BTreeMap::new(),
+            enterprise_sites: BTreeMap::new(),
+            recipe_reads: BTreeMap::new(),
             cursor: None,
             effects: Vec::new(),
         }
     }
-    fn project(&mut self, world: &World, id: ProjectId, after: Project) {
+    pub(crate) fn project(&mut self, store: &Store, id: ProjectId, after: Project) {
         self.projects
-            .insert(id, (world.projects.get(&id).cloned(), Some(after)));
+            .insert(id, (project(store, id).cloned(), Some(after)));
     }
-    fn enterprise(&mut self, world: &World, id: EnterpriseId, after: Enterprise) {
+    pub(crate) fn enterprise(&mut self, store: &Store, id: EnterpriseId, after: Enterprise) {
         self.enterprises
-            .insert(id, (world.enterprises.get(&id).cloned(), Some(after)));
+            .insert(id, (enterprise(store, id).cloned(), Some(after)));
     }
-    fn job(&mut self, world: &World, actor: PersonId, after: Option<Construction>) {
+    fn job(&mut self, store: &Store, actor: PersonId, after: Option<Construction>) {
         self.jobs
-            .insert(actor, (world.jobs.get(&actor).cloned(), after));
+            .insert(actor, (construction(store, actor).cloned(), after));
+    }
+    fn guard_jobs(&mut self, store: &Store) {
+        self.job_membership = Some(
+            constructions(store)
+                .map(|(actor, row)| (actor, row.clone()))
+                .collect(),
+        );
+    }
+    fn guard_area_slots(&mut self, store: &Store, area: AreaId) {
+        self.area_slots.insert(area, area_slots(store, area));
+    }
+    fn guard_farm_slots(&mut self, store: &Store, plot: SiteId) {
+        self.farm_slots.insert(plot, farm_slots(store, plot));
+    }
+    fn guard_enterprise_sites(&mut self, store: &Store, site: SiteId) {
+        self.enterprise_sites
+            .insert(site, enterprise_sites(store, site));
     }
     pub fn effects(&self) -> &[Effect] {
         &self.effects
     }
-    pub fn commit(self, world: &mut World) -> Result<Vec<Effect>, Error> {
-        if world.rules != self.rules
+    pub(crate) fn validate_rows(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
+        if runtime.rules != self.rules
             || self
-                .project_catalog
-                .as_ref()
-                .is_some_and(|before| before != &world.projects)
-            || self
-                .job_catalog
-                .as_ref()
-                .is_some_and(|before| before != &world.jobs)
+                .cursor
+                .is_some_and(|(before, _)| runtime.last_event != before)
             || self
                 .projects
                 .iter()
-                .any(|(id, (before, _))| world.projects.get(id) != before.as_ref())
+                .any(|(id, (before, _))| project(store, *id) != before.as_ref())
             || self
                 .enterprises
                 .iter()
-                .any(|(id, (before, _))| world.enterprises.get(id) != before.as_ref())
+                .any(|(id, (before, _))| enterprise(store, *id) != before.as_ref())
             || self
                 .jobs
                 .iter()
-                .any(|(id, (before, _))| world.jobs.get(id) != before.as_ref())
+                .any(|(actor, (before, _))| construction(store, *actor) != before.as_ref())
+            || self.job_membership.as_ref().is_some_and(|before| {
+                constructions(store)
+                    .map(|(actor, row)| (actor, row.clone()))
+                    .collect::<Vec<_>>()
+                    != *before
+            })
+            || self.project_job_membership.iter().any(|(project, before)| {
+                constructions(store)
+                    .filter(|(_, job)| job.project == *project)
+                    .map(|(actor, _)| actor)
+                    .collect::<Vec<_>>()
+                    != *before
+            })
             || self
-                .cursor
-                .is_some_and(|(before, _)| world.last_event != before)
+                .area_slots
+                .iter()
+                .any(|(area, before)| area_slots(store, *area) != *before)
+            || self
+                .farm_slots
+                .iter()
+                .any(|(plot, before)| farm_slots(store, *plot) != *before)
+            || self
+                .enterprise_sites
+                .iter()
+                .any(|(site, before)| enterprise_sites(store, *site) != *before)
         {
             return Err(Error::Unavailable);
         }
+        for (id, (_, after)) in &self.projects {
+            if let Some(row) = after {
+                row.validate()?;
+                if row.id != *id || row.progress_ms > runtime.rules.construction_labor.0 {
+                    return Err(Error::Unavailable);
+                }
+            }
+        }
+        for (id, (_, after)) in &self.enterprises {
+            if let Some(row) = after {
+                row.validate()?;
+                if row.id != *id {
+                    return Err(Error::Unavailable);
+                }
+            }
+        }
+        for (_, after) in self.jobs.values() {
+            if let Some(row) = after {
+                row.validate()?;
+            }
+        }
+        Ok(())
+    }
+    pub fn validate(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
+    ) -> Result<(), Error> {
+        self.validate_rows(runtime, store)?;
+        for (id, before) in &self.recipe_reads {
+            if definitions.recipe(id)? != before {
+                return Err(Error::Unavailable);
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn stage_rows(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<ProjectFinalization, Error> {
+        self.validate_rows(runtime, store)?;
         for (id, (_, after)) in self.projects {
-            if let Some(record) = after {
-                world.projects.insert(id, record);
+            if let Some(row) = after {
+                batch.insert(StableId(id.0), row);
             } else {
-                world.projects.remove(&id);
+                batch.remove::<Project>(StableId(id.0));
             }
         }
         for (id, (_, after)) in self.enterprises {
-            if let Some(record) = after {
-                world.enterprises.insert(id, record);
+            if let Some(row) = after {
+                batch.insert(StableId(id.0), row);
             } else {
-                world.enterprises.remove(&id);
+                batch.remove::<Enterprise>(StableId(id.0));
             }
         }
-        for (id, (_, after)) in self.jobs {
-            if let Some(record) = after {
-                world.jobs.insert(id, record);
+        for (actor, (_, after)) in self.jobs {
+            if let Some(row) = after {
+                batch.insert(StableId(actor.0), row);
             } else {
-                world.jobs.remove(&id);
+                batch.remove::<Construction>(StableId(actor.0));
             }
         }
-        if let Some((_, after)) = self.cursor {
-            world.last_event = after;
-        }
-        Ok(self.effects)
+        Ok(ProjectFinalization {
+            cursor: self.cursor.map(|(_, after)| after),
+            effects: self.effects,
+        })
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
+        batch: &mut Batch,
+    ) -> Result<ProjectFinalization, Error> {
+        self.validate(runtime, store, definitions)?;
+        self.stage_rows(runtime, store, batch)
+    }
+    pub fn commit(
+        self,
+        runtime: &mut Runtime,
+        store: &mut Store,
+        definitions: &game_workshop::Definitions,
+    ) -> Result<Vec<Effect>, Error> {
+        let mut batch = Batch::new();
+        let finish = self.stage_into(runtime, store, definitions, &mut batch)?;
+        store.apply_batch(batch)?;
+        Ok(finish.finish(runtime))
     }
 }
+/// Consume after the host admits the combined batch in the same serialized window.
+pub struct ProjectFinalization {
+    cursor: Option<u64>,
+    effects: Vec<Effect>,
+}
+impl ProjectFinalization {
+    pub fn finish(self, runtime: &mut Runtime) -> Vec<Effect> {
+        if let Some(cursor) = self.cursor {
+            runtime.last_event = cursor;
+        }
+        self.effects
+    }
+}
+
 fn terminal(status: ProjectStatus) -> bool {
     matches!(
         status,
@@ -200,24 +338,24 @@ fn terminal(status: ProjectStatus) -> bool {
     )
 }
 
-impl World {
-    pub fn boundary(&self, now: SimTime, limit: SimTime) -> SimTime {
-        self.projects
-            .values()
+impl Runtime {
+    pub fn boundary(&self, store: &Store, now: SimTime, limit: SimTime) -> SimTime {
+        crate::projects(store)
+            .map(|(_, row)| row)
             .filter(|p| !terminal(p.status) && p.finish_by > now)
             .map(|p| p.finish_by)
             .min()
             .unwrap_or(limit)
             .min(limit)
     }
-    pub fn allocation_bound(&self, next: SimTime) -> Result<u64, Error> {
-        self.jobs
-            .values()
+    pub fn allocation_bound(&self, store: &Store, next: SimTime) -> Result<u64, Error> {
+        crate::constructions(store)
+            .map(|(_, row)| row)
             .filter(|j| j.completes == next)
             .try_fold(0u64, |total, job| {
-                let project = self.projects.get(&job.project).ok_or(Error::Unavailable)?;
+                let project = crate::project(store, job.project).ok_or(Error::Unavailable)?;
                 total
-                    .checked_add(if matches!(project.kind, ProjectKind::Workshop) {
+                    .checked_add(if matches!(&project.kind, ProjectKind::Workshop { .. }) {
                         2
                     } else {
                         1
@@ -225,112 +363,10 @@ impl World {
                     .ok_or(Error::Overflow)
             })
     }
-    pub fn validate_owned(&self, now: SimTime) -> Result<(), Error> {
-        self.rules.validate()?;
-        let fail = || Error::InvalidSave("invalid owned project lifecycle or account".into());
-        let mut exclusive = BTreeMap::<PersonId, u128>::new();
-        for (id, p) in &self.projects {
-            if *id != p.id
-                || p.beneficiaries.is_empty()
-                || p.beneficiaries.len() > 8
-                || p.workers.is_empty()
-                || p.workers.len() > 8
-                || !p.beneficiaries.contains(&p.sponsor)
-                || !p.workers.contains(&p.sponsor)
-                || p.progress_ms > self.rules.construction_labor.0
-                || p.contributions
-                    .values()
-                    .map(|q| u128::from(*q))
-                    .sum::<u128>()
-                    != u128::from(p.progress_ms)
-                || !p.materials_consumed && p.progress_ms != 0
-                || p.tool == p.output
-                || (p.status == ProjectStatus::Completed) != p.enterprise.is_some()
-                || p.status == ProjectStatus::Completed
-                    && p.progress_ms != self.rules.construction_labor.0
-                || p.status == ProjectStatus::Failed
-                    && (p.finish_by > now || p.blocker != Some(ProjectBlocker::Deadline))
-                || p.enterprise
-                    .is_some_and(|id| self.enterprises.get(&id).is_none_or(|e| e.project != p.id))
-            {
-                return Err(fail());
-            }
-            for (actor, elapsed) in &p.contributions {
-                *exclusive.entry(*actor).or_default() += u128::from(*elapsed);
-            }
-        }
-        let mut busy = BTreeSet::new();
-        for (actor, job) in &self.jobs {
-            let p = self.projects.get(&job.project).ok_or_else(fail)?;
-            if !busy.insert(job.project)
-                || !p.materials_consumed
-                || p.status != ProjectStatus::Active
-                || !p.workers.contains(actor)
-                || job.completes <= now
-                || job.completes > p.finish_by
-                || job.completes.0 - now.0 != self.rules.construction_labor.0 - p.progress_ms
-            {
-                return Err(fail());
-            }
-        }
-        if self
-            .projects
-            .values()
-            .any(|p| p.status == ProjectStatus::Active && !busy.contains(&p.id))
-        {
-            return Err(fail());
-        }
-        let mut sites = BTreeSet::new();
-        for (id, e) in &self.enterprises {
-            let p = self.projects.get(&e.project).ok_or_else(fail)?;
-            if *id != e.id
-                || !sites.insert(e.site)
-                || p.enterprise != Some(*id)
-                || e.kind != p.kind
-                || e.area != p.area
-                || e.sponsor != p.sponsor
-                || e.beneficiaries != p.beneficiaries
-                || e.workers != p.workers
-            {
-                return Err(fail());
-            }
-            match e.kind {
-                ProjectKind::Farm { plot, .. } => {
-                    if e.site != plot
-                        || e.tools_produced != 0
-                        || e.timber_consumed != 0
-                        || e.inputs
-                            .keys()
-                            .any(|g| !matches!(g, Good::Seed | Good::Water))
-                    {
-                        return Err(fail());
-                    }
-                }
-                ProjectKind::Workshop => {
-                    if e.timber_consumed % self.rules.recipe_timber.0 != 0
-                        || e.tools_produced % self.rules.recipe_tools.0 != 0
-                        || u128::from(e.timber_consumed)
-                            < u128::from(e.tools_produced / self.rules.recipe_tools.0)
-                                * u128::from(self.rules.recipe_timber.0)
-                    {
-                        return Err(fail());
-                    }
-                }
-            }
-            for (actor, elapsed) in &e.labor {
-                *exclusive.entry(*actor).or_default() += u128::from(*elapsed);
-            }
-        }
-        if exclusive
-            .values()
-            .any(|elapsed| *elapsed > u128::from(now.0))
-        {
-            return Err(fail());
-        }
-        Ok(())
-    }
     pub fn prepare_proposal(
         &self,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
         id: ProjectId,
         action: &ProjectAction,
         facts: ProposalFacts<'_>,
@@ -339,6 +375,7 @@ impl World {
         let (kind, area, materials, tool, input, output, beneficiaries, workers, finish_by) =
             match action {
                 ProjectAction::Propose {
+                    recipe,
                     area,
                     materials,
                     tool,
@@ -348,7 +385,9 @@ impl World {
                     workers,
                     finish_by,
                 } => (
-                    ProjectKind::Workshop,
+                    ProjectKind::Workshop {
+                        recipe: recipe.clone(),
+                    },
                     *area,
                     *materials,
                     *tool,
@@ -385,7 +424,7 @@ impl World {
                 _ => return Err(Error::Unavailable),
             };
         if id.0 == 0
-            || self.projects.contains_key(&id)
+            || crate::project(store, id).is_some()
             || !actor.capable
             || actor.area != Some(area)
             || finish_by <= actor.now
@@ -401,16 +440,18 @@ impl World {
         {
             return Err(Error::Unavailable);
         }
-        let mut stocks = vec![
-            (materials, Good::Timber),
-            (tool, Good::Tool),
-            (input, Good::Timber),
-            (output, Good::Tool),
-        ];
-        if let ProjectKind::Farm { plot, water } = kind {
+        let mut selected_recipe = None;
+        let mut stocks = vec![(materials, Good::Timber), (tool, Good::Tool)];
+        if let ProjectKind::Workshop { recipe: id } = &kind {
+            let recipe = definitions.recipe(id)?;
+            recipe.validate()?;
+            selected_recipe = Some((id.clone(), recipe.clone()));
+            stocks.extend([(input, recipe.input_good), (output, recipe.output_good)]);
+        }
+        if let ProjectKind::Farm { plot, water } = &kind {
             if !facts.land_accessible
-                || self.projects.values().any(|p| {
-                    matches!(p.kind,ProjectKind::Farm {plot:id,..} if id==plot)
+                || crate::projects(store).map(|(_, row)| row).any(|p| {
+                    matches!(&p.kind,ProjectKind::Farm {plot:id,..} if id==plot)
                         && !matches!(p.status, ProjectStatus::Failed | ProjectStatus::Cancelled)
                 })
             {
@@ -420,7 +461,7 @@ impl World {
                 (materials, Good::Timber),
                 (tool, Good::Tool),
                 (input, Good::Seed),
-                (water, Good::Water),
+                (*water, Good::Water),
                 (output, Good::Food),
             ];
         } else if tool == output || output == materials || input == output {
@@ -455,8 +496,13 @@ impl World {
             enterprise: None,
         };
         let mut change = PreparedChange::new(self);
-        change.project_catalog = Some(self.projects.clone());
-        change.project(self, id, project);
+        if let ProjectKind::Farm { plot, .. } = &project.kind {
+            change.guard_farm_slots(store, *plot);
+        }
+        if let Some((id, recipe)) = selected_recipe {
+            change.recipe_reads.insert(id, recipe);
+        }
+        change.project(store, id, project);
         change.effects.push(Effect::Proposed {
             project: id,
             sponsor: actor.actor,
@@ -465,11 +511,12 @@ impl World {
     }
     pub fn prepare_support(
         &self,
+        store: &Store,
         project: ProjectId,
         contract: &Agreement,
         facts: ActorFacts,
     ) -> Result<PreparedChange, Error> {
-        let plan = self.projects.get(&project).ok_or(Error::Unavailable)?;
+        let plan = crate::project(store, project).ok_or(Error::Unavailable)?;
         if !facts.capable
             || !facts.knows_project
             || facts.area != Some(plan.area)
@@ -482,7 +529,7 @@ impl World {
             )
             || !contract.terms.iter().any(|term| match term {
                 AgreementTerm::SiteAccess { site, .. } => {
-                    matches!(plan.kind,ProjectKind::Farm {plot,..} if plot==*site)
+                    matches!(&plan.kind,ProjectKind::Farm {plot,..} if *plot==*site)
                 }
                 AgreementTerm::ConstructionLabor {
                     project: target, ..
@@ -500,11 +547,13 @@ impl World {
         let mut plan = plan.clone();
         plan.support.insert(contract.id);
         if let Some(id) = plan.enterprise {
-            let mut enterprise = self.enterprises.get(&id).ok_or(Error::Unavailable)?.clone();
+            let mut enterprise = crate::enterprise(store, id)
+                .ok_or(Error::Unavailable)?
+                .clone();
             enterprise.operating_agreements.insert(contract.id);
-            change.enterprise(self, id, enterprise);
+            change.enterprise(store, id, enterprise);
         }
-        change.project(self, project, plan);
+        change.project(store, project, plan);
         change.effects.push(Effect::Supported {
             project,
             actor: facts.actor,
@@ -514,15 +563,13 @@ impl World {
     }
     pub fn prepare_operation(
         &self,
+        store: &Store,
         enterprise: EnterpriseId,
         contract: &Agreement,
         facts: ActorFacts,
         known: bool,
     ) -> Result<PreparedChange, Error> {
-        let asset = self
-            .enterprises
-            .get(&enterprise)
-            .ok_or(Error::Unavailable)?;
+        let asset = crate::enterprise(store, enterprise).ok_or(Error::Unavailable)?;
         if !facts.capable
             || !known
             || facts.area != Some(asset.area)
@@ -543,15 +590,16 @@ impl World {
         let mut after = asset.clone();
         after.operating_agreements.insert(contract.id);
         let mut change = PreparedChange::new(self);
-        change.enterprise(self, enterprise, after);
+        change.enterprise(store, enterprise, after);
         Ok(change)
     }
     pub fn prepare_construction(
         &self,
+        store: &Store,
         project: ProjectId,
         facts: ConstructionFacts,
     ) -> Result<PreparedChange, Error> {
-        let plan = self.projects.get(&project).ok_or(Error::Unavailable)?;
+        let plan = crate::project(store, project).ok_or(Error::Unavailable)?;
         let actor = facts.actor;
         if !actor.capable
             || !actor.knows_project
@@ -561,15 +609,12 @@ impl World {
             || !facts.tool_available
             || terminal(plan.status)
             || actor.now >= plan.finish_by
-            || self
-                .jobs
-                .iter()
-                .any(|(worker, job)| *worker != actor.actor && job.project == project)
+            || crate::constructions(store)
+                .any(|(worker, job)| worker != actor.actor && job.project == project)
             || (!plan.materials_consumed
                 && (facts.materials_available < self.rules.construction_timber
-                    || self
-                        .projects
-                        .values()
+                    || crate::projects(store)
+                        .map(|(_, row)| row)
                         .filter(|p| p.area == plan.area && p.materials_consumed)
                         .count()
                         >= self.rules.workshops_per_area))
@@ -589,9 +634,9 @@ impl World {
         if completes > plan.finish_by {
             return Err(Error::Unavailable);
         }
-        let mut change = self.prepare_interrupt(actor.actor)?;
-        change.job_catalog = Some(self.jobs.clone());
-        change.project_catalog = Some(self.projects.clone());
+        let mut change = self.prepare_interrupt(store, actor.actor)?;
+        change.guard_jobs(store);
+        change.guard_area_slots(store, plan.area);
         if !plan.materials_consumed {
             change.effects.push(Effect::Consume {
                 actor: actor.actor,
@@ -603,8 +648,12 @@ impl World {
         after.materials_consumed = true;
         after.status = ProjectStatus::Active;
         after.blocker = None;
-        change.project(self, project, after);
-        change.job(self, actor.actor, Some(Construction { project, completes }));
+        change.project(store, project, after);
+        change.job(
+            store,
+            actor.actor,
+            Some(Construction { project, completes }),
+        );
         change
             .effects
             .insert(0, Effect::Interrupt { actor: actor.actor });
@@ -615,29 +664,53 @@ impl World {
         });
         Ok(change)
     }
-    pub fn prepare_interrupt(&self, actor: PersonId) -> Result<PreparedChange, Error> {
+    pub fn prepare_interrupt(
+        &self,
+        store: &Store,
+        actor: PersonId,
+    ) -> Result<PreparedChange, Error> {
+        self.prepare_interrupt_many(store, &[actor])
+    }
+    pub fn prepare_interrupt_many(
+        &self,
+        store: &Store,
+        actors: &[PersonId],
+    ) -> Result<PreparedChange, Error> {
         let mut change = PreparedChange::new(self);
-        if let Some(job) = self.jobs.get(&actor) {
-            let mut project = self
-                .projects
-                .get(&job.project)
-                .ok_or(Error::Unavailable)?
-                .clone();
-            if !terminal(project.status) {
-                project.status = ProjectStatus::Ready;
-                project.blocker = None;
+        let mut seen = BTreeSet::new();
+        for actor in actors {
+            if !seen.insert(*actor) {
+                continue;
             }
-            change.project(self, project.id, project);
-            change.job(self, actor, None);
+            if let Some(job) = crate::construction(store, *actor) {
+                let members = constructions(store)
+                    .filter(|(_, row)| row.project == job.project)
+                    .map(|(actor, _)| actor)
+                    .collect::<Vec<_>>();
+                if members != [*actor] {
+                    return Err(Error::Unavailable);
+                }
+                change.project_job_membership.insert(job.project, members);
+                let mut project = crate::project(store, job.project)
+                    .ok_or(Error::Unavailable)?
+                    .clone();
+                if !terminal(project.status) {
+                    project.status = ProjectStatus::Ready;
+                    project.blocker = None;
+                }
+                change.project(store, project.id, project);
+                change.job(store, *actor, None);
+            }
         }
         Ok(change)
     }
     pub fn prepare_cancel(
         &self,
+        store: &Store,
         project: ProjectId,
         facts: ActorFacts,
     ) -> Result<PreparedChange, Error> {
-        let plan = self.projects.get(&project).ok_or(Error::Unavailable)?;
+        let plan = crate::project(store, project).ok_or(Error::Unavailable)?;
         if !facts.capable
             || !facts.knows_project
             || plan.sponsor != facts.actor
@@ -646,16 +719,16 @@ impl World {
             return Err(Error::Unavailable);
         }
         let mut change = PreparedChange::new(self);
-        change.job_catalog = Some(self.jobs.clone());
-        for (actor, job) in &self.jobs {
+        change.guard_jobs(store);
+        for (actor, job) in crate::constructions(store) {
             if job.project == project {
-                change.job(self, *actor, None);
-                change.effects.push(Effect::Interrupt { actor: *actor });
+                change.job(store, actor, None);
+                change.effects.push(Effect::Interrupt { actor });
             }
         }
         let mut after = plan.clone();
         after.status = ProjectStatus::Cancelled;
-        change.project(self, project, after);
+        change.project(store, project, after);
         change.effects.push(Effect::Cancelled {
             project,
             actor: facts.actor,
@@ -664,59 +737,71 @@ impl World {
     }
     pub fn prepare_completion(
         &self,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
         actor: PersonId,
         facts: CompletionFacts,
     ) -> Result<PreparedChange, Error> {
-        let job = self.jobs.get(&actor).ok_or(Error::Unavailable)?;
-        let plan = self.projects.get(&job.project).ok_or(Error::Unavailable)?;
+        let job = crate::construction(store, actor).ok_or(Error::Unavailable)?;
+        let plan = crate::project(store, job.project).ok_or(Error::Unavailable)?;
         if facts.now < job.completes || plan.progress_ms != self.rules.construction_labor.0 {
             return Err(Error::Unavailable);
         }
         if !facts.capable || !facts.asset_available {
-            let mut change = self.prepare_interrupt(actor)?;
+            let mut change = self.prepare_interrupt(store, actor)?;
             change.effects.push(Effect::Interrupt { actor });
             return Ok(change);
         }
-        let site = match plan.kind {
-            ProjectKind::Workshop => facts.site,
-            ProjectKind::Farm { plot, .. } => plot,
+        let site = match &plan.kind {
+            ProjectKind::Workshop { .. } => facts.site,
+            ProjectKind::Farm { plot, .. } => *plot,
         };
         if facts.enterprise.0 == 0
-            || self.enterprises.contains_key(&facts.enterprise)
-            || self.enterprises.values().any(|e| e.site == site)
+            || crate::enterprise(store, facts.enterprise).is_some()
+            || crate::enterprises(store)
+                .map(|(_, row)| row)
+                .any(|e| e.site == site)
         {
             return Err(Error::Unavailable);
         }
-        let asset = match plan.kind {
-            ProjectKind::Workshop => AssetEffect::Workshop(WorkshopAsset {
-                site,
-                area: plan.area,
-                input: plan.input,
-                input_quantity: self.rules.recipe_timber,
-                tool: plan.tool,
-                output: plan.output,
-                output_quantity: self.rules.recipe_tools,
-                duration: self.rules.recipe_time,
-                access: plan.workers.clone(),
-            }),
+        let asset = match &plan.kind {
+            ProjectKind::Workshop { recipe } => {
+                let selected = definitions.recipe(recipe)?;
+                selected.validate()?;
+                AssetEffect::Workshop(WorkshopAsset {
+                    recipe: recipe.clone(),
+                    site,
+                    area: plan.area,
+                    input: plan.input,
+                    tool: plan.tool,
+                    output: plan.output,
+                    access: plan.workers.clone(),
+                })
+            }
             ProjectKind::Farm { plot, water } => AssetEffect::Farm {
-                plot,
+                plot: *plot,
                 area: plan.area,
                 seed: plan.input,
                 tool: plan.tool,
-                water,
+                water: *water,
                 food: plan.output,
             },
         };
         let mut change = PreparedChange::new(self);
-        change.job(self, actor, None);
+        if let ProjectKind::Workshop { recipe } = &plan.kind {
+            change
+                .recipe_reads
+                .insert(recipe.clone(), definitions.recipe(recipe)?.clone());
+        }
+        change.guard_enterprise_sites(store, site);
+        change.job(store, actor, None);
         let mut after = plan.clone();
         after.status = ProjectStatus::Completed;
         after.enterprise = Some(facts.enterprise);
         after.blocker = None;
-        change.project(self, plan.id, after);
+        change.project(store, plan.id, after);
         change.enterprise(
-            self,
+            store,
             facts.enterprise,
             Enterprise {
                 kind: plan.kind.clone(),
@@ -731,8 +816,6 @@ impl World {
                 workers: plan.workers.clone(),
                 status: EnterpriseStatus::Ready,
                 blocker: None,
-                timber_consumed: 0,
-                tools_produced: 0,
                 labor: BTreeMap::new(),
                 operating_agreements: plan.support.clone(),
             },
@@ -748,38 +831,51 @@ impl World {
     }
     pub fn prepare_input(
         &self,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
         site: SiteId,
         good: Good,
         quantity: Quantity,
     ) -> Result<PreparedChange, Error> {
         let mut change = PreparedChange::new(self);
-        if let Some(asset) = self.enterprises.values().find(|e| e.site == site) {
+        if let Some(asset) = crate::enterprises(store)
+            .map(|(_, row)| row)
+            .find(|e| e.site == site)
+        {
+            change.guard_enterprise_sites(store, site);
             let mut after = asset.clone();
             let total = after.inputs.entry(good).or_default();
             *total = total.checked_add(quantity.0).ok_or(Error::Overflow)?;
-            if matches!(asset.kind, ProjectKind::Workshop) && good == Good::Timber {
-                after.timber_consumed = after
-                    .timber_consumed
-                    .checked_add(quantity.0)
-                    .ok_or(Error::Overflow)?;
+            if let ProjectKind::Workshop { recipe: id } = &asset.kind {
+                let recipe = definitions.recipe(id)?;
+                if good != recipe.input_good {
+                    return Err(Error::Unavailable);
+                }
+                change.recipe_reads.insert(id.clone(), recipe.clone());
                 change.effects.push(Effect::InputUsed {
                     enterprise: asset.id,
                     site,
                     quantity,
                 });
             }
-            change.enterprise(self, asset.id, after);
+            change.enterprise(store, asset.id, after);
         }
         Ok(change)
     }
     pub fn prepare_outputs(
         &self,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
         outputs: &[(SiteId, Good, Quantity)],
         cursor: Option<u64>,
     ) -> Result<PreparedChange, Error> {
         let mut change = PreparedChange::new(self);
         for (site, good, quantity) in outputs {
-            if let Some(asset) = self.enterprises.values().find(|e| e.site == *site) {
+            if let Some(asset) = crate::enterprises(store)
+                .map(|(_, row)| row)
+                .find(|e| e.site == *site)
+            {
+                change.guard_enterprise_sites(store, *site);
                 let mut after = change
                     .enterprises
                     .get(&asset.id)
@@ -787,13 +883,14 @@ impl World {
                     .unwrap_or_else(|| asset.clone());
                 let total = after.produced.entry(*good).or_default();
                 *total = total.checked_add(quantity.0).ok_or(Error::Overflow)?;
-                if *good == Good::Tool {
-                    after.tools_produced = after
-                        .tools_produced
-                        .checked_add(quantity.0)
-                        .ok_or(Error::Overflow)?;
+                if let ProjectKind::Workshop { recipe: id } = &asset.kind {
+                    let recipe = definitions.recipe(id)?;
+                    if *good != recipe.output_good {
+                        return Err(Error::Unavailable);
+                    }
+                    change.recipe_reads.insert(id.clone(), recipe.clone());
                 }
-                change.enterprise(self, asset.id, after);
+                change.enterprise(store, asset.id, after);
             }
         }
         if let Some(cursor) = cursor {
@@ -804,26 +901,32 @@ impl World {
         }
         Ok(change)
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "explicit Store and recipe authority accompany the existing ordered closing facts"
+    )]
     pub fn prepare_reconcile(
         &self,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
         now: SimTime,
         projects: &[ProjectCondition],
         enterprises: &[EnterpriseCondition],
         outputs: &[(SiteId, Good, Quantity)],
         cursor: u64,
     ) -> Result<PreparedChange, Error> {
-        let mut change = self.prepare_outputs(outputs, Some(cursor))?;
-        change.job_catalog = Some(self.jobs.clone());
-        for plan in self.projects.values() {
+        let mut change = self.prepare_outputs(store, definitions, outputs, Some(cursor))?;
+        change.guard_jobs(store);
+        for plan in crate::projects(store).map(|(_, row)| row) {
             if terminal(plan.status) {
                 continue;
             }
             let mut after = plan.clone();
             if plan.finish_by <= now {
-                for (actor, job) in &self.jobs {
+                for (actor, job) in crate::constructions(store) {
                     if job.project == plan.id {
-                        change.job(self, *actor, None);
-                        change.effects.push(Effect::Interrupt { actor: *actor });
+                        change.job(store, actor, None);
+                        change.effects.push(Effect::Interrupt { actor });
                     }
                 }
                 after.status = ProjectStatus::Failed;
@@ -835,10 +938,10 @@ impl World {
                     .find(|f| f.project == plan.id)
                     .ok_or(Error::Unavailable)?;
                 let mut interrupted = false;
-                for (actor, job) in &self.jobs {
-                    if job.project == plan.id && !facts.usable_worker_tools.contains(actor) {
-                        change.job(self, *actor, None);
-                        change.effects.push(Effect::Interrupt { actor: *actor });
+                for (actor, job) in crate::constructions(store) {
+                    if job.project == plan.id && !facts.usable_worker_tools.contains(&actor) {
+                        change.job(store, actor, None);
+                        change.effects.push(Effect::Interrupt { actor });
                         interrupted = true;
                     }
                 }
@@ -860,15 +963,15 @@ impl World {
                 }
             }
             if after != *plan {
-                change.project(self, plan.id, after);
+                change.project(store, plan.id, after);
             }
         }
-        for asset in self.enterprises.values() {
+        for asset in crate::enterprises(store).map(|(_, row)| row) {
             let facts = enterprises
                 .iter()
                 .find(|f| f.enterprise == asset.id)
                 .ok_or(Error::Unavailable)?;
-            let blocker = match asset.kind {
+            let blocker = match &asset.kind {
                 ProjectKind::Farm { .. } => {
                     if !facts.workers.iter().any(|p| p.capable && p.land_accessible) {
                         Some(ProjectBlocker::Workers)
@@ -878,13 +981,16 @@ impl World {
                         None
                     }
                 }
-                ProjectKind::Workshop => {
-                    if facts.output_room < facts.required_output {
+                ProjectKind::Workshop { recipe: id } => {
+                    let recipe = definitions.recipe(id)?;
+                    recipe.validate()?;
+                    change.recipe_reads.insert(id.clone(), recipe.clone());
+                    if facts.output_room < recipe.output_quantity {
                         Some(ProjectBlocker::OutputCapacity)
                     } else if !facts.workers.iter().any(|p| {
                         p.capable
                             && p.tool_available
-                            && p.materials_available >= facts.required_input
+                            && p.materials_available >= recipe.input_quantity
                     }) {
                         Some(ProjectBlocker::Materials)
                     } else {
@@ -904,13 +1010,13 @@ impl World {
             } else {
                 EnterpriseStatus::Ready
             };
-            after.blocker = if facts.active && matches!(asset.kind, ProjectKind::Workshop) {
+            after.blocker = if facts.active && matches!(&asset.kind, ProjectKind::Workshop { .. }) {
                 None
             } else {
                 blocker
             };
             if after != *asset {
-                change.enterprise(self, asset.id, after);
+                change.enterprise(store, asset.id, after);
             }
         }
         Ok(change)
@@ -918,25 +1024,12 @@ impl World {
 }
 impl Rules {
     pub fn validate(&self) -> Result<(), Error> {
-        if [
-            self.construction_timber.0,
-            self.construction_labor.0,
-            self.recipe_timber.0,
-            self.recipe_tools.0,
-            self.recipe_time.0,
-        ]
-        .contains(&0)
-            || self
-                .recipe_timber
-                .0
-                .checked_mul(3)
-                .and_then(|q| q.checked_add(self.construction_timber.0))
-                .is_none()
-            || self.recipe_tools.0.checked_mul(3).is_none()
+        if self.construction_timber.0 == 0
+            || self.construction_labor.0 == 0
             || !(1..=16).contains(&self.workshops_per_area)
         {
             return Err(Error::InvalidConfiguration(
-                "invalid project technology rules".into(),
+                "invalid project construction rules".into(),
             ));
         }
         Ok(())
@@ -970,8 +1063,6 @@ pub struct EnterpriseCondition {
     pub workers: Vec<WorkerCondition>,
     pub crop_failed: bool,
     pub output_room: Quantity,
-    pub required_input: Quantity,
-    pub required_output: Quantity,
 }
 
 pub struct AccountObligation {
@@ -988,8 +1079,6 @@ pub fn account_view(
     let mut accounts = EnterpriseAccountView {
         inputs: enterprise.inputs.clone(),
         produced: enterprise.produced.clone(),
-        timber_consumed: enterprise.timber_consumed,
-        tools_produced: enterprise.tools_produced,
         labor: enterprise.labor.clone(),
         operating_agreements: enterprise.operating_agreements.clone(),
         promised_labor_ms: 0,

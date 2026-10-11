@@ -1162,7 +1162,10 @@ impl Simulation {
         else {
             return;
         };
-        if matches!(talk.conversation, Conversation::File) {
+        if let Some(change) = game_society::enforcement::complaint_interruption(
+            owner_now,
+            matches!(talk.conversation, Conversation::File),
+        ) {
             let case = self
                 .host
                 .state
@@ -1173,9 +1176,8 @@ impl Simulation {
                 .get_mut(&talk.case)
                 .unwrap();
             case.status = EnforcementStatus::Withdrawn;
-            case.changed_at = owner_now;
-            case.explanation =
-                "The complaint was interrupted before the officer received it".into();
+            case.changed_at = change.changed_at;
+            case.explanation = change.explanation.into();
         }
     }
     pub(crate) fn complete_enforcement_talk(&mut self, actor: PersonId) {

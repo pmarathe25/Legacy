@@ -10,9 +10,7 @@ impl Site {
             || self.input.0 == 0
             || self.tool.0 == 0
             || self.output.0 == 0
-            || self.input_quantity.0 == 0
-            || self.output_quantity.0 == 0
-            || self.duration.0 == 0
+            || self.recipe.validate().is_err()
             || self.access.iter().any(|id| id.0 == 0)
             || self.last_granted.is_some_and(|id| id.0 == 0)
         {

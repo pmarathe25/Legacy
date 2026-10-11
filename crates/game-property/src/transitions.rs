@@ -259,7 +259,7 @@ impl PreparedProperty {
             ),
         );
     }
-    fn cancel(&mut self, store: &Store, actor: PersonId, now: SimTime) {
+    pub(crate) fn cancel(&mut self, store: &Store, actor: PersonId, now: SimTime) {
         self.report_membership
             .entry(actor)
             .or_insert_with(|| report_membership(store, actor));
@@ -281,6 +281,13 @@ impl PreparedProperty {
             .map(|(_, row)| row)
             .filter(|r| r.sender == actor || r.recipient == actor)
         {
+            if self
+                .reports
+                .get(&report.sender)
+                .is_some_and(|(_, after)| after.is_none())
+            {
+                continue;
+            }
             self.reports
                 .insert(report.sender, (Some(report.clone()), None));
             self.effects.push(Effect::ClearReport {

@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 41;
+const SAVE_VERSION: u32 = 42;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -52,7 +52,16 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if s.components.ids().any(|id| id.0 == 0 || id.0 >= s.next_id) {
         return Err(fail());
     }
-    let playable = scenarios::PLAYABLE.contains(&s.state.scenario.id.as_str());
+    s.state.workshops.validate_storage(s.components)?;
+    if let Some(openings) = &s.state.openings {
+        openings.validate()?;
+    }
+    let playable = s.state.openings.as_ref().is_some_and(|definitions| {
+        definitions
+            .catalog
+            .openings
+            .contains_key(&s.state.scenario.id)
+    });
     let enforcement_fixture = matches!(
         s.state.scenario.id.as_str(),
         "enforcement-fixture" | "realm-fixture"
@@ -302,12 +311,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.projects {
-        for id in world
-            .projects
-            .keys()
-            .map(|id| id.0)
-            .chain(world.enterprises.keys().map(|id| id.0))
+    if s.state.projects.is_some() {
+        for id in game_projects::projects(s.components)
+            .map(|(id, _)| id.0)
+            .chain(game_projects::enterprises(s.components).map(|(id, _)| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
@@ -1424,7 +1431,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .projects
                         .as_ref()
-                        .is_some_and(|w| w.projects.contains_key(&project))
+                        .is_some_and(|_| game_projects::project(s.components, project).is_some())
                 {
                     return Err(fail());
                 }
@@ -1439,7 +1446,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .projects
                         .as_ref()
-                        .is_some_and(|w| w.projects.contains_key(&project))
+                        .is_some_and(|_| game_projects::project(s.components, project).is_some())
                     || !s
                         .state
                         .agreements
@@ -1456,7 +1463,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .projects
                         .as_ref()
-                        .is_some_and(|w| w.projects.contains_key(&project))
+                        .is_some_and(|_| game_projects::project(s.components, project).is_some())
                 {
                     return Err(fail());
                 }
@@ -1466,7 +1473,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .projects
                     .as_ref()
-                    .is_some_and(|w| w.projects.contains_key(&project))
+                    .is_some_and(|_| game_projects::project(s.components, project).is_some())
                 {
                     return Err(fail());
                 }
@@ -1476,15 +1483,15 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 enterprise,
                 site,
             } => {
-                let valid = s.state.projects.as_ref().is_some_and(|world| {
-                    let Some(plan) = world.projects.get(&project) else {
+                let valid = s.state.projects.as_ref().is_some_and(|_| {
+                    let Some(plan) = game_projects::project(s.components, project) else {
                         return false;
                     };
-                    world.enterprises.get(&enterprise).is_some_and(|record| {
+                    game_projects::enterprise(s.components, enterprise).is_some_and(|record| {
                         record.project == project
                             && record.site == site
                             && match plan.kind {
-                                ProjectKind::Workshop => {
+                                ProjectKind::Workshop { .. } => {
                                     s.state.physical.as_ref().is_some_and(|_| {
                                         game_workshop::site(s.components, site).is_some()
                                     })
@@ -1514,9 +1521,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::EnterpriseInputUsed {
                 enterprise, site, ..
             } => {
-                if !s.state.projects.as_ref().is_some_and(|w| {
-                    w.enterprises
-                        .get(&enterprise)
+                if !s.state.projects.as_ref().is_some_and(|_| {
+                    game_projects::enterprise(s.components, enterprise)
                         .is_some_and(|e| e.site == site)
                 }) {
                     return Err(fail());
@@ -1869,7 +1875,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .projects
                         .as_ref()
-                        .is_some_and(|w| w.projects.contains_key(&id)),
+                        .is_some_and(|_| game_projects::project(s.components, id).is_some()),
                 };
                 let subject_exists = |subject: Subject| match subject {
                     Subject::Inventory(id) => game_cargo::inventory(s.components, id).is_some(),
@@ -1882,7 +1888,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .projects
                         .as_ref()
-                        .is_some_and(|w| w.projects.contains_key(&id)),
+                        .is_some_and(|_| game_projects::project(s.components, id).is_some()),
                     Subject::Resource(id) => s
                         .state
                         .ecology
@@ -2112,9 +2118,7 @@ fn validate_physical(
         let id = &id;
         if *id != site.id
             || !areas.contains(&site.area)
-            || site.duration.0 == 0
-            || site.input_quantity.0 == 0
-            || site.output_quantity.0 == 0
+            || s.state.workshops.resolve_site(site).is_err()
             || site.access.iter().any(|p| !people.contains_key(p))
         {
             return Err(fail());
@@ -2189,8 +2193,12 @@ fn validate_physical(
                         || numerator / denominator > u128::from(maximum)
                 }
                 || job.work_remainder >= job.rate.denominator
-                || !game_workshop::site(s.components, job.site)
-                    .is_some_and(|site| job.remaining <= site.duration.0))
+                || !game_workshop::site(s.components, job.site).is_some_and(|site| {
+                    s.state
+                        .workshops
+                        .resolve_site(site)
+                        .is_ok_and(|view| job.remaining <= view.recipe.duration.0)
+                }))
         {
             return Err(fail());
         }

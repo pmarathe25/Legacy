@@ -69,6 +69,13 @@ fn propose(sim: &mut Simulation, finish_by: SimTime, workers: BTreeSet<PersonId>
     sim.debug_project_action(
         maker,
         ProjectAction::Propose {
+            recipe: sim
+                .canonical_state()
+                .state
+                .workshops
+                .catalog
+                .default_recipe
+                .clone(),
             area: AreaId(1),
             materials,
             tool,
@@ -149,18 +156,21 @@ fn supply(sim: &mut Simulation, quantity: u64) {
 fn autonomous_citizen_negotiates_real_financing_builds_and_repays_from_actual_production() {
     let mut sim = fixture(2);
     sim.advance(SimDuration(1_500_000)).unwrap();
-    let world = sim.canonical_state().state.projects.as_ref().unwrap();
-    let plan = world
-        .projects
-        .values()
+    let plan = game_projects::projects(sim.canonical_state().components)
+        .map(|(_, row)| row)
         .find(|project| project.sponsor == actor(&sim, 3))
         .unwrap();
     assert_eq!(plan.status, ProjectStatus::Completed);
     assert!(plan.materials_consumed);
     assert_eq!(plan.progress_ms, 300_000);
-    let workshop = &world.enterprises[&plan.enterprise.unwrap()];
-    assert!(workshop.tools_produced >= 3_000);
-    assert_eq!(workshop.timber_consumed, 2 * workshop.tools_produced);
+    let workshop =
+        game_projects::enterprise(sim.canonical_state().components, plan.enterprise.unwrap())
+            .unwrap();
+    assert!(workshop.produced.get(&Good::Tool).copied().unwrap_or(0) >= 3_000);
+    assert_eq!(
+        workshop.inputs.get(&Good::Timber).copied().unwrap_or(0),
+        2 * workshop.produced.get(&Good::Tool).copied().unwrap_or(0)
+    );
     let funding = &sim
         .canonical_state()
         .state
@@ -220,12 +230,8 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
     sim.advance(SimDuration(120_000)).unwrap();
     sim.debug_actor_command(maker, Command::Cancel).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
+        game_projects::project(sim.canonical_state().components, plan)
             .unwrap()
-            .projects[&plan]
             .progress_ms,
         120_000
     );
@@ -238,12 +244,8 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
         .unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
+        game_projects::project(sim.canonical_state().components, plan)
             .unwrap()
-            .projects[&plan]
             .status,
         ProjectStatus::Completed
     );
@@ -280,23 +282,15 @@ fn shortages_leave_stocks_untouched_and_fail_at_exact_deadline() {
     );
     sim.advance(SimDuration(180_122)).unwrap();
     assert_ne!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
+        game_projects::project(sim.canonical_state().components, plan)
             .unwrap()
-            .projects[&plan]
             .status,
         ProjectStatus::Failed
     );
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
+        game_projects::project(sim.canonical_state().components, plan)
             .unwrap()
-            .projects[&plan]
             .status,
         ProjectStatus::Failed
     );
@@ -408,12 +402,8 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
         120_000
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
+        game_projects::project(sim.canonical_state().components, plan)
             .unwrap()
-            .projects[&plan]
             .contributions[&helper],
         120_000
     );
@@ -491,22 +481,12 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
     sim.debug_project_action(maker, ProjectAction::Work { project })
         .unwrap();
     sim.advance(SimDuration(300_000)).unwrap();
-    let enterprise = sim
-        .canonical_state()
-        .state
-        .projects
-        .as_ref()
+    let enterprise = game_projects::project(sim.canonical_state().components, project)
         .unwrap()
-        .projects[&project]
         .enterprise
         .unwrap();
-    let site = sim
-        .canonical_state()
-        .state
-        .projects
-        .as_ref()
+    let site = game_projects::enterprise(sim.canonical_state().components, enterprise)
         .unwrap()
-        .enterprises[&enterprise]
         .site;
     let (materials, tool, _) = maker_assets(&sim);
     let provisions = game_cargo::inventories(sim.canonical_state().components)
@@ -580,23 +560,18 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
         .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
+        game_projects::enterprise(sim.canonical_state().components, enterprise)
             .unwrap()
-            .enterprises[&enterprise]
             .labor[&worker],
         60_000
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
+        game_projects::enterprise(sim.canonical_state().components, enterprise)
             .unwrap()
-            .enterprises[&enterprise]
-            .tools_produced,
+            .produced
+            .get(&Good::Tool)
+            .copied()
+            .unwrap_or(0),
         1_000
     );
     // Changing the debtor's own willingness does not erase the wage obligation.
@@ -666,13 +641,9 @@ fn cautious_financier_refuses_startup_risk_without_any_stock_transfer() {
         before
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .projects
-            .as_ref()
-            .unwrap()
-            .enterprises
-            .is_empty()
+        game_projects::enterprises(sim.canonical_state().components)
+            .next()
+            .is_none()
     );
 }
 
@@ -692,24 +663,14 @@ fn procurement_uses_personal_hints_then_real_loading_travel_and_unloading() {
         .unwrap()
         .id;
     assert!(sim.canonical_state().events.iter().any(|event|matches!(event.event,EventKind::Transferred {actor,source,..} if actor==maker&&source==forest)));
-    let plan = sim
-        .canonical_state()
-        .state
-        .projects
-        .as_ref()
-        .unwrap()
-        .projects
-        .values()
+    let plan = game_projects::projects(sim.canonical_state().components)
+        .map(|(_, row)| row)
         .find(|project| project.sponsor == maker)
         .unwrap();
-    let enterprise = &sim
-        .canonical_state()
-        .state
-        .projects
-        .as_ref()
-        .unwrap()
-        .enterprises[&plan.enterprise.unwrap()];
-    assert!(enterprise.tools_produced > 3_000);
+    let enterprise =
+        &game_projects::enterprise(sim.canonical_state().components, plan.enterprise.unwrap())
+            .unwrap();
+    assert!(enterprise.produced.get(&Good::Tool).copied().unwrap_or(0) > 3_000);
     assert!(sim.canonical_state().events.iter().any(
         |event| matches!(event.event,EventKind::Departed {actor,to:AreaId(3),..} if actor==maker)
     ));

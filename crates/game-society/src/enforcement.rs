@@ -49,6 +49,19 @@ impl EnforcementRemedy {
     }
 }
 
+/// The complaint has not reached its officer, so interruption withdraws it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComplaintInterruption {
+    pub changed_at: SimTime,
+    pub explanation: &'static str,
+}
+pub fn complaint_interruption(now: SimTime, filing: bool) -> Option<ComplaintInterruption> {
+    filing.then_some(ComplaintInterruption {
+        changed_at: now,
+        explanation: "The complaint was interrupted before the officer received it",
+    })
+}
+
 /// Promised spending and supplies are requests, not available balances.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DispatchBudget {
@@ -76,6 +89,16 @@ impl DispatchBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_an_unreceived_filing_is_withdrawn() {
+        assert_eq!(complaint_interruption(SimTime(9), false), None);
+        let change = complaint_interruption(SimTime(9), true).unwrap();
+        assert_eq!(change.changed_at, SimTime(9));
+        assert_eq!(
+            change.explanation,
+            "The complaint was interrupted before the officer received it"
+        );
+    }
     #[test]
     fn several_promises_share_one_chosen_cap_without_creating_funds() {
         let policy = EnforcementPolicy {

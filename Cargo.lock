@@ -496,6 +496,7 @@ dependencies = [
  "game-lineage",
  "game-logistics",
  "game-missions",
+ "game-openings",
  "game-physiology",
  "game-projects",
  "game-property",
@@ -691,6 +692,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-openings"
+version = "0.1.0"
+dependencies = [
+ "game-content",
+ "game-core",
+ "game-ecology",
+ "game-property",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-physiology"
 version = "0.1.0"
 dependencies = [
@@ -706,7 +719,11 @@ name = "game-projects"
 version = "0.1.0"
 dependencies = [
  "game-agreements",
+ "game-cargo",
+ "game-content",
  "game-core",
+ "game-ecs",
+ "game-workshop",
  "serde",
  "serde_json",
 ]
@@ -796,6 +813,7 @@ name = "game-workshop"
 version = "0.1.0"
 dependencies = [
  "game-cargo",
+ "game-content",
  "game-core",
  "game-ecs",
  "game-skills",

@@ -2,27 +2,7 @@
 //! published, population growth uses ordinary conception and birth exclusively.
 use crate::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Plan {
-    pub people: usize,
-    pub settlement_size: usize,
-}
-impl Plan {
-    pub fn small() -> Self {
-        Self {
-            people: 15,
-            settlement_size: 15,
-        }
-    }
-    fn validate(self) -> Result<(), Error> {
-        if !(15..=100_000).contains(&self.people) || !(15..=128).contains(&self.settlement_size) {
-            return Err(Error::InvalidConfiguration(
-                "population requires 15..100000 people and 15..128 residents per settlement".into(),
-            ));
-        }
-        Ok(())
-    }
-}
+pub(crate) use game_openings::PopulationPlan as Plan;
 /// Authoring IDs, not a second registry of the live population.
 #[derive(Clone, Debug)]
 pub struct Settlement {
@@ -30,6 +10,9 @@ pub struct Settlement {
     pub fields: AreaId,
     pub wood: AreaId,
     pub residents: Vec<PersonId>,
+    pub areas: BTreeMap<String, AreaId>,
+    pub stocks: BTreeMap<String, InventoryId>,
+    pub profile: String,
 }
 fn mind(
     personality: decisions::Personality,
@@ -68,14 +51,15 @@ impl Simulation {
         config: scenarios::Config,
         plan: Plan,
     ) -> Result<Self, Error> {
+        let content = authored::Content::resolve(&config)?;
         let (mut sim, settlements) =
-            Self::initial_population(seed, execution, &config, plan, true)?;
+            Self::initial_population(seed, execution, &config, plan, true, &content, "populated")?;
         sim.host.state.scenario = ScenarioInfo {
             id: "settlement-founder".into(),
             version: 1,
             debug_fixture: false,
         };
-        sim.install_playable_domains(&config)?;
+        sim.install_playable_domains(&config, "populated")?;
         sim.initialize_transport(config.transport.clone())?;
         sim.initialize_realm(realm::Rules::default())?;
         sim.initialize_armies(armies::Rules::default())?;
@@ -205,58 +189,33 @@ impl Simulation {
                 .insert(*id, steward);
         }
         for actor in &settlement.residents {
-            self.host
-                .state
-                .projects
-                .as_mut()
+            if game_projects::knowledge(&self.host.storage, *actor).is_none() {
+                game_projects::insert_knowledge(
+                    &mut self.host.storage,
+                    *actor,
+                    game_projects::Knowledge::default(),
+                )?;
+            }
+            game_projects::knowledge_mut(&mut self.host.storage, *actor)
                 .unwrap()
                 .timber_hints
-                .insert(*actor, BTreeSet::from([settlement.wood]));
+                .insert(settlement.wood);
         }
-        for (kind, area, capacity, growth) in [
-            (ResourceKind::Coppice, settlement.wood, 500_000, 5_000),
-            (ResourceKind::Berries, settlement.wood, 100_000, 5_000),
-            (ResourceKind::Herbs, settlement.wood, 100_000, 2_000),
-            (ResourceKind::Spring, settlement.fields, 1_000_000, 300_000),
-        ] {
-            let resource = self.debug_add_resource(
-                kind,
-                area,
-                Quantity(capacity),
-                Quantity(capacity),
-                Quantity(growth),
-                access.clone(),
-                Some(steward),
-                0,
-            )?;
-            self.host
-                .state
-                .ecology
-                .as_mut()
-                .unwrap()
-                .resource_mut(&mut self.host.storage, resource)
-                .unwrap()
-                .labor_per_unit = match kind {
-                ResourceKind::Coppice => SimDuration(3_600_000),
-                ResourceKind::Spring => SimDuration(5 * MINUTE.0),
-                _ => SimDuration(30 * MINUTE.0),
-            };
-        }
+        let definition = self
+            .host
+            .state
+            .openings
+            .as_ref()
+            .unwrap()
+            .catalog
+            .settlements[&settlement.profile]
+            .clone();
+        let authored = definition.plan(settlement.residents.len())?;
+        self.bind_authored_custody(&authored, settlement)?;
+        self.bind_authored_resources(&authored, settlement)?;
         self.debug_add_plot(settlement.fields, Some(steward), access.clone(), 900)?;
-        let herbs = self.add_inventory(
-            Good::Herb,
-            InventoryLocation::Area(settlement.center),
-            Quantity(100_000),
-            Quantity(500_000),
-            BTreeSet::from([healer]),
-        )?;
-        let water = self.add_inventory(
-            Good::Water,
-            InventoryLocation::Area(settlement.center),
-            Quantity(1_000_000),
-            Quantity(5_000_000),
-            access.clone(),
-        )?;
+        let herbs = settlement.stocks["herbs"];
+        let water = settlement.stocks["drinking-water"];
         for id in [herbs, water] {
             self.host
                 .state
@@ -266,7 +225,13 @@ impl Simulation {
                 .custodians
                 .insert(id, healer);
         }
-        self.collected_water_quality(water, Quantity(1_000_000), 0);
+        self.collected_water_quality(
+            water,
+            game_cargo::inventory(&self.host.storage, water)
+                .unwrap()
+                .quantity,
+            0,
+        );
         for actor in &settlement.residents {
             self.seed_water_safety(*actor, water)?;
         }
@@ -289,131 +254,113 @@ impl Simulation {
         game_characters::decisions::mind_mut::<game_api::Command>(&mut self.host.storage, healer)
             .unwrap()
             .dream = decisions::Aspiration::SupportOthers;
-        let timber = lots
-            .iter()
-            .find(|id| {
-                game_cargo::inventory(&self.host.storage, **id)
-                    .expect("inventory exists")
-                    .good
-                    == Good::Timber
-                    && game_cargo::inventory(&self.host.storage, **id)
-                        .expect("inventory exists")
-                        .location
-                        == InventoryLocation::Area(settlement.center)
-            })
-            .copied()
-            .unwrap();
-        let tool = lots
-            .iter()
-            .find(|id| {
-                game_cargo::inventory(&self.host.storage, **id)
-                    .expect("inventory exists")
-                    .good
-                    == Good::Tool
-                    && game_cargo::inventory(&self.host.storage, **id)
-                        .expect("inventory exists")
-                        .location
-                        == InventoryLocation::Area(settlement.center)
-            })
-            .copied()
-            .unwrap();
-        let output = self.add_inventory(
-            Good::Tool,
-            InventoryLocation::Area(settlement.center),
-            Quantity(0),
-            Quantity(500_000),
-            access.clone(),
-        )?;
-        self.host
-            .state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .custodians
-            .insert(output, steward);
-        let site = SiteId(self.host.allocate_id()?.0);
-        let rules = self.host.state.projects.as_ref().unwrap().rules.clone();
-        game_workshop::insert_site(
-            &mut self.host.storage,
-            physical::Site {
-                id: site,
-                area: settlement.center,
-                input: timber,
-                input_quantity: rules.recipe_timber,
+        let mut reported_sites = Vec::new();
+        for workshop in &definition.workshops {
+            let sponsor = settlement.residents[workshop.sponsor];
+            let area = settlement.areas[&workshop.area];
+            let materials = settlement.stocks[&workshop.materials];
+            let input = settlement.stocks[&workshop.input];
+            let tool = settlement.stocks[&workshop.tool];
+            let output = settlement.stocks[&workshop.output];
+            let recipe = game_workshop::RecipeId(workshop.recipe.clone());
+            let site = self.bind_authored_workshop(workshop, settlement)?;
+            let rules = self.host.state.projects.as_ref().unwrap().rules.clone();
+            let project = ProjectId(self.host.allocate_id()?.0);
+            let enterprise = EnterpriseId(self.host.allocate_id()?.0);
+            let beneficiaries: BTreeSet<_> = workshop
+                .beneficiaries
+                .iter()
+                .map(|i| settlement.residents[*i])
+                .collect();
+            let workers: BTreeSet<_> = workshop
+                .workers
+                .iter()
+                .map(|i| settlement.residents[*i])
+                .collect();
+            let workshop_history = projects::Project {
+                id: project,
+                kind: ProjectKind::Workshop {
+                    recipe: recipe.clone(),
+                },
+                sponsor,
+                area,
+                materials,
                 tool,
+                input,
                 output,
-                output_quantity: rules.recipe_tools,
-                duration: rules.recipe_time,
-                access: access.clone(),
-                last_granted: None,
-            },
-        )?;
-        let project = ProjectId(self.host.allocate_id()?.0);
-        let enterprise = EnterpriseId(self.host.allocate_id()?.0);
-        let participants: BTreeSet<_> = settlement.residents[3..11].iter().copied().collect();
-        let workshop_history = projects::Project {
-            id: project,
-            kind: ProjectKind::Workshop,
-            sponsor: steward,
-            area: settlement.center,
-            materials: timber,
-            tool,
-            input: timber,
-            output,
-            beneficiaries: participants.clone(),
-            workers: participants.clone(),
-            support: BTreeSet::new(),
-            status: ProjectStatus::Completed,
-            blocker: None,
-            progress_ms: rules.construction_labor.0,
-            contributions: BTreeMap::from([(steward, rules.construction_labor.0)]),
-            materials_consumed: true,
-            finish_by: owner_now,
-            enterprise: Some(enterprise),
-        };
-        let world = self.host.state.projects.as_mut().unwrap();
-        world.projects.insert(project, workshop_history);
-        world.enterprises.insert(
-            enterprise,
-            projects::Enterprise {
-                id: enterprise,
-                project,
-                sponsor: steward,
-                area: settlement.center,
-                site,
-                kind: ProjectKind::Workshop,
-                beneficiaries: participants.clone(),
-                workers: participants,
-                status: EnterpriseStatus::Ready,
+                beneficiaries: beneficiaries.clone(),
+                workers: workers.clone(),
+                support: BTreeSet::new(),
+                status: ProjectStatus::Completed,
                 blocker: None,
-                timber_consumed: 0,
-                tools_produced: 0,
-                inputs: BTreeMap::new(),
-                produced: BTreeMap::new(),
-                labor: BTreeMap::new(),
-                operating_agreements: BTreeSet::new(),
-            },
-        );
-        // Existing workshops have an actual material cost in their initial
-        // history; subsequent recipes consume their own real input lots.
-        game_cargo::inventory_mut(&mut self.host.storage, timber)
-            .unwrap()
-            .quantity
-            .0 -= rules.construction_timber.0;
-        self.emit(EventKind::Consumed {
-            actor: steward,
-            source: timber,
-            quantity: rules.construction_timber,
-        });
-        self.emit(EventKind::ConstructionStarted {
-            project,
-            actor: steward,
-        });
-        self.emit(EventKind::ProjectCompleted {
-            project,
-            enterprise,
-            site,
-        });
+                progress_ms: rules.construction_labor.0,
+                contributions: BTreeMap::from([(sponsor, rules.construction_labor.0)]),
+                materials_consumed: true,
+                finish_by: owner_now,
+                enterprise: Some(enterprise),
+            };
+            game_projects::insert_project(&mut self.host.storage, project, workshop_history)?;
+            game_projects::insert_enterprise(
+                &mut self.host.storage,
+                enterprise,
+                projects::Enterprise {
+                    id: enterprise,
+                    project,
+                    sponsor,
+                    area,
+                    site,
+                    kind: ProjectKind::Workshop {
+                        recipe: recipe.clone(),
+                    },
+                    beneficiaries: beneficiaries.clone(),
+                    workers,
+                    status: EnterpriseStatus::Ready,
+                    blocker: None,
+
+                    inputs: BTreeMap::new(),
+                    produced: BTreeMap::new(),
+                    labor: BTreeMap::new(),
+                    operating_agreements: BTreeSet::new(),
+                },
+            )?;
+            // Existing workshops have an actual material cost in their initial
+            // history; subsequent recipes consume their own real input lots.
+            let stock = game_cargo::inventory_mut(&mut self.host.storage, materials).unwrap();
+            stock.quantity = Quantity(
+                stock
+                    .quantity
+                    .0
+                    .checked_sub(rules.construction_timber.0)
+                    .ok_or_else(|| {
+                        Error::InvalidConfiguration(
+                            "authored construction stock is insufficient".into(),
+                        )
+                    })?,
+            );
+            self.emit(EventKind::Consumed {
+                actor: sponsor,
+                source: materials,
+                quantity: rules.construction_timber,
+            });
+            self.emit(EventKind::ConstructionStarted {
+                project,
+                actor: sponsor,
+            });
+            self.emit(EventKind::ProjectCompleted {
+                project,
+                enterprise,
+                site,
+            });
+            reported_sites.push(decisions::SiteKnowledge {
+                site,
+                area: settlement.areas[&workshop.area],
+                input,
+                tool,
+                input_quantity: self.host.state.workshops.recipe(&recipe)?.input_quantity,
+                output,
+                access: false,
+            });
+        }
         for area in [settlement.center, settlement.fields] {
             let occupants: Vec<_> = settlement
                 .residents
@@ -461,6 +408,17 @@ impl Simulation {
         }
         let reported:Vec<_>=game_cargo::inventories(&self.host.storage).map(|(_, row)| row).filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
         for actor in &settlement.residents {
+            let sites = reported_sites
+                .iter()
+                .map(|view| {
+                    let mut view = view.clone();
+                    view.access = game_workshop::site(&self.host.storage, view.site)
+                        .expect("site exists")
+                        .access
+                        .contains(actor);
+                    view
+                })
+                .collect::<Vec<_>>();
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
                 &mut self.host.storage,
                 *actor,
@@ -484,18 +442,9 @@ impl Simulation {
                     },
                 );
             }
-            mind.sites.insert(
-                site,
-                decisions::SiteKnowledge {
-                    site,
-                    area: settlement.center,
-                    input: timber,
-                    tool,
-                    input_quantity: rules.recipe_timber,
-                    output,
-                    access: true,
-                },
-            );
+            for view in sites {
+                mind.sites.insert(view.site, view);
+            }
         }
         Ok(())
     }
@@ -505,8 +454,16 @@ impl Simulation {
         config: &scenarios::Config,
         plan: Plan,
         mixed: bool,
+        content: &authored::Content,
+        profile: &str,
     ) -> Result<(Self, Vec<Settlement>), Error> {
         plan.validate()?;
+        let definition = content
+            .openings
+            .catalog
+            .settlements
+            .get(profile)
+            .ok_or_else(|| Error::InvalidConfiguration("unknown settlement content".into()))?;
         config.environment.validate()?;
         let crop_document = config.agriculture.resolve()?;
         crop_document
@@ -521,6 +478,16 @@ impl Simulation {
         // Only storage/IDs are reused. This unpublished base contains no bodies,
         // minds, biological processes, or simulated population growth.
         let mut sim = Self::kernel_fixture(seed, plan.people, execution)?;
+        sim.host.state.openings = Some(content.openings.clone());
+        sim.host.state.workshops = content.workshops.clone();
+        sim.host
+            .state
+            .content
+            .insert("openings".into(), content.openings.content.clone());
+        sim.host
+            .state
+            .content
+            .insert("workshops".into(), content.workshops.content.clone());
         sim.host.publish_clock(game_sim::Clock {
             time: SimTime(
                 (3 * 86_400_000).max(
@@ -576,17 +543,14 @@ impl Simulation {
                 ]
             } else {
                 let mut ids = [AreaId(0); 3];
-                for (slot, suffix) in ["settlement", "fields", "wood"].into_iter().enumerate() {
+                for area in &mut ids {
                     let id = AreaId(sim.host.allocate_id()?.0);
-                    ids[slot] = id;
+                    *area = id;
                     sim.host.state.areas.push(Area {
                         id,
-                        name: format!("Reach{} {suffix}", index + 1),
+                        name: String::new(),
                         links: Vec::new(),
                     });
-                }
-                for (a, b, minutes) in [(0, 1, 2), (0, 2, 3)] {
-                    sim.population_link(ids[a], ids[b], SimDuration(minutes * MINUTE.0))?;
                 }
                 sim.population_link(
                     settlements[index - 1].center,
@@ -595,11 +559,58 @@ impl Simulation {
                 )?;
                 ids
             };
+            let mut authored_areas = BTreeMap::new();
+            for area in &definition.areas {
+                let id = if area.key == definition.centre {
+                    areas[0]
+                } else if area.key == definition.fields {
+                    areas[1]
+                } else if area.key == definition.wood {
+                    areas[2]
+                } else {
+                    let id = AreaId(sim.host.allocate_id()?.0);
+                    sim.host.state.areas.push(Area {
+                        id,
+                        name: String::new(),
+                        links: Vec::new(),
+                    });
+                    id
+                };
+                let name = area.name.replace("{n}", &(index + 1).to_string());
+                sim.host
+                    .state
+                    .areas
+                    .iter_mut()
+                    .find(|row| row.id == id)
+                    .unwrap()
+                    .name = name;
+                authored_areas.insert(area.key.clone(), id);
+            }
+            for area in sim
+                .host
+                .state
+                .areas
+                .iter_mut()
+                .filter(|area| authored_areas.values().any(|id| *id == area.id))
+            {
+                area.links
+                    .retain(|link| !authored_areas.values().any(|id| *id == link.destination));
+            }
+            for link in &definition.links {
+                sim.population_link(
+                    authored_areas[&link.from],
+                    authored_areas[&link.to],
+                    link.duration,
+                )?;
+            }
             settlements.push(Settlement {
                 center: areas[0],
                 fields: areas[1],
                 wood: areas[2],
                 residents,
+                areas: authored_areas,
+                stocks: BTreeMap::new(),
+                profile: profile.into(),
             });
         }
         let day = 86_400_000;
@@ -727,104 +738,26 @@ impl Simulation {
             .last()
             .unwrap();
         let work_concept = sim.host.state.decisions.as_ref().unwrap().work_concept;
-        for (index, settlement) in settlements.iter().enumerate() {
+        for (index, settlement) in settlements.iter_mut().enumerate() {
             let access = settlement
                 .residents
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>();
-            let reserve = if mixed {
-                3_000_000_u64.max(settlement.residents.len() as u64 * 180_000)
-            } else {
-                3_000_000
-            };
-            let food = if index == 0 {
-                let stock = game_cargo::inventory_mut(&mut sim.host.storage, first_food).unwrap();
-                stock.quantity = Quantity(reserve);
-                stock.capacity = Quantity(reserve * 4);
-                stock.access = access.clone();
-                first_food
-            } else {
-                sim.add_inventory(
-                    Good::Food,
-                    InventoryLocation::Area(settlement.center),
-                    Quantity(reserve),
-                    Quantity(reserve * 4),
-                    access.clone(),
-                )?
-            };
-            let timber = sim.add_inventory(
-                Good::Timber,
-                InventoryLocation::Area(settlement.center),
-                Quantity(if mixed { 200_000 } else { 20_000 }),
-                Quantity(if mixed { 1_000_000 } else { 100_000 }),
-                access.clone(),
+            let authored = definition.plan(settlement.residents.len())?;
+            settlement.stocks = sim.bind_authored_stocks(
+                &authored,
+                settlement,
+                (index == 0).then_some(first_food),
             )?;
-            let tool = sim.add_inventory(
-                Good::Tool,
-                InventoryLocation::Area(settlement.center),
-                Quantity(if mixed { 8_000 } else { 1_000 }),
-                Quantity(100_000),
-                access.clone(),
-            )?;
-            let wood_tool = sim.add_inventory(
-                Good::Tool,
-                InventoryLocation::Area(settlement.wood),
-                Quantity(if mixed { 4_000 } else { 1_000 }),
-                Quantity(100_000),
-                access.clone(),
-            )?;
-            let _deposit = sim.add_inventory(
-                Good::Timber,
-                InventoryLocation::Area(settlement.wood),
-                Quantity(if mixed { 200_000 } else { 20_000 }),
-                Quantity(if mixed { 1_000_000 } else { 100_000 }),
-                access.clone(),
-            )?;
-            let _wood_output = sim.add_inventory(
-                Good::Timber,
-                InventoryLocation::Area(settlement.wood),
-                Quantity(0),
-                Quantity(100_000),
-                access.clone(),
-            )?;
-            for actor in &settlement.residents {
-                sim.add_inventory(
-                    Good::Timber,
-                    InventoryLocation::Carried(*actor),
-                    Quantity(0),
-                    Quantity(10_000),
-                    BTreeSet::from([*actor]),
-                )?;
-            }
-            let seed_stock = sim.add_inventory(
-                Good::Seed,
-                InventoryLocation::Area(settlement.fields),
-                Quantity(if mixed { 100_000 } else { 10_000 }),
-                Quantity(1_000_000),
-                access.clone(),
-            )?;
-            let farm_tool = sim.add_inventory(
-                Good::Tool,
-                InventoryLocation::Area(settlement.fields),
-                Quantity(if mixed { 8_000 } else { 1_000 }),
-                Quantity(if mixed { 100_000 } else { 1_000 }),
-                access.clone(),
-            )?;
-            let water = sim.add_inventory(
-                Good::Water,
-                InventoryLocation::Area(settlement.fields),
-                Quantity(if mixed { 300_000 } else { 30_000 }),
-                Quantity(1_000_000),
-                access.clone(),
-            )?;
-            let farm_food = sim.add_inventory(
-                Good::Food,
-                InventoryLocation::Area(settlement.fields),
-                Quantity(reserve),
-                Quantity(reserve * 4),
-                access.clone(),
-            )?;
+            let food = settlement.stocks["food"];
+            let timber = settlement.stocks["timber"];
+            let tool = settlement.stocks["tool"];
+            let wood_tool = settlement.stocks["wood-tool"];
+            let seed_stock = settlement.stocks["seed"];
+            let farm_tool = settlement.stocks["farm-tool"];
+            let water = settlement.stocks["water"];
+            let farm_food = settlement.stocks["farm-food"];
             let field_count = if mixed {
                 settlement.residents.len().div_ceil(20) + 1
             } else {

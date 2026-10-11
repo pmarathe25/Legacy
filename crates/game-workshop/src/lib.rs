@@ -4,6 +4,10 @@ use game_cargo::{Inventory, InventoryLocation};
 use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+mod recipes;
+pub use recipes::{
+    Catalog, Definitions, ProductionRequirement, Recipe, RecipeId, RecipeView, SiteBindings,
+};
 mod components;
 pub use components::{
     insert_job, insert_site, job, job_mut, jobs, register_components, remove_job, remove_site,
@@ -21,15 +25,14 @@ pub struct Job {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Site {
+    pub recipe: RecipeId,
     pub id: SiteId,
     pub area: AreaId,
     pub input: InventoryId,
-    pub input_quantity: Quantity,
     pub tool: InventoryId,
     pub output: InventoryId,
-    pub output_quantity: Quantity,
-    pub duration: SimDuration,
     pub access: BTreeSet<PersonId>,
     pub last_granted: Option<PersonId>,
 }
@@ -87,7 +90,7 @@ pub struct Start {
     pub consumption: Option<Consumption>,
 }
 
-impl Site {
+impl RecipeView<'_> {
     pub fn prepare_start(
         &self,
         previous: Option<&Job>,
@@ -96,33 +99,36 @@ impl Site {
         output: &Inventory,
         facts: StartFacts,
     ) -> Result<Start, Error> {
-        if !facts.capable
+        self.recipe.validate()?;
+        if input.good != self.recipe.input_good
+            || output.good != self.recipe.output_good
+            || !facts.capable
             || !facts.adult
             || !facts.fatigue_allows
             || !facts.site_access
             || facts.occupied_by_other
             || facts.actor.0 == 0
-            || facts.area != self.area
-            || input.id != self.input
-            || output.id != self.output
-            || input.location != InventoryLocation::Area(self.area)
-            || output.location != InventoryLocation::Area(self.area)
+            || facts.area != self.site.area
+            || input.id != self.site.input
+            || output.id != self.site.output
+            || input.location != InventoryLocation::Area(self.site.area)
+            || output.location != InventoryLocation::Area(self.site.area)
             || !facts.tool_usable
             || tool.good != Good::Tool
             || tool.quantity.0 < 1_000
             || tool.room().is_err()
             || input.room().is_err()
-            || output.room()? < self.output_quantity
-            || self.duration.0 == 0
-            || self.input_quantity.0 == 0
-            || self.output_quantity.0 == 0
+            || output.room()? < self.recipe.output_quantity
+            || self.recipe.duration.0 == 0
+            || self.recipe.input_quantity.0 == 0
+            || self.recipe.output_quantity.0 == 0
         {
             return Err(Error::Unavailable);
         }
-        if let Some(previous) = previous.filter(|job| job.site == self.id) {
+        if let Some(previous) = previous.filter(|job| job.site == self.site.id) {
             game_skills::advance_work(0, previous.rate, previous.work_remainder)?;
             game_skills::advance_work(0, previous.body_rate, 0)?;
-            if previous.remaining > self.duration.0 {
+            if previous.remaining > self.recipe.duration.0 {
                 return Err(Error::Unavailable);
             }
             let mut job = previous.clone();
@@ -133,8 +139,8 @@ impl Site {
             });
         }
         if !facts.input_usable
-            || facts.input_unreserved < self.input_quantity
-            || input.quantity < self.input_quantity
+            || facts.input_unreserved < self.recipe.input_quantity
+            || input.quantity < self.recipe.input_quantity
         {
             return Err(Error::Unavailable);
         }
@@ -143,18 +149,18 @@ impl Site {
         game_skills::advance_work(0, facts.body_rate, 0)?;
         Ok(Start {
             job: Job {
-                site: self.id,
-                remaining: self.duration.0,
+                site: self.site.id,
+                remaining: self.recipe.duration.0,
                 rate: facts.rate,
                 body_rate: facts.body_rate,
                 work_remainder: 0,
                 tool: Some(tool.id),
             },
             consumption: Some(Consumption {
-                source: self.input,
-                quantity: self.input_quantity,
+                source: self.site.input,
+                quantity: self.recipe.input_quantity,
                 expected_input: input.clone(),
-                admitted_quantity: self.input_quantity,
+                admitted_quantity: self.recipe.input_quantity,
             }),
         })
     }
@@ -227,41 +233,45 @@ impl Job {
     pub fn output_forecast(
         &self,
         progress: Progress,
-        site: &Site,
-        output_good: Good,
+        site: RecipeView<'_>,
     ) -> Option<(SiteId, Good, Quantity)> {
-        (self.site == site.id && progress.remaining == 0).then_some((
-            site.id,
-            output_good,
-            site.output_quantity,
+        (self.site == site.site.id && progress.remaining == 0).then_some((
+            site.site.id,
+            site.recipe.output_good,
+            site.recipe.output_quantity,
         ))
     }
 
     pub fn prepare_completion(
         &self,
-        site: &Site,
+        site: RecipeView<'_>,
         output: &Inventory,
         facts: CompletionFacts,
     ) -> Result<Option<Production>, Error> {
-        if self.site != site.id || output.id != site.output || facts.actor.0 == 0 {
+        if self.site != site.site.id
+            || output.id != site.site.output
+            || output.good != site.recipe.output_good
+            || facts.actor.0 == 0
+        {
             return Err(Error::Unavailable);
         }
         if self.remaining != 0
             || !facts.active
             || !facts.alive_at_start
             || !facts.equipped
-            || output.room()? < site.output_quantity
+            || output.room()? < site.recipe.output_quantity
         {
             return Ok(None);
         }
         Ok(Some(Production {
             actor: facts.actor,
-            site: site.id,
+            site: site.site.id,
             output: output.id,
-            quantity: site.output_quantity,
+            quantity: site.recipe.output_quantity,
             expected_job: self.clone(),
             expected_output: output.clone(),
-            expected_site: site.clone(),
+            expected_site: site.site.clone(),
+            expected_recipe: site.recipe.clone(),
             admitted_actor: facts.actor,
         }))
     }
@@ -285,6 +295,7 @@ pub struct Production {
     expected_job: Job,
     expected_output: Inventory,
     expected_site: Site,
+    expected_recipe: Recipe,
     admitted_actor: PersonId,
 }
 
@@ -294,15 +305,16 @@ impl Production {
     pub fn validate(
         &self,
         job: Option<&Job>,
-        site: &Site,
+        site: RecipeView<'_>,
         output: &Inventory,
     ) -> Result<(), Error> {
         if self.actor != self.admitted_actor
             || self.site != self.expected_site.id
             || self.output != self.expected_output.id
-            || self.quantity != self.expected_site.output_quantity
+            || self.quantity != self.expected_recipe.output_quantity
             || job != Some(&self.expected_job)
-            || site != &self.expected_site
+            || site.site != &self.expected_site
+            || site.recipe != &self.expected_recipe
             || output != &self.expected_output
             || output.room()? < self.quantity
         {
@@ -320,11 +332,12 @@ impl Production {
     /// The host publishes the corresponding Produced receipt after success.
     pub fn commit(
         self,
+        definitions: &Definitions,
         job: &mut Option<Job>,
         site: &mut Site,
         output: &mut Inventory,
     ) -> Result<(), Error> {
-        self.validate(job.as_ref(), site, output)?;
+        self.validate(job.as_ref(), definitions.resolve_site(site)?, output)?;
         output.quantity.0 += self.quantity.0;
         *job = None;
         site.last_granted = Some(self.actor);
@@ -336,11 +349,16 @@ impl Production {
     /// the host refreshes its query bindings after the commit barrier.
     pub fn commit_to_store(
         self,
+        definitions: &Definitions,
         store: &mut game_ecs::Store,
         site: &mut Site,
         output: &mut Inventory,
     ) -> Result<(), Error> {
-        self.validate(job(store, self.actor), site, output)?;
+        self.validate(
+            job(store, self.actor),
+            definitions.resolve_site(site)?,
+            output,
+        )?;
         remove_job(store, self.actor)?;
         output.quantity.0 += self.quantity.0;
         site.last_granted = Some(self.actor);
@@ -349,10 +367,18 @@ impl Production {
 
     /// Publishes the authoritative job, site and output stock together. All
     /// opening guards and registered component validators run before any write.
-    pub fn commit_stocks(self, store: &mut game_ecs::Store) -> Result<(), Error> {
+    pub fn commit_stocks(
+        self,
+        definitions: &Definitions,
+        store: &mut game_ecs::Store,
+    ) -> Result<(), Error> {
         let declaration = site(store, self.site).ok_or(Error::Unavailable)?;
         let output = game_cargo::inventory(store, self.output).ok_or(Error::Unavailable)?;
-        self.validate(job(store, self.actor), declaration, output)?;
+        self.validate(
+            job(store, self.actor),
+            definitions.resolve_site(declaration)?,
+            output,
+        )?;
         let mut after_site = declaration.clone();
         let mut after_output = output.clone();
         after_site.last_granted = Some(self.actor);
@@ -372,11 +398,16 @@ impl Production {
     /// output stock remains a cargo-owned row supplied by the host.
     pub fn commit_components(
         self,
+        definitions: &Definitions,
         store: &mut game_ecs::Store,
         output: &mut Inventory,
     ) -> Result<(), Error> {
         let declaration = site(store, self.site).ok_or(Error::Unavailable)?;
-        self.validate(job(store, self.actor), declaration, output)?;
+        self.validate(
+            job(store, self.actor),
+            definitions.resolve_site(declaration)?,
+            output,
+        )?;
         remove_job(store, self.actor)?;
         // Removing a Job preserves its entity and every other component,
         // including a Site when actor and site happen to share a stable ID.

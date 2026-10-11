@@ -345,12 +345,22 @@ mod tests {
             .find(|site| site.area == AreaId(1))
             .unwrap()
             .id;
-        let input = game_workshop::site(&sim.host.storage, site)
-            .expect("site exists")
-            .input;
+        let (input, output, output_quantity, duration) = {
+            let site = game_workshop::site(&sim.host.storage, site).expect("site exists");
+            let recipe = sim.host.state.workshops.recipe(&site.recipe).unwrap();
+            (
+                site.input,
+                site.output,
+                recipe.output_quantity,
+                recipe.duration,
+            )
+        };
+        let recipe = sim
+            .fixture_recipe(input, output, Quantity(250), output_quantity, duration)
+            .unwrap();
         game_workshop::site_mut(&mut sim.host.storage, site)
             .unwrap()
-            .input_quantity = Quantity(250);
+            .recipe = recipe;
         game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
             .unwrap()
             .sites

@@ -1,8 +1,9 @@
 //! Prospective financing terms. These are choices, never published promises or
 //! physical supplies. Every deadline and amount is prepared before publication.
-use crate::{Project, ProjectKind, ProjectStatus, Rules, World};
+use crate::{Project, ProjectKind, ProjectStatus, Rules};
 use game_agreements::AgreementTerm;
 use game_core::*;
+use game_workshop::Definitions;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug)]
@@ -11,6 +12,48 @@ pub struct FundingFacts {
     pub financier: PersonId,
     pub source: InventoryId,
     pub repayment_destination: InventoryId,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkshopFundingFacts {
+    pub now: SimTime,
+    pub financier: PersonId,
+    pub materials_source: InventoryId,
+    pub input_source: InventoryId,
+    pub repayment_destination: InventoryId,
+    pub materials_good: Good,
+    pub input_good: Good,
+    pub repayment_good: Good,
+}
+
+/// Personal supply memory plus current custody/locality facts.
+#[derive(Clone, Copy)]
+pub struct RememberedFinancingStock<'a> {
+    pub known: &'a StockKnowledge,
+    pub custodian: Option<PersonId>,
+    pub custodian_area: Option<AreaId>,
+}
+#[derive(Clone, Copy)]
+pub struct FinancingRepaymentLot {
+    pub inventory: InventoryId,
+    pub good: Good,
+    pub area: Option<AreaId>,
+    pub custodian: Option<PersonId>,
+}
+#[derive(Clone, Copy)]
+pub struct FundingBalances {
+    pub materials: Quantity,
+    pub input: Quantity,
+}
+
+pub struct RememberedWorkshopFunding<'a> {
+    pub seeks_independence: bool,
+    pub ambition: u16,
+    pub now: SimTime,
+    pub loading: SimDuration,
+    pub balances: FundingBalances,
+    pub supplies: &'a [RememberedFinancingStock<'a>],
+    pub repayments: &'a [FinancingRepaymentLot],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -40,50 +83,145 @@ pub enum FundingChoice {
     Unavailable(FundingUnavailable),
 }
 
-impl World {
-    /// Structural closing bound for automatic funding choices. Contact,
-    /// willingness, dated knowledge and agreement outcomes may change before
-    /// review, so opening versions of those facts cannot exclude a candidate.
-    /// No closing phase creates a project before the funding review.
-    pub fn funding_proposal_bound(&self, next: SimTime) -> Result<u64, Error> {
-        self.projects
-            .values()
-            .filter(|plan| {
-                !matches!(
-                    plan.status,
-                    ProjectStatus::Failed | ProjectStatus::Cancelled
-                ) && match plan.kind {
-                    ProjectKind::Workshop => true,
-                    ProjectKind::Farm { .. } => !plan.materials_consumed && plan.finish_by > next,
-                }
-            })
-            .try_fold(0u64, |count, _| count.checked_add(1).ok_or(Error::Overflow))
-    }
-}
-
 impl Project {
-    /// Three recipe batches fund the authored first workshop repayment. A built
-    /// enterprise needs no construction materials in its subsequent financing.
-    pub fn workshop_funding_materials(
+    pub fn workshop_funding_inputs(
+        &self,
+        definitions: &Definitions,
+    ) -> Result<Quantity, FundingUnavailable> {
+        let ProjectKind::Workshop { recipe } = &self.kind else {
+            return Err(FundingUnavailable::IneligibleProject);
+        };
+        let recipe = definitions
+            .recipe(recipe)
+            .map_err(|_| FundingUnavailable::IneligibleProject)?;
+        let output = Quantity(
+            recipe
+                .output_quantity
+                .0
+                .checked_mul(3)
+                .ok_or(FundingUnavailable::UnrepresentableQuantity)?,
+        );
+        recipe
+            .production_requirement(output)
+            .map(|required| required.input)
+            .map_err(|_| FundingUnavailable::UnrepresentableQuantity)
+    }
+
+    pub fn prepare_remembered_workshop_funding(
         &self,
         rules: &Rules,
-    ) -> Result<Quantity, FundingUnavailable> {
-        if self.kind != ProjectKind::Workshop {
-            return Err(FundingUnavailable::IneligibleProject);
+        definitions: &Definitions,
+        facts: RememberedWorkshopFunding<'_>,
+    ) -> FundingChoice {
+        let RememberedWorkshopFunding {
+            seeks_independence,
+            ambition,
+            now,
+            loading,
+            balances,
+            supplies,
+            repayments,
+        } = facts;
+        let unavailable = || FundingChoice::Unavailable(FundingUnavailable::IneligibleProject);
+        if !seeks_independence || ambition < 600 {
+            return unavailable();
         }
-        rules
-            .recipe_timber
-            .0
-            .checked_mul(3)
-            .and_then(|recipes| {
-                recipes.checked_add(if self.enterprise.is_some() {
-                    0
-                } else {
-                    rules.construction_timber.0
+        let ProjectKind::Workshop { recipe: id } = &self.kind else {
+            return unavailable();
+        };
+        let Ok(recipe) = definitions.recipe(id) else {
+            return unavailable();
+        };
+        let Ok(input_needed) = self.workshop_funding_inputs(definitions) else {
+            return unavailable();
+        };
+        let construction = if self.enterprise.is_some() {
+            Quantity(0)
+        } else {
+            rules.construction_timber
+        };
+        if self.materials == self.input {
+            let Some(total) = construction.0.checked_add(input_needed.0) else {
+                return FundingChoice::Unavailable(FundingUnavailable::UnrepresentableQuantity);
+            };
+            if balances.materials.0 >= total {
+                return unavailable();
+            }
+        } else if balances.materials >= construction && balances.input >= input_needed {
+            return unavailable();
+        }
+        let mut candidates = supplies.iter().collect::<Vec<_>>();
+        candidates.sort_by_key(|row| row.known.inventory);
+        for input in &candidates {
+            let Some(financier) = input.custodian.filter(|owner| *owner != self.sponsor) else {
+                continue;
+            };
+            let shared_materials = recipe.input_good == Good::Timber;
+            if input.known.good != recipe.input_good
+                || input.known.area != self.area
+                || input.known.inventory == self.input
+                || construction.0 > 0 && shared_materials && input.known.inventory == self.materials
+                || input.custodian_area != Some(self.area)
+            {
+                continue;
+            }
+            let Some(needed_from_input) =
+                input_needed
+                    .0
+                    .checked_add(if shared_materials { construction.0 } else { 0 })
+            else {
+                return FundingChoice::Unavailable(FundingUnavailable::UnrepresentableQuantity);
+            };
+            if input.known.quantity.0 < needed_from_input {
+                continue;
+            }
+            let materials = if construction.0 == 0 || shared_materials {
+                *input
+            } else {
+                let Some(materials) = candidates.iter().find(|row| {
+                    row.known.good == Good::Timber
+                        && row.known.area == self.area
+                        && row.known.inventory != self.materials
+                        && row.known.quantity >= construction
+                        && row.custodian == Some(financier)
+                        && row.custodian_area == Some(self.area)
+                }) else {
+                    continue;
+                };
+                *materials
+            };
+            let destination = repayments
+                .iter()
+                .filter(|lot| {
+                    lot.good == recipe.output_good
+                        && lot.area == Some(self.area)
+                        && lot.inventory != self.tool
+                        && lot.inventory != self.output
+                        && lot.custodian == Some(financier)
                 })
-            })
-            .map(Quantity)
-            .ok_or(FundingUnavailable::UnrepresentableQuantity)
+                .min_by_key(|lot| lot.inventory);
+            let Some(destination) = destination else {
+                continue;
+            };
+            let choice = self.prepare_workshop_funding(
+                rules,
+                definitions,
+                WorkshopFundingFacts {
+                    now,
+                    financier,
+                    materials_source: materials.known.inventory,
+                    input_source: input.known.inventory,
+                    repayment_destination: destination.inventory,
+                    materials_good: materials.known.good,
+                    input_good: input.known.good,
+                    repayment_good: destination.good,
+                },
+                loading,
+            );
+            // Stable first qualifying financier preserves the original proposal choice.
+            return choice;
+        }
+        unavailable()
     }
 
     fn funding_parties(
@@ -182,28 +320,51 @@ impl Project {
     pub fn prepare_workshop_funding(
         &self,
         rules: &Rules,
-        facts: FundingFacts,
+        definitions: &Definitions,
+        facts: WorkshopFundingFacts,
         loading: SimDuration,
     ) -> FundingChoice {
         let prepare = || -> Result<FundingProposal, FundingUnavailable> {
-            let parties = self.funding_parties(facts)?;
-            let needed = self.workshop_funding_materials(rules)?;
-            let repayment = rules
-                .recipe_tools
-                .0
-                .checked_mul(3)
-                .map(Quantity)
-                .ok_or(FundingUnavailable::UnrepresentableQuantity)?;
+            let ProjectKind::Workshop { recipe: id } = &self.kind else {
+                return Err(FundingUnavailable::IneligibleProject);
+            };
+            let recipe = definitions
+                .recipe(id)
+                .map_err(|_| FundingUnavailable::IneligibleProject)?;
+            if facts.input_good != recipe.input_good
+                || facts.repayment_good != recipe.output_good
+                || (self.enterprise.is_none() && facts.materials_good != Good::Timber)
+                || facts.input_source == self.input
+                || (facts.materials_source == facts.input_source
+                    && facts.materials_good != facts.input_good)
+            {
+                return Err(FundingUnavailable::InvalidParticipants);
+            }
+            let parties = self.funding_parties(FundingFacts {
+                now: facts.now,
+                financier: facts.financier,
+                source: facts.input_source,
+                repayment_destination: facts.repayment_destination,
+            })?;
+            let repayment = Quantity(
+                recipe
+                    .output_quantity
+                    .0
+                    .checked_mul(3)
+                    .ok_or(FundingUnavailable::UnrepresentableQuantity)?,
+            );
+            let required = recipe
+                .production_requirement(repayment)
+                .map_err(|_| FundingUnavailable::UnrepresentableQuantity)?;
             let funding_window = loading
                 .0
                 .checked_mul(4)
                 .and_then(|v| v.checked_add(120_000))
                 .ok_or(FundingUnavailable::UnrepresentableTime)?;
-            let production_window = rules
-                .recipe_time
+            let production_window = required
+                .work
                 .0
-                .checked_mul(3)
-                .and_then(|v| rules.construction_labor.0.checked_add(v))
+                .checked_add(rules.construction_labor.0)
                 .and_then(|v| {
                     loading
                         .0
@@ -213,44 +374,67 @@ impl Project {
                 .and_then(|v| v.checked_mul(2))
                 .and_then(|v| v.checked_add(120_000))
                 .ok_or(FundingUnavailable::UnrepresentableTime)?;
-            let funding_deadline = facts
-                .now
-                .0
-                .checked_add(funding_window)
-                .map(SimTime)
-                .ok_or(FundingUnavailable::UnrepresentableTime)?;
-            let repayment_deadline = facts
-                .now
-                .0
-                .checked_add(production_window)
-                .map(SimTime)
-                .ok_or(FundingUnavailable::UnrepresentableTime)?;
-            let next_search = facts
-                .now
-                .0
-                .checked_add(600_000)
-                .map(SimTime)
-                .ok_or(FundingUnavailable::UnrepresentableTime)?;
+            let funding_deadline = SimTime(
+                facts
+                    .now
+                    .0
+                    .checked_add(funding_window)
+                    .ok_or(FundingUnavailable::UnrepresentableTime)?,
+            );
+            let repayment_deadline = SimTime(
+                facts
+                    .now
+                    .0
+                    .checked_add(production_window)
+                    .ok_or(FundingUnavailable::UnrepresentableTime)?,
+            );
+            let next_search = SimTime(
+                facts
+                    .now
+                    .0
+                    .checked_add(600_000)
+                    .ok_or(FundingUnavailable::UnrepresentableTime)?,
+            );
+            let construction = if self.enterprise.is_some() {
+                Quantity(0)
+            } else {
+                rules.construction_timber
+            };
+            let mut supplies = std::collections::BTreeMap::<(InventoryId, InventoryId), u64>::new();
+            if construction.0 > 0 {
+                if facts.materials_source.0 == 0 || facts.materials_source == self.materials {
+                    return Err(FundingUnavailable::InvalidParticipants);
+                }
+                supplies.insert((facts.materials_source, self.materials), construction.0);
+            }
+            let total = supplies
+                .entry((facts.input_source, self.input))
+                .or_default();
+            *total = total
+                .checked_add(required.input.0)
+                .ok_or(FundingUnavailable::UnrepresentableQuantity)?;
+            let mut terms = supplies
+                .into_iter()
+                .map(|((source, destination), amount)| AgreementTerm::Delivery {
+                    debtor: facts.financier,
+                    creditor: self.sponsor,
+                    source,
+                    destination,
+                    quantity: Quantity(amount),
+                    deadline: funding_deadline,
+                })
+                .collect::<Vec<_>>();
+            terms.push(AgreementTerm::Delivery {
+                debtor: self.sponsor,
+                creditor: facts.financier,
+                source: self.output,
+                destination: facts.repayment_destination,
+                quantity: repayment,
+                deadline: repayment_deadline,
+            });
             Ok(FundingProposal {
                 parties,
-                terms: vec![
-                    AgreementTerm::Delivery {
-                        debtor: facts.financier,
-                        creditor: self.sponsor,
-                        source: facts.source,
-                        destination: self.materials,
-                        quantity: needed,
-                        deadline: funding_deadline,
-                    },
-                    AgreementTerm::Delivery {
-                        debtor: self.sponsor,
-                        creditor: facts.financier,
-                        source: self.output,
-                        destination: facts.repayment_destination,
-                        quantity: repayment,
-                        deadline: repayment_deadline,
-                    },
-                ],
+                terms,
                 next_search,
             })
         };

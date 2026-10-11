@@ -6,6 +6,9 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod consumption;
+pub use consumption::{PreparedConsumptions, prepare_consumptions};
+
 mod deposit;
 pub use deposit::{
     DepositBounds, PreparedDeposit, append_deposit_schema_bounds, deposit_available,

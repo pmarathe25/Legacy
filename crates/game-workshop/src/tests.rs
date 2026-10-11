@@ -14,17 +14,42 @@ fn stock(id: u64, good: Good, quantity: u64) -> Inventory {
 }
 fn site() -> Site {
     Site {
+        recipe: RecipeId("meal".into()),
         id: SiteId(5),
         area: AreaId(1),
         input: InventoryId(1),
-        input_quantity: Quantity(2_000),
         tool: InventoryId(2),
         output: InventoryId(3),
-        output_quantity: Quantity(4_000),
-        duration: SimDuration(10_001),
         access: BTreeSet::from([PersonId(1)]),
         last_granted: None,
     }
+}
+const TEST_RECIPE: Recipe = Recipe {
+    input_good: Good::Timber,
+    input_quantity: Quantity(2000),
+    output_good: Good::Food,
+    output_quantity: Quantity(4000),
+    duration: SimDuration(10001),
+};
+fn view(site: &Site) -> RecipeView<'_> {
+    RecipeView {
+        site,
+        recipe: &TEST_RECIPE,
+    }
+}
+fn definitions() -> Definitions {
+    Definitions::from_content(game_content::Document {
+        id: "test/workshop".into(),
+        version: 1,
+        data: Catalog {
+            default_recipe: RecipeId("meal".into()),
+            recipes: std::collections::BTreeMap::from([(
+                RecipeId("meal".into()),
+                TEST_RECIPE.clone(),
+            )]),
+        },
+    })
+    .unwrap()
 }
 fn facts() -> StartFacts {
     StartFacts {
@@ -54,7 +79,7 @@ fn closing(actor: u64, equipped: bool) -> CompletionFacts {
     }
 }
 fn start() -> Start {
-    site()
+    view(&site())
         .prepare_start(
             None,
             &stock(1, Good::Timber, 2_000),
@@ -71,7 +96,7 @@ fn admission_requires_real_stock_tools_contact_and_available_space() {
     let input = stock(1, Good::Timber, 2_000);
     let tool = stock(2, Good::Tool, 1_000);
     let output = stock(3, Good::Food, 0);
-    let accepted = site
+    let accepted = view(&site)
         .prepare_start(None, &input, &tool, &output, facts())
         .unwrap();
     assert_eq!(
@@ -123,26 +148,30 @@ fn admission_requires_real_stock_tools_contact_and_available_space() {
         },
     ] {
         assert!(
-            site.prepare_start(None, &input, &tool, &output, denied)
+            view(&site)
+                .prepare_start(None, &input, &tool, &output, denied)
                 .is_err()
         );
     }
     assert!(
-        site.prepare_start(
-            None,
-            &stock(1, Good::Timber, 1_999),
-            &tool,
-            &output,
-            facts()
-        )
-        .is_err()
-    );
-    assert!(
-        site.prepare_start(None, &input, &stock(2, Good::Tool, 999), &output, facts())
+        view(&site)
+            .prepare_start(
+                None,
+                &stock(1, Good::Timber, 1_999),
+                &tool,
+                &output,
+                facts()
+            )
             .is_err()
     );
     assert!(
-        site.prepare_start(None, &input, &tool, &stock(3, Good::Food, 16_001), facts())
+        view(&site)
+            .prepare_start(None, &input, &stock(2, Good::Tool, 999), &output, facts())
+            .is_err()
+    );
+    assert!(
+        view(&site)
+            .prepare_start(None, &input, &tool, &stock(3, Good::Food, 16_001), facts())
             .is_err()
     );
 }
@@ -152,7 +181,7 @@ fn resume_keeps_fractional_work_and_rates_without_consuming_again() {
     let mut job = start().job;
     job.remaining = 77;
     job.work_remainder = 2;
-    let resumed = site()
+    let resumed = view(&site())
         .prepare_start(
             Some(&job),
             &stock(1, Good::Timber, 0),
@@ -231,18 +260,18 @@ fn blocked_completed_job_can_resume_after_output_is_removed() {
     let site = site();
     let mut output = stock(3, Good::Food, 18_000);
     assert!(
-        job.prepare_completion(&site, &output, closing(1, true))
+        job.prepare_completion(view(&site), &output, closing(1, true))
             .unwrap()
             .is_none()
     );
     output.quantity = Quantity(0);
     assert!(
-        job.prepare_completion(&site, &output, closing(1, true))
+        job.prepare_completion(view(&site), &output, closing(1, true))
             .unwrap()
             .is_some()
     );
     assert!(
-        job.prepare_completion(&site, &output, closing(1, false))
+        job.prepare_completion(view(&site), &output, closing(1, false))
             .unwrap()
             .is_none()
     );
@@ -258,7 +287,7 @@ fn prepared_production_is_atomic_and_carries_producer_attribution() {
     let production = job
         .as_ref()
         .unwrap()
-        .prepare_completion(&site, &output, closing(8, true))
+        .prepare_completion(view(&site), &output, closing(8, true))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -271,11 +300,17 @@ fn prepared_production_is_atomic_and_carries_producer_attribution() {
         (PersonId(8), SiteId(5), InventoryId(3), Quantity(4_000))
     );
     let replay = production.clone();
-    production.commit(&mut job, &mut site, &mut output).unwrap();
+    production
+        .commit(&definitions(), &mut job, &mut site, &mut output)
+        .unwrap();
     assert_eq!(output.quantity, Quantity(9_000));
     assert!(job.is_none());
     assert_eq!(site.last_granted, Some(PersonId(8)));
-    assert!(replay.commit(&mut job, &mut site, &mut output).is_err());
+    assert!(
+        replay
+            .commit(&definitions(), &mut job, &mut site, &mut output)
+            .is_err()
+    );
     assert_eq!(output.quantity, Quantity(9_000));
 }
 
@@ -289,12 +324,16 @@ fn stale_production_never_partially_changes_job_stock_or_cursor() {
     let production = job
         .as_ref()
         .unwrap()
-        .prepare_completion(&site, &output, closing(1, true))
+        .prepare_completion(view(&site), &output, closing(1, true))
         .unwrap()
         .unwrap();
     output.quantity = Quantity(1);
     let before = (job.clone(), site.clone(), output.clone());
-    assert!(production.commit(&mut job, &mut site, &mut output).is_err());
+    assert!(
+        production
+            .commit(&definitions(), &mut job, &mut site, &mut output)
+            .is_err()
+    );
     assert_eq!((job, site, output), before);
 }
 
@@ -332,17 +371,21 @@ fn recipe_or_output_metadata_changes_reject_prepared_production_atomically() {
         let mut output = original_output.clone();
         let mut job = Some(finished.clone());
         let production = finished
-            .prepare_completion(&site, &output, closing(1, true))
+            .prepare_completion(view(&site), &output, closing(1, true))
             .unwrap()
             .unwrap();
         match changed {
-            0 => site.duration = SimDuration(9),
+            0 => site.recipe = RecipeId("changed".into()),
             1 => output.good = Good::Herb,
             2 => output.location = InventoryLocation::Carried(PersonId(4)),
             _ => output.access.clear(),
         }
         let before = (job.clone(), site.clone(), output.clone());
-        assert!(production.commit(&mut job, &mut site, &mut output).is_err());
+        assert!(
+            production
+                .commit(&definitions(), &mut job, &mut site, &mut output)
+                .is_err()
+        );
         assert_eq!((job, site, output), before);
     }
 }
@@ -352,7 +395,7 @@ fn invalid_paused_rate_and_inactive_or_previously_dead_completion_are_rejected()
     let mut paused = start().job;
     paused.rate.denominator = 0;
     assert!(
-        site()
+        view(&site())
             .prepare_start(
                 Some(&paused),
                 &stock(1, Good::Timber, 0),
@@ -376,7 +419,7 @@ fn invalid_paused_rate_and_inactive_or_previously_dead_completion_are_rejected()
     ] {
         assert!(
             finished
-                .prepare_completion(&site(), &stock(3, Good::Food, 0), facts)
+                .prepare_completion(view(&site()), &stock(3, Good::Food, 0), facts)
                 .unwrap()
                 .is_none()
         );
@@ -397,8 +440,8 @@ fn completion_forecast_uses_evaluated_work_without_creating_output() {
         )
         .unwrap();
     assert_eq!(
-        job.output_forecast(completed, &site, output.good),
-        Some((site.id, output.good, site.output_quantity))
+        job.output_forecast(completed, view(&site)),
+        Some((site.id, output.good, TEST_RECIPE.output_quantity))
     );
     assert_eq!(output.quantity, Quantity(0));
     assert!(job.remaining > 0);
@@ -487,9 +530,9 @@ fn invalid_site_components_cannot_create_or_replace_declarations() {
             2 => invalid.input = InventoryId(0),
             3 => invalid.tool = InventoryId(0),
             4 => invalid.output = InventoryId(0),
-            5 => invalid.input_quantity = Quantity(0),
-            6 => invalid.output_quantity = Quantity(0),
-            7 => invalid.duration = SimDuration(0),
+            5 => invalid.recipe = RecipeId(String::new()),
+            6 => invalid.recipe = RecipeId("bad key".into()),
+            7 => invalid.recipe = RecipeId("α".into()),
             8 => {
                 invalid.access.insert(PersonId(0));
             }
@@ -527,7 +570,7 @@ fn absent_or_stricter_site_schemas_leave_the_shared_store_unchanged() {
     schema
         .register::<Site>("workshop/site", |value| {
             value.validate()?;
-            if value.duration.0 <= 50 {
+            if value.recipe.0 == "blocked" {
                 Ok(())
             } else {
                 Err(Error::Unavailable)
@@ -539,7 +582,7 @@ fn absent_or_stricter_site_schemas_leave_the_shared_store_unchanged() {
     assert!(insert_site(&mut stricter, site()).is_err());
     assert_eq!(stricter.snapshot().unwrap(), before);
     let mut admitted = site();
-    admitted.duration = SimDuration(50);
+    admitted.recipe = RecipeId("blocked".into());
     insert_site(&mut stricter, admitted).unwrap();
     let before = stricter.snapshot().unwrap();
     assert!(insert_site(&mut stricter, site()).is_err());
@@ -626,18 +669,18 @@ fn production_commits_the_exact_job_component_once_and_preserves_foreign_data() 
     let mut site = site();
     let mut output = stock(3, Good::Food, 0);
     let production = work
-        .prepare_completion(&site, &output, closing(1, true))
+        .prepare_completion(view(&site), &output, closing(1, true))
         .unwrap()
         .unwrap();
     production
-        .validate(job(&store, PersonId(1)), &site, &output)
+        .validate(job(&store, PersonId(1)), view(&site), &output)
         .unwrap();
     job_mut(&mut store, PersonId(1)).unwrap().work_remainder = 1;
     let before = (store.snapshot().unwrap(), site.clone(), output.clone());
     assert!(
         production
             .clone()
-            .commit_to_store(&mut store, &mut site, &mut output)
+            .commit_to_store(&definitions(), &mut store, &mut site, &mut output)
             .is_err()
     );
     assert_eq!(
@@ -647,7 +690,7 @@ fn production_commits_the_exact_job_component_once_and_preserves_foreign_data() 
     *job_mut(&mut store, PersonId(1)).unwrap() = work;
     production
         .clone()
-        .commit_to_store(&mut store, &mut site, &mut output)
+        .commit_to_store(&definitions(), &mut store, &mut site, &mut output)
         .unwrap();
     assert!(job(&store, PersonId(1)).is_none());
     assert_eq!(output.quantity, Quantity(4_000));
@@ -659,7 +702,7 @@ fn production_commits_the_exact_job_component_once_and_preserves_foreign_data() 
     let completed = (store.snapshot().unwrap(), site.clone(), output.clone());
     assert!(
         production
-            .commit_to_store(&mut store, &mut site, &mut output)
+            .commit_to_store(&definitions(), &mut store, &mut site, &mut output)
             .is_err()
     );
     assert_eq!((store.snapshot().unwrap(), site, output), completed);
@@ -684,12 +727,12 @@ fn component_production_updates_the_site_and_preserves_other_rows_once() {
         insert_job(&mut store, actor, work.clone()).unwrap();
         let mut output = stock(3, Good::Food, 0);
         let production = work
-            .prepare_completion(&declaration, &output, closing(actor.0, true))
+            .prepare_completion(view(&declaration), &output, closing(actor.0, true))
             .unwrap()
             .unwrap();
         production
             .clone()
-            .commit_components(&mut store, &mut output)
+            .commit_components(&definitions(), &mut store, &mut output)
             .unwrap();
         assert!(job(&store, actor).is_none());
         assert_eq!(output.quantity, Quantity(4_000));
@@ -704,7 +747,7 @@ fn component_production_updates_the_site_and_preserves_other_rows_once() {
         let completed = (store.snapshot().unwrap(), output.clone());
         assert!(
             production
-                .commit_components(&mut store, &mut output)
+                .commit_components(&definitions(), &mut store, &mut output)
                 .is_err()
         );
         assert_eq!((store.snapshot().unwrap(), output), completed);
@@ -722,11 +765,11 @@ fn component_production_rejects_stale_or_missing_rows_before_any_write() {
         insert_job(&mut store, PersonId(1), work.clone()).unwrap();
         let mut output = stock(3, Good::Food, 0);
         let production = work
-            .prepare_completion(&declaration, &output, closing(1, true))
+            .prepare_completion(view(&declaration), &output, closing(1, true))
             .unwrap()
             .unwrap();
         match change {
-            0 => site_mut(&mut store, SiteId(5)).unwrap().duration = SimDuration(77),
+            0 => site_mut(&mut store, SiteId(5)).unwrap().recipe = RecipeId("changed".into()),
             1 => job_mut(&mut store, PersonId(1)).unwrap().remaining = 1,
             2 => output.quantity = Quantity(1),
             3 => {
@@ -740,7 +783,7 @@ fn component_production_rejects_stale_or_missing_rows_before_any_write() {
         let before = (store.snapshot().unwrap(), output.clone());
         assert!(
             production
-                .commit_components(&mut store, &mut output)
+                .commit_components(&definitions(), &mut store, &mut output)
                 .is_err()
         );
         assert_eq!((store.snapshot().unwrap(), output), before);
@@ -799,7 +842,7 @@ fn native_stock_production_is_atomic_with_schema_guards_and_replay() {
     let output = stock(3, Good::Food, 0);
     game_cargo::insert_inventory(&mut store, output.clone()).unwrap();
     let production = work
-        .prepare_completion(&declaration, &output, closing(1, true))
+        .prepare_completion(view(&declaration), &output, closing(1, true))
         .unwrap()
         .unwrap();
     game_cargo::inventory_mut(&mut store, InventoryId(3))
@@ -807,14 +850,17 @@ fn native_stock_production_is_atomic_with_schema_guards_and_replay() {
         .quantity = Quantity(1);
     let before = store.clone();
     assert_eq!(
-        production.clone().commit_stocks(&mut store),
+        production.clone().commit_stocks(&definitions(), &mut store),
         Err(Error::Unavailable)
     );
     assert_eq!(store, before);
     game_cargo::inventory_mut(&mut store, InventoryId(3))
         .unwrap()
         .quantity = Quantity(0);
-    production.clone().commit_stocks(&mut store).unwrap();
+    production
+        .clone()
+        .commit_stocks(&definitions(), &mut store)
+        .unwrap();
     assert!(job(&store, PersonId(1)).is_none());
     assert_eq!(
         game_cargo::inventory(&store, InventoryId(3))
@@ -828,7 +874,7 @@ fn native_stock_production_is_atomic_with_schema_guards_and_replay() {
     );
     let completed = store.clone();
     assert_eq!(
-        production.commit_stocks(&mut store),
+        production.commit_stocks(&definitions(), &mut store),
         Err(Error::Unavailable)
     );
     assert_eq!(store, completed);
@@ -849,12 +895,12 @@ fn native_stock_production_is_atomic_with_schema_guards_and_replay() {
     insert_job(&mut store, PersonId(1), work.clone()).unwrap();
     game_cargo::insert_inventory(&mut store, output.clone()).unwrap();
     let production = work
-        .prepare_completion(&declaration, &output, closing(1, true))
+        .prepare_completion(view(&declaration), &output, closing(1, true))
         .unwrap()
         .unwrap();
     let before = store.clone();
     assert_eq!(
-        production.commit_stocks(&mut store),
+        production.commit_stocks(&definitions(), &mut store),
         Err(Error::Unavailable)
     );
     assert_eq!(store, before);

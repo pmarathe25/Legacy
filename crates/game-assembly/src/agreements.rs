@@ -85,9 +85,9 @@ fn output_source(state: &CanonicalState, site: SiteId, good: Good) -> Option<Inv
                 .state
                 .projects
                 .as_ref()
-                .and_then(|w| {
-                    w.projects
-                        .values()
+                .and_then(|_| {
+                    game_projects::projects(state.components)
+                        .map(|(_, row)| row)
                         .find(|p| matches!(p.kind,ProjectKind::Farm {plot,..} if plot==site))
                 })
                 .and_then(|p| match good {
@@ -239,7 +239,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 .state
                 .projects
                 .as_ref()
-                .is_some_and(|w| w.projects.contains_key(project)),
+                .is_some_and(|_| game_projects::project(s.components, *project).is_some()),
             AgreementTerm::Access {
                 grantor, inventory, ..
             } => {
@@ -477,7 +477,7 @@ fn valid_knowledge(state: &CanonicalState, view: &AgreementView) -> bool {
                 .state
                 .projects
                 .as_ref()
-                .is_some_and(|w| w.projects.contains_key(project)),
+                .is_some_and(|_| game_projects::project(state.components, *project).is_some()),
             AgreementTerm::Access { inventory, .. } => {
                 game_cargo::inventory(state.components, *(inventory)).is_some()
             }
@@ -1806,13 +1806,9 @@ impl Simulation {
                     }
                 }
                 AgreementTerm::ConstructionLabor { project, .. } => {
-                    if self
-                        .host
-                        .state
-                        .projects
-                        .as_ref()
-                        .is_some_and(|w| w.projects.contains_key(&project))
-                    {
+                    if self.host.state.projects.as_ref().is_some_and(|_| {
+                        game_projects::project(&self.host.storage, project).is_some()
+                    }) {
                         context.projects.insert(project);
                     }
                 }
@@ -2359,7 +2355,9 @@ impl Simulation {
                     .state
                     .projects
                     .as_ref()
-                    .and_then(|world| world.known_projects.get(&actor))
+                    .and_then(|_| {
+                        game_projects::knowledge(&self.host.storage, actor).map(|row| &row.projects)
+                    })
                     .is_some_and(|known| {
                         known.values().any(
                             |plan| matches!(plan.kind,ProjectKind::Farm {plot,..} if plot==site),
@@ -2387,7 +2385,10 @@ impl Simulation {
                     .state
                     .projects
                     .as_ref()
-                    .and_then(|world| world.known_enterprises.get(&actor))
+                    .and_then(|_| {
+                        game_projects::knowledge(&self.host.storage, actor)
+                            .map(|row| &row.enterprises)
+                    })
                     .is_some_and(|known| known.values().any(|enterprise| enterprise.site == site))
                     || self.host.state.agriculture.as_ref().is_some_and(|world| {
                         world.field(&self.host.storage, site).is_some_and(|field| {
@@ -2439,7 +2440,9 @@ impl Simulation {
             .state
             .projects
             .as_ref()
-            .and_then(|world| world.known_projects.get(&actor))
+            .and_then(|_| {
+                game_projects::knowledge(&self.host.storage, actor).map(|row| &row.projects)
+            })
             .map(|known| known.keys().copied().collect())
             .unwrap_or_default();
         let facts = game_agreements::OfferActorFacts {

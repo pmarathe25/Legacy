@@ -2,6 +2,7 @@
 pub mod agreements;
 pub mod agriculture;
 pub mod armies;
+pub mod authored;
 #[doc(hidden)]
 pub mod benchmark;
 pub mod combat;
@@ -21,13 +22,14 @@ mod guardian_delivery;
 pub mod health;
 mod host;
 pub mod institutions;
+mod interruptions;
 pub mod invocation;
 pub mod lineage;
 mod logistics;
 pub mod missions;
 mod persistence;
 pub mod physical;
-pub mod population;
+mod population;
 pub mod projects;
 pub mod property;
 mod quantities;
@@ -123,6 +125,8 @@ enum Due {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssemblyState {
+    pub openings: Option<game_openings::Definitions>,
+    pub workshops: game_workshop::Definitions,
     pub armies: Option<armies::World>,
     pub realm: Option<realm::World>,
     pub transport: Option<game_transport::World>,
@@ -155,7 +159,7 @@ pub struct AssemblyState {
     #[serde(default)]
     pub skills: Option<skills::Runtime>,
     #[serde(default)]
-    pub projects: Option<projects::World>,
+    pub projects: Option<projects::Runtime>,
     #[serde(default)]
     pub invocation: Option<invocation::World>,
     #[serde(default)]
@@ -221,6 +225,17 @@ pub struct Simulation {
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
+    let mut scenarios = fixture_scenarios();
+    let ids = scenarios::playable_ids().expect("valid authored opening catalog");
+    scenarios.retain(|scenario| scenario.debug_fixture);
+    scenarios.extend(ids.into_iter().map(|id| ScenarioInfo {
+        id,
+        version: 1,
+        debug_fixture: false,
+    }));
+    scenarios
+}
+fn fixture_scenarios() -> Vec<ScenarioInfo> {
     vec![
         ScenarioInfo {
             id: "kernel-fixture".into(),
@@ -362,14 +377,6 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
 
 impl Simulation {
     pub fn new(scenario: &str, seed: u64, execution: Execution) -> Result<Self, Error> {
-        if scenarios::PLAYABLE.contains(&scenario) || scenario == "random" {
-            return Self::playable_scenario(
-                scenario,
-                seed,
-                execution,
-                scenarios::Config::default(),
-            );
-        }
         if scenario == "ecology-fixture" {
             return Self::ecology_fixture(seed, execution);
         }
@@ -439,10 +446,10 @@ impl Simulation {
         if scenario == "life-fixture" {
             return Self::life_fixture(seed, execution);
         }
-        if scenario != "kernel-fixture" {
-            return Err(Error::InvalidConfiguration("unknown scenario".into()));
+        if scenario == "kernel-fixture" {
+            return Self::kernel_fixture(seed, 15, execution);
         }
-        Self::kernel_fixture(seed, 15, execution)
+        Self::playable_scenario(scenario, seed, execution, scenarios::Config::default())
     }
 
     pub fn kernel_fixture(
@@ -456,13 +463,15 @@ impl Simulation {
             ));
         }
         let state = AssemblyState {
+            openings: None,
+            workshops: authored::fixture_workshops()?,
             transport: None,
             genetics: None,
             physical_traits: None,
             temperament: None,
             heredity: None,
             content: BTreeMap::new(),
-            scenario: scenarios().remove(0),
+            scenario: fixture_scenarios().remove(0),
             ruler: PersonId(0),
             areas: Vec::new(),
             people: Vec::new(),
@@ -1707,6 +1716,16 @@ impl Simulation {
             arbitration_ns,
         } = prepared;
         self.validate_physical_output(&physical_output)?;
+        if let Some(batch) = &project_output {
+            batch.validate(
+                self.host
+                    .state
+                    .projects
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?,
+                &self.host.storage,
+            )?;
+        }
         if let Some(batch) = &health_output {
             batch.validate(
                 self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
@@ -1788,10 +1807,9 @@ impl Simulation {
             .state
             .projects
             .as_ref()
-            .map_or_else(Vec::new, |w| {
-                w.jobs
-                    .iter()
-                    .map(|(actor, job)| (*actor, job.project))
+            .map_or_else(Vec::new, |_| {
+                game_projects::constructions(&self.host.storage)
+                    .map(|(actor, job)| (actor, job.project))
                     .collect()
             });
         for (actor, project) in builders {
@@ -1802,7 +1820,7 @@ impl Simulation {
         // state once, rather than being overwritten by an opening snapshot.
         self.commit_health(health_output)?;
         self.commit_agriculture(agriculture_output)?;
-        self.commit_projects(project_output);
+        self.commit_projects(project_output)?;
         self.commit_environment(environment_output)?;
         self.commit_ecology(ecology_output)?;
         self.host.state.due.remove(&next);

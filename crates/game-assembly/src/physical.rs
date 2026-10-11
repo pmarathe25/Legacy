@@ -214,22 +214,27 @@ impl Simulation {
             Quantity(100_000),
             people.clone(),
         )?;
-        for (area, input, tool, output, output_quantity) in [
-            (village, timber, tools, food, 1_000),
-            (forest, deposit, forest_tools, output, 1_000),
+        for (area, input, tool, output) in [
+            (village, timber, tools, food),
+            (forest, deposit, forest_tools, output),
         ] {
             let id = SiteId(sim.host.allocate_id()?.0);
             game_workshop::insert_site(
                 &mut sim.host.storage,
                 Site {
+                    recipe: game_workshop::RecipeId(
+                        if area == village {
+                            "timber-food"
+                        } else {
+                            "timber-timber"
+                        }
+                        .into(),
+                    ),
                     id,
                     area,
                     input,
-                    input_quantity: Quantity(1_000),
                     tool,
                     output,
-                    output_quantity: Quantity(output_quantity),
-                    duration: MINUTE,
                     access: people.clone(),
                     last_granted: None,
                 },
@@ -623,7 +628,7 @@ impl Simulation {
                     .ok_or(Error::Unavailable)?;
                 let input = game_cargo::inventory(&self.host.storage, site_record.input)
                     .expect("inventory exists");
-                let start = site_record.prepare_start(
+                let start = self.host.state.workshops.resolve_site(site_record)?.prepare_start(
                     game_workshop::job(&self.host.storage,actor),
                     input,
                     game_cargo::inventory(&self.host.storage, tool_id).expect("inventory exists"),
@@ -1701,7 +1706,7 @@ impl Simulation {
                     .as_ref()
                     .unwrap()
                     .prepare_completion(
-                        site,
+                        self.host.state.workshops.resolve_site(site)?,
                         game_cargo::inventory(&self.host.storage, site.output)
                             .expect("inventory exists"),
                         game_workshop::CompletionFacts {
@@ -1718,7 +1723,7 @@ impl Simulation {
                         output: production.output,
                         quantity: production.quantity,
                     };
-                    production.commit_stocks(&mut self.host.storage)?;
+                    production.commit_stocks(&self.host.state.workshops, &mut self.host.storage)?;
                     *self
                         .host
                         .storage
@@ -1780,10 +1785,7 @@ impl Simulation {
                         remaining: out.remaining?,
                         remainder: out.work_remainder?,
                     },
-                    site,
-                    game_cargo::inventory(&self.host.storage, site.output)
-                        .expect("inventory exists")
-                        .good,
+                    self.host.state.workshops.resolve_site(site).ok()?,
                 )
             })
             .collect()

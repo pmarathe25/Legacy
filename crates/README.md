@@ -57,13 +57,14 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-invocation` | `game-characters` | Borrowed character goals, personality and memories; historical-controller intentions and admission fallback |
 | `game-lineage` | `game-logistics` | Care provision delivery requirements and receipts |
 | `game-missions` | `game-agreements` | Agreement terms in mission objectives |
+| `game-openings` | `game-content`, `game-ecology`, `game-property` | Authored opening and settlement declarations, validated independently of simulation startup |
 | `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components and numerical integration; opaque inheritable physical characteristics |
-| `game-projects` | `game-agreements` | Project funding terms |
+| `game-projects` | `game-ecs`, `game-agreements`, `game-workshop` | Native plans, enterprises, construction and personal knowledge; guarded material funding and selected-recipe accounts |
 | `game-property` | `game-ecs` | Native claims, incidents, stock provenance, personal attitudes, dated knowledge, actions and request deadlines; guarded sparse changes |
 | `game-realm` | `game-agreements`, `game-missions` | Diplomatic terms and objectives |
 | `game-society` | `game-agreements` | Obligations and disputes |
 | `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
-| `game-workshop` | `game-ecs`, `game-cargo`, `game-skills` | Site and optional job components; material inputs and outputs; work rates and craft practice effects |
+| `game-workshop` | `game-ecs`, `game-cargo`, `game-skills`, `game-content` | Native sites and jobs; saved recipe definitions, material inputs and outputs, work rates and craft practice effects |
 
 `game-agreements`, `game-logistics`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
 

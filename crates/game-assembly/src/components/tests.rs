@@ -769,17 +769,26 @@ fn workshop_sites_roundtrip_only_as_shared_rows_and_require_physical_metadata() 
     let person = &kernel.host.state.people[0];
     let id = game_api::SiteId(person.id.0);
     let stock = person.inventory;
+    let chosen_recipe = kernel
+        .fixture_recipe(
+            stock,
+            stock,
+            game_api::Quantity(1),
+            game_api::Quantity(1),
+            SimDuration(1),
+        )
+        .unwrap();
     game_workshop::insert_site(
         &mut kernel.host.storage,
         game_workshop::Site {
+            recipe: chosen_recipe,
             id,
             area: kernel.host.state.areas[0].id,
             input: stock,
-            input_quantity: game_api::Quantity(1),
+
             tool: stock,
             output: stock,
-            output_quantity: game_api::Quantity(1),
-            duration: SimDuration(1),
+
             access: std::collections::BTreeSet::new(),
             last_granted: None,
         },

@@ -9,7 +9,9 @@ fn project(farm: bool) -> Project {
                 water: InventoryId(8),
             }
         } else {
-            ProjectKind::Workshop
+            ProjectKind::Workshop {
+                recipe: game_workshop::RecipeId("toolmaking".into()),
+            }
         },
         id: ProjectId(1),
         sponsor: PersonId(2),
@@ -36,6 +38,25 @@ fn facts(now: u64) -> FundingFacts {
         financier: PersonId(9),
         source: InventoryId(10),
         repayment_destination: InventoryId(11),
+    }
+}
+fn definitions() -> Definitions {
+    Definitions::from_content(serde_json::from_value(serde_json::json!({
+        "id":"test/recipes", "version":1,"data":{"default_recipe":"toolmaking","recipes":{"toolmaking":{
+            "input_good":"Timber","input_quantity":2000,"output_good":"Tool","output_quantity":1000,"duration":60000
+        }}}
+    })).unwrap()).unwrap()
+}
+fn workshop_facts(now: u64) -> WorkshopFundingFacts {
+    WorkshopFundingFacts {
+        now: SimTime(now),
+        financier: PersonId(9),
+        materials_source: InventoryId(10),
+        input_source: InventoryId(10),
+        repayment_destination: InventoryId(11),
+        materials_good: Good::Timber,
+        input_good: Good::Timber,
+        repayment_good: Good::Tool,
     }
 }
 fn available(choice: FundingChoice) -> FundingProposal {
@@ -129,11 +150,20 @@ fn farm_end_may_fit_but_repayment_grace_must_fit_too() {
 #[test]
 fn workshop_terms_preserve_three_batches_and_completed_enterprise_materials() {
     let rules = Rules::default();
+    let definitions = definitions();
+    let recipe = definitions
+        .recipe(&definitions.catalog.default_recipe)
+        .unwrap();
     let mut plan = project(false);
-    let terms = available(plan.prepare_workshop_funding(&rules, facts(100), SimDuration(30_000)));
+    let terms = available(plan.prepare_workshop_funding(
+        &rules,
+        &definitions,
+        workshop_facts(100),
+        SimDuration(30_000),
+    ));
     let funding = 4 * 30_000 + 120_000;
     let production =
-        (rules.construction_labor.0 + 3 * rules.recipe_time.0 + 10 * 30_000) * 2 + 120_000;
+        (rules.construction_labor.0 + 3 * recipe.duration.0 + 10 * 30_000) * 2 + 120_000;
     assert_eq!(terms.next_search, SimTime(600_100));
     assert_eq!(
         terms.terms,
@@ -143,7 +173,7 @@ fn workshop_terms_preserve_three_batches_and_completed_enterprise_materials() {
                 creditor: PersonId(2),
                 source: InventoryId(10),
                 destination: InventoryId(4),
-                quantity: Quantity(rules.construction_timber.0 + 3 * rules.recipe_timber.0),
+                quantity: Quantity(rules.construction_timber.0 + 3 * recipe.input_quantity.0),
                 deadline: SimTime(100 + funding)
             },
             AgreementTerm::Delivery {
@@ -151,82 +181,247 @@ fn workshop_terms_preserve_three_batches_and_completed_enterprise_materials() {
                 creditor: PersonId(9),
                 source: InventoryId(6),
                 destination: InventoryId(11),
-                quantity: Quantity(3 * rules.recipe_tools.0),
+                quantity: Quantity(3 * recipe.output_quantity.0),
                 deadline: SimTime(100 + production)
             },
         ]
     );
     plan.enterprise = Some(EnterpriseId(12));
     assert_eq!(
-        plan.workshop_funding_materials(&rules).unwrap(),
-        Quantity(3 * rules.recipe_timber.0)
+        plan.workshop_funding_inputs(&definitions).unwrap(),
+        Quantity(3 * recipe.input_quantity.0)
     );
 }
-
 #[test]
 fn workshop_future_windows_and_quantities_cannot_wrap_or_saturate_into_promises() {
     let plan = project(false);
+    let rules = Rules::default();
+    for (now, loading) in [(u64::MAX - 1, 30_000), (0, u64::MAX)] {
+        assert_eq!(
+            plan.prepare_workshop_funding(
+                &rules,
+                &definitions(),
+                workshop_facts(now),
+                SimDuration(loading)
+            ),
+            FundingChoice::Unavailable(FundingUnavailable::UnrepresentableTime)
+        );
+    }
+    for output in [false, true] {
+        let mut definitions = definitions();
+        let recipe = definitions
+            .catalog
+            .recipes
+            .get_mut(&definitions.catalog.default_recipe)
+            .unwrap();
+        if output {
+            recipe.output_quantity = Quantity(u64::MAX);
+        } else {
+            recipe.input_quantity = Quantity(u64::MAX);
+        }
+        assert_eq!(
+            plan.prepare_workshop_funding(
+                &rules,
+                &definitions,
+                workshop_facts(0),
+                SimDuration(30_000)
+            ),
+            FundingChoice::Unavailable(FundingUnavailable::UnrepresentableQuantity)
+        );
+    }
+}
+#[test]
+fn distinct_construction_and_production_goods_require_distinct_supply_terms() {
+    let mut definitions = definitions();
+    let recipe = definitions
+        .catalog
+        .recipes
+        .get_mut(&definitions.catalog.default_recipe)
+        .unwrap();
+    recipe.input_good = Good::Food;
+    let mut plan = project(false);
+    plan.input = InventoryId(12);
+    let mut facts = workshop_facts(100);
+    facts.input_good = Good::Food;
     assert_eq!(
-        plan.prepare_workshop_funding(&Rules::default(), facts(u64::MAX - 1), SimDuration(30_000)),
-        FundingChoice::Unavailable(FundingUnavailable::UnrepresentableTime)
+        plan.prepare_workshop_funding(&Rules::default(), &definitions, facts, SimDuration(30_000)),
+        FundingChoice::Unavailable(FundingUnavailable::InvalidParticipants)
     );
-    assert_eq!(
-        plan.prepare_workshop_funding(&Rules::default(), facts(0), SimDuration(u64::MAX)),
-        FundingChoice::Unavailable(FundingUnavailable::UnrepresentableTime)
-    );
-    assert_eq!(
-        plan.prepare_workshop_funding(
-            &Rules {
-                recipe_timber: Quantity(u64::MAX),
-                ..Rules::default()
-            },
-            facts(0),
-            SimDuration(30_000)
-        ),
-        FundingChoice::Unavailable(FundingUnavailable::UnrepresentableQuantity)
-    );
-    assert_eq!(
-        plan.prepare_workshop_funding(
-            &Rules {
-                recipe_tools: Quantity(u64::MAX),
-                ..Rules::default()
-            },
-            facts(0),
-            SimDuration(30_000)
-        ),
-        FundingChoice::Unavailable(FundingUnavailable::UnrepresentableQuantity)
-    );
+    facts.input_source = InventoryId(13);
+    let terms = available(plan.prepare_workshop_funding(
+        &Rules::default(),
+        &definitions,
+        facts,
+        SimDuration(30_000),
+    ));
+    assert_eq!(terms.terms.len(), 3);
+    assert!(terms.terms.iter().any(|term|matches!(term,AgreementTerm::Delivery{source,destination,quantity,..} if *source==InventoryId(10) && *destination==plan.materials && *quantity==Quantity(5000))));
+    assert!(terms.terms.iter().any(|term|matches!(term,AgreementTerm::Delivery{source,destination,quantity,..} if *source==InventoryId(13) && *destination==plan.input && *quantity==Quantity(6000))));
 }
 
-#[test]
-fn funding_bound_includes_completed_workshops_and_excludes_closed_or_consumed_plans() {
-    let mut world = World {
-        rules: Rules::default(),
-        projects: BTreeMap::new(),
-        enterprises: BTreeMap::new(),
-        jobs: BTreeMap::new(),
-        known_projects: BTreeMap::new(),
-        known_enterprises: BTreeMap::new(),
-        timber_hints: BTreeMap::new(),
-        next_search: BTreeMap::new(),
-        last_event: 0,
-    };
-    for (id, farm, status, consumed, finish) in [
-        (1, false, ProjectStatus::Blocked, false, u64::MAX),
-        (2, false, ProjectStatus::Completed, true, 0),
-        (3, true, ProjectStatus::Blocked, false, u64::MAX),
-        (4, true, ProjectStatus::Completed, true, 0),
-        (5, false, ProjectStatus::Cancelled, false, u64::MAX),
-        (6, false, ProjectStatus::Failed, false, u64::MAX),
-        (7, true, ProjectStatus::Blocked, false, 60_000),
-    ] {
-        let mut plan = project(farm);
-        plan.id = ProjectId(id);
-        plan.status = status;
-        plan.materials_consumed = consumed;
-        plan.finish_by = SimTime(finish);
-        world.projects.insert(plan.id, plan);
+fn remembered_stock(id: u64, good: Good, quantity: u64) -> StockKnowledge {
+    StockKnowledge {
+        inventory: InventoryId(id),
+        area: AreaId(3),
+        good,
+        quantity: Quantity(quantity),
+        accessible: false,
+        observed_at: SimTime(1),
+        learned_at: SimTime(1),
+        source: KnowledgeSource::Observed(PersonId(2)),
     }
-    assert_eq!(world.funding_proposal_bound(SimTime(60_000)).unwrap(), 3);
-    assert_eq!(world.allocation_bound(SimTime(60_000)).unwrap(), 0);
+}
+#[test]
+fn remembered_financing_preserves_default_shared_lot_order_and_combines_once() {
+    let plan = project(false);
+    let rows = [
+        remembered_stock(12, Good::Timber, 20_000),
+        remembered_stock(10, Good::Timber, 20_000),
+    ];
+    let supplies = rows
+        .iter()
+        .map(|known| RememberedFinancingStock {
+            known,
+            custodian: Some(PersonId(9)),
+            custodian_area: Some(AreaId(3)),
+        })
+        .collect::<Vec<_>>();
+    let repayments = [FinancingRepaymentLot {
+        inventory: InventoryId(11),
+        good: Good::Tool,
+        area: Some(AreaId(3)),
+        custodian: Some(PersonId(9)),
+    }];
+    let found = available(plan.prepare_remembered_workshop_funding(
+        &Rules::default(),
+        &definitions(),
+        RememberedWorkshopFunding {
+            seeks_independence: true,
+            ambition: 800,
+            now: SimTime(1),
+            loading: MINUTE,
+            balances: FundingBalances {
+                materials: Quantity(0),
+                input: Quantity(0),
+            },
+            supplies: &supplies,
+            repayments: &repayments,
+        },
+    ));
+    let expected = available(plan.prepare_workshop_funding(
+        &Rules::default(),
+        &definitions(),
+        workshop_facts(1),
+        MINUTE,
+    ));
+    assert_eq!(found, expected);
+    assert_eq!(found.terms.len(), 2);
+    assert!(matches!(
+        found.terms[0],
+        AgreementTerm::Delivery {
+            source: InventoryId(10),
+            destination: InventoryId(4),
+            quantity: Quantity(11_000),
+            ..
+        }
+    ));
+}
+#[test]
+fn remembered_financing_uses_alternate_recipe_goods_with_one_financier() {
+    let mut plan = project(false);
+    plan.input = InventoryId(13);
+    let mut defs = definitions();
+    let selected = defs
+        .declare_recipe(game_workshop::Recipe {
+            input_good: Good::Food,
+            input_quantity: Quantity(1_000),
+            output_good: Good::Binding,
+            output_quantity: Quantity(1_000),
+            duration: MINUTE,
+        })
+        .unwrap();
+    plan.kind = ProjectKind::Workshop { recipe: selected };
+    let rows = [
+        remembered_stock(10, Good::Timber, 5_000),
+        remembered_stock(14, Good::Food, 3_000),
+    ];
+    let mut supplies = rows
+        .iter()
+        .map(|known| RememberedFinancingStock {
+            known,
+            custodian: Some(PersonId(9)),
+            custodian_area: Some(AreaId(3)),
+        })
+        .collect::<Vec<_>>();
+    let repayments = [FinancingRepaymentLot {
+        inventory: InventoryId(15),
+        good: Good::Binding,
+        area: Some(AreaId(3)),
+        custodian: Some(PersonId(9)),
+    }];
+    let prepare = |supplies: &[RememberedFinancingStock<'_>], balances| {
+        plan.prepare_remembered_workshop_funding(
+            &Rules::default(),
+            &defs,
+            RememberedWorkshopFunding {
+                seeks_independence: true,
+                ambition: 800,
+                now: SimTime(1),
+                loading: MINUTE,
+                balances,
+                supplies,
+                repayments: &repayments,
+            },
+        )
+    };
+    let balances = FundingBalances {
+        materials: Quantity(0),
+        input: Quantity(0),
+    };
+    let found = available(prepare(&supplies, balances));
+    assert_eq!(found.parties, BTreeSet::from([PersonId(2), PersonId(9)]));
+    assert_eq!(found.terms.len(), 3);
+    assert!(found.terms.iter().any(|term| matches!(
+        term,
+        AgreementTerm::Delivery {
+            source: InventoryId(10),
+            destination: InventoryId(4),
+            quantity: Quantity(5_000),
+            ..
+        }
+    )));
+    assert!(found.terms.iter().any(|term| matches!(
+        term,
+        AgreementTerm::Delivery {
+            source: InventoryId(14),
+            destination: InventoryId(13),
+            quantity: Quantity(3_000),
+            ..
+        }
+    )));
+    assert!(found.terms.iter().any(|term| matches!(
+        term,
+        AgreementTerm::Delivery {
+            source: InventoryId(6),
+            destination: InventoryId(15),
+            quantity: Quantity(3_000),
+            ..
+        }
+    )));
+    supplies[0].custodian = Some(PersonId(8));
+    assert!(matches!(
+        prepare(&supplies, balances),
+        FundingChoice::Unavailable(_)
+    ));
+    supplies[0].custodian = Some(PersonId(9));
+    assert!(matches!(
+        prepare(
+            &supplies,
+            FundingBalances {
+                materials: Quantity(5_000),
+                input: Quantity(3_000)
+            }
+        ),
+        FundingChoice::Unavailable(_)
+    ));
 }

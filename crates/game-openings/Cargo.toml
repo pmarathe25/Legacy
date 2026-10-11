@@ -1,0 +1,15 @@
+[package]
+name = "game-openings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-property.workspace = true
+game-core.workspace = true
+game-content.workspace = true
+game-ecology.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

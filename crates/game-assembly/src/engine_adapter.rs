@@ -153,7 +153,7 @@ pub(crate) struct PreparedWorldStep {
     pub output: Vec<compute::ProgressOutput>,
     pub physical_output: Vec<physical::Outcome>,
     pub skill_output: Vec<skills::PracticeDelta>,
-    pub project_output: Option<projects::World>,
+    pub project_output: Option<game_projects::PreparedAdvance>,
     pub invocation_output: invocation::PendingInvocation,
     pub environment_output: Option<environment::Step>,
     pub agriculture_output: Option<game_agriculture::PreparedAdvance>,

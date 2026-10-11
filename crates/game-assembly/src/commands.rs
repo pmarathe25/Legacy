@@ -3,7 +3,7 @@
 use crate::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ActivityOwner {
+pub(crate) enum ActivityOwner {
     Projects,
     Health,
     Property,
@@ -177,6 +177,7 @@ impl Simulation {
         self.interrupt_actor_activity_preserving(actor, None);
     }
 
+    #[cfg(test)]
     pub(crate) fn interrupt_actor_activity_except_projects(&mut self, actor: PersonId) {
         self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Projects));
     }

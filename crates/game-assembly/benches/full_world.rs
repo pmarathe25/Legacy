@@ -3,7 +3,8 @@ use game_api::{
     InvocationAction, LifeStage, PlayerView, Quantity, ResourceKind, SimDuration, SocialAction,
     StockPosition, StopReason, Submission,
 };
-use game_assembly::{Execution, Simulation, population::Plan, scenarios::Config};
+use game_assembly::{Execution, Simulation, scenarios::Config};
+use game_openings::PopulationPlan as Plan;
 use std::collections::BTreeMap;
 use std::time::Instant;
 

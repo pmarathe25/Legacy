@@ -306,7 +306,13 @@ impl Simulation {
                     area,
                     input: site.input,
                     tool: site.tool,
-                    input_quantity: site.input_quantity,
+                    input_quantity: self
+                        .host
+                        .state
+                        .workshops
+                        .recipe(&site.recipe)
+                        .expect("validated recipe")
+                        .input_quantity,
                     output: site.output,
                     access: site.access.contains(&p.id),
                 });
@@ -803,7 +809,10 @@ impl Simulation {
                         .state
                         .projects
                         .as_ref()
-                        .and_then(|world| world.known_projects.get(&id))
+                        .and_then(|_| {
+                            game_projects::knowledge(&self.host.storage, id)
+                                .map(|row| &row.projects)
+                        })
                         .and_then(|known| known.get(project))
                 {
                     motives = plan
