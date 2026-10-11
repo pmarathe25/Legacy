@@ -1053,6 +1053,7 @@ impl Simulation {
         &self,
         actor: PersonId,
         elapsed: u64,
+        exposure: game_health::ExposureInput,
     ) -> Result<(Vitals, u16, u16), Error> {
         let body = self
             .state
@@ -1064,7 +1065,7 @@ impl Simulation {
             .components
             .activity(actor)
             .ok_or(Error::Unavailable)?;
-        self.integrated_body(actor, body, activity, elapsed)
+        self.integrated_body(actor, body, activity, elapsed, exposure)
     }
 
     fn integrated_body(
@@ -1073,10 +1074,11 @@ impl Simulation {
         body: &game_physiology::Body,
         current_activity: &Activity,
         elapsed: u64,
+        exposure: game_health::ExposureInput,
     ) -> Result<(Vitals, u16, u16), Error> {
         let (snapshot, limits, activity, exempt) =
             self.body_context(actor, body, current_activity)?;
-        let health = self.health_body_delta(actor, elapsed)?;
+        let health = self.health_body_delta(actor, elapsed, exposure)?;
         let (strain, injury) = self.invocation_rates(actor);
         let contributions = [
             game_physiology::Contribution {
@@ -1115,6 +1117,7 @@ impl Simulation {
         let Some(world) = &self.state.physical else {
             return Ok(limit);
         };
+        let exposures = self.health_exposures()?;
         let mut next = limit;
         // Hunger changes the healing/harm slope. Clip that transition before
         // searching crossings so a recovery followed by starvation cannot hide
@@ -1138,7 +1141,11 @@ impl Simulation {
             let rules = self.body_rules(actor);
             let incapacitation = self.state.combat.as_ref().map(|w| w.rules.incapacitation);
             let crossed = |dt| {
-                let (after, _, _) = self.integrated_vitals(actor, dt)?;
+                let (after, _, _) = self.integrated_vitals(
+                    actor,
+                    dt,
+                    exposures.get(&actor).copied().unwrap_or_default(),
+                )?;
                 Ok(!after.alive
                     || before.fatigue < world.rules.fatigue_limit
                         && after.fatigue >= world.rules.fatigue_limit
@@ -1155,7 +1162,11 @@ impl Simulation {
         Ok(next)
     }
 
-    pub(crate) fn evaluate_physical(&self, elapsed: u64) -> Result<Vec<Outcome>, Error> {
+    pub(crate) fn evaluate_physical(
+        &self,
+        elapsed: u64,
+        exposures: &BTreeMap<PersonId, game_health::ExposureInput>,
+    ) -> Result<Vec<Outcome>, Error> {
         if self.state.physical.is_none() {
             return Ok(Vec::new());
         }
@@ -1173,8 +1184,13 @@ impl Simulation {
             .executor()
             .map_ordered(&input, |(id, body, activity, job)| {
                 let id = *id;
-                let (vitals, fatigue_remainder, health_remainder) =
-                    self.integrated_body(id, body, activity, elapsed)?;
+                let (vitals, fatigue_remainder, health_remainder) = self.integrated_body(
+                    id,
+                    body,
+                    activity,
+                    elapsed,
+                    exposures.get(&id).copied().unwrap_or_default(),
+                )?;
                 let (remaining, work_remainder) = if let Some(job) = job {
                     let progress = job.evaluate(
                         elapsed,

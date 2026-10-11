@@ -9,3 +9,7 @@ All health state lives in the host's shared component store. Clinical state, job
 `prepare_interval` advances supplied clinical and job rows through the same numerical rules and retains sparse guarded changes. The host validates the prepared interval before publishing other frame writes, then commits through the atomic batch. Closing job policy can preserve intentional cancellation without accepting replacement work or recreating a removed job.
 
 Local exposure and observation systems consume temporary spatial, activity, body, and geometry facts. Health owns shelter inheritance, contact counting, symptom visibility, and remembered observations. Geometry providers supply visibility and reach facts without exposing their runtimes. Observations commit as a guarded batch and preserve water knowledge.
+
+`prepare_local_index` builds one immutable index for a preparation. Physical systems can reuse its scalar exposure lookups, and perception can prepare observations from the same cohorts. Its borrowed store prevents using the index after health state changes.
+
+Individual affordances can resolve shelter through a small carrier-chain lookup or inspect symptoms and pair visibility directly, without indexing the population.

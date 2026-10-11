@@ -176,9 +176,17 @@ fn scalar_observations(
             .collect();
         let record = output.entry(observer.actor).or_default();
         for (id, subject) in peers.into_iter().take(64) {
-            record
-                .people
-                .insert(id, symptoms(store, &runtime.rules, subject, at));
+            record.people.insert(
+                id,
+                symptoms(
+                    store,
+                    &runtime.rules,
+                    at,
+                    subject.actor,
+                    subject.health,
+                    subject.max_health,
+                ),
+            );
         }
         if let Some(area) = observer.physical_area.filter(|_| tactical.is_none()) {
             for (id, row) in shelters(store).filter(|(_, row)| row.area == area) {
@@ -295,7 +303,195 @@ fn indexed_exposures_match_exhaustive_actual_contacts_with_duplicates_and_local_
                 .unwrap(),
             scalar_exposures(&store, &actors, &hints, &[], SimTime(100))
         );
+        let index = runtime
+            .prepare_local_index(&store, SimTime(100), &actors, &hints, &[])
+            .unwrap();
+        let expected = scalar_exposures(&store, &actors, &hints, &[], SimTime(100));
+        assert_eq!(index.exposures().collect::<BTreeMap<_, _>>(), expected);
+        for _ in 0..3 {
+            for facts in &actors {
+                assert_eq!(index.exposure(facts.actor), Some(expected[&facts.actor]));
+                assert_eq!(
+                    index.effective_shelter(facts.actor),
+                    scalar_shelter(&store, &actors, facts.actor)
+                );
+                assert_eq!(
+                    runtime
+                        .effective_shelter(&store, facts.actor, |id| {
+                            actors
+                                .iter()
+                                .find(|row| row.actor == id)
+                                .map(ShelterActorFacts::from)
+                        })
+                        .unwrap(),
+                    index.effective_shelter(facts.actor)
+                );
+            }
+        }
+        assert_eq!(index.exposure(PersonId(999)), None);
+        assert_eq!(index.effective_shelter(PersonId(999)), None);
         assert_eq!(store.snapshot().unwrap(), before);
+    }
+}
+#[test]
+fn direct_shelter_and_perception_queries_use_only_their_required_facts() {
+    let runtime = runtime();
+    let mut store = store();
+    let mut actors: Vec<_> = (1..=4).map(|id| actor(id, "village", Some(1))).collect();
+    seed_actors(&mut store, &actors);
+    seed_shelter(&mut store, 200, 1, BTreeSet::new());
+    insert_occupancy(
+        &mut store,
+        PersonId(1),
+        Occupancy {
+            shelter: ShelterId(200),
+        },
+    )
+    .unwrap();
+    actors[1].carrier = Some(PersonId(1));
+    actors[2].carrier = Some(PersonId(2));
+    let lookup = |id| {
+        actors
+            .iter()
+            .find(|row| row.actor == id)
+            .map(ShelterActorFacts::from)
+    };
+    assert_eq!(
+        runtime
+            .effective_shelter(&store, PersonId(3), lookup)
+            .unwrap(),
+        Some(ShelterId(200))
+    );
+    assert!(
+        runtime
+            .effective_shelter(&store, PersonId(99), lookup)
+            .is_err()
+    );
+    actors[1].alive = false;
+    assert_eq!(
+        runtime
+            .effective_shelter(&store, PersonId(3), |id| actors
+                .iter()
+                .find(|row| row.actor == id)
+                .map(ShelterActorFacts::from))
+            .unwrap(),
+        None
+    );
+    actors[0].carrier = Some(PersonId(3));
+    assert!(
+        runtime
+            .effective_shelter(&store, PersonId(3), |id| actors
+                .iter()
+                .find(|row| row.actor == id)
+                .map(ShelterActorFacts::from))
+            .is_err()
+    );
+
+    let mut observer = actor(1, "road", None);
+    let mut subject = actor(2, "road", None);
+    let shared = [Some(ShelterId(200)); 2];
+    assert!(signal_visible(&observer, &subject, shared, true));
+    assert!(can_observe(&observer, &subject, shared, true));
+    observer.moving = true;
+    assert!(signal_visible(&observer, &subject, shared, true));
+    assert!(!can_observe(&observer, &subject, shared, true));
+    assert!(!signal_visible(&observer, &subject, shared, false));
+    assert!(!signal_visible(
+        &observer,
+        &subject,
+        [shared[0], None],
+        true
+    ));
+    subject.place = None;
+    assert!(!signal_visible(&observer, &subject, shared, true));
+    observer.place = None;
+    assert!(!signal_visible(&observer, &subject, [None; 2], true));
+    infect(&mut store, subject.actor, IllnessKind::Enteric);
+    subject.health = 400;
+    let symptoms = runtime.local_symptoms(&store, SimTime(100), &subject);
+    assert_eq!(
+        symptoms,
+        runtime.symptoms_for(
+            &store,
+            SimTime(100),
+            subject.actor,
+            subject.health,
+            subject.max_health
+        )
+    );
+    assert!(symptoms.fever && symptoms.nausea && symptoms.wounded);
+    assert!(!symptoms.cough);
+    let places: [Option<String>; 3] = [None, Some("road".into()), Some("village".into())];
+    for a in &places {
+        for b in &places {
+            for shelters in [[None; 2], shared, [shared[0], None]] {
+                for sight in [false, true] {
+                    for moving in [false, true] {
+                        observer.place = a.clone();
+                        subject.place = b.clone();
+                        observer.moving = moving;
+                        let expected = a.is_some() && a == b && shelters[0] == shelters[1] && sight;
+                        assert_eq!(
+                            signal_visible_at(a.as_ref(), b.as_ref(), shelters, sight),
+                            expected
+                        );
+                        assert_eq!(
+                            signal_visible(&observer, &subject, shelters, sight),
+                            expected
+                        );
+                        assert_eq!(
+                            can_observe_at(a.as_ref(), b.as_ref(), shelters, sight, moving),
+                            expected && !moving
+                        );
+                        assert_eq!(
+                            can_observe(&observer, &subject, shelters, sight),
+                            expected && !moving
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn one_immutable_index_supplies_scalar_exposures_and_the_same_observations() {
+    let runtime = runtime();
+    let mut store = store();
+    let mut actors: Vec<_> = (1..=5).map(|id| actor(id, "village", Some(1))).collect();
+    seed_actors(&mut store, &actors);
+    seed_shelter(&mut store, 200, 1, BTreeSet::from([PersonId(1)]));
+    insert_occupancy(
+        &mut store,
+        PersonId(1),
+        Occupancy {
+            shelter: ShelterId(200),
+        },
+    )
+    .unwrap();
+    actors[1].carrier = Some(PersonId(1));
+    infect(&mut store, PersonId(2), IllnessKind::Respiratory);
+    let mut separately_prepared = store.clone();
+    let index = runtime
+        .prepare_local_index(&store, SimTime(100), &actors, &[], &[])
+        .unwrap();
+    let expected = scalar_exposures(&store, &actors, &[], &[], SimTime(100));
+    assert_eq!(index.exposures().collect::<BTreeMap<_, _>>(), expected);
+    let shared_observations = index.prepare_observations().unwrap();
+    let separate_observations = runtime
+        .prepare_local_observations(&separately_prepared, SimTime(100), &actors, &[])
+        .unwrap();
+    let observed = scalar_observations(&runtime, &store, &actors, &[], SimTime(100));
+    drop(index);
+    shared_observations.commit(&runtime, &mut store).unwrap();
+    separate_observations
+        .commit(&runtime, &mut separately_prepared)
+        .unwrap();
+    assert_eq!(
+        store.snapshot().unwrap(),
+        separately_prepared.snapshot().unwrap()
+    );
+    for (actor, expected) in observed {
+        assert_eq!(knowledge(&store, actor).unwrap(), &expected);
     }
 }
 #[test]
@@ -505,7 +701,9 @@ fn observation_is_guarded_atomic_and_preserves_concurrent_water_knowledge() {
     prepared.commit(&runtime, &mut store).unwrap();
     assert!(knowledge(&store, PersonId(1)).unwrap().water[&InventoryId(20)].purified);
     let prepared = runtime
-        .prepare_local_observations(&store, SimTime(101), &actors, &[])
+        .prepare_local_index(&store, SimTime(101), &actors, &[], &[])
+        .unwrap()
+        .prepare_observations()
         .unwrap();
     infect(&mut store, PersonId(2), IllnessKind::Enteric);
     let before = store.snapshot().unwrap();

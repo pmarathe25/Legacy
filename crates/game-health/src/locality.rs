@@ -39,6 +39,84 @@ pub struct LocalHealthActor<K> {
     pub max_health: u64,
     pub temperature_c: Option<i32>,
 }
+/// Minimal transient facts for a single actor's shelter or carrier chain.
+#[derive(Clone, Copy, Debug)]
+pub struct ShelterActorFacts {
+    pub actor: PersonId,
+    pub carrier: Option<PersonId>,
+    pub alive: bool,
+    pub physical_area: Option<AreaId>,
+    pub activity: HealthActivityFacts,
+}
+impl<K> From<&LocalHealthActor<K>> for ShelterActorFacts {
+    fn from(actor: &LocalHealthActor<K>) -> Self {
+        Self {
+            actor: actor.actor,
+            carrier: actor.carrier,
+            alive: actor.alive,
+            physical_area: actor.physical_area,
+            activity: actor.activity,
+        }
+    }
+}
+fn occupied_shelter(store: &Store, actor: &ShelterActorFacts) -> Option<ShelterId> {
+    occupancy(store, actor.actor)
+        .and_then(|row| shelter(store, row.shelter))
+        .filter(|shelter| {
+            actor.alive
+                && !actor.activity.outside_shelter()
+                && actor.physical_area == Some(shelter.area)
+        })
+        .map(|shelter| shelter.id)
+}
+fn visible_places<K: Eq>(
+    a: Option<&K>,
+    b: Option<&K>,
+    shelters: [Option<ShelterId>; 2],
+    sight_clear: bool,
+) -> bool {
+    a.is_some() && a == b && shelters[0] == shelters[1] && sight_clear
+}
+pub fn signal_visible_at<K: Eq>(
+    a: Option<&K>,
+    b: Option<&K>,
+    shelters: [Option<ShelterId>; 2],
+    sight_clear: bool,
+) -> bool {
+    visible_places(a, b, shelters, sight_clear)
+}
+pub fn can_observe_at<K: Eq>(
+    a: Option<&K>,
+    b: Option<&K>,
+    shelters: [Option<ShelterId>; 2],
+    sight_clear: bool,
+    observer_moving: bool,
+) -> bool {
+    !observer_moving && signal_visible_at(a, b, shelters, sight_clear)
+}
+/// Geometry has already resolved tactical anchors and supplied sight clearance.
+pub fn signal_visible<K: Eq>(
+    a: &LocalHealthActor<K>,
+    b: &LocalHealthActor<K>,
+    shelters: [Option<ShelterId>; 2],
+    sight_clear: bool,
+) -> bool {
+    signal_visible_at(a.place.as_ref(), b.place.as_ref(), shelters, sight_clear)
+}
+pub fn can_observe<K: Eq>(
+    a: &LocalHealthActor<K>,
+    b: &LocalHealthActor<K>,
+    shelters: [Option<ShelterId>; 2],
+    sight_clear: bool,
+) -> bool {
+    can_observe_at(
+        a.place.as_ref(),
+        b.place.as_ref(),
+        shelters,
+        sight_clear,
+        a.moving,
+    )
+}
 /// An actual interaction supplied by another feature, not a relationship,
 /// intention, conversation offer, or another person's private knowledge.
 #[derive(Clone, Copy, Debug)]
@@ -62,6 +140,7 @@ struct Cohort<K> {
 }
 struct LocalIndex<'a, K> {
     actors: BTreeMap<PersonId, &'a LocalHealthActor<K>>,
+    effective_shelters: BTreeMap<PersonId, Option<ShelterId>>,
     cohorts: BTreeMap<PersonId, Cohort<K>>,
     geometry: BTreeMap<(TacticalIdentity, TacticalIdentity), (bool, bool)>,
 }
@@ -127,14 +206,7 @@ impl<'a, K: Clone + Ord> LocalIndex<'a, K> {
                     chain.push(current);
                     current = carrier;
                 } else {
-                    let effective = occupancy(store, current)
-                        .and_then(|row| shelter(store, row.shelter))
-                        .filter(|shelter| {
-                            actor.alive
-                                && !actor.activity.outside_shelter()
-                                && actor.physical_area == Some(shelter.area)
-                        })
-                        .map(|shelter| shelter.id);
+                    let effective = occupied_shelter(store, &ShelterActorFacts::from(*actor));
                     shelters.insert(current, effective);
                     tactical.insert(current, actor.tactical);
                     break effective;
@@ -164,6 +236,7 @@ impl<'a, K: Clone + Ord> LocalIndex<'a, K> {
             .collect();
         Ok(Self {
             actors: facts,
+            effective_shelters: shelters,
             cohorts,
             geometry: clear,
         })
@@ -196,7 +269,12 @@ impl<'a, K: Clone + Ord> LocalIndex<'a, K> {
             && (treatment || a.shelter == b.shelter)
     }
     fn visible(&self, a: &Cohort<K>, b: &Cohort<K>) -> bool {
-        a.place == b.place && a.shelter == b.shelter && self.clear(a.tactical, b.tactical, false)
+        visible_places(
+            Some(&a.place),
+            Some(&b.place),
+            [a.shelter, b.shelter],
+            self.clear(a.tactical, b.tactical, false),
+        )
     }
 }
 fn infectious(store: &Store, actor: PersonId, at: SimTime) -> [u64; 2] {
@@ -211,22 +289,113 @@ fn infectious(store: &Store, actor: PersonId, at: SimTime) -> [u64; 2] {
 fn symptoms(
     store: &Store,
     rules: &Rules,
-    actor: &LocalHealthActor<impl Clone>,
     at: SimTime,
+    actor: PersonId,
+    health: u64,
+    max_health: u64,
 ) -> SymptomsView {
-    let state = clinical(store, actor.actor);
-    let [enteric, respiratory] = infectious(store, actor.actor, at);
+    let state = clinical(store, actor);
+    let [enteric, respiratory] = infectious(store, actor, at);
     SymptomsView {
-        person: actor.actor,
+        person: actor,
         fever: enteric > 0 || respiratory > 0,
         nausea: enteric > 0,
         cough: respiratory > 0,
         shivering: state.is_some_and(|state| state.cold >= rules.cold_harm / 2),
-        wounded: actor.health < actor.max_health / 2,
+        wounded: health < max_health / 2,
         observed_at: at,
     }
 }
+/// Immutable health preparation shared by scalar physical queries and perception.
+/// The borrowed store cannot change while this index is in use.
+pub struct LocalHealthIndex<'a, K> {
+    runtime: &'a Runtime,
+    store: &'a Store,
+    at: SimTime,
+    local: LocalIndex<'a, K>,
+    exposures: BTreeMap<PersonId, ExposureInput>,
+}
+impl<K: Clone + Ord> LocalHealthIndex<'_, K> {
+    pub fn effective_shelter(&self, actor: PersonId) -> Option<ShelterId> {
+        self.local.effective_shelters.get(&actor).copied().flatten()
+    }
+    pub fn exposure(&self, actor: PersonId) -> Option<ExposureInput> {
+        self.exposures.get(&actor).copied()
+    }
+    pub fn exposures(&self) -> impl Iterator<Item = (PersonId, ExposureInput)> + '_ {
+        self.exposures.iter().map(|(id, input)| (*id, *input))
+    }
+    pub fn prepare_observations(&self) -> Result<PreparedLocalObservation, Error> {
+        self.runtime
+            .prepare_observations_with_index(self.store, self.at, &self.local)
+    }
+}
 impl Runtime {
+    pub fn effective_shelter(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        mut lookup: impl FnMut(PersonId) -> Option<ShelterActorFacts>,
+    ) -> Result<Option<ShelterId>, Error> {
+        let mut current = actor;
+        let mut seen = BTreeSet::new();
+        let mut alive = true;
+        loop {
+            if current.0 == 0 || !seen.insert(current) {
+                return Err(invalid("invalid or cyclic local health carrying"));
+            }
+            let facts = lookup(current).ok_or_else(|| invalid("missing local health carrier"))?;
+            if facts.actor != current || facts.physical_area.is_some_and(|area| area.0 == 0) {
+                return Err(invalid("invalid local shelter actor"));
+            }
+            alive &= facts.alive;
+            if let Some(carrier) = facts.carrier {
+                current = carrier;
+            } else {
+                return Ok(if alive {
+                    occupied_shelter(store, &facts)
+                } else {
+                    None
+                });
+            }
+        }
+    }
+    pub fn local_symptoms<K>(
+        &self,
+        store: &Store,
+        at: SimTime,
+        actor: &LocalHealthActor<K>,
+    ) -> SymptomsView {
+        self.symptoms_for(store, at, actor.actor, actor.health, actor.max_health)
+    }
+    pub fn symptoms_for(
+        &self,
+        store: &Store,
+        at: SimTime,
+        actor: PersonId,
+        health: u64,
+        max_health: u64,
+    ) -> SymptomsView {
+        symptoms(store, &self.rules, at, actor, health, max_health)
+    }
+    pub fn prepare_local_index<'a, K: Clone + Ord>(
+        &'a self,
+        store: &'a Store,
+        at: SimTime,
+        actors: &'a [LocalHealthActor<K>],
+        interactions: &[HealthInteraction],
+        geometry: &[HealthGeometry],
+    ) -> Result<LocalHealthIndex<'a, K>, Error> {
+        let local = LocalIndex::build(store, actors, geometry)?;
+        let exposures = local.exposures(store, at, interactions)?;
+        Ok(LocalHealthIndex {
+            runtime: self,
+            store,
+            at,
+            local,
+            exposures,
+        })
+    }
     pub fn local_exposures<K: Clone + Ord>(
         &self,
         store: &Store,
@@ -235,14 +404,25 @@ impl Runtime {
         interactions: &[HealthInteraction],
         geometry: &[HealthGeometry],
     ) -> Result<BTreeMap<PersonId, ExposureInput>, Error> {
-        let index = LocalIndex::build(store, actors, geometry)?;
-        let infectious: BTreeMap<_, _> = index
+        Ok(self
+            .prepare_local_index(store, at, actors, interactions, geometry)?
+            .exposures)
+    }
+}
+impl<K: Clone + Ord> LocalIndex<'_, K> {
+    fn exposures(
+        &self,
+        store: &Store,
+        at: SimTime,
+        interactions: &[HealthInteraction],
+    ) -> Result<BTreeMap<PersonId, ExposureInput>, Error> {
+        let infectious: BTreeMap<_, _> = self
             .actors
             .keys()
             .map(|actor| (*actor, infectious(store, *actor, at)))
             .collect();
         let mut shared = BTreeMap::<ShelterId, [u64; 2]>::new();
-        for (actor, cohort) in &index.cohorts {
+        for (actor, cohort) in &self.cohorts {
             if let Some(shelter) = cohort.shelter {
                 let total = shared.entry(shelter).or_default();
                 for (sum, flag) in total.iter_mut().zip(infectious[actor]) {
@@ -250,11 +430,11 @@ impl Runtime {
                 }
             }
         }
-        let mut exposures: BTreeMap<_, _> = index
+        let mut exposures: BTreeMap<_, _> = self
             .actors
             .iter()
             .map(|(actor, facts)| {
-                let effective = index.cohorts.get(actor).and_then(|row| row.shelter);
+                let effective = self.cohorts.get(actor).and_then(|row| row.shelter);
                 let mut contacts = effective.map_or([0; 2], |shelter| shared[&shelter]);
                 if effective.is_some() {
                     for (count, own) in contacts.iter_mut().zip(infectious[actor]) {
@@ -275,9 +455,9 @@ impl Runtime {
             .collect();
         let mut pairs = BTreeSet::new();
         let mut add_pair = |a, b, treatment| {
-            if index.contact(a, b, treatment) {
-                let shared_shelter = index.cohorts[&a].shelter;
-                if shared_shelter.is_none() || shared_shelter != index.cohorts[&b].shelter {
+            if self.contact(a, b, treatment) {
+                let shared_shelter = self.cohorts[&a].shelter;
+                if shared_shelter.is_none() || shared_shelter != self.cohorts[&b].shelter {
                     pairs.insert(ordered(a, b));
                 }
             }
@@ -290,7 +470,7 @@ impl Runtime {
         for hint in interactions {
             add_pair(hint.first, hint.second, false);
         }
-        for actor in actors {
+        for actor in self.actors.values() {
             if let Some(carrier) = actor.carrier {
                 add_pair(actor.actor, carrier, true);
             }
@@ -381,6 +561,14 @@ impl Runtime {
         geometry: &[HealthGeometry],
     ) -> Result<PreparedLocalObservation, Error> {
         let index = LocalIndex::build(store, actors, geometry)?;
+        self.prepare_observations_with_index(store, at, &index)
+    }
+    fn prepare_observations_with_index<K: Clone + Ord>(
+        &self,
+        store: &Store,
+        at: SimTime,
+        index: &LocalIndex<'_, K>,
+    ) -> Result<PreparedLocalObservation, Error> {
         let mut observed_areas = BTreeSet::new();
         let mut occupants = BTreeMap::<(ShelterId, Cohort<K>), BTreeSet<PersonId>>::new();
         for (actor, cohort) in &index.cohorts {
@@ -406,12 +594,7 @@ impl Runtime {
                 .iter()
                 .filter(|(_, subject)| index.visible(cohort, subject))
                 .take(64)
-                .map(|(actor, _)| {
-                    (
-                        *actor,
-                        symptoms(store, &self.rules, index.actors[actor], at),
-                    )
-                })
+                .map(|(actor, _)| (*actor, self.local_symptoms(store, at, index.actors[actor])))
                 .collect();
             visible.insert(cohort.clone(), people);
         }

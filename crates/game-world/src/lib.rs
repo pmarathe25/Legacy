@@ -1407,7 +1407,8 @@ impl Simulation {
             &input,
             self.execution.reverse_jobs,
         )?;
-        let physical_output = self.evaluate_physical(elapsed)?;
+        let exposures = self.health_exposures()?;
+        let physical_output = self.evaluate_physical(elapsed, &exposures)?;
         let skill_output = self.evaluate_skills(next)?;
         let project_output = self.evaluate_projects(next)?;
         let invocation_output = self.evaluate_invocation(next)?;
@@ -1417,7 +1418,7 @@ impl Simulation {
             .and_then(|step| step.elapsed_local_day.as_ref());
         let agriculture_output = self.evaluate_agriculture(next, elapsed_day)?;
         let ecology_output = self.evaluate_ecology(elapsed_day)?;
-        let health_output = self.evaluate_health(next)?;
+        let health_output = self.evaluate_health_with_exposures(next, &exposures)?;
         let evaluation_ns = started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
         let mut due = self.state.due.get(&next).cloned().unwrap_or_default();

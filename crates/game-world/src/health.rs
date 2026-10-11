@@ -3,11 +3,29 @@
 use crate::*;
 
 pub use game_health::*;
-type HealthCohort = (
-    game_transport::PositionKey,
-    Option<ShelterId>,
-    Option<(EncounterId, PersonId)>,
-);
+pub(crate) struct LocalHealthFacts {
+    actors: Vec<game_health::LocalHealthActor<game_transport::PositionKey>>,
+    interactions: Vec<game_health::HealthInteraction>,
+    geometry: Vec<game_health::HealthGeometry>,
+}
+impl LocalHealthFacts {
+    fn index<'a>(
+        &'a self,
+        sim: &'a Simulation,
+    ) -> Result<game_health::LocalHealthIndex<'a, game_transport::PositionKey>, Error> {
+        sim.state
+            .health
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .prepare_local_index(
+                &sim.state.components,
+                sim.state.time,
+                &self.actors,
+                &self.interactions,
+                &self.geometry,
+            )
+    }
+}
 
 struct HealthPlanningData {
     area: AreaId,
@@ -821,7 +839,147 @@ impl Simulation {
 }
 
 impl Simulation {
+    fn health_activity_facts(&self, actor: PersonId) -> game_health::HealthActivityFacts {
+        let activity = self.state.components.activity(actor);
+        game_health::HealthActivityFacts {
+            combat: matches!(activity, Some(Activity::Combat { .. })),
+            cultivation: matches!(activity, Some(Activity::Cultivate { .. })),
+            gathering: matches!(activity, Some(Activity::Gather { .. })),
+            construction: matches!(activity, Some(Activity::Construct { .. })),
+            play: matches!(activity, Some(Activity::Play { .. })),
+        }
+    }
+    fn health_shelter_actor(&self, actor: PersonId) -> Option<game_health::ShelterActorFacts> {
+        let location = self.state.components.location(actor)?;
+        Some(game_health::ShelterActorFacts {
+            actor,
+            carrier: match location {
+                Location::Carried { carrier } => Some(*carrier),
+                _ => None,
+            },
+            alive: self.state.components.body(actor)?.vitals.alive,
+            physical_area: match self.resolved_location(actor) {
+                Location::AtArea(area) => Some(area),
+                _ => None,
+            },
+            activity: self.health_activity_facts(actor),
+        })
+    }
     fn effective_shelter(&self, actor: PersonId) -> Option<&Shelter> {
+        let id = self
+            .state
+            .health
+            .as_ref()?
+            .effective_shelter(&self.state.components, actor, |id| {
+                self.health_shelter_actor(id)
+            })
+            .expect("valid shelter chain")?;
+        self.state.components.shelter(id)
+    }
+    fn health_local_actor(
+        &self,
+        actor: PersonId,
+        resolved: &Location,
+    ) -> game_health::LocalHealthActor<game_transport::PositionKey> {
+        let body = self.state.components.body(actor).expect("body exists");
+        game_health::LocalHealthActor {
+            actor,
+            place: transport::location_position(resolved, self.state.time)
+                .ok()
+                .map(|position| position.key()),
+            physical_area: match resolved {
+                Location::AtArea(area) => Some(*area),
+                _ => None,
+            },
+            carrier: match self
+                .state
+                .components
+                .location(actor)
+                .expect("location exists")
+            {
+                Location::Carried { carrier } => Some(*carrier),
+                _ => None,
+            },
+            tactical: self
+                .health_tactical_place(actor)
+                .map(|(encounter, anchor)| game_health::TacticalIdentity { encounter, anchor }),
+            alive: body.vitals.alive,
+            moving: self.transport_is_moving(actor),
+            activity: self.health_activity_facts(actor),
+            health: body.vitals.health,
+            max_health: self.body_rules(actor).max_health,
+            temperature_c: self
+                .local_weather_for_actor(actor)
+                .map(|weather| weather.temperature),
+        }
+    }
+    fn health_local_facts(&self) -> Result<LocalHealthFacts, Error> {
+        let resolved = transport::resolved_locations_for(&self.state)?;
+        let actors: Vec<_> = self
+            .state
+            .people
+            .iter()
+            .map(|person| self.health_local_actor(person.id, &resolved[&person.id]))
+            .collect();
+        let mut interactions = Vec::new();
+        for (actor, activity) in self.state.components.activities() {
+            let second = match *activity {
+                Activity::Care { child, .. } | Activity::Comfort { child, .. } => Some(child),
+                Activity::Tell { recipient, .. } | Activity::RealmTalk { recipient, .. } => {
+                    Some(recipient)
+                }
+                Activity::ArmyTalk { listener, .. } => Some(listener),
+                _ => None,
+            };
+            if let Some(second) = second {
+                interactions.push(game_health::HealthInteraction {
+                    first: actor,
+                    second,
+                });
+            }
+        }
+        if let Some(missions) = &self.state.missions {
+            interactions.extend(missions.talks.values().map(|talk| {
+                game_health::HealthInteraction {
+                    first: talk.speaker,
+                    second: talk.listener,
+                }
+            }));
+        }
+        let anchors: BTreeSet<_> = actors.iter().filter_map(|actor| actor.tactical).collect();
+        let mut geometry = Vec::new();
+        for first in &anchors {
+            for second in anchors.range((
+                std::ops::Bound::Excluded(*first),
+                std::ops::Bound::Unbounded,
+            )) {
+                if first.encounter == second.encounter {
+                    let a = Some((first.encounter, first.anchor));
+                    let b = Some((second.encounter, second.anchor));
+                    geometry.push(game_health::HealthGeometry {
+                        first: *first,
+                        second: *second,
+                        contact_clear: self.health_tactical_clear(a, b, true),
+                        sight_clear: self.health_tactical_clear(a, b, false),
+                    });
+                }
+            }
+        }
+        Ok(LocalHealthFacts {
+            actors,
+            interactions,
+            geometry,
+        })
+    }
+    pub(crate) fn health_exposures(&self) -> Result<BTreeMap<PersonId, ExposureInput>, Error> {
+        if self.state.health.is_none() {
+            return Ok(BTreeMap::new());
+        }
+        let facts = self.health_local_facts()?;
+        Ok(facts.index(self)?.exposures().collect())
+    }
+    #[cfg(test)]
+    fn oracle_effective_shelter(&self, actor: PersonId) -> Option<&Shelter> {
         self.state.health.as_ref()?;
         if let Location::Carried { carrier } = *self
             .state
@@ -835,7 +993,7 @@ impl Simulation {
                 .body(actor)?
                 .vitals
                 .alive
-                .then(|| self.effective_shelter(carrier))
+                .then(|| self.oracle_effective_shelter(carrier))
                 .flatten();
         }
         let shelter = self
@@ -876,8 +1034,8 @@ impl Simulation {
         {
             return true;
         }
-        let sa = self.effective_shelter(a).map(|s| s.id);
-        let sb = self.effective_shelter(b).map(|s| s.id);
+        let sa = self.oracle_effective_shelter(a).map(|s| s.id);
+        let sb = self.oracle_effective_shelter(b).map(|s| s.id);
         if sa.is_some() && sa == sb {
             return true;
         }
@@ -907,190 +1065,20 @@ impl Simulation {
             })
         })
     }
+    #[cfg(test)]
     fn health_exposure(&self, actor: PersonId) -> ExposureInput {
         ExposureInput {
             temperature_c: self.local_weather_for_actor(actor).map(|w| w.temperature),
-            insulation: self.effective_shelter(actor).map_or(0, |s| s.insulation),
+            insulation: self
+                .oracle_effective_shelter(actor)
+                .map_or(0, |s| s.insulation),
             // Body contributions use weather/shelter, never contact doses.
             infectious_contacts: [0; 2],
         }
     }
-    fn health_locations(&self) -> BTreeMap<PersonId, HealthCohort> {
-        let resolved =
-            transport::resolved_locations_for(&self.state).expect("valid physical locations");
-        let mut shelters = BTreeMap::new();
-        let mut tactical = BTreeMap::new();
-        for person in &self.state.people {
-            let mut current = person.id;
-            let mut chain = Vec::new();
-            let mut shelter = loop {
-                if let Some(shelter) = shelters.get(&current) {
-                    break *shelter;
-                }
-                match *self
-                    .state
-                    .components
-                    .location(current)
-                    .expect("location exists")
-                {
-                    Location::Carried { carrier } => {
-                        chain.push(current);
-                        current = carrier;
-                    }
-                    _ => {
-                        let shelter = self.effective_shelter(current).map(|s| s.id);
-                        shelters.insert(current, shelter);
-                        tactical.insert(current, self.health_tactical_place(current));
-                        break shelter;
-                    }
-                }
-            };
-            for carried in chain.into_iter().rev() {
-                if !self.state.components.body(carried).unwrap().vitals.alive {
-                    shelter = None;
-                }
-                shelters.insert(carried, shelter);
-                tactical.insert(carried, tactical[&current]);
-            }
-        }
-        self.state
-            .people
-            .iter()
-            .filter_map(|person| {
-                let position =
-                    transport::location_position(&resolved[&person.id], self.state.time).ok();
-                position.map(|position| {
-                    (
-                        person.id,
-                        (position.key(), shelters[&person.id], tactical[&person.id]),
-                    )
-                })
-            })
-            .collect()
-    }
-    /// Derived from one immutable opening state. Shared shelter contacts are
-    /// aggregated, while actual interactions outside them are deduplicated.
+    #[cfg(test)]
     fn indexed_health_exposures(&self) -> BTreeMap<PersonId, ExposureInput> {
-        let locations = self.health_locations();
-        let infectious: BTreeMap<_, _> = self
-            .state
-            .people
-            .iter()
-            .map(|person| {
-                let state = self.state.components.clinical(person.id);
-                let flags = [IllnessKind::Enteric, IllnessKind::Respiratory].map(|kind| {
-                    u64::from(
-                        state
-                            .and_then(|s| s.illnesses.get(&kind))
-                            .is_some_and(|i| i.symptomatic && i.recovers > self.state.time),
-                    )
-                });
-                (person.id, flags)
-            })
-            .collect();
-        let mut shared: BTreeMap<ShelterId, [u64; 2]> = BTreeMap::new();
-        for (actor, (_, shelter, _)) in &locations {
-            if let Some(shelter) = shelter {
-                let count = shared.entry(*shelter).or_default();
-                for (total, flag) in count.iter_mut().zip(infectious[actor]) {
-                    *total += flag;
-                }
-            }
-        }
-        let mut exposures: BTreeMap<_, _> = self
-            .state
-            .people
-            .iter()
-            .map(|person| {
-                let mut exposure = ExposureInput {
-                    temperature_c: self
-                        .local_weather_for_actor(person.id)
-                        .map(|w| w.temperature),
-                    insulation: locations
-                        .get(&person.id)
-                        .and_then(|(_, shelter, _)| *shelter)
-                        .map_or(0, |id| {
-                            self.state.components.shelter(id).unwrap().insulation
-                        }),
-                    infectious_contacts: [0; 2],
-                };
-                if let Some((_, Some(shelter), _)) = locations.get(&person.id) {
-                    exposure.infectious_contacts = shared[shelter];
-                    for (count, own) in exposure
-                        .infectious_contacts
-                        .iter_mut()
-                        .zip(infectious[&person.id])
-                    {
-                        *count -= own;
-                    }
-                }
-                (person.id, exposure)
-            })
-            .collect();
-        let mut pairs = BTreeSet::new();
-        let mut add_pair = |a: PersonId, b: PersonId, treatment: bool| {
-            if a == b {
-                return;
-            }
-            let (Some((area_a, shelter_a, tactical_a)), Some((area_b, shelter_b, tactical_b))) =
-                (locations.get(&a), locations.get(&b))
-            else {
-                return;
-            };
-            if area_a != area_b
-                || !self.health_tactical_clear(*tactical_a, *tactical_b, true)
-                || (!treatment && shelter_a != shelter_b)
-                || (shelter_a.is_some() && shelter_a == shelter_b)
-            {
-                return;
-            }
-            pairs.insert(if a < b { (a, b) } else { (b, a) });
-        };
-        for (_, job) in self.state.components.health_jobs() {
-            if let Work::Treat { patient, .. } = job.work {
-                add_pair(job.actor, patient, true);
-            }
-        }
-        for (actor, activity) in self.state.components.activities() {
-            match *activity {
-                Activity::Care { child, .. } | Activity::Comfort { child, .. } => {
-                    add_pair(actor, child, false)
-                }
-                Activity::Tell { recipient, .. } | Activity::RealmTalk { recipient, .. } => {
-                    add_pair(actor, recipient, false)
-                }
-                Activity::ArmyTalk { listener, .. } => add_pair(actor, listener, false),
-                _ => {}
-            }
-        }
-        for person in &self.state.people {
-            if let Location::Carried { carrier } = *self
-                .state
-                .components
-                .location(person.id)
-                .expect("location exists")
-            {
-                add_pair(person.id, carrier, true);
-            }
-        }
-        if let Some(missions) = &self.state.missions {
-            for talk in missions.talks.values() {
-                add_pair(talk.speaker, talk.listener, false);
-            }
-        }
-        for (a, b) in pairs {
-            for (receiver, source) in [(a, b), (b, a)] {
-                let exposure = exposures.get_mut(&receiver).unwrap();
-                for (count, flag) in exposure
-                    .infectious_contacts
-                    .iter_mut()
-                    .zip(infectious[&source])
-                {
-                    *count += flag;
-                }
-            }
-        }
-        exposures
+        self.health_exposures().expect("valid local health facts")
     }
     fn clinical_input<'a>(
         &'a self,
@@ -1143,9 +1131,15 @@ impl Simulation {
         &self,
         actor: PersonId,
         elapsed: u64,
+        exposure: ExposureInput,
     ) -> Result<HealthDelta, Error> {
         let Some(_) = &self.state.health else {
             return Ok(HealthDelta::default());
+        };
+        // Contact doses are progressed by the clinical interval, not body arithmetic.
+        let exposure = ExposureInput {
+            infectious_contacts: [0; 2],
+            ..exposure
         };
         let empty = Clinical::default();
         let state = self.state.components.clinical(actor).unwrap_or(&empty);
@@ -1156,19 +1150,22 @@ impl Simulation {
                 .checked_add(elapsed)
                 .ok_or(Error::Overflow)?,
         );
-        game_health::clinical_contribution(self.clinical_input(
-            actor,
-            state,
-            next,
-            self.health_exposure(actor),
-        ))
+        game_health::clinical_contribution(self.clinical_input(actor, state, next, exposure))
     }
+    #[cfg(test)]
     pub(crate) fn evaluate_health(&self, next: SimTime) -> Result<PendingHealth, Error> {
+        let exposures = self.health_exposures()?;
+        self.evaluate_health_with_exposures(next, &exposures)
+    }
+    pub(crate) fn evaluate_health_with_exposures(
+        &self,
+        next: SimTime,
+        exposures: &BTreeMap<PersonId, ExposureInput>,
+    ) -> Result<PendingHealth, Error> {
         let Some(runtime) = &self.state.health else {
             return Ok(None);
         };
         let empty = Clinical::default();
-        let exposures = self.indexed_health_exposures();
         let mut clinical = Vec::new();
         for person in &self.state.people {
             if !self.state.components.body(person.id).unwrap().vitals.alive {
@@ -1207,7 +1204,7 @@ impl Simulation {
             return Ok(limit);
         };
         let mut boundary = limit;
-        let exposures = self.indexed_health_exposures();
+        let exposures = self.health_exposures()?;
         for (_, job) in self.state.components.health_jobs() {
             if self.health_job_can_progress(job) && job.completes > self.state.time {
                 boundary = boundary.min(job.completes);
@@ -1443,19 +1440,102 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn dependent_signal_visible(&self, observer: PersonId, subject: PersonId) -> bool {
+        if !self.person_index.contains_key(&observer)
+            || !self.person_index.contains_key(&subject)
+            || self.state.components.body(observer).is_none()
+            || self.state.components.body(subject).is_none()
+        {
+            return false;
+        }
+        let a = transport::location_position(&self.resolved_location(observer), self.state.time)
+            .ok()
+            .map(|point| point.key());
+        let b = transport::location_position(&self.resolved_location(subject), self.state.time)
+            .ok()
+            .map(|point| point.key());
+        game_health::signal_visible_at(
+            a.as_ref(),
+            b.as_ref(),
+            [
+                self.effective_shelter(observer).map(|s| s.id),
+                self.effective_shelter(subject).map(|s| s.id),
+            ],
+            self.health_tactical_clear(
+                self.health_tactical_place(observer),
+                self.health_tactical_place(subject),
+                false,
+            ),
+        )
+    }
+    fn can_observe_health(&self, observer: PersonId, subject: PersonId) -> bool {
+        if !self.person_index.contains_key(&observer)
+            || !self.person_index.contains_key(&subject)
+            || self.state.components.body(observer).is_none()
+            || self.state.components.body(subject).is_none()
+        {
+            return false;
+        }
+        let a = transport::location_position(&self.resolved_location(observer), self.state.time)
+            .ok()
+            .map(|point| point.key());
+        let b = transport::location_position(&self.resolved_location(subject), self.state.time)
+            .ok()
+            .map(|point| point.key());
+        game_health::can_observe_at(
+            a.as_ref(),
+            b.as_ref(),
+            [
+                self.effective_shelter(observer).map(|s| s.id),
+                self.effective_shelter(subject).map(|s| s.id),
+            ],
+            self.health_tactical_clear(
+                self.health_tactical_place(observer),
+                self.health_tactical_place(subject),
+                false,
+            ),
+            self.transport_is_moving(observer),
+        )
+    }
+    fn visible_symptoms(&self, actor: PersonId) -> SymptomsView {
+        self.state
+            .health
+            .as_ref()
+            .expect("health runtime")
+            .symptoms_for(
+                &self.state.components,
+                self.state.time,
+                actor,
+                self.state
+                    .components
+                    .body(actor)
+                    .expect("body exists")
+                    .vitals
+                    .health,
+                self.body_rules(actor).max_health,
+            )
+    }
+    #[cfg(test)]
+    fn oracle_dependent_signal_visible(&self, observer: PersonId, subject: PersonId) -> bool {
         self.transport_same_place(observer, subject)
             && self.health_tactical_clear(
                 self.health_tactical_place(observer),
                 self.health_tactical_place(subject),
                 false,
             )
-            && self.effective_shelter(observer).map(|shelter| shelter.id)
-                == self.effective_shelter(subject).map(|shelter| shelter.id)
+            && self
+                .oracle_effective_shelter(observer)
+                .map(|shelter| shelter.id)
+                == self
+                    .oracle_effective_shelter(subject)
+                    .map(|shelter| shelter.id)
     }
-    fn can_observe_health(&self, observer: PersonId, subject: PersonId) -> bool {
-        self.dependent_signal_visible(observer, subject) && !self.transport_is_moving(observer)
+    #[cfg(test)]
+    fn oracle_can_observe_health(&self, observer: PersonId, subject: PersonId) -> bool {
+        self.oracle_dependent_signal_visible(observer, subject)
+            && !self.transport_is_moving(observer)
     }
-    fn visible_symptoms(&self, person: PersonId) -> SymptomsView {
+    #[cfg(test)]
+    fn oracle_visible_symptoms(&self, person: PersonId) -> SymptomsView {
         let state = self
             .state
             .health
@@ -1482,125 +1562,20 @@ impl Simulation {
         if self.state.health.is_none() {
             return;
         }
-        let locations = self.health_locations();
-        let mut cohorts: BTreeMap<HealthCohort, BTreeSet<PersonId>> = BTreeMap::new();
-        for (actor, location) in &locations {
-            cohorts.entry(*location).or_default().insert(*actor);
-        }
-        let symptoms: BTreeMap<_, _> = cohorts
-            .iter()
-            .map(|(cohort, actors)| {
-                let visible: BTreeSet<_> = if cohort.2.is_some() {
-                    cohorts
-                        .iter()
-                        .filter(|(other, _)| {
-                            other.0 == cohort.0
-                                && other.1 == cohort.1
-                                && self.health_tactical_clear(cohort.2, other.2, false)
-                        })
-                        .flat_map(|(_, actors)| actors.iter().copied())
-                        .collect()
-                } else {
-                    actors.clone()
-                };
-                (
-                    *cohort,
-                    visible
-                        .iter()
-                        .take(64)
-                        .map(|actor| (*actor, self.visible_symptoms(*actor)))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect();
-        let mut area_shelters: BTreeMap<AreaId, Vec<ShelterId>> = BTreeMap::new();
-        for (_, shelter) in self.state.components.shelters() {
-            area_shelters
-                .entry(shelter.area)
-                .or_default()
-                .push(shelter.id);
-        }
-        let mut occupants: BTreeMap<(ShelterId, HealthCohort), BTreeSet<PersonId>> =
-            BTreeMap::new();
-        for (actor, location) in &locations {
-            let shelter = if matches!(
-                *self
-                    .state
-                    .components
-                    .location(*actor)
-                    .expect("location exists"),
-                Location::Carried { .. }
-            ) {
-                location.1
-            } else {
-                self.state
-                    .components
-                    .shelter_occupancy(*actor)
-                    .map(|row| row.shelter)
-            };
-            if let Some(shelter) = shelter {
-                occupants
-                    .entry((shelter, *location))
-                    .or_default()
-                    .insert(*actor);
-            }
-        }
-        let observers: Vec<_> = self
-            .state
-            .people
-            .iter()
-            .filter(|person| {
-                self.state.components.body(person.id).unwrap().vitals.alive
-                    && !self.transport_is_moving(person.id)
-                    && locations.contains_key(&person.id)
-            })
-            .map(|person| person.id)
-            .collect();
-        for observer in observers {
-            let area = match locations[&observer].0 {
-                game_transport::PositionKey::Area(area) if locations[&observer].2.is_none() => {
-                    Some(area)
-                }
-                game_transport::PositionKey::Area(_) => None,
-                game_transport::PositionKey::Road { .. } => None,
-            };
-            let cohort = locations[&observer];
-            let people = &symptoms[&cohort];
-            let shelters: Vec<_> = area
-                .and_then(|area| area_shelters.get(&area))
-                .into_iter()
-                .flatten()
-                .map(|id| {
-                    let s = self.state.components.shelter(*id).unwrap();
-                    let known_occupants =
-                        occupants.get(&(*id, cohort)).cloned().unwrap_or_default();
-                    (
-                        s.id,
-                        ShelterView {
-                            id: s.id,
-                            area: s.area,
-                            capacity: s.capacity,
-                            insulation: s.insulation,
-                            custodian: s.custodian,
-                            accessible: s.access.contains(&observer),
-                            known_occupants,
-                            observed_at: self.state.time,
-                        },
-                    )
-                })
-                .collect();
-            let knowledge = self
-                .state
-                .components
-                .ensure_health_knowledge(observer)
-                .expect("known health observer");
-            for (person, symptoms) in people {
-                knowledge.people.insert(*person, symptoms.clone());
-            }
-            for (id, s) in shelters {
-                knowledge.shelters.insert(id, s);
-            }
-        }
+        let prepared = {
+            let facts = self.health_local_facts().expect("valid local health facts");
+            facts
+                .index(self)
+                .expect("valid local health index")
+                .prepare_observations()
+                .expect("valid local observations")
+        };
+        prepared
+            .commit(
+                self.state.health.as_ref().unwrap(),
+                &mut self.state.components,
+            )
+            .expect("fresh local observation");
     }
     pub(crate) fn health_view(&self, actor: PersonId) -> Option<HealthView> {
         self.state.health.as_ref()?;
@@ -2476,7 +2451,9 @@ mod integration_tests {
         let actor = sim.state.ruler;
         sim.state.components.clinical_mut(actor).unwrap().thirst = 200_000;
         let before = sim.evaluate_health(SimTime(1_003)).unwrap();
-        let before_delta = sim.health_body_delta(actor, 1_003).unwrap();
+        let before_delta = sim
+            .health_body_delta(actor, 1_003, sim.health_exposure(actor))
+            .unwrap();
         let before_physiology = sim.health_physiology(actor);
         let mut content = genetics::Content::read(genetics::Config::default().content_dir).unwrap();
         for definition in &mut content.physiology.data.traits {
@@ -2491,7 +2468,11 @@ mod integration_tests {
         sim.initialize_trait_content(content).unwrap();
         let after = sim.evaluate_health(SimTime(1_003)).unwrap();
         assert_eq!(before, after);
-        assert_eq!(before_delta, sim.health_body_delta(actor, 1_003).unwrap());
+        assert_eq!(
+            before_delta,
+            sim.health_body_delta(actor, 1_003, sim.health_exposure(actor))
+                .unwrap()
+        );
         assert_eq!(before_physiology, sim.health_physiology(actor));
     }
 
@@ -3346,12 +3327,12 @@ mod index_tests {
                 .state
                 .people
                 .iter()
-                .filter(|p| sim.can_observe_health(observer.id, p.id))
+                .filter(|p| sim.oracle_can_observe_health(observer.id, p.id))
                 .map(|p| p.id)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .take(64)
-                .map(|p| (p, sim.visible_symptoms(p)))
+                .map(|p| (p, sim.oracle_visible_symptoms(p)))
                 .collect();
             let shelters: Vec<_> = sim
                 .state
@@ -3374,7 +3355,8 @@ mod index_tests {
                                 .components
                                 .occupancies()
                                 .filter(|(p, row)| {
-                                    row.shelter == s.id && sim.can_observe_health(observer.id, *p)
+                                    row.shelter == s.id
+                                        && sim.oracle_can_observe_health(observer.id, *p)
                                 })
                                 .map(|(p, _)| p)
                                 .collect(),
@@ -3655,7 +3637,10 @@ mod index_tests {
             );
             let start = Instant::now();
             for person in &sim.state.people {
-                std::hint::black_box(sim.health_body_delta(person.id, 1_000).unwrap());
+                std::hint::black_box(
+                    sim.health_body_delta(person.id, 1_000, sim.health_exposure(person.id))
+                        .unwrap(),
+                );
             }
             let body_contributions = start.elapsed();
             println!(
