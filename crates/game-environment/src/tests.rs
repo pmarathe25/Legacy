@@ -1,5 +1,218 @@
 use super::*;
 
+// Standalone host composition for owner tests; only Store owns cell data.
+#[derive(Debug)]
+struct World {
+    runtime: Runtime,
+    store: Store,
+    queries: std::cell::RefCell<Queries>,
+}
+fn schema() -> game_ecs::Schema {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<Foreign>("fixture/foreign", |_| Ok(()))
+        .unwrap();
+    schema
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Foreign(u64);
+
+#[test]
+fn local_weather_uses_shared_components_and_preserves_foreign_data() {
+    let mut world = World::new(config(), SimTime(0), 19).unwrap();
+    world.register_cell(AreaId(2), upland()).unwrap();
+    world
+        .store
+        .insert_or_spawn(StableId(2), Foreign(5))
+        .unwrap();
+    let prepared = world.prepare(SimTime(10)).unwrap();
+    world
+        .store
+        .insert_or_spawn(StableId(99), Foreign(7))
+        .unwrap();
+    world.commit(prepared).unwrap();
+    assert_eq!(world.store.get::<Foreign>(StableId(2)), Some(&Foreign(5)));
+    assert_eq!(world.store.get::<Foreign>(StableId(99)), Some(&Foreign(7)));
+    let metadata = serde_json::to_value(&world.runtime).unwrap();
+    assert!(!metadata.as_object().unwrap().contains_key("cells"));
+    let saved = serde_json::to_vec(&world).unwrap();
+    let mut restored: World = serde_json::from_slice(&saved).unwrap();
+    restored
+        .commit(restored.prepare(SimTime(20)).unwrap())
+        .unwrap();
+    world.commit(world.prepare(SimTime(20)).unwrap()).unwrap();
+    assert_eq!(world, restored);
+}
+
+#[test]
+fn local_cell_registration_preflights_both_component_validators() {
+    let runtime = Runtime::new(config(), SimTime(0), 19).unwrap();
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<LocalClimate>("environment/local-climate", LocalClimate::validate)
+        .unwrap();
+    schema
+        .register::<Weather>("environment/weather", |_| Err(Error::Unavailable))
+        .unwrap();
+    let mut store = Store::with_schema(schema);
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        runtime.register_cell(&mut store, AreaId(2), upland()),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+impl std::fmt::Debug for Queries {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Queries")
+    }
+}
+impl World {
+    fn from_runtime(runtime: Runtime) -> Self {
+        let mut store = Store::with_schema(schema());
+        let queries = std::cell::RefCell::new(Runtime::bind(&mut store));
+        Self {
+            runtime,
+            store,
+            queries,
+        }
+    }
+    fn new(config: Config, at: SimTime, seed: u64) -> Result<Self, Error> {
+        Ok(Self::from_runtime(Runtime::new(config, at, seed)?))
+    }
+    #[cfg(feature = "content")]
+    fn from_content(
+        doc: game_content::Document<Config>,
+        at: SimTime,
+        seed: u64,
+    ) -> Result<Self, Error> {
+        Ok(Self::from_runtime(Runtime::from_content(doc, at, seed)?))
+    }
+    fn register_cell(&mut self, area: AreaId, policy: LocalClimate) -> Result<(), Error> {
+        self.runtime.register_cell(&mut self.store, area, policy)
+    }
+    fn local_weather(&self, area: AreaId) -> Option<&Weather> {
+        self.runtime.local_weather(&self.store, area)
+    }
+    fn observe_cell(&self, area: AreaId) -> Option<Observation> {
+        self.runtime.observe_cell(&self.store, area)
+    }
+    fn validate(&self, at: SimTime, seed: u64) -> Result<(), Error> {
+        self.runtime.validate(&self.store, at, seed)
+    }
+    fn reset_epoch(&mut self, at: SimTime, seed: u64) -> Result<(), Error> {
+        self.runtime.reset_epoch(&mut self.store, at, seed)
+    }
+    #[cfg(feature = "content")]
+    fn attach_content(&mut self, doc: game_content::Document<Config>) -> Result<(), Error> {
+        self.runtime.attach_content(&self.store, doc)
+    }
+    fn prepare(&self, next: SimTime) -> Result<Step, Error> {
+        self.advance(self.at, next, self.seed)
+    }
+    fn advance(&self, from: SimTime, next: SimTime, seed: u64) -> Result<Step, Error> {
+        let mut queries = self.queries.borrow_mut();
+        queries.refresh(&self.store)?;
+        self.runtime
+            .advance(&self.store, &queries, from, next, seed)
+    }
+    fn commit(&mut self, step: Step) -> Result<(), Error> {
+        self.runtime
+            .commit(&mut self.store, self.queries.get_mut(), step)
+    }
+    fn preview(&self, step: &Step) -> Result<Self, Error> {
+        let mut out = self.clone();
+        out.commit(step.clone())?;
+        Ok(out)
+    }
+    fn cells(&self) -> BTreeMap<AreaId, WeatherCell> {
+        self.runtime
+            .cells(&self.store)
+            .map(|(id, policy, weather)| {
+                (
+                    id,
+                    WeatherCell {
+                        policy: *policy,
+                        weather: weather.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+    fn weather_mut(&mut self, area: AreaId) -> &mut Weather {
+        self.store.get_mut(StableId(area.0)).unwrap()
+    }
+    fn remove_cell(&mut self, area: AreaId) -> WeatherCell {
+        WeatherCell {
+            policy: self
+                .store
+                .remove::<LocalClimate>(StableId(area.0))
+                .unwrap()
+                .unwrap(),
+            weather: self
+                .store
+                .remove::<Weather>(StableId(area.0))
+                .unwrap()
+                .unwrap(),
+        }
+    }
+}
+impl std::ops::Deref for World {
+    type Target = Runtime;
+    fn deref(&self) -> &Runtime {
+        &self.runtime
+    }
+}
+impl std::ops::DerefMut for World {
+    fn deref_mut(&mut self) -> &mut Runtime {
+        &mut self.runtime
+    }
+}
+impl Clone for World {
+    fn clone(&self) -> Self {
+        let mut store = self.store.clone();
+        let queries = std::cell::RefCell::new(Runtime::bind(&mut store));
+        Self {
+            runtime: self.runtime.clone(),
+            store,
+            queries,
+        }
+    }
+}
+impl PartialEq for World {
+    fn eq(&self, other: &Self) -> bool {
+        self.runtime == other.runtime && self.store == other.store
+    }
+}
+#[derive(Serialize, Deserialize)]
+struct Save {
+    runtime: Runtime,
+    components: game_ecs::Snapshot,
+}
+impl Serialize for World {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        Save {
+            runtime: self.runtime.clone(),
+            components: self.store.snapshot().map_err(serde::ser::Error::custom)?,
+        }
+        .serialize(s)
+    }
+}
+impl<'de> Deserialize<'de> for World {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let save = Save::deserialize(d)?;
+        let mut store =
+            Store::restore(schema(), save.components).map_err(serde::de::Error::custom)?;
+        let queries = std::cell::RefCell::new(Runtime::bind(&mut store));
+        Ok(Self {
+            runtime: save.runtime,
+            store,
+            queries,
+        })
+    }
+}
+
 fn config() -> Config {
     Config {
         calendar: Calendar {
@@ -185,8 +398,8 @@ fn short_intervals_prepare_no_weather_work_and_leave_cell_storage_in_place() {
         .register_cell(AreaId(1), LocalClimate::default())
         .unwrap();
     world.register_cell(AreaId(2), upland()).unwrap();
-    let cells = world.cells.clone();
-    let address = std::ptr::from_ref(&world.cells[&AreaId(2)]);
+    let cells = world.cells();
+    let address = std::ptr::from_ref(world.local_weather(AreaId(2)).unwrap());
     for next in 1..10 {
         let step = world.prepare(SimTime(next)).unwrap();
         assert!(step.daily.is_none());
@@ -194,15 +407,21 @@ fn short_intervals_prepare_no_weather_work_and_leave_cell_storage_in_place() {
         assert!(step.elapsed_local_day.is_none());
         world.commit(step).unwrap();
         assert_eq!(world.epoch(), SimTime(next));
-        assert_eq!(world.cells, cells);
-        assert_eq!(std::ptr::from_ref(&world.cells[&AreaId(2)]), address);
+        assert_eq!(world.cells(), cells);
+        assert_eq!(
+            std::ptr::from_ref(world.local_weather(AreaId(2)).unwrap()),
+            address
+        );
     }
     let step = world.prepare(SimTime(10)).unwrap();
     assert_eq!(step.daily.as_ref().unwrap().cells.len(), 2);
     assert_eq!(step.elapsed_local_day.as_ref().unwrap().cells.len(), 2);
     world.commit(step).unwrap();
-    assert_eq!(std::ptr::from_ref(&world.cells[&AreaId(2)]), address);
-    assert_ne!(world.cells, cells);
+    assert_eq!(
+        std::ptr::from_ref(world.local_weather(AreaId(2)).unwrap()),
+        address
+    );
+    assert_ne!(world.cells(), cells);
 }
 
 #[test]
@@ -220,14 +439,14 @@ fn changed_daily_membership_or_a_late_cell_guard_cannot_partially_publish() {
                 .register_cell(AreaId(3), LocalClimate::default())
                 .unwrap(),
             1 => {
-                world.cells.remove(&AreaId(2));
+                world.remove_cell(AreaId(2));
             }
             2 => {
-                let existing = world.cells.remove(&AreaId(2)).unwrap();
-                world.cells.insert(AreaId(3), existing);
+                let existing = world.remove_cell(AreaId(2));
+                world.register_cell(AreaId(3), existing.policy).unwrap();
             }
             3 => {
-                world.cells.get_mut(&AreaId(2)).unwrap().weather.rain += 1;
+                world.weather_mut(AreaId(2)).rain += 1;
             }
             _ => unreachable!(),
         }
@@ -236,8 +455,8 @@ fn changed_daily_membership_or_a_late_cell_guard_cannot_partially_publish() {
         assert_eq!(world, before);
         assert_eq!(world.epoch(), SimTime(0));
         assert_eq!(
-            world.cells[&AreaId(1)].weather,
-            opening.cells[&AreaId(1)].weather
+            *world.local_weather(AreaId(1)).unwrap(),
+            *opening.local_weather(AreaId(1)).unwrap()
         );
     }
 }
@@ -308,7 +527,7 @@ fn local_cell_corruption_and_changed_elapsed_facts_cannot_be_committed() {
     let mut world = World::new(config(), SimTime(0), 19).unwrap();
     world.register_cell(AreaId(2), upland()).unwrap();
     let mut corrupt = world.clone();
-    corrupt.cells.get_mut(&AreaId(2)).unwrap().weather.rain += 1;
+    corrupt.weather_mut(AreaId(2)).rain += 1;
     assert!(corrupt.validate(SimTime(0), 19).is_err());
     let before = world.clone();
     let mut changed = world.prepare(SimTime(10)).unwrap();
@@ -333,7 +552,7 @@ fn resetting_an_opening_epoch_preserves_local_policies_and_samples_new_weather()
     let mut world = World::new(config(), SimTime(0), 19).unwrap();
     world.register_cell(AreaId(2), upland()).unwrap();
     world.reset_epoch(SimTime(25), 3).unwrap();
-    assert_eq!(world.cells[&AreaId(2)].policy, upland());
+    assert_eq!(world.cells()[&AreaId(2)].policy, upland());
     assert_eq!(
         world.local_weather(AreaId(2)),
         Some(&upland().apply(&world.weather).unwrap())
@@ -406,10 +625,10 @@ fn attaching_content_preserves_local_components_and_epoch_and_rejects_mismatches
     let expected_stamp = document.stamp().unwrap();
     let mut runtime = World::new(document.data.clone(), SimTime(7), 19).unwrap();
     runtime.register_cell(AreaId(2), upland()).unwrap();
-    let components = runtime.cells.clone();
+    let components = runtime.cells();
     runtime.attach_content(document.clone()).unwrap();
     assert_eq!(runtime.epoch(), SimTime(7));
-    assert_eq!(runtime.cells, components);
+    assert_eq!(runtime.cells(), components);
     assert_eq!(runtime.content_stamp(), Some(&expected_stamp));
     let before = runtime.clone();
     let mut changed = document.clone();

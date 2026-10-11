@@ -10,6 +10,7 @@ content = ["dep:game-content"]
 
 [dependencies]
 game-core.workspace = true
+game-ecs.workspace = true
 game-content = { workspace = true, optional = true }
 
 serde.workspace = true

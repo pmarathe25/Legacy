@@ -218,6 +218,56 @@ impl Storage {
         self.structural_revision = revision;
         Ok(removed)
     }
+    pub(super) fn insert_pair_or_spawn<A: Component, B: Component>(
+        &mut self,
+        id: StableId,
+        first: A,
+        second: B,
+    ) -> Result<(), Error> {
+        if id.0 == 0 || TypeId::of::<A>() == TypeId::of::<B>() {
+            return Err(Error::InvalidConfiguration("invalid component pair".into()));
+        }
+        let validate = |registration: &Registration| {
+            if registration.matches::<A>() {
+                (registration
+                    .validator
+                    .downcast_ref::<fn(&A) -> Result<(), Error>>()
+                    .unwrap())(&first)
+            } else {
+                (registration
+                    .validator
+                    .downcast_ref::<fn(&B) -> Result<(), Error>>()
+                    .unwrap())(&second)
+            }
+        };
+        validate(self.schema.registration::<A>()?)?;
+        validate(self.schema.registration::<B>()?)?;
+        let existing = self.entities.get(&id).copied();
+        let structural = existing.is_none_or(|entity| {
+            self.world.get::<Native<A>>(entity).is_none()
+                || self.world.get::<Native<B>>(entity).is_none()
+        });
+        let revision = if structural {
+            self.structural_revision
+                .checked_add(1)
+                .ok_or(Error::Overflow)?
+        } else {
+            self.structural_revision
+        };
+        let entity = match existing {
+            Some(entity) => entity,
+            None => {
+                let entity = self.world.spawn(NativeId(id)).id();
+                self.entities.insert(id, entity);
+                entity
+            }
+        };
+        self.world
+            .entity_mut(entity)
+            .insert((Native(first), Native(second)));
+        self.structural_revision = revision;
+        Ok(())
+    }
     pub(super) fn iter<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> {
         self.entities.iter().filter_map(|(id, entity)| {
             self.world

@@ -148,6 +148,15 @@ impl Store {
     ) -> Result<(), Error> {
         self.backend.insert_or_spawn(id, component)
     }
+    /// Attach a pair atomically, including validation and optional entity creation.
+    pub fn insert_pair_or_spawn<A: Component, B: Component>(
+        &mut self,
+        id: StableId,
+        first: A,
+        second: B,
+    ) -> Result<(), Error> {
+        self.backend.insert_pair_or_spawn(id, first, second)
+    }
     pub fn remove<C: Component>(&mut self, id: StableId) -> Result<Option<C>, Error> {
         self.backend.remove(id)
     }
@@ -438,6 +447,51 @@ mod tests {
         assert_eq!(store.get::<Count>(StableId(8)), Some(&Count(10)));
         store.insert_or_spawn(StableId(2), Count(80)).unwrap();
         assert_eq!(store.get::<Count>(StableId(2)), Some(&Count(80)));
+    }
+    #[test]
+    fn paired_components_reject_both_new_and_existing_changes_atomically() {
+        let mut schema = schema();
+        schema.components.remove("fixture/name");
+        schema
+            .register::<Name>("fixture/name", |name| {
+                if name.0.is_empty() {
+                    Err(Error::Unavailable)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+        let mut store = Store::with_schema(schema);
+        store
+            .insert_pair_or_spawn(StableId(1), Count(5), Name("Ada".into()))
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let query = store.query2::<Count, Name>();
+        for id in [StableId(1), StableId(2)] {
+            assert_eq!(
+                store.insert_pair_or_spawn(id, Count(9), Name(String::new())),
+                Err(Error::Unavailable)
+            );
+            assert_eq!(store.snapshot().unwrap(), before);
+            assert_eq!(query.iter(&store).unwrap().count(), 1);
+        }
+        assert!(
+            store
+                .insert_pair_or_spawn(StableId(2), Count(5), Count(6))
+                .is_err()
+        );
+        assert!(
+            store
+                .insert_pair_or_spawn(StableId(0), Count(5), Name("Bo".into()))
+                .is_err()
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
+        store
+            .insert_pair_or_spawn(StableId(1), Count(9), Name("Bo".into()))
+            .unwrap();
+        let (_, count, name) = query.iter(&store).unwrap().next().unwrap();
+        assert_eq!(count.0, 9);
+        assert_eq!(name.0, "Bo");
     }
     #[test]
     fn snapshot_and_clone_ignore_native_allocation_and_preserve_large_integers() {

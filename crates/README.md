@@ -16,6 +16,9 @@ flowchart TD
     World --> Sim[game-sim]
     World --> Content[game-content]
     World --> ECS
+    World --> Spatial[game-spatial]
+    Spatial --> ECS
+    Spatial --> Core
     Domains -->|typed component access| ECS[game-ecs]
     ECS --> Core
     ECS --> Backend[private ECS backend]
@@ -37,7 +40,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-armies` | `game-missions` | Objectives for autonomous leaders |
 | `game-characters` | `game-logistics`; `game-genetics` (optional) | Material goals; opaque inheritable temperament loci |
 | `game-conflict` | `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
-| `game-environment` | `game-content` (optional) | Typed calendar and climate loading |
+| `game-environment` | `game-ecs`; `game-content` (optional) | Local climate and weather components; typed calendar and climate loading |
 | `game-lifecycle` | `game-genetics` (optional) | Opaque inheritable reproductive characteristics |
 | `game-lineage` | `game-logistics` | Care provision delivery requirements and receipts |
 | `game-missions` | `game-agreements` | Agreement terms in mission objectives |
@@ -53,13 +56,13 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 
 **Storage boundary:** `game-ecs` hides the chosen ECS engine. Feature data uses ordinary Rust types, stable game IDs, registered save schemas, and typed joins. Native entity handles, engine derives, and query internals remain in its private adapter. `game-sim` retains logical scheduling and per-simulation bounded execution.
 
-**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Agriculture, physiology bodies, and workshop jobs use this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
+**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Agriculture, physiology bodies, workshop jobs, shared locations, and local weather use this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
 
 **Engine independence:** Feature interfaces expose plain values, borrowed component rows, and typed prepared changes. They do not expose engine entity handles, derives, query types, or schedules. Replacing the engine changes the private `game-ecs` adapter; its callers keep the same interfaces. Systems order authoritative results by stable game IDs because engine iteration order is unspecified.
 
-**Shared space:** Features share `game-core::AreaId` and `Location`, rather than defining separate maps. Fields refer to an area; soil attaches to the field entity; weather cells use the same area IDs. `Location::cell()` keeps a road segment in its departure cell until its scheduled arrival; carried entities use their resolved carrier location. Different spatial resolutions will use explicit mappings within this common model.
+**Shared space:** Features share `game-core::AreaId` and `Location`, rather than defining separate maps. Fields refer to an area; soil attaches to the field entity; weather cells use the same area IDs. `Location::cell()` keeps a road segment in its departure cell until its scheduled arrival; carried entities use their resolved carrier location. `game-spatial` owns location storage and carrier-chain resolution; transport owns carrying decisions and movement effects. Missing anchors and cycles are explicit errors. Different spatial resolutions will use explicit mappings within this common model.
 
-**Local inputs:** Environment owns weather cells keyed by `AreaId`. Agriculture joins `Field`, `Crop`, and `Soil` by `SiteId`, then looks up weather for the field's area. Crop growth consumes agriculture's `WeatherFacts`, supplied by the composition from environment observations. Agriculture has no dependency on environment's runtime or global climate state.
+**Local inputs:** Environment owns local climate and weather components on area entities. Agriculture joins `Field`, `Crop`, and `Soil` by `SiteId`, then looks up weather for the field's area. Crop growth consumes agriculture's `WeatherFacts`, supplied by the composition from environment observations. Agriculture has no dependency on environment's runtime or global climate state.
 
 **Person systems:** Physiology integrates `Body` from activity flags, body limits, and external contributions. Workshop owns the optional `Job` component, including paused progress and frozen work rates. The composition joins bodies, activity, and optional jobs for interval evaluation. The existing `Activity` enum remains a coordination component while task payloads move to their feature owners; physiology does not depend on it.
 

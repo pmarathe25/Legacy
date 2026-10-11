@@ -554,6 +554,7 @@ version = "0.1.0"
 dependencies = [
  "game-content",
  "game-core",
+ "game-ecs",
  "serde",
  "serde_json",
 ]
@@ -702,6 +703,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-spatial"
+version = "0.1.0"
+dependencies = [
+ "game-core",
+ "game-ecs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-transport"
 version = "0.1.0"
 dependencies = [
@@ -753,6 +764,7 @@ dependencies = [
  "game-sim",
  "game-skills",
  "game-society",
+ "game-spatial",
  "game-transport",
  "game-workshop",
  "rayon",

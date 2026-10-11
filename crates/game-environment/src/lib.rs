@@ -1,7 +1,10 @@
 //! Calendar and deterministic weather. This domain owns no crops, people or goods.
 use game_core::{AreaId, Error, SimDuration, SimTime};
+use game_ecs::{StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod storage;
+pub use storage::{Queries, register_components};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Calendar {
@@ -226,12 +229,12 @@ impl Config {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
     pub calendar: Calendar,
     pub climate: Climate,
     pub weather: Weather,
     pub weather_day: u64,
-    pub cells: BTreeMap<AreaId, WeatherCell>,
     /// The runtime owns its temporal position, independently of a host clock.
     at: SimTime,
     seed: u64,
@@ -286,7 +289,7 @@ struct Header {
     content: Option<game_content::Stamp>,
 }
 impl Header {
-    fn capture(world: &World) -> Self {
+    fn capture(world: &Runtime) -> Self {
         Self {
             calendar: world.calendar.clone(),
             climate: world.climate.clone(),
@@ -298,7 +301,7 @@ impl Header {
             content: world.content.clone(),
         }
     }
-    fn matches(&self, world: &World) -> bool {
+    fn matches(&self, world: &Runtime) -> bool {
         self.calendar == world.calendar
             && self.climate == world.climate
             && self.at == world.at
@@ -330,7 +333,7 @@ struct CellChange {
     before: WeatherCell,
     weather: Weather,
 }
-impl World {
+impl Runtime {
     pub fn new(config: Config, at: SimTime, seed: u64) -> Result<Self, Error> {
         config.validate()?;
         let weather_day = at.0 / config.calendar.day.0;
@@ -342,7 +345,6 @@ impl World {
             climate: config.climate,
             weather,
             weather_day,
-            cells: BTreeMap::new(),
             at,
             seed,
             #[cfg(feature = "content")]
@@ -370,9 +372,10 @@ impl World {
     #[cfg(feature = "content")]
     pub fn attach_content(
         &mut self,
+        store: &Store,
         document: game_content::Document<Config>,
     ) -> Result<(), Error> {
-        self.validate(self.at, self.seed)?;
+        self.validate(store, self.at, self.seed)?;
         document.data.validate()?;
         let stamp = document.stamp()?;
         if document.data.calendar != self.calendar || document.data.climate != self.climate {
@@ -395,8 +398,16 @@ impl World {
             weather: self.weather.clone(),
         }
     }
-    pub fn register_cell(&mut self, area: AreaId, policy: LocalClimate) -> Result<(), Error> {
-        if area.0 == 0 || self.cells.contains_key(&area) {
+    pub fn register_cell(
+        &self,
+        store: &mut Store,
+        area: AreaId,
+        policy: LocalClimate,
+    ) -> Result<(), Error> {
+        if area.0 == 0
+            || store.get::<LocalClimate>(StableId(area.0)).is_some()
+            || store.get::<Weather>(StableId(area.0)).is_some()
+        {
             return Err(Error::InvalidConfiguration(
                 "invalid or duplicate weather cell".into(),
             ));
@@ -408,44 +419,77 @@ impl World {
         .validate()?;
         policy.validate_climate(&self.climate)?;
         let weather = policy.apply(&self.weather)?;
-        self.cells.insert(area, WeatherCell { policy, weather });
-        Ok(())
+        store.insert_pair_or_spawn(StableId(area.0), policy, weather)
     }
-    pub fn local_weather(&self, area: AreaId) -> Option<&Weather> {
-        self.cells.get(&area).map(|cell| &cell.weather)
+    pub fn cells<'a>(
+        &self,
+        store: &'a Store,
+    ) -> impl Iterator<Item = (AreaId, &'a LocalClimate, &'a Weather)> {
+        store
+            .iter::<LocalClimate>()
+            .filter_map(move |(id, policy)| Some((AreaId(id.0), policy, store.get::<Weather>(id)?)))
     }
-    pub fn observe_cell(&self, area: AreaId) -> Option<Observation> {
-        let weather = self.local_weather(area)?;
+    pub fn local_weather<'a>(&self, store: &'a Store, area: AreaId) -> Option<&'a Weather> {
+        store.get::<Weather>(StableId(area.0))
+    }
+    pub fn observe_cell(&self, store: &Store, area: AreaId) -> Option<Observation> {
+        let weather = self.local_weather(store, area)?;
         Some(Observation {
             weather: weather.clone(),
             ..self.observe()
         })
     }
-    /// Place a configured scenario at its opening epoch. This does not emit
-    /// elapsed-day effects and must not be used to advance an active simulation.
-    pub fn reset_epoch(&mut self, at: SimTime, seed: u64) -> Result<(), Error> {
-        let configured = Config {
+    /// Resample an opening epoch without emitting completed-day effects.
+    pub fn reset_epoch(&mut self, store: &mut Store, at: SimTime, seed: u64) -> Result<(), Error> {
+        if store
+            .iter::<LocalClimate>()
+            .map(|(id, _)| id)
+            .ne(store.iter::<Weather>().map(|(id, _)| id))
+        {
+            return Err(Error::InvalidSave(
+                "unpaired local weather components".into(),
+            ));
+        }
+        let config = Config {
             calendar: self.calendar.clone(),
             climate: self.climate.clone(),
         };
-        let mut replacement = Self::new(configured, at, seed)?;
-        for (area, cell) in &self.cells {
-            replacement.register_cell(*area, cell.policy)?;
-        }
+        let replacement = Self::new(config, at, seed)?;
+        let changes = self
+            .cells(store)
+            .map(|(area, policy, _)| {
+                policy.validate_climate(&replacement.climate)?;
+                Ok((area, policy.apply(&replacement.weather)?))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         #[cfg(feature = "content")]
         let replacement = Self {
             content: self.content.clone(),
             ..replacement
         };
-        replacement.validate(at, seed)?;
+        replacement.validate_header(at, seed)?;
+        for (area, weather) in changes {
+            *store
+                .get_mut::<Weather>(StableId(area.0))
+                .expect("opening weather component") = weather;
+        }
         *self = replacement;
         Ok(())
     }
-    pub fn validate(&self, at: SimTime, seed: u64) -> Result<(), Error> {
+    pub fn validate(&self, store: &Store, at: SimTime, seed: u64) -> Result<(), Error> {
         self.validate_header(at, seed)?;
-        for (area, cell) in &self.cells {
-            cell.policy.validate_climate(&self.climate)?;
-            if area.0 == 0 || cell.weather != cell.policy.apply(&self.weather)? {
+        if store
+            .iter::<LocalClimate>()
+            .map(|(id, _)| id)
+            .ne(store.iter::<Weather>().map(|(id, _)| id))
+        {
+            return Err(Error::InvalidSave(
+                "unpaired local weather components".into(),
+            ));
+        }
+        for (area, policy, weather) in self.cells(store) {
+            policy.validate_climate(&self.climate)?;
+            if area.0 == 0 || weather != &policy.apply(&self.weather)? {
                 return Err(Error::InvalidSave("inconsistent local weather cell".into()));
             }
         }
@@ -505,10 +549,10 @@ impl World {
     }
     /// Prepare an immutable transition. Foreign features can consume the
     /// completed-day facts before any runtime publishes its closing state.
-    pub fn prepare(&self, next: SimTime) -> Result<Step, Error> {
-        self.advance(self.at, next, self.seed)
+    pub fn prepare(&self, store: &Store, queries: &Queries, next: SimTime) -> Result<Step, Error> {
+        self.advance(store, queries, self.at, next, self.seed)
     }
-    pub fn admit(&self, step: &Step) -> Result<(), Error> {
+    pub fn admit(&self, store: &Store, queries: &mut Queries, step: &Step) -> Result<(), Error> {
         if !step.opening.matches(self) {
             return Err(Error::SequenceConflict);
         }
@@ -516,6 +560,7 @@ impl World {
             return Err(Error::SequenceConflict);
         }
         let next_day = step.next.0 / self.calendar.day.0;
+        queries.refresh(store)?;
         match &step.daily {
             None => {
                 if next_day != self.weather_day
@@ -538,7 +583,7 @@ impl World {
                 if next_day == self.weather_day
                     || daily.weather_day != next_day
                     || daily.weather != expected_weather
-                    || daily.cell_count != self.cells.len()
+                    || daily.cell_count != queries.rows(store)?.count()
                     || daily.cells.len() != daily.cell_count
                     || local.cells.len() != daily.cell_count
                     || elapsed.day != next_day
@@ -552,7 +597,10 @@ impl World {
                 let mut previous = None;
                 for change in &daily.cells {
                     if previous.is_some_and(|area| area >= change.area)
-                        || self.cells.get(&change.area) != Some(&change.before)
+                        || (store.get::<LocalClimate>(StableId(change.area.0))
+                            != Some(&change.before.policy)
+                            || store.get::<Weather>(StableId(change.area.0))
+                                != Some(&change.before.weather))
                         || local.cells.get(&change.area) != Some(&change.before.weather)
                         || change.weather != change.before.policy.apply(&daily.weather)?
                     {
@@ -564,14 +612,18 @@ impl World {
         }
         Ok(())
     }
-    pub fn commit(&mut self, step: Step) -> Result<(), Error> {
-        self.admit(&step)?;
+    pub fn commit(
+        &mut self,
+        store: &mut Store,
+        queries: &mut Queries,
+        step: Step,
+    ) -> Result<(), Error> {
+        self.admit(store, queries, &step)?;
         if let Some(daily) = step.daily {
             for change in daily.cells {
-                self.cells
-                    .get_mut(&change.area)
-                    .expect("admitted weather cell")
-                    .weather = change.weather;
+                *store
+                    .get_mut::<Weather>(StableId(change.area.0))
+                    .expect("admitted weather cell") = change.weather;
             }
             self.weather_day = daily.weather_day;
             self.weather = daily.weather;
@@ -579,15 +631,14 @@ impl World {
         self.at = step.next;
         Ok(())
     }
-    /// Snapshot convenience for inspectors and tests. Production commits apply
-    /// sparse prepared changes directly and never clone the containing runtime.
-    pub fn preview(&self, step: &Step) -> Result<Self, Error> {
-        self.admit(step)?;
-        let mut snapshot = self.clone();
-        snapshot.commit(step.clone())?;
-        Ok(snapshot)
-    }
-    pub fn advance(&self, from: SimTime, next: SimTime, seed: u64) -> Result<Step, Error> {
+    pub fn advance(
+        &self,
+        store: &Store,
+        queries: &Queries,
+        from: SimTime,
+        next: SimTime,
+        seed: u64,
+    ) -> Result<Step, Error> {
         self.validate_header(from, seed)?;
         if next < from || next > self.boundary(from, next)? {
             return Err(Error::InvalidSave(
@@ -610,20 +661,26 @@ impl World {
             let weather = self
                 .climate
                 .weather(seed, next_day, self.calendar.season(next));
-            let mut cells = Vec::with_capacity(self.cells.len());
+            let mut cells = Vec::new();
             let mut forcing = BTreeMap::new();
-            for (area, cell) in &self.cells {
-                cell.policy.validate_climate(&self.climate)?;
-                if area.0 == 0 || cell.weather != cell.policy.apply(&self.weather)? {
+            for (id, policy, local_weather) in queries.rows(store)? {
+                let area = AreaId(id.0);
+                policy.validate_climate(&self.climate)?;
+                if area.0 == 0 || local_weather != &policy.apply(&self.weather)? {
                     return Err(Error::InvalidSave("inconsistent local weather cell".into()));
                 }
                 cells.push(CellChange {
-                    area: *area,
-                    before: cell.clone(),
-                    weather: cell.policy.apply(&weather)?,
+                    area,
+                    before: WeatherCell {
+                        policy: *policy,
+                        weather: local_weather.clone(),
+                    },
+                    weather: policy.apply(&weather)?,
                 });
-                forcing.insert(*area, cell.weather.clone());
+                forcing.insert(area, local_weather.clone());
             }
+            cells.sort_unstable_by_key(|change| change.area);
+            let cell_count = cells.len();
             elapsed_local_day = Some(LocalDayFacts {
                 day: day.day,
                 day_of_year: day.day_of_year,
@@ -633,7 +690,7 @@ impl World {
                 weather_day: next_day,
                 weather,
                 cells,
-                cell_count: self.cells.len(),
+                cell_count,
             });
         }
         Ok(Step {
