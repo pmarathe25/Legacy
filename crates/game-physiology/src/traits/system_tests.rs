@@ -67,7 +67,7 @@ fn after() -> Development {
 
 #[test]
 fn inherited_genome_and_physical_development_compose_without_the_game_assembly() {
-    let physical = Runtime::new(definitions(), SimTime(0)).unwrap();
+    let mut physical = Runtime::new(definitions(), SimTime(0)).unwrap();
     let mut genes = game_genetics::Runtime::new(
         game_genetics::Rules {
             mutation_chance: 0,
@@ -162,9 +162,10 @@ fn inherited_genome_and_physical_development_compose_without_the_game_assembly()
     assert_eq!(trained.strength_milli, 1_100);
     assert_eq!(game_genetics::person_genome(&store, child), Some(&genome));
 
+    physical.reset_epoch(SimTime(20)).unwrap();
     let restored = Store::restore(schema(), store.snapshot().unwrap()).unwrap();
     game_genetics::validate(&genes, &restored, SimTime(20)).unwrap();
-    physical.validate(&restored, SimTime(0)).unwrap();
+    physical.validate(&restored, SimTime(20)).unwrap();
     assert_eq!(
         physical
             .phenotype_from_genes(&restored, child, &genes.allele_source(&restored))
