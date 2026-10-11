@@ -527,11 +527,9 @@ fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
     sim.advance(SimDuration(6_000)).unwrap();
     let site = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()
         .id;

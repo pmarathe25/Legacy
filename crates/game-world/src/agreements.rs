@@ -7,7 +7,7 @@ fn site_exists(state: &CanonicalState, site: SiteId) -> bool {
     state
         .physical
         .as_ref()
-        .is_some_and(|w| w.sites.contains_key(&site))
+        .is_some_and(|_| state.components.site(site).is_some())
         || state
             .agriculture
             .as_ref()
@@ -60,7 +60,7 @@ fn output_source(state: &CanonicalState, site: SiteId, good: Good) -> Option<Inv
             state
                 .physical
                 .as_ref()
-                .and_then(|w| w.sites.get(&site))
+                .and_then(|_| state.components.site(site))
                 .and_then(|s| (state.inventories[&s.output].good == good).then_some(s.output))
         })
 }

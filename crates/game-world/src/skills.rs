@@ -325,11 +325,9 @@ mod tests {
 
     fn local_site(sim: &Simulation) -> SiteId {
         sim.state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .find(|site| site.area == AreaId(1))
             .unwrap()
             .id

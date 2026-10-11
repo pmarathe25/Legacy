@@ -51,11 +51,9 @@ fn food(sim: &Simulation) -> InventoryId {
 fn labor(sim: &Simulation, millis: u64) -> AgreementTerm {
     let site = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
         .id;
@@ -319,11 +317,9 @@ fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade(
     let npc = citizen(&sim);
     let site = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
         .id;

@@ -890,11 +890,9 @@ mod tests {
         strong.debug_actor_command(actor, Command::Cancel).unwrap();
         let site = weak
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .find(|site| site.area == weak.state.areas[0].id)
             .unwrap()
             .id;

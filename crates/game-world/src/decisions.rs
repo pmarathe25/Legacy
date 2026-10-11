@@ -318,11 +318,9 @@ impl Simulation {
             mind.reconcile_care_observation(p.id);
             for site in self
                 .state
-                .physical
-                .as_ref()
-                .unwrap()
-                .sites
-                .values()
+                .components
+                .sites()
+                .map(|(_, site)| site)
                 .filter(|s| at_area && s.area == area)
             {
                 mind.sites.insert(
@@ -430,7 +428,11 @@ impl Simulation {
                 }
                 Some(Command::Work { site }) => (
                     site.0,
-                    self.state.physical.as_ref().unwrap().sites[site].last_granted,
+                    self.state
+                        .components
+                        .site(*site)
+                        .expect("site exists")
+                        .last_granted,
                 ),
                 _ => (0, None),
             };

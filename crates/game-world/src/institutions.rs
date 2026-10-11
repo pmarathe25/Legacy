@@ -540,7 +540,7 @@ impl Simulation {
                     self.state
                         .physical
                         .as_ref()
-                        .and_then(|world| world.sites.get(id))
+                        .and_then(|_| self.state.components.site(*id))
                         .map(|site| (*id, site.area))
                 })
                 .collect(),
@@ -1098,7 +1098,7 @@ impl Simulation {
                         self.state.agreements.as_ref().unwrap().obligations[&obligation].clone();
                     let (area, good, inventory) = match o.term {
                         AgreementTerm::Labor { site, .. } => {
-                            let site = &self.state.physical.as_ref().unwrap().sites[&site];
+                            let site = &self.state.components.site(site).expect("site exists");
                             (
                                 site.area,
                                 self.state.inventories[&site.output].good,
@@ -1138,7 +1138,7 @@ impl Simulation {
                     output,
                     ..
                 } if !attributable.contains(&(actor, site)) => {
-                    let site = &self.state.physical.as_ref().unwrap().sites[&site];
+                    let site = &self.state.components.site(site).expect("site exists");
                     let counterpart = self
                         .state
                         .agreements
@@ -1192,7 +1192,11 @@ impl Simulation {
                     };
                     let inventory = match o.term {
                         AgreementTerm::Labor { site, .. } => {
-                            self.state.physical.as_ref().unwrap().sites[&site].output
+                            self.state
+                                .components
+                                .site(site)
+                                .expect("site exists")
+                                .output
                         }
                         AgreementTerm::Delivery { destination, .. } => destination,
                         _ => continue,
@@ -1997,7 +2001,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let fail = || Error::InvalidSave("invalid institution state".into());
     let people: BTreeSet<_> = s.people.iter().map(|p| p.id).collect();
     let areas: BTreeSet<_> = s.areas.iter().map(|a| a.id).collect();
-    let physical = s.physical.as_ref().ok_or_else(fail)?;
+    s.physical.as_ref().ok_or_else(fail)?;
     let agreements = s.agreements.as_ref().ok_or_else(fail)?;
     if s.decisions.is_none()
         || w.last_event >= s.next_event
@@ -2068,7 +2072,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 beneficiary: b,
                 due_after,
             } => {
-                physical.sites.contains_key(site)
+                s.components.site(*site).is_some()
                     && *millis > 0
                     && due_after.0 >= *millis
                     && beneficiary(b)
@@ -2139,7 +2143,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 || office
                     .sites
                     .iter()
-                    .any(|id| !physical.sites.contains_key(id))
+                    .any(|id| s.components.site(*id).is_none())
             {
                 return Err(fail());
             }

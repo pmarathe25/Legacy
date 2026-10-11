@@ -430,6 +430,123 @@ fn job_store() -> game_ecs::Store {
 }
 
 #[test]
+fn site_components_roundtrip_and_removal_preserves_other_features() {
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct ForeignTag(u64);
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    assert_eq!(
+        schema.keys().collect::<Vec<_>>(),
+        vec!["workshop/job", "workshop/site"]
+    );
+    schema
+        .register::<ForeignTag>("fixture/tag", |_| Ok(()))
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(schema.clone());
+    assert!(crate::site(&store, SiteId(5)).is_none());
+    assert!(site_mut(&mut store, SiteId(5)).is_none());
+    assert!(remove_site(&mut store, SiteId(5)).unwrap().is_none());
+    let declaration = site();
+    insert_site(&mut store, declaration.clone()).unwrap();
+    store.insert(game_ecs::StableId(5), ForeignTag(9)).unwrap();
+    let work = start().job;
+    insert_job(&mut store, PersonId(5), work.clone()).unwrap();
+    assert_eq!(crate::site(&store, declaration.id), Some(&declaration));
+    let bytes = serde_json::to_vec(&store.snapshot().unwrap()).unwrap();
+    let mut restored =
+        game_ecs::Store::restore(schema, serde_json::from_slice(&bytes).unwrap()).unwrap();
+    assert_eq!(
+        sites(&restored).map(|(id, _)| id).collect::<Vec<_>>(),
+        vec![SiteId(5)]
+    );
+    assert_eq!(crate::site(&restored, SiteId(5)), Some(&declaration));
+    site_mut(&mut restored, SiteId(5)).unwrap().last_granted = Some(PersonId(8));
+    let removed = remove_site(&mut restored, SiteId(5)).unwrap().unwrap();
+    assert_eq!(removed.last_granted, Some(PersonId(8)));
+    assert!(crate::site(&restored, SiteId(5)).is_none());
+    assert_eq!(job(&restored, PersonId(5)), Some(&work));
+    assert_eq!(
+        restored.get::<ForeignTag>(game_ecs::StableId(5)),
+        Some(&ForeignTag(9))
+    );
+    assert!(restored.contains(game_ecs::StableId(5)));
+    assert!(remove_site(&mut restored, SiteId(5)).unwrap().is_none());
+}
+
+#[test]
+fn invalid_site_components_cannot_create_or_replace_declarations() {
+    let mut store = job_store();
+    let declaration = site();
+    insert_site(&mut store, declaration.clone()).unwrap();
+    let before = store.snapshot().unwrap();
+    for change in 0..10 {
+        let mut invalid = declaration.clone();
+        match change {
+            0 => invalid.id = SiteId(0),
+            1 => invalid.area = AreaId(0),
+            2 => invalid.input = InventoryId(0),
+            3 => invalid.tool = InventoryId(0),
+            4 => invalid.output = InventoryId(0),
+            5 => invalid.input_quantity = Quantity(0),
+            6 => invalid.output_quantity = Quantity(0),
+            7 => invalid.duration = SimDuration(0),
+            8 => {
+                invalid.access.insert(PersonId(0));
+            }
+            9 => invalid.last_granted = Some(PersonId(0)),
+            _ => unreachable!(),
+        }
+        assert!(insert_site(&mut store, invalid.clone()).is_err());
+        assert_eq!(store.snapshot().unwrap(), before);
+        let mut corrupted = before.clone();
+        corrupted.columns.get_mut("workshop/site").unwrap()[0].value =
+            serde_json::value::to_raw_value(&invalid).unwrap();
+        assert!(game_ecs::Store::restore(store.schema().clone(), corrupted).is_err());
+        if change > 0 {
+            invalid.id = SiteId(99);
+            assert!(insert_site(&mut store, invalid).is_err());
+            assert_eq!(store.snapshot().unwrap(), before);
+        }
+    }
+    let mut private = declaration;
+    private.id = SiteId(99);
+    private.access.clear();
+    private.last_granted = Some(PersonId(8));
+    insert_site(&mut store, private.clone()).unwrap();
+    assert_eq!(crate::site(&store, SiteId(99)), Some(&private));
+}
+
+#[test]
+fn absent_or_stricter_site_schemas_leave_the_shared_store_unchanged() {
+    let mut missing = game_ecs::Store::with_schema(game_ecs::Schema::new());
+    let before = missing.snapshot().unwrap();
+    assert!(insert_site(&mut missing, site()).is_err());
+    assert_eq!(missing.snapshot().unwrap(), before);
+
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<Site>("workshop/site", |value| {
+            value.validate()?;
+            if value.duration.0 <= 50 {
+                Ok(())
+            } else {
+                Err(Error::Unavailable)
+            }
+        })
+        .unwrap();
+    let mut stricter = game_ecs::Store::with_schema(schema);
+    let before = stricter.snapshot().unwrap();
+    assert!(insert_site(&mut stricter, site()).is_err());
+    assert_eq!(stricter.snapshot().unwrap(), before);
+    let mut admitted = site();
+    admitted.duration = SimDuration(50);
+    insert_site(&mut stricter, admitted).unwrap();
+    let before = stricter.snapshot().unwrap();
+    assert!(insert_site(&mut stricter, site()).is_err());
+    assert_eq!(stricter.snapshot().unwrap(), before);
+}
+
+#[test]
 fn missing_work_and_paused_fractional_jobs_roundtrip_without_an_aggregate_actor() {
     let mut store = job_store();
     assert!(job(&store, PersonId(1)).is_none());
@@ -546,6 +663,88 @@ fn production_commits_the_exact_job_component_once_and_preserves_foreign_data() 
             .is_err()
     );
     assert_eq!((store.snapshot().unwrap(), site, output), completed);
+}
+
+#[test]
+fn component_production_updates_the_site_and_preserves_other_rows_once() {
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct ForeignTag(u64);
+    for actor in [PersonId(1), PersonId(5)] {
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).unwrap();
+        schema
+            .register::<ForeignTag>("fixture/tag", |_| Ok(()))
+            .unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
+        let declaration = site();
+        insert_site(&mut store, declaration.clone()).unwrap();
+        store.insert(game_ecs::StableId(5), ForeignTag(9)).unwrap();
+        let mut work = start().job;
+        work.remaining = 0;
+        insert_job(&mut store, actor, work.clone()).unwrap();
+        let mut output = stock(3, Good::Food, 0);
+        let production = work
+            .prepare_completion(&declaration, &output, closing(actor.0, true))
+            .unwrap()
+            .unwrap();
+        production
+            .clone()
+            .commit_components(&mut store, &mut output)
+            .unwrap();
+        assert!(job(&store, actor).is_none());
+        assert_eq!(output.quantity, Quantity(4_000));
+        assert_eq!(
+            crate::site(&store, SiteId(5)).unwrap().last_granted,
+            Some(actor)
+        );
+        assert_eq!(
+            store.get::<ForeignTag>(game_ecs::StableId(5)),
+            Some(&ForeignTag(9))
+        );
+        let completed = (store.snapshot().unwrap(), output.clone());
+        assert!(
+            production
+                .commit_components(&mut store, &mut output)
+                .is_err()
+        );
+        assert_eq!((store.snapshot().unwrap(), output), completed);
+    }
+}
+
+#[test]
+fn component_production_rejects_stale_or_missing_rows_before_any_write() {
+    for change in 0..5 {
+        let mut store = job_store();
+        let declaration = site();
+        insert_site(&mut store, declaration.clone()).unwrap();
+        let mut work = start().job;
+        work.remaining = 0;
+        insert_job(&mut store, PersonId(1), work.clone()).unwrap();
+        let mut output = stock(3, Good::Food, 0);
+        let production = work
+            .prepare_completion(&declaration, &output, closing(1, true))
+            .unwrap()
+            .unwrap();
+        match change {
+            0 => site_mut(&mut store, SiteId(5)).unwrap().duration = SimDuration(77),
+            1 => job_mut(&mut store, PersonId(1)).unwrap().remaining = 1,
+            2 => output.quantity = Quantity(1),
+            3 => {
+                remove_site(&mut store, SiteId(5)).unwrap();
+            }
+            4 => {
+                remove_job(&mut store, PersonId(1)).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = (store.snapshot().unwrap(), output.clone());
+        assert!(
+            production
+                .commit_components(&mut store, &mut output)
+                .is_err()
+        );
+        assert_eq!((store.snapshot().unwrap(), output), before);
+    }
 }
 
 #[test]

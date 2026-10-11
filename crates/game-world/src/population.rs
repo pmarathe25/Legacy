@@ -341,21 +341,18 @@ impl Simulation {
             .insert(output, steward);
         let site = SiteId(allocate(&mut self.state)?);
         let rules = self.state.projects.as_ref().unwrap().rules.clone();
-        self.state.physical.as_mut().unwrap().sites.insert(
-            site,
-            physical::Site {
-                id: site,
-                area: settlement.center,
-                input: timber,
-                input_quantity: rules.recipe_timber,
-                tool,
-                output,
-                output_quantity: rules.recipe_tools,
-                duration: rules.recipe_time,
-                access: access.clone(),
-                last_granted: None,
-            },
-        );
+        self.state.components.insert_site(physical::Site {
+            id: site,
+            area: settlement.center,
+            input: timber,
+            input_quantity: rules.recipe_timber,
+            tool,
+            output,
+            output_quantity: rules.recipe_tools,
+            duration: rules.recipe_time,
+            access: access.clone(),
+            last_granted: None,
+        })?;
         let project = ProjectId(allocate(&mut self.state)?);
         let enterprise = EnterpriseId(allocate(&mut self.state)?);
         let participants: BTreeSet<_> = settlement.residents[3..11].iter().copied().collect();

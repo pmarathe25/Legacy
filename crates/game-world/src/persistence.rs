@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 29;
+const SAVE_VERSION: u32 = 30;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -277,8 +277,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.physical {
-        for id in world.sites.keys() {
+    if s.physical.is_some() {
+        for (id, _) in s.components.sites() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -1219,7 +1219,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .physical
                         .as_ref()
-                        .is_some_and(|w| w.sites.contains_key(&site))
+                        .is_some_and(|_| s.components.site(site).is_some())
                     || !s.inventories.contains_key(&output)
                     || quantity.0 == 0
                 {
@@ -1430,7 +1430,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                                 ProjectKind::Workshop => s
                                     .physical
                                     .as_ref()
-                                    .is_some_and(|world| world.sites.contains_key(&site)),
+                                    .is_some_and(|_| s.components.site(site).is_some()),
                                 ProjectKind::Farm { plot, water } => {
                                     site == plot
                                         && s.agriculture
@@ -1743,6 +1743,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     } else if s.components.bodies().next().is_some()
         || s.components.activities().next().is_some()
         || s.components.jobs().next().is_some()
+        || s.components.sites().next().is_some()
     {
         return Err(fail());
     }
@@ -1794,7 +1795,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     Subject::Site(id) => s
                         .physical
                         .as_ref()
-                        .is_some_and(|w| w.sites.contains_key(&id)),
+                        .is_some_and(|_| s.components.site(id).is_some()),
                     Subject::Project(id) => s
                         .projects
                         .as_ref()
@@ -1853,7 +1854,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || plan.prospects.site.is_some_and(|id| {
                         !s.physical
                             .as_ref()
-                            .is_some_and(|w| w.sites.contains_key(&id))
+                            .is_some_and(|_| s.components.site(id).is_some())
                     })
                     || plan
                         .prospects
@@ -1972,7 +1973,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             for (id, site) in &mind.sites {
                 if *id != site.site
-                    || !s.physical.as_ref().unwrap().sites.contains_key(id)
+                    || !s.components.site(*id).is_some()
                     || !areas.contains(&site.area)
                     || !s.inventories.contains_key(&site.input)
                     || !s.inventories.contains_key(&site.tool)
@@ -2025,7 +2026,8 @@ fn validate_physical(
     {
         return Err(fail());
     }
-    for (id, site) in &world.sites {
+    for (id, site) in s.components.sites() {
+        let id = &id;
         if *id != site.id
             || !areas.contains(&site.area)
             || site.duration.0 == 0
@@ -2104,9 +2106,9 @@ fn validate_physical(
                         || numerator / denominator > u128::from(maximum)
                 }
                 || job.work_remainder >= job.rate.denominator
-                || !world
-                    .sites
-                    .get(&job.site)
+                || !s
+                    .components
+                    .site(job.site)
                     .is_some_and(|site| job.remaining <= site.duration.0))
         {
             return Err(fail());

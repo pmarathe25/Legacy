@@ -132,7 +132,7 @@ impl Simulation {
         &self,
         only: Option<InventoryId>,
     ) -> Result<game_cargo::ToolAllocations, Error> {
-        let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let mut uses = Vec::new();
         for (actor, body) in self.state.components.bodies() {
             let actor = &actor;
@@ -146,9 +146,9 @@ impl Simulation {
             }
             let selected = match *activity {
                 Activity::Work { site } => self.state.components.job(*actor).and_then(|job| {
-                    physical
-                        .sites
-                        .get(&site)
+                    self.state
+                        .components
+                        .site(site)
                         .map(|site| job.tool.unwrap_or(site.tool))
                 }),
                 Activity::Cultivate { field, .. } => self
@@ -302,12 +302,12 @@ impl Simulation {
     }
 
     pub(crate) fn select_work_tool(&self, actor: PersonId, site: SiteId) -> Option<InventoryId> {
-        let physical = self.state.physical.as_ref()?;
+        self.state.physical.as_ref()?;
         let body = self.state.components.body(actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
-        let site = physical.sites.get(&site)?;
+        let site = self.state.components.site(site)?;
         let Location::AtArea(area) = *self
             .state
             .components
@@ -376,7 +376,7 @@ impl Simulation {
 
     #[cfg(test)]
     pub(crate) fn work_equipment_available(&self, actor: PersonId) -> bool {
-        let Some(physical) = &self.state.physical else {
+        let Some(_) = &self.state.physical else {
             return false;
         };
         if self.state.components.body(actor).is_none() {
@@ -388,7 +388,7 @@ impl Simulation {
         let Some(job) = self.state.components.job(actor) else {
             return false;
         };
-        let Some(site) = physical.sites.get(site) else {
+        let Some(site) = self.state.components.site(*site) else {
             return false;
         };
         self.tool_available_for(actor, job.tool.unwrap_or(site.tool))
@@ -436,21 +436,24 @@ mod tests {
 
     fn local_site(sim: &Simulation) -> SiteId {
         sim.state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .find(|site| site.area == AreaId(1))
             .unwrap()
             .id
     }
 
     fn duplicate_site(sim: &mut Simulation, original: SiteId) -> SiteId {
-        let mut site = sim.state.physical.as_ref().unwrap().sites[&original].clone();
+        let mut site = sim
+            .state
+            .components
+            .site(original)
+            .expect("site exists")
+            .clone();
         let id = SiteId(allocate(&mut sim.state).unwrap());
         site.id = id;
-        sim.state.physical.as_mut().unwrap().sites.insert(id, site);
+        sim.state.components.insert_site(site).unwrap();
         id
     }
 
@@ -648,7 +651,7 @@ mod tests {
             sim.interrupt_actor_activity(actor);
         }
         let site = local_site(&sim);
-        let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
+        let tool = sim.state.components.site(site).expect("site exists").tool;
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         compare_resource_queries(&sim);
@@ -760,7 +763,7 @@ mod tests {
         let carrier = sim.state.people[4].id;
         let site = local_site(&sim);
         let other = duplicate_site(&mut sim, site);
-        let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
+        let tool = sim.state.components.site(site).expect("site exists").tool;
         sim.state.inventories.get_mut(&tool).unwrap().quantity = Quantity(2_000);
         sim.debug_actor_command(first, Command::Work { site })
             .unwrap();
@@ -862,9 +865,9 @@ mod tests {
             )
             .unwrap();
         let site = SiteId(allocate(&mut sim.state).unwrap());
-        sim.state.physical.as_mut().unwrap().sites.insert(
-            site,
-            physical::Site {
+        sim.state
+            .components
+            .insert_site(physical::Site {
                 id: site,
                 area: field.area,
                 input,
@@ -875,8 +878,8 @@ mod tests {
                 duration: MINUTE,
                 access: BTreeSet::from([farmer, worker]),
                 last_granted: None,
-            },
-        );
+            })
+            .expect("validated site insertion");
         sim.debug_actor_command(
             farmer,
             Command::Cultivate {
@@ -947,7 +950,12 @@ mod tests {
         let worker = sim.state.ruler;
         let carrier = sim.state.people[3].id;
         let site = local_site(&sim);
-        let recipe = sim.state.physical.as_ref().unwrap().sites[&site].clone();
+        let recipe = sim
+            .state
+            .components
+            .site(site)
+            .expect("site exists")
+            .clone();
         let alternate = sim
             .debug_add_inventory(
                 Good::Tool,
@@ -1006,7 +1014,7 @@ mod tests {
         let worker = sim.state.ruler;
         let carrier = sim.state.people[3].id;
         let site = local_site(&sim);
-        let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
+        let tool = sim.state.components.site(site).expect("site exists").tool;
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         sim.carry_good(carrier, tool, Quantity(1_000)).unwrap();
@@ -1030,7 +1038,7 @@ mod tests {
         let mut sim = sim();
         let actor = sim.state.ruler;
         let site = local_site(&sim);
-        let tool = sim.state.physical.as_ref().unwrap().sites[&site].tool;
+        let tool = sim.state.components.site(site).expect("site exists").tool;
         sim.debug_actor_command(actor, Command::Work { site })
             .unwrap();
         sim.state
@@ -1054,7 +1062,12 @@ mod tests {
     fn generic_carry_has_atomic_validation_and_one_shared_capacity_for_all_goods() {
         let mut sim = sim();
         let actor = sim.state.ruler;
-        let tools = sim.state.physical.as_ref().unwrap().sites[&local_site(&sim)].tool;
+        let tools = sim
+            .state
+            .components
+            .site(local_site(&sim))
+            .expect("site exists")
+            .tool;
         let opening = sim.state.clone();
         for (source, quantity) in [
             (InventoryId(u64::MAX), Quantity(1_000)),
@@ -1202,7 +1215,12 @@ mod tests {
     fn native_carry_and_unload_conserve_goods_and_replay_pending_allocation_once() {
         let mut sim = sim();
         let actor = sim.state.ruler;
-        let source = sim.state.physical.as_ref().unwrap().sites[&local_site(&sim)].tool;
+        let source = sim
+            .state
+            .components
+            .site(local_site(&sim))
+            .expect("site exists")
+            .tool;
         let opening = sim.state.inventories[&source].quantity;
         let carry = Submission {
             caller_sequence: sim.next_caller_sequence().unwrap(),

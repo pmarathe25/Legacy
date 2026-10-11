@@ -1062,7 +1062,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         return Ok(());
     };
     let fail = || Error::InvalidSave("inconsistent lineage state".into());
-    let Some(physical) = &state.physical else {
+    let Some(_) = &state.physical else {
         return Err(fail());
     };
     let Some(development) = &state.development else {
@@ -1274,7 +1274,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     GuardianRequest::Move { destination } => {
                         !state.areas.iter().any(|a| a.id == destination)
                     }
-                    GuardianRequest::Work { site } => !physical.sites.contains_key(&site),
+                    GuardianRequest::Work { site } => state.components.site(site).is_none(),
                     GuardianRequest::Rest => false,
                     GuardianRequest::Supply {
                         source, quantity, ..

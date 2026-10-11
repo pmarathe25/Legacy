@@ -20,7 +20,6 @@ pub use game_workshop::{Job, Site};
 #[serde(deny_unknown_fields)]
 pub struct World {
     pub rules: Rules,
-    pub sites: BTreeMap<SiteId, Site>,
 }
 
 #[derive(Clone)]
@@ -150,10 +149,7 @@ impl Simulation {
             )?;
             self.state.components.set_activity(person, Activity::Idle)?;
         }
-        self.state.physical = Some(World {
-            rules,
-            sites: BTreeMap::new(),
-        });
+        self.state.physical = Some(World { rules });
         Ok(())
     }
     pub fn survival_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -215,9 +211,9 @@ impl Simulation {
             (forest, deposit, forest_tools, output, 1_000),
         ] {
             let id = SiteId(allocate(&mut sim.state)?);
-            sim.state.physical.as_mut().unwrap().sites.insert(
-                id,
-                Site {
+            sim.state
+                .components
+                .insert_site(Site {
                     id,
                     area,
                     input,
@@ -228,8 +224,8 @@ impl Simulation {
                     duration: MINUTE,
                     access: people.clone(),
                     last_granted: None,
-                },
-            );
+                })
+                .expect("validated site insertion");
         }
         // Each good has a separate physical stack. Carrying capacity is shared
         // across every stack carried by the same person.
@@ -246,7 +242,7 @@ impl Simulation {
     }
 
     pub(crate) fn physical_view(&self) -> Option<PhysicalView> {
-        let world = self.state.physical.as_ref()?;
+        self.state.physical.as_ref()?;
         let actor = &self
             .state
             .components
@@ -302,9 +298,11 @@ impl Simulation {
                     },
                 })
                 .collect(),
-            local_sites: world
-                .sites
-                .values()
+            local_sites: self
+                .state
+                .components
+                .sites()
+                .map(|(_, site)| site)
                 .filter(|s| Some(s.area) == area && s.access.contains(&ruler.id))
                 .map(|s| s.id)
                 .collect(),
@@ -606,7 +604,7 @@ impl Simulation {
                 (Self::cargo_load_activity(&job), None, None)
             }
             Command::Work { site } => {
-                let site_record = world.sites.get(&site).ok_or(Error::Unavailable)?;
+                let site_record = self.state.components.site(site).ok_or(Error::Unavailable)?;
                 let tool_id = self
                     .select_work_tool(actor, site)
                     .ok_or(Error::Unavailable)?;
@@ -1666,8 +1664,8 @@ impl Simulation {
             }
             if job_done && equipment.get(&actor).copied().unwrap_or(false) {
                 let site_id = self.state.components.job(actor).unwrap().site;
-                let world = self.state.physical.as_ref().unwrap();
-                let site = &world.sites[&site_id];
+                self.state.physical.as_ref().unwrap();
+                let site = &self.state.components.site(site_id).expect("site exists");
                 let production = self
                     .state
                     .components
@@ -1692,10 +1690,8 @@ impl Simulation {
                         output: production.output,
                         quantity: production.quantity,
                     };
-                    let world = self.state.physical.as_mut().unwrap();
-                    production.commit_to_store(
+                    production.commit_components(
                         &mut self.state.components,
-                        world.sites.get_mut(&site_id).unwrap(),
                         self.state.inventories.get_mut(&output_id).unwrap(),
                     )?;
                     *self
@@ -1739,7 +1735,7 @@ impl Simulation {
         &self,
         outcomes: &[Outcome],
     ) -> Vec<(SiteId, Good, Quantity)> {
-        let Some(world) = &self.state.physical else {
+        let Some(_) = &self.state.physical else {
             return Vec::new();
         };
         outcomes
@@ -1756,7 +1752,7 @@ impl Simulation {
                     return None;
                 }
                 let job = self.state.components.job(out.id)?;
-                let site = &world.sites[&job.site];
+                let site = &self.state.components.site(job.site).expect("site exists");
                 job.output_forecast(
                     game_workshop::Progress {
                         remaining: out.remaining?,

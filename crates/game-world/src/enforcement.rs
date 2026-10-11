@@ -74,7 +74,10 @@ impl Simulation {
         }
         // This opening supplies a court and watch rather than the autonomy
         // fixture's recipe jobs. Old private plans must not pull witnesses away.
-        sim.state.physical.as_mut().unwrap().sites.clear();
+        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        for site in sites {
+            sim.state.components.remove_site(site)?;
+        }
         let workers: Vec<_> = sim
             .state
             .components

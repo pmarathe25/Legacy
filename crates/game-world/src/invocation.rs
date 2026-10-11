@@ -358,11 +358,9 @@ impl Simulation {
         sim.advance(SimDuration(180_000))?;
         let site = sim
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .find(|s| s.area == AreaId(3))
             .unwrap()
             .id;
@@ -2261,8 +2259,14 @@ mod tests {
         {
             inventory.access.insert(actor);
         }
-        for site in sim.state.physical.as_mut().unwrap().sites.values_mut() {
-            site.access.insert(actor);
+        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        for id in sites {
+            sim.state
+                .components
+                .site_mut(id)
+                .unwrap()
+                .access
+                .insert(actor);
         }
         let area = match *sim
             .state
@@ -2418,11 +2422,9 @@ mod tests {
         let life = past(&borrowed);
         let site = borrowed
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .find(|s| s.area == AreaId(1))
             .unwrap()
             .id;

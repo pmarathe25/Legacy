@@ -662,11 +662,9 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
     assert!(sim.canonical_state().property.as_ref().unwrap().portions[&inventory].is_empty());
     let site = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()
         .id;

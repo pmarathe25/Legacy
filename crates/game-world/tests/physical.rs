@@ -236,11 +236,9 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
     let mut sim = sim(2);
     let site = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
         .clone();
@@ -376,11 +374,9 @@ fn timed_actions_reservations_and_partial_work_survive_saving() {
     assert_eq!(sim.canonical_state(), loaded.canonical_state());
     let site = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
         .id;

@@ -5,7 +5,10 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 mod components;
-pub use components::{insert_job, job, job_mut, jobs, register_components, remove_job};
+pub use components::{
+    insert_job, insert_site, job, job_mut, jobs, register_components, remove_job, remove_site,
+    site, site_mut, sites,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Job {
@@ -341,6 +344,25 @@ impl Production {
         remove_job(store, self.actor)?;
         output.quantity.0 += self.quantity.0;
         site.last_granted = Some(self.actor);
+        Ok(())
+    }
+
+    /// Completes a job and updates its site in the host's shared store. The
+    /// output stock remains a cargo-owned row supplied by the host.
+    pub fn commit_components(
+        self,
+        store: &mut game_ecs::Store,
+        output: &mut Inventory,
+    ) -> Result<(), Error> {
+        let declaration = site(store, self.site).ok_or(Error::Unavailable)?;
+        self.validate(job(store, self.actor), declaration, output)?;
+        remove_job(store, self.actor)?;
+        // Removing a Job preserves its entity and every other component,
+        // including a Site when actor and site happen to share a stable ID.
+        site_mut(store, self.site)
+            .expect("validated site survives job removal")
+            .last_granted = Some(self.actor);
+        output.quantity.0 += self.quantity.0;
         Ok(())
     }
 }

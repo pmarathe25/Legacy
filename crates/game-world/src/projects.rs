@@ -165,7 +165,10 @@ impl Simulation {
             )?;
         }
         // The old continuous food fixture is not the workshop's recipe.
-        sim.state.physical.as_mut().unwrap().sites.clear();
+        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        for site in sites {
+            sim.state.components.remove_site(site)?;
+        }
         for mind in sim.state.decisions.as_mut().unwrap().minds.values_mut() {
             mind.sites.clear();
             mind.plan = None;
@@ -579,7 +582,7 @@ impl Simulation {
                                     .state
                                     .physical
                                     .as_ref()
-                                    .is_none_or(|w| w.sites.contains_key(site))
+                                    .is_none_or(|_| self.state.components.site(*site).is_some())
                             {
                                 return Err(Error::Unavailable);
                             }
@@ -711,9 +714,9 @@ impl Simulation {
                 } => {
                     match asset {
                         AssetEffect::Workshop(asset) => {
-                            self.state.physical.as_mut().unwrap().sites.insert(
-                                site,
-                                physical::Site {
+                            self.state
+                                .components
+                                .insert_site(physical::Site {
                                     id: site,
                                     area: asset.area,
                                     input: asset.input,
@@ -724,8 +727,8 @@ impl Simulation {
                                     duration: asset.duration,
                                     access: asset.access,
                                     last_granted: None,
-                                },
-                            );
+                                })
+                                .expect("validated site insertion");
                         }
                         AssetEffect::Farm {
                             plot,
@@ -1123,7 +1126,7 @@ impl Simulation {
                     (self.state.agriculture.as_ref().unwrap().jobs.values().any(|j|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crop(&self.state.components, asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
                 }
                 ProjectKind::Workshop=>{
-                    let site=&self.state.physical.as_ref().unwrap().sites[&asset.site];
+                    let site=&self.state.components.site(asset.site).expect("site exists");
                     let output=&self.state.inventories[&site.output];
                     (self.state.components.activities().any(|(_,activity)|matches!(activity,Activity::Work {site:id} if *id==site.id)),false,
                         Quantity(output.capacity.0.saturating_sub(output.quantity.0)),site.input_quantity,site.output_quantity)
@@ -1133,7 +1136,7 @@ impl Simulation {
                 let (land_accessible,tool_available,materials_available)=match asset.kind {
                     ProjectKind::Farm {..}=>(self.state.agriculture.as_ref().unwrap().field(&self.state.components, asset.site).expect("component exists").access.contains(actor),false,Quantity(0)),
                     ProjectKind::Workshop=>{
-                        let site=&self.state.physical.as_ref().unwrap().sites[&asset.site];
+                        let site=&self.state.components.site(asset.site).expect("site exists");
                         (true,self.project_usable(*actor,site.tool,Good::Tool,1_000),if self.project_usable(*actor,site.input,Good::Timber,0) {Quantity(self.unreserved_stock(site.input,*actor))} else {Quantity(0)})
                     }
                 };
@@ -1612,7 +1615,11 @@ impl Simulation {
                 }
                 continue;
             }
-            let site = &self.state.physical.as_ref().unwrap().sites[&workshop.site];
+            let site = &self
+                .state
+                .components
+                .site(workshop.site)
+                .expect("site exists");
             if self.project_usable_for_planning(
                 actor,
                 site.input,
@@ -1943,7 +1950,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         .iter()
         .map(|person| (person.id, person))
         .collect::<BTreeMap<_, _>>();
-    let physical = state.physical.as_ref().ok_or_else(fail)?;
+    state.physical.as_ref().ok_or_else(fail)?;
     let agreements = state.agreements.as_ref().ok_or_else(fail)?;
     let rules = &world.rules;
     if state.decisions.is_none()
@@ -2107,7 +2114,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             }
             continue;
         }
-        let site = physical.sites.get(&enterprise.site).ok_or_else(fail)?;
+        let site = state.components.site(enterprise.site).ok_or_else(fail)?;
         if *id != enterprise.id
             || id.0 >= state.next_id
             || site.area != plan.area
@@ -2659,15 +2666,12 @@ mod farm_tests {
         }
         let debtor = sim.state.ruler;
         let creditor = sim.state.people[5].id;
-        let site = *sim
+        let site = sim
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .keys()
+            .components
+            .sites()
             .next()
-            .unwrap_or(&SiteId(0));
+            .map_or(SiteId(0), |(id, _)| id);
         // An authored existing productive asset; actual production events are the accrual trigger.
         let output = sim
             .debug_add_inventory(
@@ -2710,9 +2714,9 @@ mod farm_tests {
         } else {
             site
         };
-        sim.state.physical.as_mut().unwrap().sites.insert(
-            site,
-            physical::Site {
+        sim.state
+            .components
+            .insert_site(physical::Site {
                 id: site,
                 area: AreaId(1),
                 input,
@@ -2723,8 +2727,8 @@ mod farm_tests {
                 duration: MINUTE,
                 access: BTreeSet::from([debtor]),
                 last_granted: None,
-            },
-        );
+            })
+            .unwrap();
         sim.debug_agreement_action(
             debtor,
             AgreementAction::Propose {

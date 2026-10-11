@@ -66,11 +66,9 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
     let actor = reference.canonical_state().people[3].id;
     let site = reference
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
         .id;

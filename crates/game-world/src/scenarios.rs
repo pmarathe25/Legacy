@@ -564,9 +564,9 @@ impl Simulation {
             let site = SiteId(allocate(&mut self.state)?);
             let rules = self.state.projects.as_ref().unwrap().rules.clone();
             let participants = BTreeSet::from([ruler, craftsperson]);
-            self.state.physical.as_mut().unwrap().sites.insert(
-                site,
-                physical::Site {
+            self.state
+                .components
+                .insert_site(physical::Site {
                     id: site,
                     area,
                     input: timber,
@@ -577,8 +577,8 @@ impl Simulation {
                     duration: rules.recipe_time,
                     access: participants.clone(),
                     last_granted: None,
-                },
-            );
+                })
+                .expect("validated site insertion");
             self.state.projects.as_mut().unwrap().projects.insert(
                 project,
                 projects::Project {

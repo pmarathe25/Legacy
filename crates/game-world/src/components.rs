@@ -31,6 +31,24 @@ impl Components {
     pub fn bodies(&self) -> impl Iterator<Item = (game_api::PersonId, &game_physiology::Body)> {
         game_physiology::bodies(&self.0)
     }
+    pub fn site(&self, id: game_api::SiteId) -> Option<&game_workshop::Site> {
+        game_workshop::site(&self.0, id)
+    }
+    pub fn site_mut(&mut self, id: game_api::SiteId) -> Option<&mut game_workshop::Site> {
+        game_workshop::site_mut(&mut self.0, id)
+    }
+    pub fn sites(&self) -> impl Iterator<Item = (game_api::SiteId, &game_workshop::Site)> {
+        game_workshop::sites(&self.0)
+    }
+    pub fn insert_site(&mut self, site: game_workshop::Site) -> Result<(), Error> {
+        game_workshop::insert_site(&mut self.0, site)
+    }
+    pub fn remove_site(
+        &mut self,
+        id: game_api::SiteId,
+    ) -> Result<Option<game_workshop::Site>, Error> {
+        game_workshop::remove_site(&mut self.0, id)
+    }
     pub fn location(&self, actor: game_api::PersonId) -> Option<&game_api::Location> {
         game_spatial::location(&self.0, game_ecs::StableId(actor.0))
     }
@@ -159,13 +177,11 @@ mod tests {
     fn body_activity_and_workshop_jobs_are_independent_canonical_columns() {
         let mut sim = Simulation::survival_fixture(13, Execution::default()).unwrap();
         let ruler = sim.state.ruler;
-        let site = *sim
+        let site = sim
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .keys()
+            .components
+            .sites()
+            .map(|(id, _)| id)
             .next()
             .unwrap();
         sim.debug_actor_command(ruler, game_api::Command::Work { site })
@@ -320,5 +336,56 @@ mod tests {
             Simulation::load(&serde_json::to_vec(&corrupt).unwrap(), Execution::default()).is_err()
         );
         assert_eq!(sim.save().unwrap(), saved);
+    }
+
+    #[test]
+    fn workshop_sites_roundtrip_only_as_shared_rows_and_require_physical_metadata() {
+        let sim = Simulation::survival_fixture(18, Execution::default()).unwrap();
+        let saved = sim.save().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(
+            !json["state"]["physical"]
+                .as_object()
+                .unwrap()
+                .contains_key("sites")
+        );
+        assert_eq!(
+            json["state"]["components"]["columns"]["workshop/site"]
+                .as_array()
+                .unwrap()
+                .len(),
+            sim.state.components.sites().count()
+        );
+        let restored = Simulation::load(
+            &saved,
+            Execution {
+                workers: 2,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
+
+        let mut kernel = Simulation::kernel_fixture(19, 5, Execution::default()).unwrap();
+        let person = &kernel.state.people[0];
+        let id = game_api::SiteId(person.id.0);
+        let stock = person.inventory;
+        kernel
+            .state
+            .components
+            .insert_site(game_workshop::Site {
+                id,
+                area: kernel.state.areas[0].id,
+                input: stock,
+                input_quantity: game_api::Quantity(1),
+                tool: stock,
+                output: stock,
+                output_quantity: game_api::Quantity(1),
+                duration: SimDuration(1),
+                access: std::collections::BTreeSet::new(),
+                last_granted: None,
+            })
+            .unwrap();
+        assert!(Simulation::load(&kernel.save().unwrap(), Execution::default()).is_err());
     }
 }

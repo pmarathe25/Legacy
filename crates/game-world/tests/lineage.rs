@@ -318,11 +318,9 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
     );
     let site = sim
         .canonical_state()
-        .physical
-        .as_ref()
-        .unwrap()
-        .sites
-        .values()
+        .components
+        .sites()
+        .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()
         .id;
@@ -348,7 +346,7 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
             .is_none()
     );
     let mut save: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    save["state"]["physical"]["sites"][site.0.to_string()]["access"]
+    support::component_id(&mut save, "workshop/site", site.0)["access"]
         .as_array_mut()
         .unwrap()
         .retain(|id| id != &serde_json::json!(guardian.0));

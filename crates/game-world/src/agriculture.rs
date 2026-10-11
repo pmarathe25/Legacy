@@ -77,7 +77,10 @@ impl Simulation {
             sim.interrupt_actor_activity(actor);
             sim.state.components.set_job(actor, None)?;
         }
-        sim.state.physical.as_mut().unwrap().sites.clear();
+        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        for site in sites {
+            sim.state.components.remove_site(site)?;
+        }
         for mind in sim.state.decisions.as_mut().unwrap().minds.values_mut() {
             mind.sites.clear();
             mind.plan = None;
@@ -698,7 +701,7 @@ impl Simulation {
                     .state
                     .physical
                     .as_ref()
-                    .is_none_or(|w| w.sites.contains_key(&id))
+                    .is_none_or(|_| self.state.components.site(id).is_some())
                 || !self.state.areas.iter().any(|a| a.id == field.area)
                 || field
                     .custodian

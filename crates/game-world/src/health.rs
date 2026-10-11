@@ -2731,25 +2731,16 @@ mod integration_tests {
             .unwrap();
         let site = sim
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .find(|site| site.area == area)
             .unwrap()
             .id;
-        let output = sim.state.physical.as_ref().unwrap().sites[&site].output;
+        let output = sim.state.components.site(site).expect("site exists").output;
         let before = sim.state.inventories[&output].quantity;
         {
-            let site = sim
-                .state
-                .physical
-                .as_mut()
-                .unwrap()
-                .sites
-                .get_mut(&site)
-                .unwrap();
+            let site = sim.state.components.site_mut(site).unwrap();
             site.tool = tool;
             site.duration = SimDuration(30_000);
             site.access.insert(worker);

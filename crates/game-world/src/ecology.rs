@@ -1033,7 +1033,7 @@ impl Simulation {
                     .agriculture
                     .as_ref()
                     .is_some_and(|w| w.field(&self.state.components, *id).is_some())
-                || self.state.physical.as_ref().unwrap().sites.contains_key(id)
+                || self.state.components.site(*id).is_some()
             {
                 return Err(bad());
             }

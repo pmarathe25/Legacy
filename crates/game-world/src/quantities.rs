@@ -326,23 +326,14 @@ mod tests {
         let actor = sim.state.ruler;
         let site = sim
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .find(|site| site.area == AreaId(1))
             .unwrap()
             .id;
-        let input = sim.state.physical.as_ref().unwrap().sites[&site].input;
-        sim.state
-            .physical
-            .as_mut()
-            .unwrap()
-            .sites
-            .get_mut(&site)
-            .unwrap()
-            .input_quantity = Quantity(250);
+        let input = sim.state.components.site(site).expect("site exists").input;
+        sim.state.components.site_mut(site).unwrap().input_quantity = Quantity(250);
         sim.state
             .decisions
             .as_mut()

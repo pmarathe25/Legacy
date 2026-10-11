@@ -1263,11 +1263,9 @@ mod tests {
         sim.review_decisions().unwrap();
         let site = sim
             .state
-            .physical
-            .as_ref()
-            .unwrap()
-            .sites
-            .values()
+            .components
+            .sites()
+            .map(|(_, site)| site)
             .next()
             .unwrap()
             .clone();
