@@ -54,6 +54,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-genetics` | `game-ecs` | Genomes and frozen inheritance components; opaque allele readers |
 | `game-health` | `game-ecs` | Clinical state, work, water quality, shelters, occupancy, consent offers, and remembered health components; guarded action and interval effects |
 | `game-lifecycle` | `game-ecs`; `game-genetics` (optional) | Life and pregnancy components; guarded age and birth transitions; opaque inheritable reproductive characteristics |
+| `game-invocation` | `game-characters` | Borrowed character goals, personality and memories; historical-controller intentions and admission fallback |
 | `game-lineage` | `game-logistics` | Care provision delivery requirements and receipts |
 | `game-missions` | `game-agreements` | Agreement terms in mission objectives |
 | `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components and numerical integration; opaque inheritable physical characteristics |
@@ -64,7 +65,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
 | `game-workshop` | `game-ecs`, `game-cargo`, `game-skills` | Site and optional job components; material inputs and outputs; work rates and craft practice effects |
 
-`game-agreements`, `game-invocation`, `game-logistics`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
+`game-agreements`, `game-logistics`, and `game-transport` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
 
 ## Components and systems
 

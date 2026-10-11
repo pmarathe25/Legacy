@@ -1,4 +1,4 @@
-//! Invocation cost progression. No simulation, health, archive or client dependency.
+//! Invocation costs, control, and historical decisions over supplied body facts and personal memories.
 mod progression;
 mod rules;
 mod state;
@@ -13,3 +13,6 @@ pub use control::*;
 
 #[cfg(test)]
 mod control_tests;
+
+mod controller;
+pub use controller::*;

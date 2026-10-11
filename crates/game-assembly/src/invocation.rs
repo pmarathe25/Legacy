@@ -1086,22 +1086,13 @@ impl Simulation {
     ) -> Option<BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>> {
         let w = self.host.state.invocation.as_ref()?;
         let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
-        let mut routes =
-            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
-                .routes
-                .clone();
-        for id in &a.lives {
-            for (from, links) in &w.history[id].mind.routes {
-                for (to, duration) in links {
-                    routes
-                        .entry(*from)
-                        .or_default()
-                        .entry(*to)
-                        .or_insert(*duration);
-                }
-            }
-        }
-        Some(routes)
+        let current =
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
+                .routes;
+        Some(game_invocation::recalled_routes(
+            current,
+            a.lives.iter().map(|id| &w.history[id].mind.routes),
+        ))
     }
     fn dismiss_recalled_route(&mut self, actor: PersonId) {
         let person = &self.host.state.people[self.person_index[&actor]];
@@ -1128,19 +1119,12 @@ impl Simulation {
         let w = self.host.state.invocation.as_ref()?;
         let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
         let life = a.dominant.or_else(|| a.lives.iter().next().copied())?;
-        let mut p = w.history[&life].mind.personality.clone();
-        let b = w.control.people.get(&actor).cloned().unwrap_or_default();
-        p.discipline = p.discipline.saturating_sub(
-            b.temporary_identity
-                .saturating_add(b.permanent_identity)
-                .saturating_mul(5),
-        );
-        p.aggression = p
-            .aggression
-            .saturating_add(b.emotional_disruption)
-            .min(1_000);
-        p.patience = p.patience.saturating_sub(b.emotional_disruption);
-        Some(p)
+        let empty = game_invocation::Burden::default();
+        let burden = w.control.people.get(&actor).unwrap_or(&empty);
+        Some(game_invocation::controller_personality(
+            &w.history[&life].mind.personality,
+            burden,
+        ))
     }
     pub(crate) fn invocation_social_penalty(&self, actor: PersonId) -> i64 {
         self.host
@@ -1190,7 +1174,8 @@ impl Simulation {
             })
             .unwrap();
         prepared.commit(&mut self.host.state.invocation.as_mut().unwrap().control)?;
-        let a = self
+        let controller_actor = actor;
+        let active = self
             .host
             .state
             .invocation
@@ -1198,198 +1183,130 @@ impl Simulation {
             .unwrap()
             .control
             .active
-            .clone()
+            .as_ref()
             .unwrap();
-        let mind = self.host.state.invocation.as_ref().unwrap().history[&life]
-            .mind
-            .clone();
-        if self.in_combat(a.actor) {
-            return Ok(());
-        }
-        let person = &self.host.state.people[self.person_index[&a.actor]];
-        if !self.independent(a.actor) {
-            return Ok(());
-        }
-        if !matches!(
-            *game_spatial::location(&self.host.storage, game_ecs::StableId((person.id).0))
-                .expect("location exists"),
-            Location::AtArea(_)
-        ) {
-            if changed && mind.dream == decisions::Aspiration::Comfort {
-                let _ = self.debug_actor_command(a.actor, Command::Cancel);
+        let past = &self.host.state.invocation.as_ref().unwrap().history[&life].mind;
+        let current = game_characters::decisions::mind::<game_api::Command>(
+            &self.host.storage,
+            controller_actor,
+        )
+        .expect("mind exists");
+        let body = game_physiology::body(&self.host.storage, controller_actor).unwrap();
+        let rules = &self.host.state.physical.as_ref().unwrap().rules;
+        let area = match *game_spatial::location(
+            &self.host.storage,
+            game_ecs::StableId(controller_actor.0),
+        )
+        .expect("location exists")
+        {
+            Location::AtArea(area) => Some(area),
+            _ => None,
+        };
+        let local = self
+            .host
+            .state
+            .people
+            .iter()
+            .filter(|person| {
+                area.is_some_and(|area| {
+                    game_spatial::location(&self.host.storage, game_ecs::StableId(person.id.0))
+                        == Some(&Location::AtArea(area))
+                }) && game_physiology::body(&self.host.storage, person.id)
+                    .unwrap()
+                    .vitals
+                    .alive
+            })
+            .map(|person| game_invocation::ControllerPerson {
+                person: person.id,
+                contact: self.transport_same_place(controller_actor, person.id),
+            });
+        let historical_routes: Vec<_> = active
+            .lives
+            .iter()
+            .map(|id| {
+                &self.host.state.invocation.as_ref().unwrap().history[id]
+                    .mind
+                    .routes
+            })
+            .collect();
+        let personality = self.invocation_personality(controller_actor).unwrap();
+        let activity = match *self.host.storage.activity(controller_actor).unwrap() {
+            Activity::Eat { .. } => game_invocation::ControllerActivity::Eat,
+            Activity::Load { .. } => game_invocation::ControllerActivity::Load,
+            Activity::Care { .. } => game_invocation::ControllerActivity::Care,
+            Activity::Tell { .. } => game_invocation::ControllerActivity::Tell,
+            Activity::Lesson { .. } => game_invocation::ControllerActivity::Lesson,
+            Activity::WritingMemory { .. }
+            | Activity::ReadingMemory { .. }
+            | Activity::TeachingMemory { .. }
+            | Activity::MovingRecord { .. } => game_invocation::ControllerActivity::Memory,
+            Activity::Work { site } => game_invocation::ControllerActivity::Work { site },
+            _ => game_invocation::ControllerActivity::Other,
+        };
+        let decision =
+            game_invocation::choose_controller_action(game_invocation::ControllerInput {
+                actor: controller_actor,
+                changed,
+                in_combat: self.in_combat(controller_actor),
+                independent: self.independent(controller_actor),
+                area,
+                activity,
+                hunger: body.vitals.hunger,
+                meal_relief: rules.meal_relief,
+                fatigue: body.vitals.fatigue,
+                fatigue_limit: rules.fatigue_limit,
+                personality: &personality,
+                past: game_invocation::ControllerMemory {
+                    goal: past.goal,
+                    dream: past.dream,
+                    stocks: &past.knowledge,
+                    sites: &past.sites,
+                    relationships: &past.relationships,
+                },
+                current_stocks: &current.knowledge,
+                current_sites: &current.sites,
+                child_signals: &current.child_signals,
+                local_people: local,
+                current_routes: &current.routes,
+                historical_routes: &historical_routes,
+            });
+        if let game_invocation::ControllerDecision::Act { action, ready } = decision {
+            let result = if ready {
+                self.apply_invocation_action(controller_actor, action)
+            } else {
+                Err(Error::Unavailable)
+            };
+            if result.is_err()
+                && let Some(fallback) = decision.after_failure()
+            {
+                let _ = self.apply_invocation_action(controller_actor, fallback);
             }
-            return Ok(());
-        }
-        let body = game_physiology::body(&self.host.storage, a.actor).unwrap();
-        let traits = self.invocation_personality(a.actor).unwrap();
-        if !changed
-            && matches!(
-                *self.host.storage.activity(a.actor).unwrap(),
-                Activity::Eat { .. }
-                    | Activity::Load { .. }
-                    | Activity::Care { .. }
-                    | Activity::Tell { .. }
-                    | Activity::Lesson { .. }
-                    | Activity::WritingMemory { .. }
-                    | Activity::ReadingMemory { .. }
-                    | Activity::TeachingMemory { .. }
-                    | Activity::MovingRecord { .. }
-            )
-        {
-            return Ok(());
-        }
-        let area = if let Location::AtArea(area) =
-            *game_spatial::location(&self.host.storage, game_ecs::StableId((person.id).0))
-                .expect("location exists")
-        {
-            area
-        } else {
-            unreachable!()
-        };
-        let current =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, a.actor)
-                .expect("mind exists");
-        let mut knowledge = mind.knowledge.clone();
-        knowledge.extend(
-            current
-                .knowledge
-                .iter()
-                .map(|(id, fact)| (*id, fact.clone())),
-        );
-        let mut sites = mind.sites.clone();
-        sites.extend(current.sites.iter().map(|(id, fact)| (*id, fact.clone())));
-        let command = if body.vitals.hunger
-            >= self.host.state.physical.as_ref().unwrap().rules.meal_relief
-            || mind.goal == decisions::Goal::Survival
-                && body.vitals.hunger
-                    >= self.host.state.physical.as_ref().unwrap().rules.meal_relief / 3
-        {
-            knowledge
-                .values()
-                .filter(|k| k.good == Good::Food && k.accessible && k.quantity.0 >= 1_000)
-                .filter_map(|k| {
-                    if k.area == area {
-                        Some((
-                            0,
-                            Command::Eat {
-                                source: k.inventory,
-                            },
-                        ))
-                    } else {
-                        self.invocation_routes(a.actor)
-                            .and_then(|routes| decisions::known_path(&routes, area, k.area).ok())
-                            .map(|(_, duration)| {
-                                (
-                                    duration.0,
-                                    Command::Move {
-                                        destination: k.area,
-                                    },
-                                )
-                            })
-                    }
-                })
-                .min_by_key(|(cost, _)| *cost)
-                .map(|(_, command)| command)
-                .unwrap_or(Command::Rest)
-        } else if body.vitals.fatigue
-            > self
-                .host
-                .state
-                .physical
-                .as_ref()
-                .unwrap()
-                .rules
-                .fatigue_limit
-                / 2
-            || mind.dream == decisions::Aspiration::Comfort
-            || traits.hedonism > traits.discipline
-        {
-            Command::Rest
-        } else if traits.aggression >= 800 && traits.risk_tolerance >= 600 {
-            self.host
-                .state
-                .people
-                .iter()
-                .filter(|p| {
-                    p.id != a.actor
-                        && *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
-                            .expect("location exists")
-                            == Location::AtArea(area)
-                        && game_physiology::body(&self.host.storage, p.id)
-                            .unwrap()
-                            .vitals
-                            .alive
-                })
-                .filter(|p| mind.relationships.get(&p.id).is_some_and(|r| r.trust < 0))
-                .take(64)
-                .map(|p| Command::Engage { target: p.id })
-                .next()
-                .unwrap_or(Command::Rest)
-        } else if (mind.dream == decisions::Aspiration::SupportOthers
-            || mind.goal == decisions::Goal::Care)
-            && traits.empathy >= 500
-        {
-            current
-                .child_signals
-                .iter()
-                .filter(|(_, signal)| {
-                    signal.location == Location::AtArea(area) && signal.urgency > 0
-                })
-                .find_map(|(child, _)| {
-                    knowledge
-                        .values()
-                        .find(|k| {
-                            k.area == area
-                                && k.good == Good::Food
-                                && k.accessible
-                                && k.quantity.0 >= 1_000
-                        })
-                        .map(|k| Command::Care {
-                            child: *child,
-                            source: k.inventory,
-                        })
-                })
-                .unwrap_or(Command::Rest)
-        } else {
-            sites
-                .values()
-                .filter(|s| s.access)
-                .filter(|s| {
-                    knowledge
-                        .get(&s.input)
-                        .is_some_and(|k| k.accessible && k.quantity >= s.input_quantity)
-                        && knowledge
-                            .get(&s.tool)
-                            .is_some_and(|k| k.accessible && k.quantity.0 >= 1_000)
-                })
-                .map(|s| {
-                    if s.area == area {
-                        Command::Work { site: s.site }
-                    } else {
-                        Command::Move {
-                            destination: s.area,
-                        }
-                    }
-                })
-                .next()
-                .unwrap_or(Command::Rest)
-        };
-        if !changed
-            && matches!((self.host.storage.activity(a.actor).unwrap(),&command),(Activity::Work {site:a},Command::Work {site:b})if a==b)
-        {
-            return Ok(());
-        }
-        let result = match command {
-            Command::Move { destination } => self.start_movement(a.actor, destination),
-            Command::Engage { target } => self
-                .debug_start_encounter(vec![(a.actor, 0), (target, 1)])
-                .map(|_| ()),
-            command => self.debug_actor_command(a.actor, command),
-        };
-        if result.is_err() {
-            let _ = self.debug_actor_command(a.actor, Command::Rest);
         }
         Ok(())
+    }
+    fn apply_invocation_action(
+        &mut self,
+        actor: PersonId,
+        action: game_invocation::ControllerAction,
+    ) -> Result<(), Error> {
+        use game_invocation::ControllerAction;
+        match action {
+            ControllerAction::Move { destination } => self.start_movement(actor, destination),
+            ControllerAction::Engage { target } => self
+                .debug_start_encounter(vec![(actor, 0), (target, 1)])
+                .map(|_| ()),
+            ControllerAction::Rest => self.debug_actor_command(actor, Command::Rest),
+            ControllerAction::Cancel => self.debug_actor_command(actor, Command::Cancel),
+            ControllerAction::Eat { source } => {
+                self.debug_actor_command(actor, Command::Eat { source })
+            }
+            ControllerAction::Care { child, source } => {
+                self.debug_actor_command(actor, Command::Care { child, source })
+            }
+            ControllerAction::Work { site } => {
+                self.debug_actor_command(actor, Command::Work { site })
+            }
+        }
     }
     pub fn invocation_preview(
         &self,
@@ -2878,5 +2795,62 @@ mod tests {
             );
             assert!(!sim.past_life_controls_actor(sim.host.state.ruler));
         }
+    }
+    #[test]
+    fn an_accepted_past_controller_uses_its_own_comfort_goal_in_the_actual_body() {
+        let mut sim = ready(1);
+        let actor = sim.host.state.ruler;
+        let life = past(&sim);
+        sim.debug_set_personality(
+            actor,
+            decisions::Personality::industrious(),
+            decisions::Aspiration::Independence,
+        )
+        .unwrap();
+        let archived = &mut sim
+            .host
+            .state
+            .invocation
+            .as_mut()
+            .unwrap()
+            .history
+            .get_mut(&life)
+            .unwrap()
+            .mind;
+        archived.dream = decisions::Aspiration::Comfort;
+        archived.goal = decisions::Goal::Practice;
+        activate(&mut sim, BTreeSet::from([life]));
+        let warning = approach_loss(&mut sim);
+        let body = game_physiology::body_mut(&mut sim.host.storage, actor).unwrap();
+        body.vitals.hunger = 0;
+        body.vitals.fatigue = 0;
+        sim.host
+            .storage
+            .set_activity(actor, Activity::Idle)
+            .unwrap();
+        // AcceptWarning immediately runs the first controller turn. Do not
+        // overwrite its action afterward or ask for a second turn before due.
+        act(&mut sim, InvocationAction::AcceptWarning { warning }).unwrap();
+        assert_eq!(
+            sim.host
+                .state
+                .invocation
+                .as_ref()
+                .unwrap()
+                .control
+                .active
+                .as_ref()
+                .unwrap()
+                .dominant,
+            Some(life)
+        );
+        assert_eq!(sim.host.storage.activity(actor), Some(&Activity::Rest));
+        assert_eq!(
+            game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, actor)
+                .unwrap()
+                .dream,
+            decisions::Aspiration::Independence
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
 }

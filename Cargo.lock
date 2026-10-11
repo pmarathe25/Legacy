@@ -634,6 +634,7 @@ dependencies = [
 name = "game-invocation"
 version = "0.1.0"
 dependencies = [
+ "game-characters",
  "game-core",
  "serde",
  "serde_json",
