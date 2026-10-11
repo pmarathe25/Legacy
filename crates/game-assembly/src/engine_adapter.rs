@@ -19,18 +19,16 @@ pub(crate) const COMMIT: PhaseKey = PhaseKey {
 };
 impl ClockWorld for Simulation {
     fn clock(&self) -> Clock {
-        Clock {
-            time: self.state.time,
-            revision: self.revision,
-        }
+        self.host.clock()
     }
     fn publish_clock(&mut self, clock: Clock) {
-        self.state.time = clock.time;
-        self.revision = clock.revision;
+        self.host.publish_clock(clock);
     }
 }
+
 fn due(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     Ok(world
+        .host
         .state
         .due
         .first_key_value()
@@ -74,11 +72,12 @@ fn transport(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
 }
 fn agriculture(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {
     Ok(world
+        .host
         .state
         .agriculture
         .as_ref()
         .map_or(interval.to, |crop| {
-            crop.next_boundary(&world.state.components, interval.from, interval.to)
+            crop.next_boundary(&world.host.storage, interval.from, interval.to)
         }))
 }
 fn genetics(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {

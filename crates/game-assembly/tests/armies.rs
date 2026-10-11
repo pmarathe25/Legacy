@@ -11,7 +11,7 @@ fn submit(sim: &mut Simulation, command: Command) {
 }
 fn advance_until(sim: &mut Simulation, mut ready: impl FnMut(&CanonicalState) -> bool) {
     for _ in 0..40 {
-        if ready(sim.canonical_state()) {
+        if ready(&sim.canonical_state()) {
             return;
         }
         sim.advance(MINUTE).unwrap();
@@ -20,6 +20,7 @@ fn advance_until(sim: &mut Simulation, mut ready: impl FnMut(&CanonicalState) ->
         "The actual parties did not reach the expected stage at {:?}: battles={:?}, approaches={:?}, orders={:?}, talks={:?}, actors={:?}",
         sim.time(),
         sim.canonical_state()
+            .state
             .combat
             .as_ref()
             .unwrap()
@@ -27,8 +28,14 @@ fn advance_until(sim: &mut Simulation, mut ready: impl FnMut(&CanonicalState) ->
             .values()
             .map(|e| (e.active, e.fighters.len()))
             .collect::<Vec<_>>(),
-        sim.canonical_state().armies.as_ref().unwrap().approaches,
         sim.canonical_state()
+            .state
+            .armies
+            .as_ref()
+            .unwrap()
+            .approaches,
+        sim.canonical_state()
+            .state
             .armies
             .as_ref()
             .unwrap()
@@ -37,8 +44,9 @@ fn advance_until(sim: &mut Simulation, mut ready: impl FnMut(&CanonicalState) ->
             .values()
             .flat_map(|a| a.orders.values().map(|o| (&o.objective, &o.recipients)))
             .collect::<Vec<_>>(),
-        sim.canonical_state().armies.as_ref().unwrap().talks,
+        sim.canonical_state().state.armies.as_ref().unwrap().talks,
         sim.canonical_state()
+            .state
             .missions
             .as_ref()
             .unwrap()
@@ -62,17 +70,18 @@ fn advance_until(sim: &mut Simulation, mut ready: impl FnMut(&CanonicalState) ->
 }
 fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
     let mut sim = Simulation::new("army-fixture", 7, Execution::default()).unwrap();
-    let village = sim.canonical_state().areas[0].id;
-    let forest = sim.canonical_state().areas[2].id;
-    let enemy = sim.canonical_state().people[3].id;
+    let village = sim.canonical_state().state.areas[0].id;
+    let forest = sim.canonical_state().state.areas[2].id;
+    let enemy = sim.canonical_state().state.people[3].id;
     sim.debug_move_actor(enemy, forest).unwrap();
-    let people: Vec<_> = sim.canonical_state().people[4..]
+    let people: Vec<_> = sim.canonical_state().state.people[4..]
         .iter()
         .map(|p| p.id)
         .collect();
     assert_eq!(people.len(), 65);
     let food = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(village))
@@ -80,6 +89,7 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
         .id;
     let binding = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| i.good == Good::Binding && i.location == InventoryLocation::Area(village))
@@ -122,6 +132,7 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
         );
         missions.push(
             *sim.canonical_state()
+                .state
                 .missions
                 .as_ref()
                 .unwrap()
@@ -133,7 +144,12 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
     }
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(missions.iter().all(|m| {
-        sim.canonical_state().missions.as_ref().unwrap().missions[m]
+        sim.canonical_state()
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .missions[m]
             .members
             .values()
             .all(|p| p.status == CompanionStatus::Accepted)
@@ -148,6 +164,7 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
     );
     let army = *sim
         .canonical_state()
+        .state
         .armies
         .as_ref()
         .unwrap()
@@ -158,11 +175,12 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
         .unwrap();
     advance_until(&mut sim, |state| {
         state
+            .state
             .armies
             .as_ref()
             .unwrap()
             .kernel
-            .view(state.ruler, army)
+            .view(state.state.ruler, army)
             .unwrap()
             .detachments
             .values()
@@ -183,13 +201,21 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
         },
     );
     advance_until(&mut sim, |state| {
-        state.missions.as_ref().unwrap().missions.values().all(|m| {
-            m.proposal.objective
-                == MissionObjective::Patrol {
-                    areas: BTreeSet::from([forest]),
-                    until: SimTime(12_000_000),
-                }
-        }) && state.armies.as_ref().unwrap().talks.is_empty()
+        state
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .missions
+            .values()
+            .all(|m| {
+                m.proposal.objective
+                    == MissionObjective::Patrol {
+                        areas: BTreeSet::from([forest]),
+                        until: SimTime(12_000_000),
+                    }
+            })
+            && state.state.armies.as_ref().unwrap().talks.is_empty()
     });
     submit(
         &mut sim,
@@ -199,15 +225,16 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
     );
     advance_until(&mut sim, |state| {
         state
+            .state
             .people
             .iter()
             .filter(|p| people.contains(&p.id))
             .all(|p| {
-                *game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
+                *game_spatial::location(state.components, game_ecs::StableId((p.id).0))
                     .expect("location exists")
                     == Location::AtArea(forest)
             })
-            && *game_spatial::location(&state.components, game_ecs::StableId((state.ruler).0))
+            && *game_spatial::location(state.components, game_ecs::StableId((state.state.ruler).0))
                 .expect("location exists")
                 == Location::AtArea(forest)
     });
@@ -224,8 +251,8 @@ fn battle(
     EncounterId,
 ) {
     let (mut sim, army, missions, people, enemy) = prepared();
-    let village = sim.canonical_state().areas[0].id;
-    let forest = sim.canonical_state().areas[2].id;
+    let village = sim.canonical_state().state.areas[0].id;
+    let forest = sim.canonical_state().state.areas[2].id;
     // The opposing person physically withdraws while all named leaders hear
     // the force objective. There is no command that freezes the opponent.
     sim.debug_move_actor(enemy, village).unwrap();
@@ -244,7 +271,7 @@ fn battle(
         },
     );
     advance_until(&mut sim, |state| {
-        state.missions.as_ref().unwrap().missions.values().all(|m|matches!(m.proposal.objective,MissionObjective::Confine {person,..} if person==enemy)) && state.armies.as_ref().unwrap().talks.is_empty()
+        state.state.missions.as_ref().unwrap().missions.values().all(|m|matches!(m.proposal.objective,MissionObjective::Confine {person,..} if person==enemy)) && state.state.armies.as_ref().unwrap().talks.is_empty()
     });
     if injured_opponent {
         let mut traits = game_assembly::decisions::Personality::industrious();
@@ -256,10 +283,10 @@ fn battle(
     // An authored forest barrier makes the actual encounter require detours.
     // Every person, recruitment, provision and journey remains native state.
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    let mut state: CanonicalState = serde_json::from_value(envelope["state"].take()).unwrap();
+    let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
     let map = CombatMapId(state.next_id);
     state.next_id += 1;
-    state.combat.as_mut().unwrap().maps.insert(
+    state.state.combat.as_mut().unwrap().maps.insert(
         forest,
         combat::Map {
             id: map,
@@ -289,6 +316,7 @@ fn battle(
     sim.debug_move_actor(enemy, forest).unwrap();
     advance_until(&mut sim, |state| {
         state
+            .state
             .combat
             .as_ref()
             .unwrap()
@@ -298,6 +326,7 @@ fn battle(
     });
     let encounter = sim
         .canonical_state()
+        .state
         .combat
         .as_ref()
         .unwrap()
@@ -312,11 +341,11 @@ fn battle(
 fn sixty_five_real_recruits_carry_provisions_travel_and_share_one_initiative_clock() {
     let (mut sim, _, missions, people, enemy, encounter) = battle(false);
     let state = sim.canonical_state();
-    assert_eq!(state.people.len(), 69);
+    assert_eq!(state.state.people.len(), 69);
     let roster: BTreeSet<_> = missions
         .iter()
         .flat_map(|m| {
-            state.missions.as_ref().unwrap().missions[m]
+            state.state.missions.as_ref().unwrap().missions[m]
                 .members
                 .keys()
                 .copied()
@@ -328,7 +357,7 @@ fn sixty_five_real_recruits_carry_provisions_travel_and_share_one_initiative_clo
             .events
             .iter()
             .filter(|e| matches!(
-                e.kind,
+                e.event,
                 EventKind::MissionRecruitmentChanged {
                     status: CompanionStatus::Accepted,
                     ..
@@ -342,16 +371,17 @@ fn sixty_five_real_recruits_carry_provisions_travel_and_share_one_initiative_clo
             state
                 .events
                 .iter()
-                .any(|e| matches!(e.kind,EventKind::Departed {actor,..} if actor==*person))
+                .any(|e| matches!(e.event,EventKind::Departed {actor,..} if actor==*person))
         );
         assert!(
             state
                 .events
                 .iter()
-                .any(|e| matches!(e.kind,EventKind::Arrived {actor,..} if actor==*person))
+                .any(|e| matches!(e.event,EventKind::Arrived {actor,..} if actor==*person))
         );
         assert_eq!(
             state
+                .state
                 .inventories
                 .values()
                 .filter(
@@ -362,19 +392,32 @@ fn sixty_five_real_recruits_carry_provisions_travel_and_share_one_initiative_clo
             2_000
         );
     }
-    let actual: BTreeSet<_> = state.combat.as_ref().unwrap().encounters[&encounter]
+    let actual: BTreeSet<_> = state.state.combat.as_ref().unwrap().encounters[&encounter]
         .fighters
         .keys()
         .copied()
         .collect();
     assert_eq!(actual, roster.iter().copied().chain([enemy]).collect());
-    assert!(!actual.contains(&state.ruler));
+    assert!(!actual.contains(&state.state.ruler));
     let before = sim.time();
-    let round = sim.canonical_state().combat.as_ref().unwrap().encounters[&encounter].round;
+    let round = sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&encounter]
+        .round;
     sim.advance(SimDuration(6_000)).unwrap();
     assert_eq!(sim.time(), SimTime(before.0 + 6_000));
     assert_eq!(
-        sim.canonical_state().combat.as_ref().unwrap().encounters[&encounter].round,
+        sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters[&encounter]
+            .round,
         round + 1
     );
     let mut restored = Simulation::load(
@@ -397,11 +440,16 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
     let lost = people[1];
     sim.debug_injure(lost, 180_000).unwrap();
     advance_until(&mut sim, |s| {
-        s.combat.as_ref().unwrap().captivity.contains_key(&enemy)
+        s.state
+            .combat
+            .as_ref()
+            .unwrap()
+            .captivity
+            .contains_key(&enemy)
     });
     let state = sim.canonical_state();
     assert!(
-        !game_physiology::body(&state.components, lost)
+        !game_physiology::body(state.components, lost)
             .expect("body exists")
             .vitals
             .alive
@@ -410,9 +458,10 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
         state
             .events
             .iter()
-            .any(|e| matches!(e.kind,EventKind::Died {actor} if actor==lost))
+            .any(|e| matches!(e.event,EventKind::Died {actor} if actor==lost))
     );
     let captive = state
+        .state
         .combat
         .as_ref()
         .unwrap()
@@ -421,31 +470,31 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
         .expect("a real NPC surrender permits the supplied leader to capture");
     assert!(people.contains(&captive.captor));
     assert_eq!(
-        state.inventories[&captive.binding].quantity,
+        state.state.inventories[&captive.binding].quantity,
         Quantity(1_000)
     );
     assert_eq!(
-        state.inventories[&captive.binding].location,
+        state.state.inventories[&captive.binding].location,
         InventoryLocation::Carried(enemy)
     );
     assert!(
         state
             .events
             .iter()
-            .any(|e| matches!(e.kind,EventKind::Captured {target,..} if target==enemy))
+            .any(|e| matches!(e.event,EventKind::Captured {target,..} if target==enemy))
     );
     assert_eq!(
-        state.missions.as_ref().unwrap().missions[&missions[0]].members[&lost].status,
+        state.state.missions.as_ref().unwrap().missions[&missions[0]].members[&lost].status,
         CompanionStatus::Dead
     );
     assert_eq!(
-        state.armies.as_ref().unwrap().kernel.armies[&army]
+        state.state.armies.as_ref().unwrap().kernel.armies[&army]
             .detachments
             .len(),
         3
     );
     assert_eq!(
-        state.combat.as_ref().unwrap().encounters[&encounter]
+        state.state.combat.as_ref().unwrap().encounters[&encounter]
             .fighters
             .len(),
         66
@@ -457,25 +506,47 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
 #[test]
 fn commander_personally_approaches_existing_battle_and_gets_an_individual_turn() {
     let (mut sim, army, missions, _, _, encounter) = battle(false);
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     assert!(missions.iter().all(|m| {
-        !sim.canonical_state().missions.as_ref().unwrap().missions[m]
+        !sim.canonical_state()
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .missions[m]
             .members
             .contains_key(&ruler)
     }));
     assert!(
-        !sim.canonical_state().combat.as_ref().unwrap().encounters[&encounter]
+        !sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters[&encounter]
             .fighters
             .contains_key(&ruler)
     );
     let action=sim.observe().available_commands.into_iter().find(|c|matches!(c,Command::Army {action:ArmyAction::Approach {army:a,encounter:e,..}} if *a==army && *e==encounter))
         .expect("a known physically local allied battle offers personal entry");
     let started = sim.time();
-    let opening_round = sim.canonical_state().combat.as_ref().unwrap().encounters[&encounter].round;
+    let opening_round = sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&encounter]
+        .round;
     submit(&mut sim, action);
     sim.advance(SimDuration(3_000)).unwrap();
     assert!(
-        !sim.canonical_state().combat.as_ref().unwrap().encounters[&encounter]
+        !sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters[&encounter]
             .fighters
             .contains_key(&ruler)
     );
@@ -496,12 +567,12 @@ fn commander_personally_approaches_existing_battle_and_gets_an_individual_turn()
     assert_eq!(sim.canonical_state(), restored.canonical_state());
     assert_eq!(sim.time(), SimTime(started.0 + 6_000));
     let state = sim.canonical_state();
-    let scene = &state.combat.as_ref().unwrap().encounters[&encounter];
+    let scene = &state.state.combat.as_ref().unwrap().encounters[&encounter];
     assert_eq!(scene.fighters[&ruler].joins_round, opening_round + 1);
     assert_eq!(sim.observe().combat.unwrap().turn, Some(ruler));
-    assert_eq!(state.people.len(), 69);
+    assert_eq!(state.state.people.len(), 69);
     assert!(missions.iter().all(|m| {
-        !state.missions.as_ref().unwrap().missions[m]
+        !state.state.missions.as_ref().unwrap().missions[m]
             .members
             .contains_key(&ruler)
     }));
@@ -515,7 +586,13 @@ fn commander_personally_approaches_existing_battle_and_gets_an_individual_turn()
         },
     );
     assert_eq!(
-        sim.canonical_state().combat.as_ref().unwrap().encounters[&encounter].fighters[&ruler]
+        sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters[&encounter]
+            .fighters[&ruler]
             .position,
         step
     );
@@ -524,10 +601,22 @@ fn commander_personally_approaches_existing_battle_and_gets_an_individual_turn()
 #[test]
 fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
     let (mut sim, army, missions, _, enemy) = prepared();
-    let leader = sim.canonical_state().missions.as_ref().unwrap().missions[&missions[0]]
+    let leader = sim
+        .canonical_state()
+        .state
+        .missions
+        .as_ref()
+        .unwrap()
+        .missions[&missions[0]]
         .proposal
         .leader;
-    let old = sim.canonical_state().missions.as_ref().unwrap().missions[&missions[0]]
+    let old = sim
+        .canonical_state()
+        .state
+        .missions
+        .as_ref()
+        .unwrap()
+        .missions[&missions[0]]
         .proposal
         .objective
         .clone();
@@ -558,7 +647,7 @@ fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
     );
     sim.advance(SimDuration(120_000)).unwrap();
     let state = sim.canonical_state();
-    let order = state.armies.as_ref().unwrap().kernel.armies[&army]
+    let order = state.state.armies.as_ref().unwrap().kernel.armies[&army]
         .orders
         .values()
         .next_back()
@@ -568,19 +657,19 @@ fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
         game_armies::OrderStatus::Refused
     );
     assert_eq!(
-        state.missions.as_ref().unwrap().missions[&missions[0]]
+        state.state.missions.as_ref().unwrap().missions[&missions[0]]
             .proposal
             .objective,
         old
     );
     assert_eq!(
-        state.missions.as_ref().unwrap().missions[&missions[0]].members[&leader].status,
+        state.state.missions.as_ref().unwrap().missions[&missions[0]].members[&leader].status,
         CompanionStatus::Accepted
     );
-    assert!(state.combat.as_ref().unwrap().encounters.is_empty());
-    let village = state.areas[0].id;
+    assert!(state.state.combat.as_ref().unwrap().encounters.is_empty());
+    let village = state.state.areas[0].id;
     sim.debug_move_actor(leader, village).unwrap();
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert!(
         sim.submit(Submission {
             caller_sequence: sim.next_caller_sequence().unwrap(),
@@ -595,5 +684,5 @@ fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
         })
         .is_err()
     );
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
 }

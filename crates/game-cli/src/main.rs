@@ -97,7 +97,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(document) = environment_document {
         sim.attach_environment_content(document)?;
     }
-    let selected = sim.canonical_state().scenario.clone();
+    let selected = sim.canonical_state().state.scenario.clone();
     let session = game_session::Session::spawn(sim)?;
     let interactive = script.is_none() && io::stdin().is_terminal();
     let reader: Box<dyn BufRead> = if let Some(path) = script {

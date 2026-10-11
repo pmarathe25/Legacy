@@ -39,6 +39,7 @@ pub mod transport;
 
 pub use components::Components;
 use game_api::*;
+use game_sim::ClockWorld;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -118,10 +119,10 @@ enum Due {
     CombatRound(EncounterId),
 }
 
-/// Logical state in persistent ID order; excludes host publication counters and timings.
+/// Typed feature metadata composed by this application; storage and clocks belong to the host.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CanonicalState {
-    pub components: Components,
+#[serde(deny_unknown_fields)]
+pub struct AssemblyState {
     pub armies: Option<armies::World>,
     pub realm: Option<realm::World>,
     pub transport: Option<game_transport::World>,
@@ -131,14 +132,10 @@ pub struct CanonicalState {
     pub heredity: Option<game_lifecycle::heredity::Definition>,
     pub content: BTreeMap<String, game_content::Stamp>,
     pub scenario: ScenarioInfo,
-    pub seed: u64,
-    pub time: SimTime,
-    pub next_id: u64,
     pub ruler: PersonId,
     pub areas: Vec<Area>,
     pub people: Vec<Person>,
     pub inventories: BTreeMap<InventoryId, Inventory>,
-    pub events: Vec<Event>,
     pub physical: Option<physical::World>,
     pub decisions: Option<decisions::Runtime>,
     #[serde(default)]
@@ -177,14 +174,41 @@ pub struct CanonicalState {
     due: BTreeMap<SimTime, Vec<Due>>,
     accepted: BTreeMap<u64, (Command, CommandReceipt)>,
     next_command: u64,
-    next_event: u64,
 }
 
+/// Borrowed inspection of the one host. Feature metadata and component rows
+/// stay in place; inspecting a simulation does not clone authoritative state.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct CanonicalState<'a> {
+    pub state: &'a AssemblyState,
+    pub components: &'a Components,
+    pub seed: u64,
+    pub time: SimTime,
+    pub next_id: u64,
+    pub next_event: u64,
+    pub events: &'a [game_world::Published<EventKind>],
+}
+impl<'a> CanonicalState<'a> {
+    fn from_host(host: &'a GameHost) -> Self {
+        let parts = host.parts();
+        Self {
+            state: parts.state,
+            components: &host.storage,
+            seed: parts.seed,
+            time: parts.clock.time,
+            next_id: parts.next_id,
+            next_event: parts.next_event,
+            events: parts.events,
+        }
+    }
+}
+pub type CanonicalSnapshot = game_world::Snapshot<AssemblyState, EventKind>;
+type GameHost = game_world::GenericHost<AssemblyState, EventKind, Components>;
+
 pub struct Simulation {
-    state: CanonicalState,
+    host: GameHost,
     engine: Arc<engine_adapter::WorldEngine>,
     execution: Execution,
-    revision: u64,
     profile: Profile,
     person_index: BTreeMap<PersonId, usize>,
     inventory_index: BTreeMap<InventoryLocation, Vec<InventoryId>>,
@@ -432,8 +456,7 @@ impl Simulation {
                 "fixture population must be 3..=100000".into(),
             ));
         }
-        let mut state = CanonicalState {
-            components: Components::new()?,
+        let state = AssemblyState {
             transport: None,
             genetics: None,
             physical_traits: None,
@@ -441,18 +464,13 @@ impl Simulation {
             heredity: None,
             content: BTreeMap::new(),
             scenario: scenarios().remove(0),
-            seed,
-            time: SimTime(0),
-            next_id: 1,
             ruler: PersonId(0),
             areas: Vec::new(),
             people: Vec::new(),
             inventories: BTreeMap::new(),
-            events: Vec::new(),
             due: BTreeMap::new(),
             accepted: BTreeMap::new(),
             next_command: 1,
-            next_event: 1,
             physical: None,
             decisions: None,
             development: None,
@@ -475,39 +493,40 @@ impl Simulation {
             social: None,
             enforcement: None,
         };
+        let mut host = GameHost::with_storage(Components::new()?, seed, state);
         for name in ["village", "farm", "forest"] {
-            let id = AreaId(allocate(&mut state)?);
-            state.areas.push(Area {
+            let id = AreaId(host.allocate_id()?.0);
+            host.state.areas.push(Area {
                 id,
                 name: name.into(),
                 links: Vec::new(),
             });
         }
         for (a, b, minutes) in [(0, 1, 2), (0, 2, 3)] {
-            let a_id = state.areas[a].id;
-            let b_id = state.areas[b].id;
-            state.areas[a].links.push(Link {
+            let a_id = host.state.areas[a].id;
+            let b_id = host.state.areas[b].id;
+            host.state.areas[a].links.push(Link {
                 destination: b_id,
                 duration: SimDuration(minutes * 60_000),
             });
-            state.areas[b].links.push(Link {
+            host.state.areas[b].links.push(Link {
                 destination: a_id,
                 duration: SimDuration(minutes * 60_000),
             });
         }
-        let village = state.areas[0].id;
+        let village = host.state.areas[0].id;
         for i in 0..population {
-            let id = PersonId(allocate(&mut state)?);
-            let inventory = InventoryId(allocate(&mut state)?);
+            let id = PersonId(host.allocate_id()?.0);
+            let inventory = InventoryId(host.allocate_id()?.0);
             let role = match i {
                 0 => Role::Ruler,
                 1 | 2 => Role::Guardian,
                 _ => Role::Citizen,
             };
             if i == 0 {
-                state.ruler = id;
+                host.state.ruler = id;
             }
-            state.people.push(Person {
+            host.state.people.push(Person {
                 id,
                 role,
                 inventory,
@@ -518,11 +537,11 @@ impl Simulation {
                 hunger_exempt: role == Role::Guardian,
             });
             game_spatial::set_location(
-                &mut state.components,
+                &mut host.storage,
                 game_ecs::StableId((id).0),
                 Location::AtArea(village),
             )?;
-            state.inventories.insert(
+            host.state.inventories.insert(
                 inventory,
                 Inventory {
                     id: inventory,
@@ -536,63 +555,64 @@ impl Simulation {
                 },
             );
         }
-        let store = InventoryId(allocate(&mut state)?);
-        state.inventories.insert(
+        let store = InventoryId(host.allocate_id()?.0);
+        host.state.inventories.insert(
             store,
             Inventory {
                 id: store,
                 location: InventoryLocation::Area(village),
                 quantity: Quantity(1_000),
                 capacity: Quantity(1_000_000),
-                access: state.people.iter().map(|p| p.id).collect(),
+                access: host.state.people.iter().map(|p| p.id).collect(),
                 last_granted: None,
                 good: Good::Food,
                 spoils_at: None,
             },
         );
-        state.due.insert(SimTime(60_000), vec![Due::Review]);
-        Self::from_state(state, execution, 0)
+        host.state.due.insert(SimTime(60_000), vec![Due::Review]);
+        Self::from_host(host, execution)
     }
 
-    fn from_state(
-        mut state: CanonicalState,
-        execution: Execution,
-        revision: u64,
-    ) -> Result<Self, Error> {
+    fn from_host(mut host: GameHost, execution: Execution) -> Result<Self, Error> {
         if !(1..=64).contains(&execution.workers) {
             return Err(Error::InvalidConfiguration(
                 "worker budget must be 1..=64".into(),
             ));
         }
         let engine = Arc::new(engine_adapter::build(&execution)?);
-        let person_index = state
+        let person_index = host
+            .state
             .people
             .iter()
             .enumerate()
             .map(|(i, p)| (p.id, i))
             .collect();
         let mut inventory_index = BTreeMap::<_, Vec<_>>::new();
-        for i in state.inventories.values() {
+        for i in host.state.inventories.values() {
             inventory_index
                 .entry(i.location.clone())
                 .or_default()
                 .push(i.id);
         }
-        let pregnancy_index = state.development.as_ref().map_or_else(BTreeMap::new, |_| {
-            game_lifecycle::all_pregnancies(&state.components)
-                .map(|(_, row)| row)
-                .filter(|p| {
-                    matches!(
-                        p.state,
-                        development::PregnancyState::Conceiving { .. }
-                            | development::PregnancyState::Gestating { .. }
-                    )
-                })
-                .map(|p| (p.gestator, p.id))
-                .collect()
-        });
-        let care_index = state
-            .components
+        let pregnancy_index = host
+            .state
+            .development
+            .as_ref()
+            .map_or_else(BTreeMap::new, |_| {
+                game_lifecycle::all_pregnancies(&host.storage)
+                    .map(|(_, row)| row)
+                    .filter(|p| {
+                        matches!(
+                            p.state,
+                            development::PregnancyState::Conceiving { .. }
+                                | development::PregnancyState::Gestating { .. }
+                        )
+                    })
+                    .map(|p| (p.gestator, p.id))
+                    .collect()
+            });
+        let care_index = host
+            .storage
             .activities()
             .filter_map(|(id, activity)| {
                 if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = *activity {
@@ -603,16 +623,16 @@ impl Simulation {
             })
             .collect();
         let mut dependent_index = BTreeMap::<AreaId, BTreeSet<PersonId>>::new();
-        if state.development.is_some() {
-            for p in &state.people {
+        if host.state.development.is_some() {
+            for p in &host.state.people {
                 if let Location::AtArea(area) =
-                    *game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
+                    *game_spatial::location(&host.storage, game_ecs::StableId((p.id).0))
                         .expect("location exists")
                     && matches!(
-                        game_lifecycle::life(&state.components, p.id).unwrap().stage,
+                        game_lifecycle::life(&host.storage, p.id).unwrap().stage,
                         LifeStage::Infant | LifeStage::Child
                     )
-                    && game_physiology::body(&state.components, p.id)
+                    && game_physiology::body(&host.storage, p.id)
                         .expect("body exists")
                         .vitals
                         .alive
@@ -621,17 +641,16 @@ impl Simulation {
                 }
             }
         }
-        let agriculture_queries = game_agriculture::Runtime::bind(&mut state.components);
-        let physical_query = state
-            .components
+        let agriculture_queries = game_agriculture::Runtime::bind(&mut host.storage);
+        let physical_query = host
+            .storage
             .query2_optional::<game_physiology::Body, Activity, game_workshop::Job>();
-        let environment_queries = game_environment::Runtime::bind(&mut state.components);
-        let ecology_queries = game_ecology::Runtime::bind(&mut state.components);
+        let environment_queries = game_environment::Runtime::bind(&mut host.storage);
+        let ecology_queries = game_ecology::Runtime::bind(&mut host.storage);
         let sim = Self {
-            state,
+            host,
             engine,
             execution,
-            revision,
             profile: Profile::default(),
             person_index,
             inventory_index,
@@ -643,7 +662,7 @@ impl Simulation {
             environment_queries,
             ecology_queries,
         };
-        sim.state.components.validate_land()?;
+        sim.host.storage.validate_land()?;
         sim.validate_environment()?;
         sim.validate_agriculture()?;
         sim.validate_realm()?;
@@ -655,18 +674,21 @@ impl Simulation {
         inventory.access.contains(&actor) || self.institution_allows_access(actor, inventory.id)
     }
 
-    pub fn canonical_state(&self) -> &CanonicalState {
-        &self.state
+    pub fn canonical_state(&self) -> CanonicalState<'_> {
+        CanonicalState::from_host(&self.host)
+    }
+    pub fn canonical_snapshot(&self) -> Result<CanonicalSnapshot, Error> {
+        self.host.snapshot()
     }
     pub fn profile(&self) -> &Profile {
         &self.profile
     }
     pub fn time(&self) -> SimTime {
-        self.state.time
+        self.host.clock().time
     }
 
     pub fn observe(&self) -> PlayerView {
-        let ruler = &self.state.people[self.person_index[&self.state.ruler]];
+        let ruler = &self.host.state.people[self.person_index[&self.host.state.ruler]];
         let ruler_location = self.resolved_location(ruler.id);
         let origin = match ruler_location {
             Location::AtArea(a) => a,
@@ -674,8 +696,8 @@ impl Simulation {
             Location::StoppedOnRoad { from, .. } => from,
             Location::Carried { .. } => unreachable!("resolved carrier position"),
         };
-        let known_routes = self.state.decisions.as_ref().map(|_| {
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, ruler.id)
+        let known_routes = self.host.state.decisions.as_ref().map(|_| {
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, ruler.id)
                 .unwrap()
                 .routes
         });
@@ -685,6 +707,7 @@ impl Simulation {
             })
         };
         let mut available_commands: Vec<_> = self
+            .host
             .state
             .areas
             .iter()
@@ -692,7 +715,7 @@ impl Simulation {
                 a.id != origin
                     || matches!(
                         *game_spatial::location(
-                            &self.state.components,
+                            &self.host.storage,
                             game_ecs::StableId((ruler.id).0)
                         )
                         .expect("location exists"),
@@ -707,9 +730,8 @@ impl Simulation {
             })
             .map(|a| Command::Move { destination: a.id })
             .collect();
-        if let Some(world) = &self.state.physical {
-            let actor =
-                &game_physiology::body(&self.state.components, ruler.id).expect("body exists");
+        if let Some(world) = &self.host.state.physical {
+            let actor = &game_physiology::body(&self.host.storage, ruler.id).expect("body exists");
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 available_commands.clear();
             } else if matches!(
@@ -735,13 +757,14 @@ impl Simulation {
                                 .map(|s| Command::Eat { source: s.id }),
                         );
                     }
-                    if self.state.development.is_some() {
-                        let children = game_lifecycle::all_lives(&self.state.components)
-                            .filter_map(|(id, life)| {
+                    if self.host.state.development.is_some() {
+                        let children = game_lifecycle::all_lives(&self.host.storage).filter_map(
+                            |(id, life)| {
                                 (self.dependent_signal_visible(ruler.id, id)
                                     && matches!(life.stage, LifeStage::Infant | LifeStage::Child))
                                 .then_some(id)
-                            });
+                            },
+                        );
                         for child in children {
                             if child != ruler.id {
                                 available_commands.push(Command::Comfort { child });
@@ -761,13 +784,13 @@ impl Simulation {
                 }
             }
         }
-        if self.state.development.is_some() {
-            let stage = game_lifecycle::life(&self.state.components, ruler.id)
+        if self.host.state.development.is_some() {
+            let stage = game_lifecycle::life(&self.host.storage, ruler.id)
                 .unwrap()
                 .stage;
             if stage == LifeStage::Infant {
                 available_commands.clear();
-                if game_physiology::body(&self.state.components, ruler.id)
+                if game_physiology::body(&self.host.storage, ruler.id)
                     .expect("body exists")
                     .vitals
                     .alive
@@ -778,11 +801,11 @@ impl Simulation {
                 available_commands.retain(|c| !matches!(c, Command::Work { .. }));
             }
             if matches!(stage, LifeStage::Infant | LifeStage::Child)
-                && game_physiology::body(&self.state.components, ruler.id)
+                && game_physiology::body(&self.host.storage, ruler.id)
                     .expect("body exists")
                     .vitals
                     .alive
-                && game_physiology::body(&self.state.components, ruler.id)
+                && game_physiology::body(&self.host.storage, ruler.id)
                     .expect("body exists")
                     .vitals
                     .health
@@ -809,7 +832,7 @@ impl Simulation {
             }
         }
         if !matches!(
-            *game_spatial::location(&self.state.components, game_ecs::StableId((ruler.id).0))
+            *game_spatial::location(&self.host.storage, game_ecs::StableId((ruler.id).0))
                 .expect("location exists"),
             Location::AtArea(_) | Location::InTransit { .. }
         ) {
@@ -872,7 +895,7 @@ impl Simulation {
                 )
             });
         }
-        if let Some(world) = &self.state.combat {
+        if let Some(world) = &self.host.state.combat {
             for target in world.captivity.keys() {
                 if self.can_release(ruler.id, *target) {
                     available_commands.push(Command::FreeCaptive { target: *target });
@@ -914,7 +937,7 @@ impl Simulation {
             health: self.health_view(ruler.id),
             ecology: self.ecology_view(ruler.id),
             missions: self.mission_view(ruler.id),
-            force: self.force_view(self.state.ruler),
+            force: self.force_view(self.host.state.ruler),
             invocation: self.invocation_view(),
             projects: self.project_view(ruler.id),
             skills: self.own_skill_view(ruler.id),
@@ -925,16 +948,17 @@ impl Simulation {
             agreements: self.agreement_view(ruler.id),
             environment: self.environment_view(ruler.id),
             agriculture: self.agriculture_view(ruler.id),
-            revision: self.revision,
-            time: self.state.time,
+            revision: self.host.clock().revision,
+            time: self.host.clock().time,
             ruler: ruler.id,
             location: (*game_spatial::location(
-                &self.state.components,
+                &self.host.storage,
                 game_ecs::StableId((ruler.id).0),
             )
             .expect("location exists"))
             .clone(),
             known_areas: self
+                .host
                 .state
                 .areas
                 .iter()
@@ -947,60 +971,73 @@ impl Simulation {
             available_commands,
             quantity_opportunities,
             physical: self.physical_view(),
-            known_stocks: self.state.decisions.as_ref().map_or_else(Vec::new, |_| {
-                game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
-                    ruler.id,
-                )
-                .unwrap()
-                .knowledge
-                .values()
-                .cloned()
-                .collect()
-            }),
+            known_stocks: self
+                .host
+                .state
+                .decisions
+                .as_ref()
+                .map_or_else(Vec::new, |_| {
+                    game_characters::decisions::mind::<game_api::Command>(
+                        &self.host.storage,
+                        ruler.id,
+                    )
+                    .unwrap()
+                    .knowledge
+                    .values()
+                    .cloned()
+                    .collect()
+                }),
             combat: self.tactical_view(),
-            life_stage: self.state.development.as_ref().map(|_| {
-                game_lifecycle::life(&self.state.components, ruler.id)
+            life_stage: self.host.state.development.as_ref().map(|_| {
+                game_lifecycle::life(&self.host.storage, ruler.id)
                     .unwrap()
                     .stage
             }),
-            preference: self.state.development.as_ref().and_then(|_| {
-                game_lifecycle::life(&self.state.components, ruler.id)
+            preference: self.host.state.development.as_ref().and_then(|_| {
+                game_lifecycle::life(&self.host.storage, ruler.id)
                     .unwrap()
                     .preference
-                    .filter(|(_, until)| *until >= self.state.time)
+                    .filter(|(_, until)| *until >= self.host.clock().time)
                     .map(|(p, _)| p)
             }),
-            interests: self.state.decisions.as_ref().map_or_else(Vec::new, |_| {
-                game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
-                    ruler.id,
-                )
-                .unwrap()
-                .interests
-                .iter()
-                .map(|(i, p)| (*i, *p))
-                .collect()
-            }),
-            nearby_people: self.nearby_people(0, 64),
-            nearby_life_stages: self.state.development.as_ref().map_or_else(Vec::new, |_| {
-                self.nearby_people(0, 64)
-                    .into_iter()
-                    .map(|(id, _)| {
-                        (
-                            id,
-                            game_lifecycle::life(&self.state.components, id)
-                                .unwrap()
-                                .stage,
-                        )
-                    })
+            interests: self
+                .host
+                .state
+                .decisions
+                .as_ref()
+                .map_or_else(Vec::new, |_| {
+                    game_characters::decisions::mind::<game_api::Command>(
+                        &self.host.storage,
+                        ruler.id,
+                    )
+                    .unwrap()
+                    .interests
+                    .iter()
+                    .map(|(i, p)| (*i, *p))
                     .collect()
-            }),
+                }),
+            nearby_people: self.nearby_people(0, 64),
+            nearby_life_stages: self
+                .host
+                .state
+                .development
+                .as_ref()
+                .map_or_else(Vec::new, |_| {
+                    self.nearby_people(0, 64)
+                        .into_iter()
+                        .map(|(id, _)| {
+                            (
+                                id,
+                                game_lifecycle::life(&self.host.storage, id).unwrap().stage,
+                            )
+                        })
+                        .collect()
+                }),
         }
     }
 
     pub fn lineage_view(&self) -> Option<LineageView> {
-        let world = self.state.lineage.as_ref()?;
+        let world = self.host.state.lineage.as_ref()?;
         let current = world.current();
         let local = self
             .nearby_people(0, 100)
@@ -1034,8 +1071,8 @@ impl Simulation {
                     explanation: guardian.explanation.clone(),
                     guardian: *id,
                     location: (*game_spatial::location(
-                        &self.state.components,
-                        game_ecs::StableId((self.state.people[self.person_index[id]].id).0),
+                        &self.host.storage,
+                        game_ecs::StableId((self.host.state.people[self.person_index[id]].id).0),
                     )
                     .expect("location exists"))
                     .clone(),
@@ -1053,28 +1090,29 @@ impl Simulation {
     }
 
     pub fn nearby_people(&self, offset: usize, limit: usize) -> Vec<(PersonId, Role)> {
-        let ruler = &self.state.people[self.person_index[&self.state.ruler]];
-        if self.state.physical.as_ref().is_some_and(|_| {
-            !game_physiology::body(&self.state.components, ruler.id)
+        let ruler = &self.host.state.people[self.person_index[&self.host.state.ruler]];
+        if self.host.state.physical.as_ref().is_some_and(|_| {
+            !game_physiology::body(&self.host.storage, ruler.id)
                 .expect("body exists")
                 .vitals
                 .alive
         }) {
             return Vec::new();
         }
-        self.state.people.iter().filter(|p| p.id != ruler.id && matches!((game_spatial::location(&self.state.components,game_ecs::StableId((p.id).0)).expect("location exists"), game_spatial::location(&self.state.components,game_ecs::StableId((ruler.id).0)).expect("location exists")), (Location::AtArea(a), Location::AtArea(b)) if a == b))
+        self.host.state.people.iter().filter(|p| p.id != ruler.id && matches!((game_spatial::location(&self.host.storage,game_ecs::StableId((p.id).0)).expect("location exists"), game_spatial::location(&self.host.storage,game_ecs::StableId((ruler.id).0)).expect("location exists")), (Location::AtArea(a), Location::AtArea(b)) if a == b))
             .skip(offset).take(limit.min(100)).map(|p| (p.id, p.role)).collect()
     }
 
     pub fn submit(&mut self, submission: Submission) -> Result<CommandReceipt, Error> {
-        if let Some((command, receipt)) = self.state.accepted.get(&submission.caller_sequence) {
+        if let Some((command, receipt)) = self.host.state.accepted.get(&submission.caller_sequence)
+        {
             return if command == &submission.command {
                 Ok(receipt.clone())
             } else {
                 Err(Error::SequenceConflict)
             };
         }
-        if self.past_life_controls_actor(self.state.ruler) {
+        if self.past_life_controls_actor(self.host.state.ruler) {
             return Err(Error::Unavailable);
         }
         if matches!(
@@ -1090,18 +1128,19 @@ impl Simulation {
             unreachable!()
         };
         let next = self
+            .host
             .state
             .next_command
             .checked_add(1)
             .ok_or(Error::Overflow)?;
-        self.start_movement(self.state.ruler, destination)?;
+        self.start_movement(self.host.state.ruler, destination)?;
         let receipt = CommandReceipt {
             caller_sequence: submission.caller_sequence,
-            authoritative_sequence: self.state.next_command,
-            accepted_at: self.state.time,
+            authoritative_sequence: self.host.state.next_command,
+            accepted_at: self.host.clock().time,
         };
-        self.state.next_command = next;
-        self.state.accepted.insert(
+        self.host.state.next_command = next;
+        self.host.state.accepted.insert(
             submission.caller_sequence,
             (submission.command, receipt.clone()),
         );
@@ -1118,22 +1157,23 @@ impl Simulation {
         actor: PersonId,
         destination: AreaId,
     ) -> Result<(), Error> {
+        self.host.preflight_records(0, 0, 1)?;
         let index = *self.person_index.get(&actor).ok_or(Error::Unavailable)?;
         if self.combat_restricts(actor) || !self.transport_can_depart(actor) {
             return Err(Error::Unavailable);
         }
         if !self.independent(actor)
-            || self.state.physical.as_ref().is_some_and(|w| {
-                !game_physiology::body(&self.state.components, actor)
+            || self.host.state.physical.as_ref().is_some_and(|w| {
+                !game_physiology::body(&self.host.storage, actor)
                     .expect("body exists")
                     .vitals
                     .alive
-                    || game_physiology::body(&self.state.components, actor)
+                    || game_physiology::body(&self.host.storage, actor)
                         .expect("body exists")
                         .vitals
                         .health
                         == 0
-                    || game_physiology::body(&self.state.components, actor)
+                    || game_physiology::body(&self.host.storage, actor)
                         .expect("body exists")
                         .vitals
                         .fatigue
@@ -1142,12 +1182,12 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        if !self.state.areas.iter().any(|a| a.id == destination) {
+        if !self.host.state.areas.iter().any(|a| a.id == destination) {
             return Err(Error::UnknownArea);
         }
         let origin = match *game_spatial::location(
-            &self.state.components,
-            game_ecs::StableId((self.state.people[index].id).0),
+            &self.host.storage,
+            game_ecs::StableId((self.host.state.people[index].id).0),
         )
         .expect("location exists")
         {
@@ -1159,14 +1199,11 @@ impl Simulation {
         };
         let path = if let Some(routes) = self.invocation_routes(actor) {
             decisions::known_path(&routes, origin, destination)?.0
-        } else if self.state.decisions.is_some() {
+        } else if self.host.state.decisions.is_some() {
             decisions::known_path(
-                &game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
-                    actor,
-                )
-                .unwrap()
-                .routes,
+                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .unwrap()
+                    .routes,
                 origin,
                 destination,
             )?
@@ -1177,19 +1214,19 @@ impl Simulation {
         if path.is_empty()
             && (matches!(
                 *game_spatial::location(
-                    &self.state.components,
-                    game_ecs::StableId((self.state.people[index].id).0)
+                    &self.host.storage,
+                    game_ecs::StableId((self.host.state.people[index].id).0)
                 )
                 .expect("location exists"),
                 Location::AtArea(_)
-            ) || self.state.people[index].route.is_empty())
+            ) || self.host.state.people[index].route.is_empty())
         {
             return Err(Error::AlreadyThere);
         }
         let departure = if matches!(
             *game_spatial::location(
-                &self.state.components,
-                game_ecs::StableId((self.state.people[index].id).0)
+                &self.host.storage,
+                game_ecs::StableId((self.host.state.people[index].id).0)
             )
             .expect("location exists"),
             Location::AtArea(_)
@@ -1199,14 +1236,14 @@ impl Simulation {
             None
         };
         self.ensure_event_capacity(
-            usize::from(departure.is_some()) + usize::from(self.state.development.is_some()),
+            usize::from(departure.is_some()) + usize::from(self.host.state.development.is_some()),
         )?;
         self.interrupt_actor_activity(actor);
-        self.state.people[index].route = path;
+        self.host.state.people[index].route = path;
         if let Some((to, arrives)) = departure {
             self.depart(index, origin, to, arrives);
         }
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         Ok(())
     }
 
@@ -1221,6 +1258,7 @@ impl Simulation {
                 return Ok(path);
             }
             let record = self
+                .host
                 .state
                 .areas
                 .iter()
@@ -1241,6 +1279,7 @@ impl Simulation {
 
     fn departure(&self, from: AreaId, to: AreaId) -> Result<(AreaId, SimTime), Error> {
         let link = self
+            .host
             .state
             .areas
             .iter()
@@ -1250,7 +1289,8 @@ impl Simulation {
         Ok((
             to,
             SimTime(
-                self.state
+                self.host
+                    .clock()
                     .time
                     .0
                     .checked_add(link.duration.0)
@@ -1260,24 +1300,25 @@ impl Simulation {
     }
 
     fn depart(&mut self, index: usize, from: AreaId, to: AreaId, arrives: SimTime) {
-        let actor = self.state.people[index].id;
+        let actor = self.host.state.people[index].id;
         self.leave_shelter_on_movement(actor);
         if let Some(people) = self.dependent_index.get_mut(&from) {
             people.remove(&actor);
         }
-        self.state.people[index].route.remove(0);
+        self.host.state.people[index].route.remove(0);
         *game_spatial::location_mut(
-            &mut self.state.components,
-            game_ecs::StableId((self.state.people[index].id).0),
+            &mut self.host.storage,
+            game_ecs::StableId((self.host.state.people[index].id).0),
         )
         .expect("location exists") = Location::InTransit {
             from,
             to,
-            departed: self.state.time,
+            departed: self.host.clock().time,
             arrives,
             road_start: None,
         };
-        self.state
+        self.host
+            .state
             .due
             .entry(arrives)
             .or_default()
@@ -1288,27 +1329,28 @@ impl Simulation {
             to,
             arrives,
         });
-        self.transport_departed(self.state.people[index].id);
+        self.transport_departed(self.host.state.people[index].id);
     }
 
     pub fn advance(&mut self, duration: SimDuration) -> Result<AdvanceResult, Error> {
         let requested = SimTime(
-            self.state
+            self.host
+                .clock()
                 .time
                 .0
                 .checked_add(duration.0)
                 .ok_or(Error::Overflow)?,
         );
-        while self.state.time < requested {
+        while self.host.clock().time < requested {
             if let Some(warning) = self.required_invocation_input() {
                 return Ok(AdvanceResult {
                     requested,
-                    reached: self.state.time,
-                    revision: self.revision,
+                    reached: self.host.clock().time,
+                    revision: self.host.clock().revision,
                     reason: StopReason::InvocationWarning { warning },
                 });
             }
-            let encounters: Vec<_> = self.state.combat.as_ref().map_or_else(Vec::new, |w| {
+            let encounters: Vec<_> = self.host.state.combat.as_ref().map_or_else(Vec::new, |w| {
                 w.encounters
                     .values()
                     .filter(|e| e.active)
@@ -1321,43 +1363,43 @@ impl Simulation {
             if let Some(encounter) = self.awaiting_combat_input() {
                 return Ok(AdvanceResult {
                     requested,
-                    reached: self.state.time,
-                    revision: self.revision,
+                    reached: self.host.clock().time,
+                    revision: self.host.clock().revision,
                     reason: StopReason::CombatInput { encounter },
                 });
             }
             // Autonomous turns may remove or attach components before the read phase.
-            self.agriculture_queries.refresh(&self.state.components)?;
-            self.physical_query.refresh(&self.state.components)?;
-            self.environment_queries.refresh(&self.state.components)?;
-            self.ecology_queries.refresh(&self.state.components)?;
+            self.agriculture_queries.refresh(&self.host.storage)?;
+            self.physical_query.refresh(&self.host.storage)?;
+            self.environment_queries.refresh(&self.host.storage)?;
+            self.ecology_queries.refresh(&self.host.storage)?;
             let next = self.engine.next_boundary(self, requested)?;
-            let controlled = self.state.ruler;
+            let controlled = self.host.state.ruler;
             let prepared = self.prepare_world_step(next)?;
             self.commit_prepared_step(prepared)?;
-            if controlled != self.state.ruler {
+            if controlled != self.host.state.ruler {
                 return Ok(AdvanceResult {
                     requested,
-                    reached: self.state.time,
-                    revision: self.revision,
+                    reached: self.host.clock().time,
+                    revision: self.host.clock().revision,
                     reason: StopReason::SuccessorBorn {
-                        ruler: self.state.ruler,
+                        ruler: self.host.state.ruler,
                     },
                 });
             }
             if let Some(warning) = self.required_invocation_input() {
                 return Ok(AdvanceResult {
                     requested,
-                    reached: self.state.time,
-                    revision: self.revision,
+                    reached: self.host.clock().time,
+                    revision: self.host.clock().revision,
                     reason: StopReason::InvocationWarning { warning },
                 });
             }
         }
         Ok(AdvanceResult {
             requested,
-            reached: self.state.time,
-            revision: self.revision,
+            reached: self.host.clock().time,
+            revision: self.host.clock().revision,
             reason: StopReason::TargetReached,
         })
     }
@@ -1367,9 +1409,10 @@ impl Simulation {
         next: SimTime,
     ) -> Result<engine_adapter::PreparedWorldStep, Error> {
         let started = Instant::now();
-        let elapsed = next.0 - self.state.time.0;
+        let elapsed = next.0 - self.host.clock().time.0;
         let equipment = self.equipment_availability();
         let input: Vec<_> = self
+            .host
             .state
             .people
             .iter()
@@ -1377,7 +1420,7 @@ impl Simulation {
                 units: p.work_units,
                 remainder: p.work_remainder,
                 units_per_minute: if matches!(
-                    *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
+                    *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
                         .expect("location exists"),
                     Location::AtArea(_)
                 ) && self.physically_working(p.id)
@@ -1409,7 +1452,7 @@ impl Simulation {
         let health_output = self.evaluate_health_with_exposures(next, &exposures)?;
         let evaluation_ns = started.elapsed().as_nanos();
         // Preflight boundary arithmetic before publishing any part of this interval.
-        let mut due = self.state.due.get(&next).cloned().unwrap_or_default();
+        let mut due = self.host.state.due.get(&next).cloned().unwrap_or_default();
         due.sort_by_key(|d| match d {
             Due::Spoil(id) => (0, id.0),
             Due::Arrive(id) => (1, id.0),
@@ -1424,7 +1467,7 @@ impl Simulation {
             match event {
                 Due::Review => {
                     next.0
-                        .checked_add(if self.state.decisions.is_some() {
+                        .checked_add(if self.host.state.decisions.is_some() {
                             120_000
                         } else {
                             60_000
@@ -1432,16 +1475,17 @@ impl Simulation {
                         .ok_or(Error::Overflow)?;
                 }
                 Due::Arrive(id) => {
-                    let p = &self.state.people[self.person_index[id]];
+                    let p = &self.host.state.people[self.person_index[id]];
                     if let Some(to) = p.route.first() {
                         let Location::InTransit { to: from, .. } = *game_spatial::location(
-                            &self.state.components,
+                            &self.host.storage,
                             game_ecs::StableId((p.id).0),
                         )
                         .expect("location exists") else {
                             return Err(Error::InvalidSave("arrival outside transit".into()));
                         };
                         let duration = self
+                            .host
                             .state
                             .areas
                             .iter()
@@ -1457,28 +1501,24 @@ impl Simulation {
             }
         }
         let mut possible_outputs = self.possible_work_outputs(&physical_output);
-        if let Some(agriculture) = &self.state.agriculture {
+        if let Some(agriculture) = &self.host.state.agriculture {
             for deadline in &due {
                 if let Due::Physical(actor) = deadline
                     && let Activity::Cultivate {
                         field,
                         operation: FarmOperation::Harvest,
                         ..
-                    } = *self.state.components.activity(*actor).expect("body exists")
+                    } = *self.host.storage.activity(*actor).expect("body exists")
                 {
                     possible_outputs.push((
                         field,
                         Good::Food,
-                        agriculture
-                            .rules_for(&self.state.components, field)?
-                            .food_yield,
+                        agriculture.rules_for(&self.host.storage, field)?.food_yield,
                     ));
                     possible_outputs.push((
                         field,
                         Good::Seed,
-                        agriculture
-                            .rules_for(&self.state.components, field)?
-                            .seed_yield,
+                        agriculture.rules_for(&self.host.storage, field)?.seed_yield,
                     ));
                 }
             }
@@ -1486,7 +1526,7 @@ impl Simulation {
         self.preflight_output_shares(&possible_outputs)?;
         self.preflight_prepared_maintenance(next, &possible_outputs)?;
         let births = due.iter().filter(|d| matches!(d, Due::Birth(_))).count() as u64;
-        let population = (self.state.people.len() as u64)
+        let population = (self.host.state.people.len() as u64)
             .checked_add(births)
             .ok_or(Error::Overflow)?;
         let (ledger_demand, direct_cases) =
@@ -1540,9 +1580,11 @@ impl Simulation {
             self.mission_event_bound() as u64,
             self.army_event_bound() as u64,
             self.health_event_bound() as u64,
-            self.state.agriculture.as_ref().map_or(0, |world| {
-                world.fields(&self.state.components).count() as u64
-            }),
+            self.host
+                .state
+                .agriculture
+                .as_ref()
+                .map_or(0, |world| world.fields(&self.host.storage).count() as u64),
             ledger_demand.events()?,
             society_demand.events,
             invocation_output.event_demand(),
@@ -1556,7 +1598,7 @@ impl Simulation {
             // three-event continuation margin after earlier publications.
             resources.add_events(3)?;
         }
-        resources.check(self.state.next_id, self.state.next_event)?;
+        resources.check(self.host.next_id(), self.host.next_event())?;
         let started = Instant::now();
         let lifecycle: Vec<_> = due
             .iter()
@@ -1577,7 +1619,7 @@ impl Simulation {
             .collect();
         let opening_stock: BTreeMap<_, _> = transfers
             .iter()
-            .map(|i| (i.source, self.state.inventories[&i.source].quantity.0))
+            .map(|i| (i.source, self.host.state.inventories[&i.source].quantity.0))
             .collect();
         let arbitration_ns = started.elapsed().as_nanos();
         Ok(engine_adapter::PreparedWorldStep {
@@ -1608,21 +1650,20 @@ impl Simulation {
         next: SimTime,
         outputs: &[(SiteId, Good, Quantity)],
     ) -> Result<(), Error> {
-        if let Some(world) = &self.state.social
+        if let Some(world) = &self.host.state.social
             && next.0 >= world.last_review.0.saturating_add(world.rules.review.0)
         {
             next.0
                 .checked_add(world.rules.review.0)
                 .ok_or(Error::Overflow)?;
         }
-        if let Some(world) = &self.state.physical_traits
+        if let Some(world) = &self.host.state.physical_traits
             && world.next_expression <= next
         {
             world.prepare_refresh_time(next)?;
-            if self.state.development.is_some() {
-                for (actor, _) in game_physiology::traits::all_developments(&self.state.components)
-                {
-                    game_lifecycle::life(&self.state.components, actor)
+            if self.host.state.development.is_some() {
+                for (actor, _) in game_physiology::traits::all_developments(&self.host.storage) {
+                    game_lifecycle::life(&self.host.storage, actor)
                         .unwrap()
                         .age_at(next)?;
                 }
@@ -1636,6 +1677,7 @@ impl Simulation {
         &mut self,
         prepared: engine_adapter::PreparedWorldStep,
     ) -> Result<(), Error> {
+        self.host.preflight_records(0, 0, 1)?;
         let engine_adapter::PreparedWorldStep {
             next,
             elapsed,
@@ -1660,31 +1702,34 @@ impl Simulation {
         self.validate_physical_output(&physical_output)?;
         if let Some(batch) = &health_output {
             batch.validate(
-                self.state.health.as_ref().ok_or(Error::Unavailable)?,
-                &self.state.components,
+                self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                &self.host.storage,
             )?;
         }
 
         if let Some(step) = &environment_output {
-            self.state
+            self.host
+                .state
                 .environment
                 .as_ref()
                 .ok_or(Error::Unavailable)?
-                .admit(&self.state.components, &mut self.environment_queries, step)?;
+                .admit(&self.host.storage, &mut self.environment_queries, step)?;
         }
         if let Some(batch) = &agriculture_output {
-            self.state
+            self.host
+                .state
                 .agriculture
                 .as_ref()
                 .ok_or(Error::Unavailable)?
-                .validate_advance(&self.state.components, batch)?;
+                .validate_advance(&self.host.storage, batch)?;
         }
         if let Some(batch) = &ecology_output {
-            self.state
+            self.host
+                .state
                 .ecology
                 .as_ref()
                 .ok_or(Error::Unavailable)?
-                .validate_advance(&self.state.components, batch)?;
+                .validate_advance(&self.host.storage, batch)?;
         }
         self.profile.evaluation_ns += evaluation_ns;
         self.profile.arbitration_ns += arbitration_ns;
@@ -1692,43 +1737,56 @@ impl Simulation {
         let mut production_completions = Vec::new();
         let mut force_completions = Vec::new();
         let started = Instant::now();
-        for (p, out) in self.state.people.iter_mut().zip(output) {
+        for (p, out) in self.host.state.people.iter_mut().zip(output) {
             p.work_units = out.units;
             p.work_remainder = out.remainder;
         }
-        self.state.time = next;
-        let actual_work: Vec<_> = self.state.physical.as_ref().map_or_else(Vec::new, |_| {
-            self.state
-                .components
-                .activities()
-                .filter_map(|(actor, activity)| {
-                    if let Activity::Work { site } = *activity {
-                        equipment
-                            .get(&actor)
-                            .copied()
-                            .unwrap_or(false)
-                            .then_some((actor, site))
-                    } else if let Activity::Cultivate { field, .. } = *activity {
-                        equipment
-                            .get(&actor)
-                            .copied()
-                            .unwrap_or(false)
-                            .then_some((actor, field))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+        self.host.publish_clock(game_sim::Clock {
+            time: next,
+            ..self.host.clock()
         });
+        let actual_work: Vec<_> = self
+            .host
+            .state
+            .physical
+            .as_ref()
+            .map_or_else(Vec::new, |_| {
+                self.host
+                    .storage
+                    .activities()
+                    .filter_map(|(actor, activity)| {
+                        if let Activity::Work { site } = *activity {
+                            equipment
+                                .get(&actor)
+                                .copied()
+                                .unwrap_or(false)
+                                .then_some((actor, site))
+                        } else if let Activity::Cultivate { field, .. } = *activity {
+                            equipment
+                                .get(&actor)
+                                .copied()
+                                .unwrap_or(false)
+                                .then_some((actor, field))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            });
         for (actor, site) in actual_work {
             self.record_agreement_work(actor, site, elapsed);
         }
-        let builders: Vec<_> = self.state.projects.as_ref().map_or_else(Vec::new, |w| {
-            w.jobs
-                .iter()
-                .map(|(actor, job)| (*actor, job.project))
-                .collect()
-        });
+        let builders: Vec<_> = self
+            .host
+            .state
+            .projects
+            .as_ref()
+            .map_or_else(Vec::new, |w| {
+                w.jobs
+                    .iter()
+                    .map(|(actor, job)| (*actor, job.project))
+                    .collect()
+            });
         for (actor, project) in builders {
             self.record_agreement_construction(actor, project, elapsed);
         }
@@ -1740,10 +1798,11 @@ impl Simulation {
         self.commit_projects(project_output);
         self.commit_environment(environment_output)?;
         self.commit_ecology(ecology_output)?;
-        self.state.due.remove(&next);
+        self.host.state.due.remove(&next);
         for event in due {
             match event {
                 Due::Review => self
+                    .host
                     .state
                     .due
                     .entry(SimTime(next.0 + 60_000))
@@ -1755,14 +1814,14 @@ impl Simulation {
                     }
                     let index = self.person_index[&id];
                     if let Location::InTransit { to, .. } = *game_spatial::location(
-                        &self.state.components,
-                        game_ecs::StableId((self.state.people[index].id).0),
+                        &self.host.storage,
+                        game_ecs::StableId((self.host.state.people[index].id).0),
                     )
                     .expect("location exists")
                     {
                         *game_spatial::location_mut(
-                            &mut self.state.components,
-                            game_ecs::StableId((self.state.people[index].id).0),
+                            &mut self.host.storage,
+                            game_ecs::StableId((self.host.state.people[index].id).0),
                         )
                         .expect("location exists") = Location::AtArea(to);
                         self.index_dependent(id, to);
@@ -1770,7 +1829,9 @@ impl Simulation {
                             actor: id,
                             area: to,
                         });
-                        if let Some(destination) = self.state.people[index].route.first().copied() {
+                        if let Some(destination) =
+                            self.host.state.people[index].route.first().copied()
+                        {
                             continued_journeys.push((id, to, destination));
                         }
                     }
@@ -1778,18 +1839,18 @@ impl Simulation {
                 Due::Transfers(_) => {}
                 Due::Age(_) | Due::Birth(_) | Due::CombatRound(_) => {}
                 Due::Physical(actor) => {
-                    if self.state.physical.as_ref().is_some_and(|_| {
+                    if self.host.state.physical.as_ref().is_some_and(|_| {
                         matches!(
-                            *self.state.components.activity(actor).expect("body exists"),
+                            *self.host.storage.activity(actor).expect("body exists"),
                             Activity::Gather { .. }
                                 | Activity::Cultivate { .. }
                                 | Activity::Construct { .. }
                         )
                     }) {
                         production_completions.push(actor);
-                    } else if self.state.physical.as_ref().is_some_and(|_| {
+                    } else if self.host.state.physical.as_ref().is_some_and(|_| {
                         matches!(
-                            *self.state.components.activity(actor).expect("body exists"),
+                            *self.host.storage.activity(actor).expect("body exists"),
                             Activity::Escape { .. }
                                 | Activity::Restrain { .. }
                                 | Activity::Lift { .. }
@@ -1802,7 +1863,7 @@ impl Simulation {
                     }
                 }
                 Due::Spoil(inventory) => {
-                    let stock = self.state.inventories.get_mut(&inventory).unwrap();
+                    let stock = self.host.state.inventories.get_mut(&inventory).unwrap();
                     let quantity = stock.quantity;
                     stock.quantity = Quantity(0);
                     stock.spoils_at = None;
@@ -1816,9 +1877,9 @@ impl Simulation {
         let arbitration_started = Instant::now();
         let mut resolved = self
             .prepare_cargo_transfers(transfers, Some(&opening_stock))?
-            .begin(&self.state.inventories)?;
+            .begin(&self.host.state.inventories)?;
         self.profile.arbitration_ns += arbitration_started.elapsed().as_nanos();
-        while let Some((intent, granted)) = resolved.apply_next(&mut self.state.inventories) {
+        while let Some((intent, granted)) = resolved.apply_next(&mut self.host.state.inventories) {
             if granted {
                 self.emit(EventKind::Transferred {
                     actor: intent.actor,
@@ -1851,9 +1912,9 @@ impl Simulation {
             .record_phase("commit.commit_physical", phase_started);
         self.reconcile_transport();
         for actor in force_completions {
-            if self.state.physical.as_ref().is_some_and(|_| {
+            if self.host.state.physical.as_ref().is_some_and(|_| {
                 matches!(
-                    *self.state.components.activity(actor).expect("body exists"),
+                    *self.host.storage.activity(actor).expect("body exists"),
                     Activity::Escape { .. }
                         | Activity::Restrain { .. }
                         | Activity::Lift { .. }
@@ -1882,9 +1943,8 @@ impl Simulation {
         // A closing arrival cannot grant another leg before death, exhaustion,
         // or incapacity at that same timestamp has been committed.
         for (actor, origin, destination) in continued_journeys {
-            let ready = self.state.physical.as_ref().is_none_or(|world| {
-                let body =
-                    &game_physiology::body(&self.state.components, actor).expect("body exists");
+            let ready = self.host.state.physical.as_ref().is_none_or(|world| {
+                let body = &game_physiology::body(&self.host.storage, actor).expect("body exists");
                 body.vitals.alive
                     && body.vitals.health > 0
                     && body.vitals.fatigue < world.rules.fatigue_limit
@@ -1894,17 +1954,17 @@ impl Simulation {
             let index = self.person_index[&actor];
             if ready
                 && *game_spatial::location(
-                    &self.state.components,
-                    game_ecs::StableId((self.state.people[index].id).0),
+                    &self.host.storage,
+                    game_ecs::StableId((self.host.state.people[index].id).0),
                 )
                 .expect("location exists")
                     == Location::AtArea(origin)
-                && self.state.people[index].route.first() == Some(&destination)
+                && self.host.state.people[index].route.first() == Some(&destination)
             {
                 let (_, arrival) = self.departure(origin, destination)?;
                 self.depart(index, origin, destination, arrival);
             } else {
-                self.state.people[index].route.clear();
+                self.host.state.people[index].route.clear();
                 self.emit(EventKind::Interrupted { actor });
             }
         }
@@ -1969,14 +2029,14 @@ impl Simulation {
         self.review_social()?;
         self.profile
             .record_phase("commit.review_social", phase_started);
-        if self.state.time.0.is_multiple_of(60_000) {
+        if self.host.clock().time.0.is_multiple_of(60_000) {
             self.review_decisions()?;
             let phase_started = Instant::now();
             self.review_invocation()?;
             self.profile
                 .record_phase("commit.review_invocation", phase_started);
         }
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         self.profile.commit_ns += started.elapsed().as_nanos();
         self.profile.evaluated_people += evaluated_people as u64;
         self.profile.boundaries += 1;
@@ -1994,16 +2054,17 @@ impl Simulation {
     }
 
     fn cargo_closing_facts(&self, intent: &TransferIntent) -> game_cargo::ClosingFacts {
-        let source = self.state.inventories.get(&intent.source);
-        let destination = self.state.inventories.get(&intent.destination);
+        let source = self.host.state.inventories.get(&intent.source);
+        let destination = self.host.state.inventories.get(&intent.destination);
         let body = self
+            .host
             .state
             .physical
             .as_ref()
-            .and_then(|_| game_physiology::body(&self.state.components, intent.actor));
+            .and_then(|_| game_physiology::body(&self.host.storage, intent.actor));
         game_cargo::ClosingFacts {
-            alive: self.state.physical.is_none() || body.is_some_and(|body| body.vitals.alive),
-            health: if self.state.physical.is_none() {
+            alive: self.host.state.physical.is_none() || body.is_some_and(|body| body.vitals.alive),
+            health: if self.host.state.physical.is_none() {
                 1
             } else {
                 body.map_or(0, |body| body.vitals.health)
@@ -2051,13 +2112,19 @@ impl Simulation {
         let stocks = requests
             .iter()
             .flat_map(|request| [request.intent.source, request.intent.destination])
-            .filter_map(|id| self.state.inventories.get(&id).map(|stock| (id, stock)))
+            .filter_map(|id| {
+                self.host
+                    .state
+                    .inventories
+                    .get(&id)
+                    .map(|stock| (id, stock))
+            })
             .collect();
-        let free = self.state.physical.as_ref().map(|_| {
+        let free = self.host.state.physical.as_ref().map(|_| {
             let holders: BTreeSet<_> = requests
                 .iter()
                 .flat_map(|request| [request.intent.source, request.intent.destination])
-                .filter_map(|id| self.state.inventories.get(&id))
+                .filter_map(|id| self.host.state.inventories.get(&id))
                 .filter_map(|stock| match stock.location {
                     InventoryLocation::Carried(holder) => Some(holder),
                     InventoryLocation::Area(_) => None,
@@ -2071,7 +2138,7 @@ impl Simulation {
                         .get(&InventoryLocation::Carried(holder))
                         .into_iter()
                         .flatten()
-                        .map(|id| u128::from(self.state.inventories[id].quantity.0))
+                        .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
                         .sum();
                     (
                         holder,
@@ -2082,6 +2149,7 @@ impl Simulation {
                 .collect()
         });
         let mut transport_bodies = if self
+            .host
             .state
             .transport
             .as_ref()
@@ -2092,14 +2160,14 @@ impl Simulation {
             None
         };
         game_cargo::prepare_transfers(&stocks, opening, requests, free.as_ref(), |intent| {
-            let Some(world) = &self.state.transport else {
+            let Some(world) = &self.host.state.transport else {
                 return true;
             };
             if world.groups.is_empty() {
                 return true;
             }
             let InventoryLocation::Carried(holder) =
-                self.state.inventories[&intent.destination].location
+                self.host.state.inventories[&intent.destination].location
             else {
                 return true;
             };
@@ -2127,7 +2195,8 @@ impl Simulation {
         at: SimTime,
         intents: Vec<TransferIntent>,
     ) -> Result<(), Error> {
-        if at <= self.state.time {
+        self.host.preflight_records(0, 0, 1)?;
+        if at <= self.host.clock().time {
             return Err(Error::InvalidFixture(
                 "transfers must be scheduled in the future".into(),
             ));
@@ -2136,26 +2205,27 @@ impl Simulation {
             if i.quantity.0 == 0
                 || i.source == i.destination
                 || !self.person_index.contains_key(&i.actor)
-                || !self.state.inventories.contains_key(&i.source)
-                || !self.state.inventories.contains_key(&i.destination)
+                || !self.host.state.inventories.contains_key(&i.source)
+                || !self.host.state.inventories.contains_key(&i.destination)
             {
                 return Err(Error::InvalidFixture(
                     "invalid transfer identity or amount".into(),
                 ));
             }
         }
-        self.state
+        self.host
+            .state
             .due
             .entry(at)
             .or_default()
             .push(Due::Transfers(intents));
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         Ok(())
     }
 
     pub fn debug_add_disconnected_area(&mut self, name: &str) -> Result<AreaId, Error> {
-        let id = AreaId(allocate(&mut self.state)?);
-        self.state.areas.push(Area {
+        let id = AreaId(self.host.allocate_id()?.0);
+        self.host.state.areas.push(Area {
             id,
             name: name.into(),
             links: Vec::new(),
@@ -2164,12 +2234,10 @@ impl Simulation {
     }
 
     fn ensure_event_capacity(&self, count: usize) -> Result<(), Error> {
-        self.state
-            .next_event
-            .checked_add(count as u64)
-            .ok_or(Error::Overflow)
-            .map(|_| ())
+        self.host
+            .preflight_records(0, u64::try_from(count).map_err(|_| Error::Overflow)?, 0)
     }
+
     fn emit(&mut self, kind: EventKind) {
         if let EventKind::Died { actor } = kind {
             self.transport_death(actor);
@@ -2189,19 +2257,10 @@ impl Simulation {
         {
             self.relocate_record_transfer(*source, *destination, *quantity);
         }
-        let id = EventId(self.state.next_event);
+        let id = EventId(self.host.next_event());
         self.on_delivery_event(&kind, id);
-        self.state.next_event += 1;
-        self.state.events.push(Event {
-            id,
-            time: self.state.time,
-            kind,
-        });
+        self.host
+            .append_many(vec![kind])
+            .expect("the command or interval preflighted its publication budget");
     }
-}
-
-fn allocate(state: &mut CanonicalState) -> Result<u64, Error> {
-    let id = state.next_id;
-    state.next_id = id.checked_add(1).ok_or(Error::Overflow)?;
-    Ok(id)
 }

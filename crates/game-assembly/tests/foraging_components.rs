@@ -4,7 +4,7 @@ use game_assembly::{Execution, Simulation};
 #[test]
 fn future_personal_resource_observations_are_rejected_from_the_actual_component_column() {
     let sim = Simulation::ecology_fixture(21, Execution::default()).unwrap();
-    let actor = sim.canonical_state().ruler;
+    let actor = sim.canonical_state().state.ruler;
     let before = sim.save().unwrap();
     let mut saved: serde_json::Value = serde_json::from_slice(&before).unwrap();
     let now = sim.canonical_state().time.0;

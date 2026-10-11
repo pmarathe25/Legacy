@@ -5,14 +5,16 @@ use game_logistics::{Destination, KnownDestination, Step};
 
 impl Simulation {
     fn guardian_supply_capable(&self, actor: PersonId) -> bool {
-        self.state
+        self.host
+            .state
             .physical
             .as_ref()
-            .and_then(|_| game_physiology::body(&self.state.components, actor))
+            .and_then(|_| game_physiology::body(&self.host.storage, actor))
             .is_some_and(|body| {
                 body.vitals.alive
                     && body.vitals.health
                         > self
+                            .host
                             .state
                             .combat
                             .as_ref()
@@ -34,16 +36,19 @@ impl Simulation {
         source: InventoryId,
         quantity: Quantity,
     ) -> Result<(), Error> {
+        let owner_now = self.host.clock().time;
+        self.host.preflight_records(0, 0, 1)?;
         self.reconcile_guardian_deliveries()?;
-        let lineage = self.state.lineage.as_ref().ok_or(Error::Unavailable)?;
+        let lineage = self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?;
         if !self.person_index.contains_key(&requester) || !self.person_index.contains_key(&guardian)
         {
             return Err(Error::Unavailable);
         }
         let mind =
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, guardian)
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)
                 .ok_or(Error::Unavailable)?;
         let source_carried = self
+            .host
             .state
             .inventories
             .get(&source)
@@ -61,26 +66,22 @@ impl Simulation {
                         .any(|area| decisions::known_path(&mind.routes, *area, k.area).is_ok()),
                     _ => false,
                 });
-        let requester_available = game_physiology::body(&self.state.components, requester)
+        let requester_available = game_physiology::body(&self.host.storage, requester)
             .expect("body exists")
             .vitals
             .alive
-            && game_physiology::body(&self.state.components, requester)
+            && game_physiology::body(&self.host.storage, requester)
                 .expect("body exists")
                 .vitals
                 .health
                 > 0
             && !self.in_combat(requester)
             && matches!(
-                *self
-                    .state
-                    .components
-                    .activity(requester)
-                    .expect("body exists"),
+                *self.host.storage.activity(requester).expect("body exists"),
                 Activity::Idle | Activity::Rest
             );
         let facts = game_lineage::SupplyFacts {
-            now: self.state.time,
+            now: owner_now,
             requester_independent: self.independent(requester),
             requester_available,
             fresh_contact: self.transport_same_place(guardian, requester),
@@ -90,7 +91,7 @@ impl Simulation {
             known_source: known,
             source_route_known: known_route,
             immediate_care: mind.child_signals.get(&requester).is_some_and(|s| {
-                s.observed_at == self.state.time && (s.urgency > 0 || s.hydration_urgency > 0)
+                s.observed_at == owner_now && (s.urgency > 0 || s.hydration_urgency > 0)
             }),
             requester_area: match self.resolved_location(requester) {
                 Location::AtArea(area) => Some(area),
@@ -99,7 +100,7 @@ impl Simulation {
             source_carried,
             room: self.delivery_carrying_room(guardian),
             carrying_capacity: self.body_rules(guardian).carrying_capacity,
-            cursor: self.state.next_event - 1,
+            cursor: self.host.next_event() - 1,
         };
         let answer = lineage.judge_supply(guardian, requester, good, source, quantity, &facts)?;
         self.ensure_event_capacity(8)?;
@@ -110,12 +111,11 @@ impl Simulation {
             }
             game_lineage::SupplyAnswer::Accept(delivery) => delivery,
         };
-        self.state
-            .time
+        owner_now
             .0
             .checked_add(self.body_rules(guardian).loading_time.0)
             .ok_or(Error::Overflow)?;
-        self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+        self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
         let step = self.requested_delivery_step(guardian, &delivery);
         if !matches!(
             step,
@@ -133,6 +133,7 @@ impl Simulation {
             return Ok(());
         }
         let previous = self
+            .host
             .state
             .lineage
             .as_mut()
@@ -143,7 +144,8 @@ impl Simulation {
             .requested_delivery
             .replace(delivery);
         if let Err(error) = self.execute_requested_delivery_step(guardian, step) {
-            self.state
+            self.host
+                .state
                 .lineage
                 .as_mut()
                 .unwrap()
@@ -162,6 +164,7 @@ impl Simulation {
             return Ok(());
         }
         let g = self
+            .host
             .state
             .lineage
             .as_mut()
@@ -175,7 +178,7 @@ impl Simulation {
                 source,
                 quantity,
             },
-            accepted_at: self.state.time,
+            accepted_at: owner_now,
         });
         g.explanation =
             "I accepted the named goods and will use my own access and actual carrying".into();
@@ -183,11 +186,12 @@ impl Simulation {
             guardian,
             requester,
         });
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         Ok(())
     }
     fn refuse_guardian_supply(&mut self, guardian: PersonId, requester: PersonId, reason: &str) {
-        self.state
+        self.host
+            .state
             .lineage
             .as_mut()
             .unwrap()
@@ -200,7 +204,9 @@ impl Simulation {
             requester,
             reason: reason.into(),
         });
-        self.revision += 1;
+        self.host
+            .bump_revision(1)
+            .expect("the guardian request preflighted its revision");
     }
     fn requested_delivery_destination(
         &self,
@@ -208,9 +214,12 @@ impl Simulation {
         requester: PersonId,
         _accepted_at: SimTime,
     ) -> Option<KnownDestination> {
-        let g = self.state.lineage.as_ref()?.guardians.get(&guardian)?;
+        let g = self.host.state.lineage.as_ref()?.guardians.get(&guardian)?;
         let (location, observed_at) = if self.transport_same_place(guardian, requester) {
-            (self.delivery_observed_location(requester), self.state.time)
+            (
+                self.delivery_observed_location(requester),
+                self.host.clock().time,
+            )
         } else if g.target == Some(requester) {
             let sensed = g.sensed_location.as_ref()?;
             let position = crate::transport::location_position(sensed, g.sensed_at).ok()?;
@@ -268,13 +277,13 @@ impl Simulation {
         step: Step<Command>,
     ) -> Result<(), Error> {
         if let Step::Arrived { source, quantity } = step {
-            let Destination::Contact(requester) = self.state.lineage.as_ref().unwrap().guardians
-                [&guardian]
-                .requested_delivery
-                .as_ref()
-                .ok_or(Error::Unavailable)?
-                .delivery
-                .destination
+            let Destination::Contact(requester) =
+                self.host.state.lineage.as_ref().unwrap().guardians[&guardian]
+                    .requested_delivery
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?
+                    .delivery
+                    .destination
             else {
                 return Err(Error::Unavailable);
             };
@@ -292,8 +301,10 @@ impl Simulation {
     /// Returns true only for an accepted task currently occupying the guardian,
     /// or an actual newly admitted physical action. No abstract progress credit.
     pub(crate) fn drive_guardian_delivery(&mut self, guardian: PersonId) -> Result<bool, Error> {
+        let owner_now = self.host.clock().time;
         self.reconcile_guardian_deliveries()?;
         let Some(request) = self
+            .host
             .state
             .lineage
             .as_ref()
@@ -306,12 +317,13 @@ impl Simulation {
         let Destination::Contact(requester) = request.delivery.destination else {
             return Ok(false);
         };
-        if self.state.lineage.as_ref().unwrap().current() != Some(requester) {
+        if self.host.state.lineage.as_ref().unwrap().current() != Some(requester) {
             self.cancel_guardian_delivery(guardian);
             return Ok(false);
         }
         let sensed = self.resolved_location(requester);
         let g = self
+            .host
             .state
             .lineage
             .as_mut()
@@ -321,13 +333,13 @@ impl Simulation {
             .unwrap();
         g.target = Some(requester);
         g.sensed_location = Some(sensed);
-        g.sensed_at = self.state.time;
+        g.sensed_at = owner_now;
         if request.delivery.remaining.0 == 0 {
             return Ok(false);
         }
         let step = self.requested_delivery_step(guardian, &request);
         if matches!(step, Step::Continue) {
-            let available = game_physiology::body(&self.state.components, guardian)
+            let available = game_physiology::body(&self.host.storage, guardian)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -353,6 +365,7 @@ impl Simulation {
     }
     fn note_requested_delivery(&mut self, guardian: PersonId) {
         let g = self
+            .host
             .state
             .lineage
             .as_mut()
@@ -366,6 +379,7 @@ impl Simulation {
     }
     pub(crate) fn cancel_guardian_delivery(&mut self, guardian: PersonId) {
         if let Some(g) = self
+            .host
             .state
             .lineage
             .as_mut()
@@ -381,7 +395,8 @@ impl Simulation {
         destination: InventoryId,
         quantity: Quantity,
     ) -> bool {
-        self.state
+        self.host
+            .state
             .inventories
             .get(&destination)
             .is_some_and(|stock| self.guardian_accepts_cargo(actor, source, stock, quantity))
@@ -395,7 +410,8 @@ impl Simulation {
         destination: &Inventory,
         quantity: Quantity,
     ) -> bool {
-        self.state
+        self.host
+            .state
             .lineage
             .as_ref()
             .and_then(|w| w.guardians.get(&actor))
@@ -407,14 +423,14 @@ impl Simulation {
                 quantity.0 > 0
                     && quantity <= request.delivery.remaining
                     && request.cargo.get(&source).is_some_and(|q| *q >= quantity.0)
-                    && self.state.inventories.get(&source).is_some_and(|i| {
+                    && self.host.state.inventories.get(&source).is_some_and(|i| {
                         i.good == request.delivery.requirement.good
                             && i.location == InventoryLocation::Carried(actor)
                     })
                     && destination.good == request.delivery.requirement.good
                     && destination.location == InventoryLocation::Carried(requester)
-                    && self.state.physical.as_ref().is_some_and(|_| {
-                        game_physiology::body(&self.state.components, requester)
+                    && self.host.state.physical.as_ref().is_some_and(|_| {
+                        game_physiology::body(&self.host.storage, requester)
                             .expect("body exists")
                             .vitals
                             .alive
@@ -425,7 +441,7 @@ impl Simulation {
     /// Only actual conserved event receipts move source tags or satisfy a task.
     /// Global stock owners remain authoritative for quantities and custody.
     pub(crate) fn reconcile_guardian_deliveries(&mut self) -> Result<(), Error> {
-        let Some(lineage) = &self.state.lineage else {
+        let Some(lineage) = &self.host.state.lineage else {
             return Ok(());
         };
         let actors = lineage
@@ -435,60 +451,63 @@ impl Simulation {
             .collect::<Vec<_>>();
         for (guardian, cursor) in actors {
             let events = self
-                .state
-                .events
+                .host
+                .events()
                 .iter()
                 .skip(cursor as usize)
-                .map(|e| (e.id, e.kind.clone()))
+                .map(|e| (EventId(e.sequence), e.event.clone()))
                 .collect::<Vec<_>>();
             for (sequence, event) in events {
                 use game_lineage::SupplyReceipt;
-                let receipt = match event {
-                    EventKind::Transferred {
-                        actor,
-                        source,
-                        destination,
-                        quantity,
-                    } => self
-                        .state
-                        .inventories
-                        .get(&source)
-                        .map(|s| SupplyReceipt::Transfer {
+                let receipt =
+                    match event {
+                        EventKind::Transferred {
                             actor,
                             source,
                             destination,
                             quantity,
-                            good: s.good,
-                            destination_holder: self.state.inventories.get(&destination).and_then(
-                                |d| match d.location {
-                                    InventoryLocation::Carried(p) => Some(p),
-                                    _ => None,
-                                },
-                            ),
+                        } => self.host.state.inventories.get(&source).map(|s| {
+                            SupplyReceipt::Transfer {
+                                actor,
+                                source,
+                                destination,
+                                quantity,
+                                good: s.good,
+                                destination_holder: self
+                                    .host
+                                    .state
+                                    .inventories
+                                    .get(&destination)
+                                    .and_then(|d| match d.location {
+                                        InventoryLocation::Carried(p) => Some(p),
+                                        _ => None,
+                                    }),
+                            }
                         }),
-                    EventKind::Ate {
-                        source, quantity, ..
-                    }
-                    | EventKind::Consumed {
-                        source, quantity, ..
-                    }
-                    | EventKind::Cared {
-                        source, quantity, ..
-                    } => Some(SupplyReceipt::Lost {
-                        inventory: source,
-                        quantity,
-                    }),
-                    EventKind::Spoiled {
-                        inventory,
-                        quantity,
-                    } => Some(SupplyReceipt::Lost {
-                        inventory,
-                        quantity,
-                    }),
-                    _ => None,
-                };
+                        EventKind::Ate {
+                            source, quantity, ..
+                        }
+                        | EventKind::Consumed {
+                            source, quantity, ..
+                        }
+                        | EventKind::Cared {
+                            source, quantity, ..
+                        } => Some(SupplyReceipt::Lost {
+                            inventory: source,
+                            quantity,
+                        }),
+                        EventKind::Spoiled {
+                            inventory,
+                            quantity,
+                        } => Some(SupplyReceipt::Lost {
+                            inventory,
+                            quantity,
+                        }),
+                        _ => None,
+                    };
                 if let Some(receipt) = receipt {
-                    self.state
+                    self.host
+                        .state
                         .lineage
                         .as_mut()
                         .unwrap()
@@ -501,7 +520,8 @@ impl Simulation {
                         .receive(guardian, sequence, &receipt)?;
                 }
             }
-            self.state
+            self.host
+                .state
                 .lineage
                 .as_mut()
                 .unwrap()
@@ -511,7 +531,7 @@ impl Simulation {
                 .requested_delivery
                 .as_mut()
                 .unwrap()
-                .last_event = self.state.next_event - 1;
+                .last_event = self.host.next_event() - 1;
         }
         Ok(())
     }
@@ -526,24 +546,25 @@ mod tests {
     #[test]
     fn guardian_supply_uses_actual_cargo_without_granting_new_incarnation_estate_access() {
         let mut sim = Simulation::force_fixture(91, Execution::default()).unwrap();
-        let predecessor = sim.state.ruler;
-        let guardian = sim.state.people[1].id;
-        let maximum = sim.state.physical.as_ref().unwrap().rules.max_health;
+        let predecessor = sim.host.state.ruler;
+        let guardian = sim.host.state.people[1].id;
+        let maximum = sim.host.state.physical.as_ref().unwrap().rules.max_health;
         sim.debug_injure(predecessor, maximum).unwrap();
         let born = sim.advance(SimDuration(900_000)).unwrap();
         assert!(matches!(born.reason, StopReason::SuccessorBorn { .. }));
-        let adulthood = sim.state.development.as_ref().unwrap().rules.adulthood;
+        let adulthood = sim.host.state.development.as_ref().unwrap().rules.adulthood;
         sim.advance(adulthood).unwrap();
-        let requester = sim.state.ruler;
+        let requester = sim.host.state.ruler;
         assert_ne!(requester, predecessor);
         assert_eq!(
-            game_lifecycle::life(&sim.state.components, requester)
+            game_lifecycle::life(&sim.host.storage, requester)
                 .unwrap()
                 .stage,
             LifeStage::Adult
         );
         sim.debug_actor_command(guardian, Command::Cancel).unwrap();
         let source = sim
+            .host
             .state
             .inventories
             .values()
@@ -552,23 +573,23 @@ mod tests {
             })
             .unwrap()
             .id;
-        let destination = sim.state.people[sim.person_index[&requester]].inventory;
-        assert!(!sim.has_stock_access(requester, &sim.state.inventories[&source]));
-        let opening = sim.state.inventories[&destination].quantity.0;
+        let destination = sim.host.state.people[sim.person_index[&requester]].inventory;
+        assert!(!sim.has_stock_access(requester, &sim.host.state.inventories[&source]));
+        let opening = sim.host.state.inventories[&destination].quantity.0;
         sim.request_guardian_supply(guardian, requester, Good::Food, source, Quantity(1_000))
             .unwrap();
-        assert!(sim.state.events.iter().any(|event|matches!(event.kind,EventKind::GuardianAccepted {guardian:id,requester:person} if id==guardian&&person==requester)));
-        assert_eq!(sim.state.inventories[&destination].quantity.0, opening);
+        assert!(sim.host.events().iter().any(|event|matches!(event.event,EventKind::GuardianAccepted {guardian:id,requester:person} if id==guardian&&person==requester)));
+        assert_eq!(sim.host.state.inventories[&destination].quantity.0, opening);
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.state.inventories[&destination].quantity.0, opening);
+        assert_eq!(sim.host.state.inventories[&destination].quantity.0, opening);
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state.inventories[&destination].quantity.0,
+            sim.host.state.inventories[&destination].quantity.0,
             opening + 1_000
         );
         assert_eq!(
             1_000
-                - sim.state.lineage.as_ref().unwrap().guardians[&guardian]
+                - sim.host.state.lineage.as_ref().unwrap().guardians[&guardian]
                     .requested_delivery
                     .as_ref()
                     .unwrap()
@@ -577,15 +598,15 @@ mod tests {
                     .0,
             1_000
         );
-        assert!(!sim.has_stock_access(requester, &sim.state.inventories[&source]));
+        assert!(!sim.has_stock_access(requester, &sim.host.state.inventories[&source]));
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
     #[test]
     fn unknown_or_unsafe_food_requests_are_explicitly_refused_without_stock_changes() {
         let mut sim = fixture();
-        let requester = sim.state.ruler;
-        let guardian = sim.state.people[1].id;
-        let opening = sim.state.inventories.clone();
+        let requester = sim.host.state.ruler;
+        let guardian = sim.host.state.people[1].id;
+        let opening = sim.host.state.inventories.clone();
         sim.request_guardian_supply(
             guardian,
             requester,
@@ -594,12 +615,12 @@ mod tests {
             Quantity(1_000),
         )
         .unwrap();
-        assert_eq!(sim.state.inventories, opening);
-        assert!(sim.state.events.iter().any(
-            |event| matches!(event.kind,EventKind::GuardianRefused {guardian:id,..} if id==guardian)
+        assert_eq!(sim.host.state.inventories, opening);
+        assert!(sim.host.events().iter().any(
+            |event| matches!(event.event,EventKind::GuardianRefused {guardian:id,..} if id==guardian)
         ));
         assert!(
-            sim.state.lineage.as_ref().unwrap().guardians[&guardian]
+            sim.host.state.lineage.as_ref().unwrap().guardians[&guardian]
                 .assignment
                 .is_none()
         );
@@ -607,8 +628,8 @@ mod tests {
     #[test]
     fn a_requested_good_creates_a_real_receiving_compartment_and_credits_only_handoff() {
         let mut sim = fixture();
-        let requester = sim.state.ruler;
-        let guardian = sim.state.people[1].id;
+        let requester = sim.host.state.ruler;
+        let guardian = sim.host.state.people[1].id;
         let area = match sim.resolved_location(requester) {
             Location::AtArea(area) => area,
             _ => panic!("fixture ruler not stationary"),
@@ -626,38 +647,36 @@ mod tests {
                 BTreeSet::from([guardian]),
             )
             .unwrap();
-        game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            guardian,
-        )
-        .unwrap()
-        .knowledge
-        .insert(
-            source,
-            StockKnowledge {
-                inventory: source,
-                area,
-                good: Good::Water,
-                quantity: Quantity(1000),
-                accessible: true,
-                observed_at: sim.state.time,
-                learned_at: sim.state.time,
-                source: KnowledgeSource::Observed(guardian),
-            },
-        );
+        let observed_at = sim.time();
+        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, guardian)
+            .unwrap()
+            .knowledge
+            .insert(
+                source,
+                StockKnowledge {
+                    inventory: source,
+                    area,
+                    good: Good::Water,
+                    quantity: Quantity(1000),
+                    accessible: true,
+                    observed_at,
+                    learned_at: observed_at,
+                    source: KnowledgeSource::Observed(guardian),
+                },
+            );
         assert!(
             !sim.inventory_index
                 .get(&InventoryLocation::Carried(requester))
                 .into_iter()
                 .flatten()
-                .any(|id| sim.state.inventories[id].good == Good::Water)
+                .any(|id| sim.host.state.inventories[id].good == Good::Water)
         );
         sim.request_guardian_supply(guardian, requester, Good::Water, source, Quantity(1000))
             .unwrap();
-        assert_eq!(sim.state.inventories[&source].quantity, Quantity(1000));
+        assert_eq!(sim.host.state.inventories[&source].quantity, Quantity(1000));
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state.lineage.as_ref().unwrap().guardians[&guardian]
+            sim.host.state.lineage.as_ref().unwrap().guardians[&guardian]
                 .requested_delivery
                 .as_ref()
                 .unwrap()
@@ -677,15 +696,18 @@ mod tests {
         sim.advance(MINUTE).unwrap();
         restored.advance(SimDuration(17000)).unwrap();
         restored.advance(SimDuration(43000)).unwrap();
-        assert_eq!(sim.state, restored.state);
+        assert_eq!(sim.host.state, restored.host.state);
         let receiver = sim.inventory_index[&InventoryLocation::Carried(requester)]
             .iter()
-            .find(|id| sim.state.inventories[id].good == Good::Water)
+            .find(|id| sim.host.state.inventories[id].good == Good::Water)
             .unwrap();
-        assert_eq!(sim.state.inventories[receiver].quantity, Quantity(1000));
-        assert_eq!(sim.state.inventories[&source].quantity, Quantity(0));
         assert_eq!(
-            sim.state.lineage.as_ref().unwrap().guardians[&guardian]
+            sim.host.state.inventories[receiver].quantity,
+            Quantity(1000)
+        );
+        assert_eq!(sim.host.state.inventories[&source].quantity, Quantity(0));
+        assert_eq!(
+            sim.host.state.lineage.as_ref().unwrap().guardians[&guardian]
                 .requested_delivery
                 .as_ref()
                 .unwrap()
@@ -693,6 +715,6 @@ mod tests {
                 .remaining,
             Quantity(0)
         );
-        assert!(!sim.has_stock_access(requester, &sim.state.inventories[&source]));
+        assert!(!sim.has_stock_access(requester, &sim.host.state.inventories[&source]));
     }
 }

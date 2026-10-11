@@ -20,6 +20,7 @@ fn command(sim: &mut Simulation, command: Command) -> Result<CommandReceipt, Err
 }
 fn food(sim: &Simulation) -> InventoryId {
     sim.canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
@@ -27,10 +28,11 @@ fn food(sim: &Simulation) -> InventoryId {
         .id
 }
 fn actor(sim: &Simulation) -> PersonId {
-    sim.canonical_state().ruler
+    sim.canonical_state().state.ruler
 }
 fn food_total(sim: &Simulation) -> u64 {
     sim.canonical_state()
+        .state
         .inventories
         .values()
         .filter(|i| i.good == Good::Food)
@@ -55,21 +57,21 @@ fn reachable_food_requires_consumption_while_guardians_have_no_hunger_need() {
     }
     assert_eq!(food_total(&sim), before - 20_000);
     assert!(sim.observe().physical.unwrap().vitals.alive);
-    let guardian = sim.canonical_state().people[1].id;
+    let guardian = sim.canonical_state().state.people[1].id;
     sim.debug_actor_command(guardian, Command::Eat { source })
         .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(food_total(&sim), before - 21_000);
     let state = sim.canonical_state();
     assert_eq!(
-        game_physiology::body(&state.components, guardian)
+        game_physiology::body(state.components, guardian)
             .expect("body exists")
             .vitals
             .hunger,
         0
     );
     assert!(
-        game_physiology::body(&state.components, guardian)
+        game_physiology::body(state.components, guardian)
             .expect("body exists")
             .vitals
             .alive
@@ -98,7 +100,7 @@ fn inaccessible_abundance_does_not_prevent_mortal_death_and_goods_remain() {
             BTreeSet::from([ruler]),
         )
         .unwrap();
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         command(&mut sim, Command::Eat { source: locked }),
         Err(Error::Unavailable)
@@ -107,21 +109,21 @@ fn inaccessible_abundance_does_not_prevent_mortal_death_and_goods_remain() {
         command(&mut sim, Command::Eat { source: remote }),
         Err(Error::Unavailable)
     );
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
     sim.advance(SimDuration(779_999)).unwrap();
     assert!(sim.observe().physical.unwrap().vitals.alive);
     sim.advance(SimDuration(1)).unwrap();
     assert!(!sim.observe().physical.unwrap().vitals.alive);
     assert_eq!(
-        sim.canonical_state().inventories[&locked].quantity,
+        sim.canonical_state().state.inventories[&locked].quantity,
         Quantity(1_000_000)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&remote].quantity,
+        sim.canonical_state().state.inventories[&remote].quantity,
         Quantity(1_000_000)
     );
     assert!(sim.observe().available_commands.is_empty());
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         command(
             &mut sim,
@@ -131,12 +133,12 @@ fn inaccessible_abundance_does_not_prevent_mortal_death_and_goods_remain() {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
     assert!(
         sim.canonical_state()
             .events
             .iter()
-            .any(|e| e.time == SimTime(780_000) && e.kind == EventKind::Died { actor: ruler })
+            .any(|e| e.at == SimTime(780_000) && e.event == EventKind::Died { actor: ruler })
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
 }
@@ -146,7 +148,7 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     let mut sim = sim(4);
     let ruler = actor(&sim);
     let source = food(&sim);
-    let carried = sim.canonical_state().people[0].inventory;
+    let carried = sim.canonical_state().state.people[0].inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -168,7 +170,7 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&carried].quantity,
+        sim.canonical_state().state.inventories[&carried].quantity,
         Quantity(2_000)
     );
     command(
@@ -180,11 +182,11 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     .unwrap();
     sim.advance(SimDuration(119_999)).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&carried].location,
+        sim.canonical_state().state.inventories[&carried].location,
         InventoryLocation::Carried(ruler)
     );
     sim.advance(SimDuration(1)).unwrap();
@@ -200,11 +202,11 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     sim.advance(SimDuration(30_000)).unwrap();
     command(&mut sim, Command::Cancel).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&carried].quantity,
+        sim.canonical_state().state.inventories[&carried].quantity,
         Quantity(2_000)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(0)
     );
     command(&mut sim, Command::Rest).unwrap();
@@ -220,54 +222,70 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(2_000)
     );
     assert_eq!(food_total(&sim), before);
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
 }
 
 #[test]
 fn production_consumes_inputs_once_and_interruption_preserves_progress() {
     let mut sim = sim(2);
-    let site = game_workshop::sites(&sim.canonical_state().components)
+    let site = game_workshop::sites(sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
         .clone();
-    let input = sim.canonical_state().inventories[&site.input].quantity.0;
-    let output = sim.canonical_state().inventories[&site.output].quantity.0;
+    let input = sim.canonical_state().state.inventories[&site.input]
+        .quantity
+        .0;
+    let output = sim.canonical_state().state.inventories[&site.output]
+        .quantity
+        .0;
     command(&mut sim, Command::Work { site: site.id }).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&site.input].quantity.0,
+        sim.canonical_state().state.inventories[&site.input]
+            .quantity
+            .0,
         input - 1_000
     );
     sim.advance(SimDuration(23_456)).unwrap();
     command(&mut sim, Command::Rest).unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&site.output].quantity.0,
+        sim.canonical_state().state.inventories[&site.output]
+            .quantity
+            .0,
         output
     );
     command(&mut sim, Command::Work { site: site.id }).unwrap();
     sim.advance(SimDuration(36_544)).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&site.input].quantity.0,
+        sim.canonical_state().state.inventories[&site.input]
+            .quantity
+            .0,
         input - 1_000
     );
     assert_eq!(
-        sim.canonical_state().inventories[&site.output].quantity.0,
+        sim.canonical_state().state.inventories[&site.output]
+            .quantity
+            .0,
         output + 1_000
     );
-    assert_eq!(sim.canonical_state().people[0].work_units, 1_000);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 1_000);
     command(&mut sim, Command::Work { site: site.id }).unwrap();
     command(&mut sim, Command::Cancel).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&site.input].quantity.0,
+        sim.canonical_state().state.inventories[&site.input]
+            .quantity
+            .0,
         input - 2_000
     );
     assert_eq!(
-        sim.canonical_state().inventories[&site.output].quantity.0,
+        sim.canonical_state().state.inventories[&site.output]
+            .quantity
+            .0,
         output + 1_000
     );
 }
@@ -276,7 +294,7 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
 fn spoilage_invalidates_loading_without_duplicating_reserved_food() {
     let mut sim = sim(1);
     let source = food(&sim);
-    let carried = sim.canonical_state().people[0].inventory;
+    let carried = sim.canonical_state().state.people[0].inventory;
     command(
         &mut sim,
         Command::Load {
@@ -289,16 +307,16 @@ fn spoilage_invalidates_loading_without_duplicating_reserved_food() {
     sim.debug_spoil_at(source, SimTime(30_000)).unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&source].quantity,
+        sim.canonical_state().state.inventories[&source].quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&carried].quantity,
+        sim.canonical_state().state.inventories[&carried].quantity,
         Quantity(0)
     );
     assert_eq!(sim.observe().physical.unwrap().activity, Activity::Idle);
     assert!(sim.canonical_state().events.iter().any(|e| matches!(
-        e.kind,
+        e.event,
         EventKind::Spoiled {
             quantity: Quantity(100_000),
             ..
@@ -309,7 +327,7 @@ fn spoilage_invalidates_loading_without_duplicating_reserved_food() {
 #[test]
 fn guardian_injury_recovers_and_mortal_rest_preserves_chunking() {
     let mut reference = sim(1);
-    let guardian = reference.canonical_state().people[1].id;
+    let guardian = reference.canonical_state().state.people[1].id;
     let ruler = actor(&reference);
     reference.debug_injure(guardian, 180_000).unwrap();
     reference.debug_injure(ruler, 100_000).unwrap();
@@ -327,7 +345,7 @@ fn guardian_injury_recovers_and_mortal_rest_preserves_chunking() {
         split.advance(SimDuration(dt)).unwrap();
     }
     assert_eq!(reference.canonical_state(), split.canonical_state());
-    let vitals = &game_physiology::body(&reference.canonical_state().components, guardian)
+    let vitals = &game_physiology::body(reference.canonical_state().components, guardian)
         .expect("body exists")
         .vitals;
     assert_eq!(vitals.health, 180_000);
@@ -340,7 +358,7 @@ fn guardian_injury_recovers_and_mortal_rest_preserves_chunking() {
 fn timed_actions_reservations_and_partial_work_survive_saving() {
     let mut sim = sim(1);
     let source = food(&sim);
-    let carried = sim.canonical_state().people[0].inventory;
+    let carried = sim.canonical_state().state.people[0].inventory;
     command(
         &mut sim,
         Command::Load {
@@ -362,7 +380,7 @@ fn timed_actions_reservations_and_partial_work_survive_saving() {
     sim.advance(SimDuration(42_877)).unwrap();
     loaded.advance(SimDuration(42_877)).unwrap();
     assert_eq!(sim.canonical_state(), loaded.canonical_state());
-    let site = game_workshop::sites(&sim.canonical_state().components)
+    let site = game_workshop::sites(sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
@@ -380,9 +398,10 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
     let mut sim = sim(4);
     let ruler = actor(&sim);
     let source = food(&sim);
-    let carried = sim.canonical_state().people[0].inventory;
+    let carried = sim.canonical_state().state.people[0].inventory;
     let timber_source = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| i.good == Good::Timber && i.location == InventoryLocation::Area(AreaId(1)))
@@ -390,6 +409,7 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
         .id;
     let timber_carried = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| i.good == Good::Timber && i.location == InventoryLocation::Carried(ruler))
@@ -416,6 +436,7 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
     sim.advance(MINUTE).unwrap();
     assert_eq!(
         sim.canonical_state()
+            .state
             .inventories
             .values()
             .filter(|i| i.location == InventoryLocation::Carried(ruler))
@@ -429,7 +450,7 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
 #[test]
 fn recovery_events_and_fatigue_interruptions_have_exact_chunk_independent_times() {
     let mut sim = sim(1);
-    let guardian = sim.canonical_state().people[1].id;
+    let guardian = sim.canonical_state().state.people[1].id;
     sim.debug_injure(guardian, 123_456).unwrap();
     let mut split = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
@@ -438,11 +459,9 @@ fn recovery_events_and_fatigue_interruptions_have_exact_chunk_independent_times(
     }
     assert_eq!(sim.canonical_state(), split.canonical_state());
     assert!(
-        sim.canonical_state()
-            .events
-            .iter()
-            .any(|e| e.kind == EventKind::Recovered { actor: guardian }
-                && e.time == SimTime(123_456))
+        sim.canonical_state().events.iter().any(|e| e.event
+            == EventKind::Recovered { actor: guardian }
+            && e.at == SimTime(123_456))
     );
 }
 
@@ -459,7 +478,7 @@ fn existing_physical_completion_and_debug_transfer_cannot_consume_the_same_units
             BTreeSet::from([ruler]),
         )
         .unwrap();
-    let carried = sim.canonical_state().people[0].inventory;
+    let carried = sim.canonical_state().state.people[0].inventory;
     command(&mut sim, Command::Eat { source }).unwrap();
     sim.debug_schedule_transfers(
         SimTime(60_000),
@@ -473,18 +492,18 @@ fn existing_physical_completion_and_debug_transfer_cannot_consume_the_same_units
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&source].quantity,
+        sim.canonical_state().state.inventories[&source].quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&carried].quantity,
+        sim.canonical_state().state.inventories[&carried].quantity,
         Quantity(0)
     );
     assert_eq!(
         sim.canonical_state()
             .events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::Ate { .. }))
+            .filter(|e| matches!(e.event, EventKind::Ate { .. }))
             .count(),
         1
     );
@@ -492,7 +511,7 @@ fn existing_physical_completion_and_debug_transfer_cannot_consume_the_same_units
         sim.canonical_state()
             .events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::Transferred { .. }))
+            .filter(|e| matches!(e.event, EventKind::Transferred { .. }))
             .count(),
         0
     );
@@ -510,9 +529,17 @@ fn arriving_at_a_body_limit(exhaustion: bool) -> (Simulation, PersonId) {
     sim.advance(SimDuration(120_000)).unwrap();
     let ruler = actor(&sim);
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    let mut state: CanonicalState = serde_json::from_value(envelope["state"].take()).unwrap();
-    let physical = state.physical.as_mut().unwrap();
-    let body = game_physiology::body_mut(&mut state.components, ruler).unwrap();
+    let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
+    let physical = state.state.physical.as_mut().unwrap();
+    let body_row = state
+        .components
+        .columns
+        .get_mut("physiology/body")
+        .unwrap()
+        .iter_mut()
+        .find(|row| row.entity == ruler.0)
+        .unwrap();
+    let mut body: game_physiology::Body = serde_json::from_str(body_row.value.get()).unwrap();
     body.vitals.fatigue = if exhaustion {
         physical.rules.fatigue_limit - 120_000
     } else {
@@ -522,6 +549,7 @@ fn arriving_at_a_body_limit(exhaustion: bool) -> (Simulation, PersonId) {
         body.vitals.hunger = physical.rules.hunger_harm;
         body.vitals.health = 120_000;
     }
+    body_row.value = serde_json::value::to_raw_value(&body).unwrap();
     envelope["state"] = serde_json::to_value(state).unwrap();
     sim = Simulation::load(
         &serde_json::to_vec(&envelope).unwrap(),
@@ -544,26 +572,23 @@ fn death_at_an_intermediate_arrival_does_not_publish_a_phantom_next_leg() {
     sim.advance(SimDuration(120_000)).unwrap();
     let state = sim.canonical_state();
     assert!(
-        !game_physiology::body(&state.components, ruler)
+        !game_physiology::body(state.components, ruler)
             .expect("body exists")
             .vitals
             .alive
     );
     assert_eq!(
         *game_spatial::location(
-            &state.components,
-            game_ecs::StableId((state.people[0].id).0)
+            state.components,
+            game_ecs::StableId((state.state.people[0].id).0)
         )
         .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
-    assert!(state.people[0].route.is_empty());
+    assert!(state.state.people[0].route.is_empty());
     assert!(
-        !state
-            .events
-            .iter()
-            .any(|event| event.time == SimTime(240_000)
-                && matches!(event.kind, EventKind::Departed { actor, .. } if actor == ruler))
+        !state.events.iter().any(|event| event.at == SimTime(240_000)
+            && matches!(event.event, EventKind::Departed { actor, .. } if actor == ruler))
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
 }
@@ -574,13 +599,13 @@ fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
     sim.advance(SimDuration(120_000)).unwrap();
     assert_eq!(
         *game_spatial::location(
-            &sim.canonical_state().components,
-            game_ecs::StableId((sim.canonical_state().people[0].id).0)
+            sim.canonical_state().components,
+            game_ecs::StableId((sim.canonical_state().state.people[0].id).0)
         )
         .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
-    assert!(sim.canonical_state().people[0].route.is_empty());
+    assert!(sim.canonical_state().state.people[0].route.is_empty());
     assert_eq!(
         command(
             &mut sim,
@@ -591,7 +616,7 @@ fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
         Err(Error::Unavailable)
     );
     assert!(
-        game_physiology::body(&sim.canonical_state().components, ruler)
+        game_physiology::body(sim.canonical_state().components, ruler)
             .expect("body exists")
             .vitals
             .alive

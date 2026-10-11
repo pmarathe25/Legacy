@@ -23,7 +23,7 @@ impl Simulation {
         if let Some(dose) = self.care_dose(good) {
             add(dose);
         }
-        if let Some(health) = &self.state.health {
+        if let Some(health) = &self.host.state.health {
             match good {
                 Good::Timber => add(health.rules.boiling_fuel),
                 Good::Herb => add(health.rules.treatment_herbs),
@@ -32,8 +32,8 @@ impl Simulation {
                 _ => {}
             }
         }
-        if let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        if let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) {
             for site in mind.sites.values() {
                 if mind
@@ -41,21 +41,20 @@ impl Simulation {
                     .get(&site.input)
                     .is_some_and(|stock| stock.good == good)
                 {
-                    let quantity = if destination == Some(site.input) {
-                        // The caller supplies only freshly visible local destinations.
-                        Quantity(
+                    let quantity =
+                        if destination == Some(site.input) {
+                            // The caller supplies only freshly visible local destinations.
+                            Quantity(site.input_quantity.0.saturating_sub(
+                                self.host.state.inventories[&site.input].quantity.0,
+                            ))
+                        } else {
                             site.input_quantity
-                                .0
-                                .saturating_sub(self.state.inventories[&site.input].quantity.0),
-                        )
-                    } else {
-                        site.input_quantity
-                    };
+                        };
                     add(quantity);
                 }
             }
         }
-        if let Some(world) = &self.state.agreements {
+        if let Some(world) = &self.host.state.agreements {
             for agreement in world
                 .knowledge
                 .get(&actor)
@@ -97,6 +96,7 @@ impl Simulation {
             }
         }
         if let Some(request) = self
+            .host
             .state
             .lineage
             .as_ref()
@@ -121,7 +121,7 @@ impl Simulation {
     }
 
     pub(crate) fn cargo_quantity_opportunities(&self, actor: PersonId) -> Vec<QuantityOpportunity> {
-        if actor != self.state.ruler || self.past_life_controls_actor(actor) {
+        if actor != self.host.state.ruler || self.past_life_controls_actor(actor) {
             return Vec::new();
         }
         let Some(view) = self.physical_view() else {
@@ -137,7 +137,7 @@ impl Simulation {
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
             .flatten()
-            .map(|id| u128::from(self.state.inventories[id].quantity.0))
+            .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
             .sum();
         let body_room = Quantity(u128::from(capacity.0).saturating_sub(held) as u64);
         let mut opportunities = Vec::new();
@@ -146,7 +146,7 @@ impl Simulation {
             .iter()
             .filter(|stock| stock.can_access && stock.quantity.0 > 0)
         {
-            let from = &self.state.inventories[&source.id];
+            let from = &self.host.state.inventories[&source.id];
             let increment = self.record_quantity_increment(source.id);
             let supply = self.cargo_source_facts(actor, from, increment);
             if from.location != InventoryLocation::Carried(actor)
@@ -178,7 +178,7 @@ impl Simulation {
                 }
             }
             for destination in &view.local_stocks {
-                let to = &self.state.inventories[&destination.id];
+                let to = &self.host.state.inventories[&destination.id];
                 if source.id == destination.id
                     || from.good != to.good
                     || (from.location != InventoryLocation::Carried(actor)
@@ -213,7 +213,7 @@ impl Simulation {
                                 ..supply
                             },
                             self.cargo_receiver_facts(actor, source.id, to, *quantity),
-                            self.state.time,
+                            self.host.clock().time,
                             rules.loading_time,
                         )
                         .is_ok()
@@ -242,8 +242,8 @@ mod tests {
     #[test]
     fn personally_accepted_remaining_delivery_is_suggested_below_a_larger_stock_bound() {
         let mut sim = Simulation::agreement_fixture(1, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
-        let recipient = sim.state.people[3].id;
+        let actor = sim.host.state.ruler;
+        let recipient = sim.host.state.people[3].id;
         let source = sim
             .debug_add_inventory(
                 Good::Timber,
@@ -262,7 +262,8 @@ mod tests {
                 BTreeSet::from([recipient]),
             )
             .unwrap();
-        sim.state
+        sim.host
+            .state
             .agreements
             .as_mut()
             .unwrap()
@@ -311,7 +312,10 @@ mod tests {
         })
         .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.state.inventories[&destination].quantity, Quantity(250));
+        assert_eq!(
+            sim.host.state.inventories[&destination].quantity,
+            Quantity(250)
+        );
         assert_eq!(
             sim.agreement_view(actor).last().unwrap().obligations[0].performed,
             250
@@ -320,28 +324,25 @@ mod tests {
     #[test]
     fn personally_known_recipe_deficit_is_an_admitted_public_quantity() {
         let mut sim = Simulation::autonomy_fixture(1, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
-        let site = game_workshop::sites(&sim.state.components)
+        let actor = sim.host.state.ruler;
+        let site = game_workshop::sites(&sim.host.storage)
             .map(|(_, site)| site)
             .find(|site| site.area == AreaId(1))
             .unwrap()
             .id;
-        let input = game_workshop::site(&sim.state.components, site)
+        let input = game_workshop::site(&sim.host.storage, site)
             .expect("site exists")
             .input;
-        game_workshop::site_mut(&mut sim.state.components, site)
+        game_workshop::site_mut(&mut sim.host.storage, site)
             .unwrap()
             .input_quantity = Quantity(250);
-        game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap()
-        .sites
-        .get_mut(&site)
-        .unwrap()
-        .input_quantity = Quantity(250);
-        sim.state.inventories.get_mut(&input).unwrap().quantity = Quantity(0);
+        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+            .unwrap()
+            .sites
+            .get_mut(&site)
+            .unwrap()
+            .input_quantity = Quantity(250);
+        sim.host.state.inventories.get_mut(&input).unwrap().quantity = Quantity(0);
         let source = sim
             .debug_add_inventory(
                 Good::Timber,
@@ -368,8 +369,8 @@ mod tests {
         })
         .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.state.inventories[&source].quantity, Quantity(250));
-        assert!(sim.state.events.iter().any(|event| matches!(event.kind,
+        assert_eq!(sim.host.state.inventories[&source].quantity, Quantity(250));
+        assert!(sim.host.events().iter().any(|event| matches!(event.event,
             EventKind::Transferred { source: from, destination: to, quantity: Quantity(250), .. }
             if from == source && to == input)));
     }

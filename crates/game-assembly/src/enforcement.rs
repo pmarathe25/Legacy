@@ -54,17 +54,24 @@ pub struct World {
 impl Simulation {
     pub fn enforcement_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::property_fixture(seed, execution)?;
-        sim.state.scenario = ScenarioInfo {
+        sim.host.state.scenario = ScenarioInfo {
             id: "enforcement-fixture".into(),
             version: 1,
             debug_fixture: true,
         };
-        let judge = sim.state.ruler;
-        let filer = sim.state.people[3].id;
-        let officer = sim.state.people[4].id;
-        let target = sim.state.people[5].id;
+        let judge = sim.host.state.ruler;
+        let filer = sim.host.state.people[3].id;
+        let officer = sim.host.state.people[4].id;
+        let target = sim.host.state.people[5].id;
         let court = AreaId(1);
-        for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+        for actor in sim
+            .host
+            .state
+            .people
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+        {
             sim.debug_actor_command(actor, Command::Cancel)?;
             sim.debug_set_personality(
                 actor,
@@ -74,80 +81,88 @@ impl Simulation {
         }
         // This opening supplies a court and watch rather than the autonomy
         // fixture's recipe jobs. Old private plans must not pull witnesses away.
-        let sites: Vec<_> = game_workshop::sites(&sim.state.components)
+        let sites: Vec<_> = game_workshop::sites(&sim.host.storage)
             .map(|(id, _)| id)
             .collect();
         for site in sites {
-            game_workshop::remove_site(&mut sim.state.components, site)?;
+            game_workshop::remove_site(&mut sim.host.storage, site)?;
         }
-        let workers: Vec<_> = game_workshop::jobs(&sim.state.components)
+        let workers: Vec<_> = game_workshop::jobs(&sim.host.storage)
             .map(|(actor, _)| actor)
             .collect();
         for actor in workers {
-            game_workshop::remove_job(&mut sim.state.components, actor).map(|_| ())?;
+            game_workshop::remove_job(&mut sim.host.storage, actor).map(|_| ())?;
         }
         let actors: Vec<_> =
-            game_characters::decisions::minds::<game_api::Command>(&sim.state.components)
+            game_characters::decisions::minds::<game_api::Command>(&sim.host.storage)
                 .map(|(id, _)| id)
                 .collect();
         for actor in actors {
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.state.components,
+                &mut sim.host.storage,
                 actor,
             )
             .unwrap();
             mind.sites.clear();
             mind.plan = None;
         }
-        if let Some(world) = &mut sim.state.development {
+        if let Some(world) = &mut sim.host.state.development {
             world.rules = development::Rules::human();
             let adulthood = world.rules.adulthood;
-            let actors: Vec<_> = game_lifecycle::all_lives(&sim.state.components)
+            let actors: Vec<_> = game_lifecycle::all_lives(&sim.host.storage)
                 .map(|(id, _)| id)
                 .collect();
             for actor in actors {
-                let life = game_lifecycle::life_mut(&mut sim.state.components, actor).unwrap();
+                let life = game_lifecycle::life_mut(&mut sim.host.storage, actor).unwrap();
                 life.initial_age = adulthood;
                 life.stage = LifeStage::Adult;
             }
-            for due in sim.state.due.values_mut() {
+            for due in sim.host.state.due.values_mut() {
                 due.retain(|d| !matches!(d, Due::Age(_)));
             }
         }
-        for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+        for actor in sim
+            .host
+            .state
+            .people
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+        {
             sim.schedule_age(actor);
         }
-        let rules = &mut sim.state.physical.as_mut().unwrap().rules;
+        let rules = &mut sim.host.state.physical.as_mut().unwrap().rules;
         rules.hunger_harm = 3 * 86_400_000;
         rules.meal_relief = 86_400_000;
         rules.fatigue_limit = 16 * 3_600_000;
         for actor in [judge, filer, officer, target] {
             *game_spatial::location_mut(
-                &mut sim.state.components,
-                game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0),
+                &mut sim.host.storage,
+                game_ecs::StableId((sim.host.state.people[sim.person_index[&actor]].id).0),
             )
             .expect("location exists") = Location::AtArea(court);
         }
-        sim.state.missions = Some(missions::World {
+        sim.host.state.missions = Some(missions::World {
             missions: BTreeMap::new(),
             recruitments: BTreeMap::new(),
             known: BTreeMap::new(),
             talks: BTreeMap::new(),
-            last_event: sim.state.next_event - 1,
-            last_review: sim.state.time,
+            last_event: sim.host.next_event() - 1,
+            last_review: sim.host.clock().time,
         });
-        sim.state.institutions = Some(institutions::World {
+        sim.host.state.institutions = Some(institutions::World {
             institutions: BTreeMap::new(),
             proposals: BTreeMap::new(),
             concepts: BTreeMap::new(),
             cases: BTreeMap::new(),
             memories: sim
+                .host
                 .state
                 .people
                 .iter()
                 .map(|p| (p.id, institutions::SocialMemory::default()))
                 .collect(),
-            last_event: sim.state.next_event - 1,
+            last_event: sim.host.next_event() - 1,
             exclusions: BTreeMap::new(),
             heard: BTreeMap::new(),
         });
@@ -185,7 +200,8 @@ impl Simulation {
             (binding, officer),
             (tool, officer),
         ] {
-            sim.state
+            sim.host
+                .state
                 .agreements
                 .as_mut()
                 .unwrap()
@@ -199,7 +215,8 @@ impl Simulation {
             Quantity(10_000),
             BTreeSet::from([filer]),
         )?;
-        sim.state
+        sim.host
+            .state
             .agreements
             .as_mut()
             .unwrap()
@@ -253,6 +270,7 @@ impl Simulation {
             },
         )?;
         let institution = *sim
+            .host
             .state
             .institutions
             .as_ref()
@@ -297,6 +315,7 @@ impl Simulation {
             },
         )?;
         let proposal = *sim
+            .host
             .state
             .institutions
             .as_ref()
@@ -335,16 +354,20 @@ impl Simulation {
         Ok(sim)
     }
     fn enforcement_world(&mut self) {
-        if self.state.enforcement.is_none() {
-            self.state.enforcement = Some(World {
-                last_event: self.state.next_event - 1,
+        if self.host.state.enforcement.is_none() {
+            self.host.state.enforcement = Some(World {
+                last_event: self.host.next_event() - 1,
                 ..World::default()
             });
         }
     }
     fn enforcement_area(&self, actor: PersonId) -> Option<AreaId> {
-        let person = self.state.people.get(*self.person_index.get(&actor)?)?;
-        let body = game_physiology::body(&self.state.components, actor)?;
+        let person = self
+            .host
+            .state
+            .people
+            .get(*self.person_index.get(&actor)?)?;
+        let body = game_physiology::body(&self.host.storage, actor)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -352,7 +375,7 @@ impl Simulation {
         {
             return None;
         }
-        match *game_spatial::location(&self.state.components, game_ecs::StableId((person.id).0))
+        match *game_spatial::location(&self.host.storage, game_ecs::StableId((person.id).0))
             .expect("location exists")
         {
             Location::AtArea(area) => Some(area),
@@ -365,6 +388,7 @@ impl Simulation {
         office: u16,
     ) -> Option<&OfficeMandate> {
         let i = self
+            .host
             .state
             .institutions
             .as_ref()?
@@ -401,7 +425,7 @@ impl Simulation {
             || policy
                 .areas
                 .iter()
-                .any(|id| !self.state.areas.iter().any(|a| a.id == *id))
+                .any(|id| !self.host.state.areas.iter().any(|a| a.id == *id))
             || !self.validate_subjects(&policy.subjects, &i.charter.offices)
             || policy.spending.len() > 16
             || policy.supplies.len() > 16
@@ -411,6 +435,7 @@ impl Simulation {
                 q.0 == 0
                     || !judge.inventories.contains(source)
                     || self
+                        .host
                         .state
                         .inventories
                         .get(source)
@@ -420,6 +445,7 @@ impl Simulation {
                 q.0 == 0
                     || !enforcer.inventories.contains(source)
                     || self
+                        .host
                         .state
                         .inventories
                         .get(source)
@@ -452,6 +478,7 @@ impl Simulation {
                 .ok_or(Error::Unavailable),
             InstitutionChange::Adjudicate { case, remedy } => {
                 let case = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -465,6 +492,7 @@ impl Simulation {
                         .enforcement_office(i.id, case.office)
                         .is_none_or(|m| !m.powers.contains(&OfficePower::Adjudicate))
                     || self
+                        .host
                         .state
                         .enforcement
                         .as_ref()
@@ -477,9 +505,10 @@ impl Simulation {
                 match remedy {
                     EnforcementRemedy::Dismiss => {}
                     EnforcementRemedy::Confine { until } => {
-                        if *until <= self.state.time
-                            || until.0 - self.state.time.0 > case.policy.maximum_confinement.0
-                            || self.state.combat.is_none()
+                        if *until <= self.host.clock().time
+                            || until.0 - self.host.clock().time.0
+                                > case.policy.maximum_confinement.0
+                            || self.host.state.combat.is_none()
                         {
                             return Err(Error::Unavailable);
                         }
@@ -500,7 +529,7 @@ impl Simulation {
                         }
                     }
                     EnforcementRemedy::Settlement { terms } => {
-                        if terms.is_empty() || terms.len()>8 || terms.iter().any(|term| !matches!(term,AgreementTerm::Delivery {debtor,quantity,deadline,..} if *debtor==case.target && quantity.0>0 && *deadline>self.state.time)) {return Err(Error::Unavailable);}
+                        if terms.is_empty() || terms.len()>8 || terms.iter().any(|term| !matches!(term,AgreementTerm::Delivery {debtor,quantity,deadline,..} if *debtor==case.target && quantity.0>0 && *deadline>self.host.clock().time)) {return Err(Error::Unavailable);}
                         for term in terms {
                             if let AgreementTerm::Delivery {
                                 source,
@@ -509,10 +538,11 @@ impl Simulation {
                                 ..
                             } = term
                                 && self
+                                    .host
                                     .state
                                     .inventories
                                     .get(source)
-                                    .zip(self.state.inventories.get(destination))
+                                    .zip(self.host.state.inventories.get(destination))
                                     .is_none_or(|(a, b)| {
                                         a.good != b.good
                                             || a.id == b.id
@@ -538,6 +568,7 @@ impl Simulation {
     ) -> bool {
         if let InstitutionChange::Adjudicate { case, .. } = change {
             let Some(case) = self
+                .host
                 .state
                 .enforcement
                 .as_ref()
@@ -545,7 +576,8 @@ impl Simulation {
             else {
                 return false;
             };
-            self.state
+            self.host
+                .state
                 .enforcement
                 .as_ref()
                 .and_then(|w| w.known.get(&actor))
@@ -567,12 +599,14 @@ impl Simulation {
         proposal: RuleProposalId,
     ) -> Result<(), Error> {
         let record = self
+            .host
             .state
             .institutions
             .as_ref()
             .and_then(|w| w.proposals.get(&proposal))
             .ok_or(Error::Unavailable)?;
         let community = self
+            .host
             .state
             .institutions
             .as_ref()
@@ -585,7 +619,7 @@ impl Simulation {
         }
         self.validate_enforcement_change(community, &record.change)?;
         if matches!(record.change, InstitutionChange::Adjudicate { .. }) {
-            self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+            self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
         }
         self.ensure_event_capacity(2)
     }
@@ -594,11 +628,13 @@ impl Simulation {
         institution: InstitutionId,
         proposal: RuleProposalId,
     ) -> Result<(), Error> {
-        let change = self.state.institutions.as_ref().unwrap().proposals[&proposal].clone();
+        let owner_now = self.host.clock().time;
+        let change = self.host.state.institutions.as_ref().unwrap().proposals[&proposal].clone();
         match change.change {
             InstitutionChange::EnforcementPolicy { office, policy } => {
                 self.enforcement_world();
                 let policies = self
+                    .host
                     .state
                     .enforcement
                     .as_mut()
@@ -613,8 +649,8 @@ impl Simulation {
                             institution,
                             office,
                             policy,
-                            adopted_at: self.state.time,
-                            observed_at: self.state.time,
+                            adopted_at: owner_now,
+                            observed_at: owner_now,
                         },
                     );
                 } else {
@@ -626,9 +662,10 @@ impl Simulation {
                 });
             }
             InstitutionChange::Adjudicate { case, remedy } => {
-                let judgment = JudgmentId(allocate(&mut self.state)?);
-                let now = self.state.time;
+                let judgment = JudgmentId(self.host.allocate_id()?.0);
+                let now = owner_now;
                 let record = self
+                    .host
                     .state
                     .enforcement
                     .as_mut()
@@ -650,7 +687,7 @@ impl Simulation {
                 };
                 record.changed_at = now;
                 record.notice_area = Some(
-                    self.state.institutions.as_ref().unwrap().institutions[&institution]
+                    self.host.state.institutions.as_ref().unwrap().institutions[&institution]
                         .charter
                         .jurisdiction,
                 );
@@ -660,6 +697,7 @@ impl Simulation {
                         .into();
                 if matches!(remedy, EnforcementRemedy::Depose { .. }) {
                     let case = self
+                        .host
                         .state
                         .enforcement
                         .as_mut()
@@ -711,6 +749,7 @@ impl Simulation {
             }
             EnforcementEvidenceRef::Assault(id) => {
                 let assault = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()?
@@ -761,6 +800,7 @@ impl Simulation {
             }
         };
         let newer = self
+            .host
             .state
             .enforcement
             .as_ref()
@@ -798,7 +838,7 @@ impl Simulation {
             status: case.status,
             explanation: case.explanation.clone(),
             observed_at: case.changed_at,
-            learned_at: self.state.time,
+            learned_at: self.host.clock().time,
             source: if matches!(source, KnowledgeSource::Observed(_)) {
                 KnowledgeSource::Observed(actor)
             } else {
@@ -807,7 +847,7 @@ impl Simulation {
         }
     }
     pub(crate) fn enforcement_view(&self, actor: PersonId) -> EnforcementView {
-        let Some(world) = &self.state.enforcement else {
+        let Some(world) = &self.host.state.enforcement else {
             return EnforcementView::default();
         };
         EnforcementView {
@@ -850,6 +890,8 @@ impl Simulation {
         actor: PersonId,
         action: &EnforcementAction,
     ) -> Result<(), Error> {
+        let owner_now = self.host.clock().time;
+        self.host.preflight_records(0, 0, 1)?;
         let area = self.enforcement_area(actor).ok_or(Error::Unavailable)?;
         if self.in_combat(actor) {
             return Err(Error::Unavailable);
@@ -867,6 +909,7 @@ impl Simulation {
                     .find(|p| p.institution == *institution && p.office == *office)
                     .ok_or(Error::Unavailable)?;
                 let actual = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -880,6 +923,7 @@ impl Simulation {
                     .evidence_for(actor, *evidence)
                     .ok_or(Error::Unavailable)?;
                 let i = self
+                    .host
                     .state
                     .institutions
                     .as_ref()
@@ -902,15 +946,9 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                let completes = SimTime(
-                    self.state
-                        .time
-                        .0
-                        .checked_add(MINUTE.0)
-                        .ok_or(Error::Overflow)?,
-                );
+                let completes = SimTime(owner_now.0.checked_add(MINUTE.0).ok_or(Error::Overflow)?);
                 self.ensure_event_capacity(2)?;
-                let id = EnforcementCaseId(allocate(&mut self.state)?);
+                let id = EnforcementCaseId(self.host.allocate_id()?.0);
                 self.interrupt_actor_activity(actor);
                 let case = Case {
                     id,
@@ -928,12 +966,12 @@ impl Simulation {
                     status: EnforcementStatus::Filing,
                     explanation: "Preparing a complaint from remembered observations or reports"
                         .into(),
-                    changed_at: self.state.time,
+                    changed_at: owner_now,
                     notice_area: None,
                     witnesses: BTreeSet::from([actor]),
                 };
                 let view = self.case_view(&case, actor, KnowledgeSource::Observed(actor));
-                let world = self.state.enforcement.as_mut().unwrap();
+                let world = self.host.state.enforcement.as_mut().unwrap();
                 world.cases.insert(id, case);
                 world.known.entry(actor).or_default().insert(id, view);
                 self.start_enforcement_talk(
@@ -954,6 +992,7 @@ impl Simulation {
             }
             EnforcementAction::Report { case, recipient } => {
                 let snapshot = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -972,13 +1011,7 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                let completes = SimTime(
-                    self.state
-                        .time
-                        .0
-                        .checked_add(MINUTE.0)
-                        .ok_or(Error::Overflow)?,
-                );
+                let completes = SimTime(owner_now.0.checked_add(MINUTE.0).ok_or(Error::Overflow)?);
                 self.ensure_event_capacity(1)?;
                 self.interrupt_actor_activity(actor);
                 self.start_enforcement_talk(
@@ -997,6 +1030,7 @@ impl Simulation {
             }
             EnforcementAction::Respond { case, comply } => {
                 let known = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -1004,6 +1038,7 @@ impl Simulation {
                     .and_then(|k| k.get(case))
                     .ok_or(Error::Unavailable)?;
                 let actual = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -1017,7 +1052,8 @@ impl Simulation {
                         actual.status,
                         EnforcementStatus::Decided | EnforcementStatus::Refused
                     )
-                    || self.state.institutions.as_ref().unwrap().institutions[&actual.institution]
+                    || self.host.state.institutions.as_ref().unwrap().institutions
+                        [&actual.institution]
                         .charter
                         .jurisdiction
                         != area
@@ -1030,6 +1066,7 @@ impl Simulation {
                     if let EnforcementRemedy::Settlement { terms } = &judgment.remedy {
                         if let Some(old) = self.existing_settlement_debt(&actual) {
                             let debt = self
+                                .host
                                 .state
                                 .agreements
                                 .as_ref()
@@ -1043,7 +1080,7 @@ impl Simulation {
                                 .iter()
                                 .flat_map(|t| t.parties())
                                 .collect::<BTreeSet<_>>();
-                            let next = self.state.next_id;
+                            let next = self.host.next_id();
                             self.agreement_command(
                                 actor,
                                 &AgreementAction::Propose {
@@ -1053,6 +1090,7 @@ impl Simulation {
                                 },
                             )?;
                             settlement = self
+                                .host
                                 .state
                                 .agreements
                                 .as_ref()
@@ -1068,6 +1106,7 @@ impl Simulation {
                 }
                 self.ensure_event_capacity(1)?;
                 let record = self
+                    .host
                     .state
                     .enforcement
                     .as_mut()
@@ -1081,7 +1120,7 @@ impl Simulation {
                 } else {
                     EnforcementStatus::Refused
                 };
-                record.changed_at = self.state.time;
+                record.changed_at = owner_now;
                 record.notice_area = Some(area);
                 record.witnesses = BTreeSet::from([actor]);
                 record.explanation = if *comply {
@@ -1101,21 +1140,23 @@ impl Simulation {
             }
         }
         self.observe_enforcement();
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         Ok(())
     }
     fn start_enforcement_talk(&mut self, actor: PersonId, talk: Talk) {
-        *self.state.components.activity_mut(actor).unwrap() = Activity::EnforcementTalk {
+        *self.host.storage.activity_mut(actor).unwrap() = Activity::EnforcementTalk {
             case: talk.case,
             recipient: talk.recipient,
             completes: talk.completes,
         };
-        self.state
+        self.host
+            .state
             .due
             .entry(talk.completes)
             .or_default()
             .push(Due::Physical(actor));
-        self.state
+        self.host
+            .state
             .enforcement
             .as_mut()
             .unwrap()
@@ -1123,7 +1164,9 @@ impl Simulation {
             .insert(actor, talk);
     }
     pub(crate) fn interrupt_enforcement(&mut self, actor: PersonId) {
+        let owner_now = self.host.clock().time;
         let Some(talk) = self
+            .host
             .state
             .enforcement
             .as_mut()
@@ -1133,6 +1176,7 @@ impl Simulation {
         };
         if matches!(talk.conversation, Conversation::File) {
             let case = self
+                .host
                 .state
                 .enforcement
                 .as_mut()
@@ -1141,13 +1185,15 @@ impl Simulation {
                 .get_mut(&talk.case)
                 .unwrap();
             case.status = EnforcementStatus::Withdrawn;
-            case.changed_at = self.state.time;
+            case.changed_at = owner_now;
             case.explanation =
                 "The complaint was interrupted before the officer received it".into();
         }
     }
     pub(crate) fn complete_enforcement_talk(&mut self, actor: PersonId) {
+        let owner_now = self.host.clock().time;
         let Some(talk) = self
+            .host
             .state
             .enforcement
             .as_mut()
@@ -1161,6 +1207,7 @@ impl Simulation {
             match talk.conversation {
                 Conversation::File => {
                     let record = self
+                        .host
                         .state
                         .enforcement
                         .as_mut()
@@ -1169,7 +1216,7 @@ impl Simulation {
                         .get_mut(&talk.case)
                         .unwrap();
                     record.status = EnforcementStatus::Pending;
-                    record.changed_at = self.state.time;
+                    record.changed_at = owner_now;
                     record.notice_area = Some(talk.area);
                     record.witnesses = BTreeSet::from([actor, talk.recipient]);
                     record.explanation =
@@ -1184,7 +1231,8 @@ impl Simulation {
                     for listener in listeners {
                         let snapshot =
                             self.case_view(&case, listener, KnowledgeSource::Reported(actor));
-                        self.state
+                        self.host
+                            .state
                             .enforcement
                             .as_mut()
                             .unwrap()
@@ -1203,9 +1251,10 @@ impl Simulation {
                     mut snapshot,
                     institution,
                 } => {
-                    snapshot.learned_at = self.state.time;
+                    snapshot.learned_at = owner_now;
                     snapshot.source = KnowledgeSource::Reported(actor);
                     let known = self
+                        .host
                         .state
                         .enforcement
                         .as_mut()
@@ -1227,6 +1276,7 @@ impl Simulation {
                     }
                     known.insert(snapshot.id, *snapshot);
                     if let Some(memory) = self
+                        .host
                         .state
                         .institutions
                         .as_mut()
@@ -1249,6 +1299,7 @@ impl Simulation {
             }
         } else if matches!(talk.conversation, Conversation::File) {
             let case = self
+                .host
                 .state
                 .enforcement
                 .as_mut()
@@ -1257,11 +1308,11 @@ impl Simulation {
                 .get_mut(&talk.case)
                 .unwrap();
             case.status = EnforcementStatus::Withdrawn;
-            case.changed_at = self.state.time;
+            case.changed_at = owner_now;
             case.explanation = "The officer could no longer hear the complaint".into();
         }
-        if self.state.physical.is_some()
-            && let Some(activity) = self.state.components.activity_mut(actor)
+        if self.host.state.physical.is_some()
+            && let Some(activity) = self.host.storage.activity_mut(actor)
         {
             *activity = Activity::Idle;
         }
@@ -1270,16 +1321,16 @@ impl Simulation {
         self.person_index
             .iter()
             .filter(|(_, index)| {
-                let p = &self.state.people[**index];
-                *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
+                let p = &self.host.state.people[**index];
+                *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
                     .expect("location exists")
                     == Location::AtArea(area)
-                    && self.state.physical.as_ref().is_some_and(|_| {
-                        game_physiology::body(&self.state.components, p.id)
+                    && self.host.state.physical.as_ref().is_some_and(|_| {
+                        game_physiology::body(&self.host.storage, p.id)
                             .expect("body exists")
                             .vitals
                             .alive
-                            && game_physiology::body(&self.state.components, p.id)
+                            && game_physiology::body(&self.host.storage, p.id)
                                 .expect("body exists")
                                 .vitals
                                 .health
@@ -1296,8 +1347,10 @@ impl Simulation {
         id: EnforcementCaseId,
         proposal: &MissionProposal,
     ) -> Result<(), Error> {
+        let owner_now = self.host.clock().time;
         let area = self.enforcement_area(actor).ok_or(Error::Unavailable)?;
         let known = self
+            .host
             .state
             .enforcement
             .as_ref()
@@ -1306,6 +1359,7 @@ impl Simulation {
             .cloned()
             .ok_or(Error::Unavailable)?;
         let case = self
+            .host
             .state
             .enforcement
             .as_ref()
@@ -1333,9 +1387,9 @@ impl Simulation {
             )
             || case.mission.is_some()
             || contact.person != case.target
-            || contact.observed_at > self.state.time
+            || contact.observed_at > owner_now
             || !case.policy.areas.contains(&contact.area)
-            || until <= self.state.time
+            || until <= owner_now
             || proposal.leader != officer.holder
             || proposal.home != area
             || proposal.objective
@@ -1344,11 +1398,12 @@ impl Simulation {
                     until,
                 })
             || proposal.deadline < until
-            || self.state.institutions.as_ref().unwrap().institutions[&case.institution]
+            || self.host.state.institutions.as_ref().unwrap().institutions[&case.institution]
                 .charter
                 .jurisdiction
                 != area
             || self
+                .host
                 .state
                 .enforcement
                 .as_ref()
@@ -1388,7 +1443,7 @@ impl Simulation {
             contact.observed_at,
         )?;
         self.ensure_event_capacity(128)?;
-        let next = self.state.next_id;
+        let next = self.host.next_id();
         self.mission_command(
             actor,
             &MissionAction::Propose {
@@ -1396,6 +1451,7 @@ impl Simulation {
             },
         )?;
         let mission = self
+            .host
             .state
             .missions
             .as_ref()
@@ -1419,6 +1475,7 @@ impl Simulation {
             .chain([proposal.leader])
             .collect::<BTreeSet<_>>();
         let record = self
+            .host
             .state
             .enforcement
             .as_mut()
@@ -1428,17 +1485,18 @@ impl Simulation {
             .unwrap();
         record.mission = Some(mission);
         record.status = EnforcementStatus::Offered;
-        record.changed_at = self.state.time;
+        record.changed_at = owner_now;
         record.notice_area = Some(area);
         record.witnesses = BTreeSet::from([actor]);
         record.explanation="The officer received a funded expedition offer; volunteers and supplies are still required".into();
         let snapshot = self.case_view(
-            &self.state.enforcement.as_ref().unwrap().cases[&id],
+            &self.host.state.enforcement.as_ref().unwrap().cases[&id],
             actor,
             KnowledgeSource::Reported(actor),
         );
         for person in participants {
-            self.state
+            self.host
+                .state
                 .enforcement
                 .as_mut()
                 .unwrap()
@@ -1455,7 +1513,7 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn observe_enforcement(&mut self) {
-        let Some(world) = &self.state.enforcement else {
+        let Some(world) = &self.host.state.enforcement else {
             return;
         };
         let cursor = world.last_event;
@@ -1467,10 +1525,10 @@ impl Simulation {
             .collect::<Vec<_>>();
         let cases = world.cases.values().cloned().collect::<Vec<_>>();
         let events = self
-            .state
-            .events
+            .host
+            .events()
             .iter()
-            .filter(|e| e.id.0 > cursor && e.time == self.state.time)
+            .filter(|e| e.sequence > cursor && e.at == self.host.clock().time)
             .cloned()
             .collect::<Vec<_>>();
         for event in events {
@@ -1479,8 +1537,9 @@ impl Simulation {
                 actor,
                 target,
                 damage,
-            } = event.kind
+            } = event.event
                 && let Some(area) = self
+                    .host
                     .state
                     .combat
                     .as_ref()
@@ -1488,7 +1547,8 @@ impl Simulation {
                     .map(|e| e.area)
             {
                 for observer in self.local_enforcement_listeners(area) {
-                    self.state
+                    self.host
+                        .state
                         .enforcement
                         .as_mut()
                         .unwrap()
@@ -1496,31 +1556,31 @@ impl Simulation {
                         .entry(observer)
                         .or_default()
                         .insert(
-                            event.id,
+                            EventId(event.sequence),
                             WitnessedAssault {
-                                event: event.id,
+                                event: EventId(event.sequence),
                                 attacker: actor,
                                 target,
                                 area,
                                 damage,
-                                observed_at: event.time,
+                                observed_at: event.at,
                             },
                         );
                 }
             }
         }
-        self.state.enforcement.as_mut().unwrap().last_event = self.state.next_event - 1;
+        self.host.state.enforcement.as_mut().unwrap().last_event = self.host.next_event() - 1;
         let mut by_area = BTreeMap::<AreaId, Vec<PersonId>>::new();
-        for person in &self.state.people {
+        for person in &self.host.state.people {
             if let Location::AtArea(area) =
-                *game_spatial::location(&self.state.components, game_ecs::StableId((person.id).0))
+                *game_spatial::location(&self.host.storage, game_ecs::StableId((person.id).0))
                     .expect("location exists")
-                && self.state.physical.as_ref().is_some_and(|_| {
-                    game_physiology::body(&self.state.components, person.id)
+                && self.host.state.physical.as_ref().is_some_and(|_| {
+                    game_physiology::body(&self.host.storage, person.id)
                         .expect("body exists")
                         .vitals
                         .alive
-                        && game_physiology::body(&self.state.components, person.id)
+                        && game_physiology::body(&self.host.storage, person.id)
                             .expect("body exists")
                             .vitals
                             .health
@@ -1543,13 +1603,14 @@ impl Simulation {
                             ReportedContact {
                                 person,
                                 area,
-                                observed_at: self.state.time,
+                                observed_at: self.host.clock().time,
                             },
                         )
                     })
                     .collect::<Vec<_>>();
                 for (person, contact) in observations {
-                    self.state
+                    self.host
+                        .state
                         .enforcement
                         .as_mut()
                         .unwrap()
@@ -1559,14 +1620,15 @@ impl Simulation {
                         .insert(person, contact);
                 }
                 for policy in policies.iter().filter(|p| {
-                    self.state.institutions.as_ref().unwrap().institutions[&p.institution]
+                    self.host.state.institutions.as_ref().unwrap().institutions[&p.institution]
                         .charter
                         .jurisdiction
                         == area
                 }) {
                     let mut observed = policy.clone();
-                    observed.observed_at = self.state.time;
-                    self.state
+                    observed.observed_at = self.host.clock().time;
+                    self.host
+                        .state
                         .enforcement
                         .as_mut()
                         .unwrap()
@@ -1580,12 +1642,13 @@ impl Simulation {
                 // Announced formal decisions are local. Internal expedition outcomes
                 // are never copied into a remote court's memory by this observer.
                 for case in &cases {
-                    if case.changed_at == self.state.time
+                    if case.changed_at == self.host.clock().time
                         && (case.witnesses.contains(&actor) || case.notice_area == Some(area))
                         && case.status != EnforcementStatus::Filing
                     {
                         let view = self.case_view(case, actor, KnowledgeSource::Observed(actor));
-                        self.state
+                        self.host
+                            .state
                             .enforcement
                             .as_mut()
                             .unwrap()
@@ -1596,6 +1659,7 @@ impl Simulation {
                     }
                 }
                 let contacts = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -1605,6 +1669,7 @@ impl Simulation {
                     .cloned()
                     .unwrap_or_default();
                 if let Some(known) = self
+                    .host
                     .state
                     .enforcement
                     .as_mut()
@@ -1624,6 +1689,7 @@ impl Simulation {
                     }
                 }
                 let obsolete = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -1633,7 +1699,7 @@ impl Simulation {
                     .into_iter()
                     .flat_map(|institutions| institutions.iter())
                     .filter(|(id, _)| {
-                        self.state.institutions.as_ref().unwrap().institutions[id]
+                        self.host.state.institutions.as_ref().unwrap().institutions[id]
                             .charter
                             .jurisdiction
                             == area
@@ -1646,6 +1712,7 @@ impl Simulation {
                                 .copied()
                                 .filter(|office| {
                                     !self
+                                        .host
                                         .state
                                         .enforcement
                                         .as_ref()
@@ -1660,7 +1727,8 @@ impl Simulation {
                     .collect::<Vec<_>>();
                 for (id, offices) in obsolete {
                     for office in offices {
-                        self.state
+                        self.host
+                            .state
                             .enforcement
                             .as_mut()
                             .unwrap()
@@ -1676,13 +1744,15 @@ impl Simulation {
         }
     }
     fn reconcile_enforcement(&mut self) {
-        let Some(world) = &self.state.enforcement else {
+        let owner_now = self.host.clock().time;
+        let Some(world) = &self.host.state.enforcement else {
             return;
         };
         let cases = world.cases.values().cloned().collect::<Vec<_>>();
         for case in cases {
             let outcome = if let Some(mission) = case.mission {
-                self.state
+                self.host
+                    .state
                     .missions
                     .as_ref()
                     .and_then(|w| w.missions.get(&mission))
@@ -1708,14 +1778,16 @@ impl Simulation {
                     })
             } else if let Some(agreement) = case.settlement {
                 if let Some(old) = self.existing_settlement_debt(&case) {
-                    self.state
+                    self.host
+                        .state
                         .agreements
                         .as_ref()
                         .and_then(|w| w.obligations.get(&old))
                         .filter(|o| o.performed >= o.amount())
                         .map(|_| EnforcementStatus::Completed)
                 } else {
-                    self.state
+                    self.host
+                        .state
                         .agreements
                         .as_ref()
                         .and_then(|w| w.agreements.get(&agreement))
@@ -1736,6 +1808,7 @@ impl Simulation {
             let changed = outcome != case.status;
             if changed {
                 let record = self
+                    .host
                     .state
                     .enforcement
                     .as_mut()
@@ -1744,12 +1817,13 @@ impl Simulation {
                     .get_mut(&case.id)
                     .unwrap();
                 record.status = outcome;
-                record.changed_at = self.state.time;
+                record.changed_at = owner_now;
                 record.notice_area = None;
                 record.witnesses.clear();
                 record.explanation=match outcome {EnforcementStatus::Completed=>"Actual agents or delivery fulfilled the requested task; assent to the court is separate",EnforcementStatus::Refused=>"Named people refused the proposed service or settlement",EnforcementStatus::Failed=>"The physical expedition returned without fulfilling the chosen task",_=>"Consenting officers are undertaking the physical expedition"}.into();
             }
             let actors = self
+                .host
                 .state
                 .enforcement
                 .as_ref()
@@ -1799,11 +1873,12 @@ impl Simulation {
                     false
                 };
                 if informed
-                    && self.state.enforcement.as_ref().unwrap().known[&actor]
+                    && self.host.state.enforcement.as_ref().unwrap().known[&actor]
                         .get(&case.id)
                         .is_some_and(|known| known.status != outcome)
                 {
-                    let actual = self.state.enforcement.as_ref().unwrap().cases[&case.id].clone();
+                    let actual =
+                        self.host.state.enforcement.as_ref().unwrap().cases[&case.id].clone();
                     let source = case
                         .mission
                         .and_then(|id| {
@@ -1815,6 +1890,7 @@ impl Simulation {
                         .map_or(KnowledgeSource::Observed(actor), KnowledgeSource::Reported);
                     let mut snapshot = self.case_view(&actual, actor, source);
                     if let Some(old) = self
+                        .host
                         .state
                         .enforcement
                         .as_ref()
@@ -1825,7 +1901,8 @@ impl Simulation {
                     {
                         snapshot.contact = old.contact.clone();
                     }
-                    self.state
+                    self.host
+                        .state
                         .enforcement
                         .as_mut()
                         .unwrap()
@@ -1882,44 +1959,39 @@ impl Simulation {
         }
     }
     pub(crate) fn review_enforcement(&mut self) -> Result<(), Error> {
+        let owner_now = self.host.clock().time;
         self.reconcile_enforcement();
         self.observe_enforcement();
         let actors = self
             .person_index
             .keys()
             .copied()
-            .filter(|p| *p != self.state.ruler)
+            .filter(|p| *p != self.host.state.ruler)
             .collect::<Vec<_>>();
         for actor in actors {
             if self.enforcement_area(actor).is_none()
                 || self.past_life_controls_actor(actor)
                 || self.in_combat(actor)
-                || self.state.enforcement.as_ref().is_none_or(|w| {
+                || self.host.state.enforcement.as_ref().is_none_or(|w| {
                     w.talks.contains_key(&actor)
                         || w.reconsider_after
                             .get(&actor)
-                            .is_some_and(|t| *t > self.state.time)
+                            .is_some_and(|t| *t > owner_now)
                 })
             {
                 continue;
             }
             if !matches!(
-                *self
-                    .state
-                    .components
-                    .activity(actor)
-                    .expect("activity exists"),
+                *self.host.storage.activity(actor).expect("activity exists"),
                 Activity::Idle | Activity::Rest
             ) {
                 continue;
             }
             let commands = self.available_enforcement_commands(actor);
-            let personality = &game_characters::decisions::mind::<game_api::Command>(
-                &self.state.components,
-                actor,
-            )
-            .unwrap()
-            .personality;
+            let personality =
+                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .unwrap()
+                    .personality;
             let chosen = commands.into_iter().find(|command| match command {
                 Command::Enforcement {
                     action: EnforcementAction::File { .. },
@@ -1934,12 +2006,13 @@ impl Simulation {
             });
             if let Some(Command::Enforcement { action }) = chosen {
                 let _ = self.enforcement_command(actor, &action);
-                self.state
+                self.host
+                    .state
                     .enforcement
                     .as_mut()
                     .unwrap()
                     .reconsider_after
-                    .insert(actor, SimTime(self.state.time.0.saturating_add(180_000)));
+                    .insert(actor, SimTime(owner_now.0.saturating_add(180_000)));
             }
         }
         self.propose_known_judgments()?;
@@ -1976,15 +2049,15 @@ impl Simulation {
             .mandate
             .holder;
         let area = self.enforcement_area(actor)?;
-        if self.enforcement_area(leader) != Some(area) || self.state.missions.is_none() {
+        if self.enforcement_area(leader) != Some(area) || self.host.state.missions.is_none() {
             return None;
         }
-        let rules = &self.state.physical.as_ref()?.rules;
+        let rules = &self.host.state.physical.as_ref()?.rules;
         let supplies = policy
             .supplies
             .iter()
             .filter_map(|(source, cap)| {
-                let good = self.state.inventories.get(source)?.good;
+                let good = self.host.state.inventories.get(source)?.good;
                 let desired = match good {
                     Good::Food => rules.meal_size.0.saturating_mul(2),
                     Good::Tool | Good::Binding => 1_000,
@@ -2002,7 +2075,8 @@ impl Simulation {
             .spending
             .iter()
             .find(|(source, _)| {
-                self.state
+                self.host
+                    .state
                     .inventories
                     .get(source)
                     .is_some_and(|i| i.good == Good::Food)
@@ -2011,9 +2085,9 @@ impl Simulation {
                 debtor: actor,
                 creditor: leader,
                 source: *source,
-                destination: self.state.people[self.person_index[&leader]].inventory,
+                destination: self.host.state.people[self.person_index[&leader]].inventory,
                 quantity: Quantity(cap.0.min(rules.meal_size.0)),
-                deadline: SimTime(self.state.time.0.saturating_add(300_000)),
+                deadline: SimTime(self.host.clock().time.0.saturating_add(300_000)),
             });
         let compensation = payment
             .map(|term| BTreeMap::from([(leader, vec![term])]))
@@ -2103,8 +2177,8 @@ impl Simulation {
                             _ => false,
                         }
                 });
-                let institution =
-                    &self.state.institutions.as_ref().unwrap().institutions[&policy.institution];
+                let institution = &self.host.state.institutions.as_ref().unwrap().institutions
+                    [&policy.institution];
                 if !duplicate
                     && policy.policy.topics.contains(&topic)
                     && self
@@ -2181,7 +2255,7 @@ impl Simulation {
             .person_index
             .keys()
             .copied()
-            .filter(|p| *p != self.state.ruler)
+            .filter(|p| *p != self.host.state.ruler)
             .collect::<Vec<_>>();
         for actor in actors {
             if self.past_life_controls_actor(actor) {
@@ -2224,7 +2298,7 @@ impl Simulation {
                     continue;
                 };
                 let mind = &game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
+                    &self.host.storage,
                     actor,
                 )
                 .unwrap();
@@ -2247,7 +2321,9 @@ impl Simulation {
                                     source,
                                     destination,
                                     quantity: Quantity(old.amount() - old.performed),
-                                    deadline: SimTime(self.state.time.0.saturating_add(600_000)),
+                                    deadline: SimTime(
+                                        self.host.clock().time.0.saturating_add(600_000),
+                                    ),
                                 }],
                             })
                         } else {
@@ -2257,7 +2333,7 @@ impl Simulation {
                     EnforcementEvidence::Incident(incident)
                         if incident.outcome == IncidentOutcome::Taken
                             && policy.remedies.contains(&RemedyKind::Settlement)
-                            && self.state.agreements.as_ref().is_some_and(|w| {
+                            && self.host.state.agreements.as_ref().is_some_and(|w| {
                                 w.custodians.get(&incident.source) == Some(&case.filer)
                             }) =>
                     {
@@ -2268,7 +2344,7 @@ impl Simulation {
                                 source: incident.destination,
                                 destination: incident.source,
                                 quantity: incident.quantity,
-                                deadline: SimTime(self.state.time.0.saturating_add(600_000)),
+                                deadline: SimTime(self.host.clock().time.0.saturating_add(600_000)),
                             }],
                         })
                     }
@@ -2277,7 +2353,7 @@ impl Simulation {
                         && mind.personality.empathy < 700 =>
                     {
                         Some(EnforcementRemedy::Confine {
-                            until: SimTime(self.state.time.0.saturating_add(
+                            until: SimTime(self.host.clock().time.0.saturating_add(
                                 (u128::from(policy.maximum_confinement.0)
                                     * u128::from(mind.personality.aggression)
                                     / 1_000) as u64,
@@ -2310,7 +2386,7 @@ impl Simulation {
             .person_index
             .keys()
             .copied()
-            .filter(|p| *p != self.state.ruler)
+            .filter(|p| *p != self.host.state.ruler)
             .collect::<Vec<_>>();
         for actor in actors {
             if self.past_life_controls_actor(actor) || self.enforcement_area(actor).is_none() {
@@ -2324,13 +2400,10 @@ impl Simulation {
                 .map(|o| o.term.parties()[0])
                 .collect::<BTreeSet<_>>();
             if unpaid.is_empty()
-                || game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
-                    actor,
-                )
-                .unwrap()
-                .personality
-                .honesty
+                || game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .unwrap()
+                    .personality
+                    .honesty
                     < 500
             {
                 continue;
@@ -2353,7 +2426,7 @@ impl Simulation {
         }
     }
     pub(crate) fn validate_enforcement(&self) -> Result<(), Error> {
-        let Some(world) = &self.state.enforcement else {
+        let Some(world) = &self.host.state.enforcement else {
             return Ok(());
         };
         let bad = || {
@@ -2361,18 +2434,18 @@ impl Simulation {
                 "invalid enforcement procedures, evidence, work or personal knowledge".into(),
             )
         };
-        let institutions = self.state.institutions.as_ref().ok_or_else(bad)?;
-        self.state.physical.as_ref().ok_or_else(bad)?;
-        if world.last_event >= self.state.next_event {
+        let institutions = self.host.state.institutions.as_ref().ok_or_else(bad)?;
+        self.host.state.physical.as_ref().ok_or_else(bad)?;
+        if world.last_event >= self.host.next_event() {
             return Err(bad());
         }
         let people = self.person_index.keys().copied().collect::<BTreeSet<_>>();
-        let area = |id| self.state.areas.iter().any(|a| a.id == id);
+        let area = |id| self.host.state.areas.iter().any(|a| a.id == id);
         let evidence_valid = |e: &EnforcementEvidence| {
             match e {
-            EnforcementEvidence::Incident(i)=>self.state.property.as_ref().is_some_and(|w|w.incidents.contains_key(&i.id)) && people.contains(&i.actor) && self.state.inventories.contains_key(&i.source) && self.state.inventories.contains_key(&i.destination) && area(i.area) && i.started_at<=i.changed_at && i.changed_at<=i.learned_at && i.learned_at<=self.state.time && i.quantity.0>0,
-            EnforcementEvidence::Assault(a)=>people.contains(&a.attacker) && people.contains(&a.target) && area(a.area) && a.observed_at<=self.state.time && self.state.events.iter().any(|e|e.id==a.event && e.time==a.observed_at && matches!(e.kind,EventKind::Struck {actor,target,damage,..} if actor==a.attacker && target==a.target && damage==a.damage)),
-            EnforcementEvidence::Default(o)=>self.state.agreements.as_ref().is_some_and(|w|w.obligations.contains_key(&o.id)) && o.defaulted && o.performed<o.amount() && o.observed_at<=o.learned_at && o.learned_at<=self.state.time && o.term.parties().iter().all(|p|people.contains(p)),
+            EnforcementEvidence::Incident(i)=>self.host.state.property.as_ref().is_some_and(|w|w.incidents.contains_key(&i.id)) && people.contains(&i.actor) && self.host.state.inventories.contains_key(&i.source) && self.host.state.inventories.contains_key(&i.destination) && area(i.area) && i.started_at<=i.changed_at && i.changed_at<=i.learned_at && i.learned_at<=self.host.clock().time && i.quantity.0>0,
+            EnforcementEvidence::Assault(a)=>people.contains(&a.attacker) && people.contains(&a.target) && area(a.area) && a.observed_at<=self.host.clock().time && self.host.events().iter().any(|e|EventId(e.sequence)==a.event && e.at==a.observed_at && matches!(e.event,EventKind::Struck {actor,target,damage,..} if actor==a.attacker && target==a.target && damage==a.damage)),
+            EnforcementEvidence::Default(o)=>self.host.state.agreements.as_ref().is_some_and(|w|w.obligations.contains_key(&o.id)) && o.defaulted && o.performed<o.amount() && o.observed_at<=o.learned_at && o.learned_at<=self.host.clock().time && o.term.parties().iter().all(|p|people.contains(p)),
             EnforcementEvidence::Social(c)=>institutions.cases.get(&c.id)==Some(c),
         }
         };
@@ -2381,7 +2454,7 @@ impl Simulation {
             for (office, policy) in offices {
                 if policy.institution != *id
                     || policy.office != *office
-                    || policy.adopted_at > self.state.time
+                    || policy.adopted_at > self.host.clock().time
                     || self
                         .validate_enforcement_policy(institution, *office, &policy.policy)
                         .is_err()
@@ -2396,18 +2469,20 @@ impl Simulation {
                 .get(&case.institution)
                 .ok_or_else(bad)?;
             if *id != case.id
-                || id.0 >= self.state.next_id
+                || id.0 >= self.host.next_id()
                 || !people.contains(&case.filer)
                 || !people.contains(&case.target)
                 || !evidence_valid(&case.evidence)
-                || case.changed_at > self.state.time
+                || case.changed_at > self.host.clock().time
                 || case.notice_area.is_some_and(|a| !area(a))
                 || !case.witnesses.is_subset(&people)
                 || self
                     .validate_enforcement_policy(institution, case.office, &case.policy)
                     .is_err()
                 || case.contact.as_ref().is_some_and(|c| {
-                    c.person != case.target || !area(c.area) || c.observed_at > self.state.time
+                    c.person != case.target
+                        || !area(c.area)
+                        || c.observed_at > self.host.clock().time
                 })
             {
                 return Err(bad());
@@ -2426,8 +2501,8 @@ impl Simulation {
                     .proposals
                     .get(&judgment.proposal)
                     .ok_or_else(bad)?;
-                if judgment.id.0 >= self.state.next_id
-                    || judgment.adopted_at > self.state.time
+                if judgment.id.0 >= self.host.next_id()
+                    || judgment.adopted_at > self.host.clock().time
                     || !people.contains(&judgment.proposer)
                     || proposal.status != RuleProposalStatus::Adopted
                     || proposal.proposer != judgment.proposer
@@ -2445,6 +2520,7 @@ impl Simulation {
             }
             if let Some(id) = case.mission {
                 let mission = self
+                    .host
                     .state
                     .missions
                     .as_ref()
@@ -2456,7 +2532,8 @@ impl Simulation {
                 }
             }
             if case.settlement.is_some_and(|id| {
-                self.state
+                self.host
+                    .state
                     .agreements
                     .as_ref()
                     .is_none_or(|w| !w.agreements.contains_key(&id))
@@ -2469,9 +2546,10 @@ impl Simulation {
                 || !people.contains(&talk.recipient)
                 || !world.cases.contains_key(&talk.case)
                 || !area(talk.area)
-                || talk.completes <= self.state.time
-                || !matches!(*self.state.components.activity(*actor).expect("body exists"),Activity::EnforcementTalk {case,recipient,completes} if case==talk.case && recipient==talk.recipient && completes==talk.completes)
+                || talk.completes <= self.host.clock().time
+                || !matches!(*self.host.storage.activity(*actor).expect("body exists"),Activity::EnforcementTalk {case,recipient,completes} if case==talk.case && recipient==talk.recipient && completes==talk.completes)
                 || !self
+                    .host
                     .state
                     .due
                     .get(&talk.completes)
@@ -2485,10 +2563,10 @@ impl Simulation {
             } = &talk.conversation
                 && (snapshot.id != talk.case
                     || snapshot.observed_at > snapshot.learned_at
-                    || snapshot.learned_at > self.state.time
+                    || snapshot.learned_at > self.host.clock().time
                     || !evidence_valid(&snapshot.evidence)
                     || institution.id != snapshot.institution
-                    || institution.observed_at > self.state.time)
+                    || institution.observed_at > self.host.clock().time)
             {
                 return Err(bad());
             }
@@ -2521,9 +2599,11 @@ impl Simulation {
                     }
                     || !evidence_valid(&view.evidence)
                     || view.observed_at > view.learned_at
-                    || view.learned_at > self.state.time
+                    || view.learned_at > self.host.clock().time
                     || view.contact.as_ref().is_some_and(|c| {
-                        c.person != view.target || !area(c.area) || c.observed_at > self.state.time
+                        c.person != view.target
+                            || !area(c.area)
+                            || c.observed_at > self.host.clock().time
                     })
                 {
                     return Err(bad());
@@ -2536,7 +2616,7 @@ impl Simulation {
                     *person != c.person
                         || !people.contains(person)
                         || !area(c.area)
-                        || c.observed_at > self.state.time
+                        || c.observed_at > self.host.clock().time
                 })
         }) || world.assaults.iter().any(|(actor, known)| {
             !people.contains(actor)
@@ -2557,7 +2637,7 @@ impl Simulation {
                         p.institution != *id
                             || p.office != *slot
                             || p.adopted_at > p.observed_at
-                            || p.observed_at > self.state.time
+                            || p.observed_at > self.host.clock().time
                             || self
                                 .validate_enforcement_policy(
                                     &institutions.institutions[id],
@@ -2574,10 +2654,11 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn enforcement_allocation_bound(&self) -> u64 {
-        self.state
+        self.host
+            .state
             .enforcement
             .as_ref()
-            .map_or(0, |_| self.state.people.len() as u64 * 128)
+            .map_or(0, |_| self.host.state.people.len() as u64 * 128)
     }
     pub(crate) fn enforcement_vote_score(
         &self,
@@ -2586,7 +2667,7 @@ impl Simulation {
         change: &InstitutionChange,
     ) -> i64 {
         let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .unwrap();
         match change {
             InstitutionChange::EnforcementPolicy {
@@ -2605,6 +2686,7 @@ impl Simulation {
             }
             InstitutionChange::Adjudicate { case, remedy } => {
                 let Some(known) = self
+                    .host
                     .state
                     .enforcement
                     .as_ref()
@@ -2653,10 +2735,11 @@ impl Simulation {
 mod atomic_tests {
     use super::*;
     fn actor(sim: &Simulation, index: usize) -> PersonId {
-        sim.canonical_state().people[index].id
+        sim.canonical_state().state.people[index].id
     }
     fn court(sim: &Simulation) -> InstitutionId {
         *sim.canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -2666,12 +2749,12 @@ mod atomic_tests {
             .unwrap()
     }
     fn role(sim: &Simulation) -> PersonId {
-        sim.canonical_state().ruler
+        sim.canonical_state().state.ruler
     }
     fn travel(sim: &mut Simulation, who: PersonId, destination: AreaId) {
         sim.debug_move_actor(who, destination).unwrap();
         let Location::InTransit { arrives, .. } = *game_spatial::location(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             game_ecs::StableId((who).0),
         )
         .expect("location exists") else {
@@ -2687,6 +2770,7 @@ mod atomic_tests {
         travel(sim, target, AreaId(3));
         let source = sim
             .canonical_state()
+            .state
             .inventories
             .values()
             .find(|i| {
@@ -2698,6 +2782,7 @@ mod atomic_tests {
             .id;
         let destination = sim
             .canonical_state()
+            .state
             .people
             .iter()
             .find(|p| p.id == target)
@@ -2729,6 +2814,7 @@ mod atomic_tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         *sim.canonical_state()
+            .state
             .enforcement
             .as_ref()
             .unwrap()
@@ -2751,6 +2837,7 @@ mod atomic_tests {
         .unwrap();
         let proposal = *sim
             .canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -2770,14 +2857,17 @@ mod atomic_tests {
         }
     }
 
-    fn exhausted_events(sim: &Simulation) -> Simulation {
+    fn exhausted_command_revision(sim: &Simulation) -> Simulation {
         let mut copy = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
-        copy.state.next_event = u64::MAX - 1;
+        copy.host.publish_clock(game_sim::Clock {
+            revision: u64::MAX,
+            ..copy.host.clock()
+        });
         copy
     }
 
     #[test]
-    fn adjudication_preflight_cannot_commit_a_vote_without_its_judgment() {
+    fn exhausted_command_revision_cannot_commit_a_vote_without_its_judgment() {
         let mut sim = Simulation::enforcement_fixture(36, Execution::default()).unwrap();
         let incident = theft(&mut sim);
         let case = file(&mut sim, incident);
@@ -2796,6 +2886,7 @@ mod atomic_tests {
         .unwrap();
         let proposal = *sim
             .canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -2811,24 +2902,26 @@ mod atomic_tests {
             },
         )
         .unwrap();
-        let mut sim = exhausted_events(&sim);
-        let before = sim.canonical_state().clone();
+        let mut sim = exhausted_command_revision(&sim);
+        let before = sim.canonical_snapshot().unwrap();
         let filer = actor(&sim, 3);
         assert_eq!(
-            sim.debug_institution_action(
+            sim.debug_actor_command(
                 filer,
-                InstitutionAction::Vote {
-                    proposal,
-                    support: true
+                Command::Institution {
+                    action: InstitutionAction::Vote {
+                        proposal,
+                        support: true
+                    }
                 }
             ),
             Err(Error::Overflow)
         );
-        assert_eq!(sim.canonical_state(), &before);
+        assert_eq!(sim.canonical_snapshot().unwrap(), before);
     }
 
     #[test]
-    fn settlement_response_preflight_cannot_create_a_promise_without_its_response() {
+    fn exhausted_command_revision_cannot_create_a_promise_without_its_response() {
         let mut sim = Simulation::enforcement_fixture(37, Execution::default()).unwrap();
         let incident = theft(&mut sim);
         let case = file(&mut sim, incident);
@@ -2837,6 +2930,7 @@ mod atomic_tests {
         travel(&mut sim, target, AreaId(1));
         let source = sim
             .canonical_state()
+            .state
             .people
             .iter()
             .find(|p| p.id == target)
@@ -2844,6 +2938,7 @@ mod atomic_tests {
             .inventory;
         let destination = sim
             .canonical_state()
+            .state
             .people
             .iter()
             .find(|p| p.id == filer)
@@ -2864,12 +2959,12 @@ mod atomic_tests {
                 }],
             },
         );
-        let mut sim = exhausted_events(&sim);
-        let before = sim.canonical_state().clone();
+        let mut sim = exhausted_command_revision(&sim);
+        let before = sim.canonical_snapshot().unwrap();
         assert_eq!(
             sim.debug_enforcement_action(target, EnforcementAction::Respond { case, comply: true }),
             Err(Error::Overflow)
         );
-        assert_eq!(sim.canonical_state(), &before);
+        assert_eq!(sim.canonical_snapshot().unwrap(), before);
     }
 }

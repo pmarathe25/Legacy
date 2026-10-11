@@ -89,26 +89,31 @@ impl Simulation {
         }
         let (mut sim, _) =
             Self::initial_population(seed, execution, &config, population::Plan::small(), false)?;
-        sim.state.time = SimTime(
-            config
-                .environment
-                .calendar
-                .day
-                .0
-                .checked_mul(3)
-                .ok_or(Error::Overflow)?
-                .max(3 * 24 * 3_600_000),
-        );
-        let environment = sim.state.environment.as_mut().unwrap();
-        environment.reset_epoch(&mut sim.state.components, sim.state.time, seed)?;
-        sim.state.scenario = ScenarioInfo {
+        sim.host.publish_clock(game_sim::Clock {
+            time: SimTime(
+                config
+                    .environment
+                    .calendar
+                    .day
+                    .0
+                    .checked_mul(3)
+                    .ok_or(Error::Overflow)?
+                    .max(3 * 24 * 3_600_000),
+            ),
+            ..sim.host.clock()
+        });
+        let epoch = sim.time();
+        let seed = sim.host.seed();
+        let environment = sim.host.state.environment.as_mut().unwrap();
+        environment.reset_epoch(&mut sim.host.storage, epoch, seed)?;
+        sim.host.state.scenario = ScenarioInfo {
             id: id.into(),
             version: 1,
             debug_fixture: false,
         };
-        sim.state.areas[0].name = "Willowbank".into();
-        sim.state.areas[1].name = "Willowbank fields".into();
-        sim.state.areas[2].name = "North wood".into();
+        sim.host.state.areas[0].name = "Willowbank".into();
+        sim.host.state.areas[1].name = "Willowbank fields".into();
+        sim.host.state.areas[2].name = "North wood".into();
         sim.prepare_playable_people(&config)?;
         sim.install_playable_domains(&config)?;
         sim.initialize_transport(config.transport.clone())?;
@@ -134,7 +139,8 @@ impl Simulation {
     }
 
     fn prepare_playable_people(&mut self, config: &Config) -> Result<(), Error> {
-        let village = self.state.areas[0].id;
+        let owner_now = self.host.clock().time;
+        let village = self.host.state.areas[0].id;
         let year = config
             .environment
             .calendar
@@ -155,6 +161,7 @@ impl Simulation {
                 .ok_or(Error::Overflow)?,
         );
         for actor in self
+            .host
             .state
             .people
             .iter()
@@ -162,53 +169,58 @@ impl Simulation {
             .collect::<Vec<_>>()
         {
             self.interrupt_actor_activity(actor);
-            game_workshop::remove_job(&mut self.state.components, actor).map(|_| ())?;
+            game_workshop::remove_job(&mut self.host.storage, actor).map(|_| ())?;
         }
-        self.state.development.as_mut().unwrap().rules = config.biology.clone();
-        for person in &mut self.state.people {
+        self.host.state.development.as_mut().unwrap().rules = config.biology.clone();
+        for person in &mut self.host.state.people {
             *game_spatial::location_mut(
-                &mut self.state.components,
+                &mut self.host.storage,
                 game_ecs::StableId((person.id).0),
             )
             .expect("location exists") = Location::AtArea(village);
             person.route.clear();
         }
-        for person in game_lifecycle::all_lives(&self.state.components)
+        for person in game_lifecycle::all_lives(&self.host.storage)
             .map(|(id, _)| id)
             .collect::<Vec<_>>()
         {
             let life =
-                game_lifecycle::life_mut(&mut self.state.components, person).expect("life exists");
+                game_lifecycle::life_mut(&mut self.host.storage, person).expect("life exists");
             life.initial_age = initial_age;
             life.stage = LifeStage::Adult;
         }
-        self.state.due.clear();
-        self.state
+        self.host.state.due.clear();
+        self.host
+            .state
             .due
             .entry(SimTime(
-                self.state
-                    .time
-                    .0
-                    .checked_add(MINUTE.0)
-                    .ok_or(Error::Overflow)?,
+                owner_now.0.checked_add(MINUTE.0).ok_or(Error::Overflow)?,
             ))
             .or_default()
             .push(Due::Review);
-        for person in self.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+        for person in self
+            .host
+            .state
+            .people
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+        {
             self.schedule_age(person);
         }
         // These residents remember the existing fields, granaries and routes.
         // The reports predate control; newborns acquire their own knowledge later.
-        let reporter = self.state.people[3].id;
-        for person in &self.state.people {
+        let reporter = self.host.state.people[3].id;
+        for person in &self.host.state.people {
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.state.components,
+                &mut self.host.storage,
                 person.id,
             )
             .unwrap();
             mind.plan = None;
-            mind.retry_after = self.state.time;
+            mind.retry_after = owner_now;
             for stock in self
+                .host
                 .state
                 .inventories
                 .values()
@@ -225,17 +237,17 @@ impl Simulation {
                         good: stock.good,
                         quantity: stock.quantity,
                         accessible: stock.access.contains(&person.id),
-                        observed_at: self.state.time,
-                        learned_at: self.state.time,
+                        observed_at: owner_now,
+                        learned_at: owner_now,
                         source: KnowledgeSource::Reported(reporter),
                     },
                 );
             }
         }
-        let parents = [self.state.people[3].id, self.state.people[4].id];
+        let parents = [self.host.state.people[3].id, self.host.state.people[4].id];
         for (actor, partner) in [(parents[0], parents[1]), (parents[1], parents[0])] {
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.state.components,
+                &mut self.host.storage,
                 actor,
             )
             .unwrap();
@@ -251,33 +263,35 @@ impl Simulation {
         }
         // Shared cultivation is this settlement's starting land arrangement.
         // It does not prescribe property or caregiving for other societies.
-        let residents: BTreeSet<_> = self.state.people.iter().map(|p| p.id).collect();
-        let world = self.state.agriculture.as_mut().unwrap();
-        let fields: Vec<_> = world
-            .fields(&self.state.components)
-            .map(|(id, _)| id)
-            .collect();
+        let residents: BTreeSet<_> = self.host.state.people.iter().map(|p| p.id).collect();
+        let world = self.host.state.agriculture.as_mut().unwrap();
+        let fields: Vec<_> = world.fields(&self.host.storage).map(|(id, _)| id).collect();
         for id in fields {
-            let field = world.field_mut(&mut self.state.components, id).unwrap();
+            let field = world.field_mut(&mut self.host.storage, id).unwrap();
             field.access = residents.clone();
-            self.state.inventories.get_mut(&field.tool).unwrap().access = residents.clone();
+            self.host
+                .state
+                .inventories
+                .get_mut(&field.tool)
+                .unwrap()
+                .access = residents.clone();
         }
         Ok(())
     }
 
     pub(crate) fn install_playable_domains(&mut self, config: &Config) -> Result<(), Error> {
-        let people: BTreeSet<_> = self.state.people.iter().map(|p| p.id).collect();
-        let ruler = self.state.ruler;
-        let village = self.state.areas[0].id;
-        self.state.skills = Some(skills::Runtime::new(config.skills.clone())?);
+        let people: BTreeSet<_> = self.host.state.people.iter().map(|p| p.id).collect();
+        let ruler = self.host.state.ruler;
+        let village = self.host.state.areas[0].id;
+        self.host.state.skills = Some(skills::Runtime::new(config.skills.clone())?);
         for person in &people {
             game_skills::insert_skills(
-                &mut self.state.components,
+                &mut self.host.storage,
                 *person,
                 game_skills::Skills::default(),
             )?;
         }
-        skills::validate(&self.state)?;
+        skills::validate(&self.canonical_state())?;
         let cap = config
             .skills
             .per_level
@@ -285,6 +299,7 @@ impl Simulation {
             .checked_mul(u64::from(config.skills.max_level))
             .ok_or(Error::Overflow)?;
         let guardians = self
+            .host
             .state
             .people
             .iter()
@@ -295,7 +310,7 @@ impl Simulation {
                     lineage::Guardian {
                         target: Some(ruler),
                         sensed_location: Some(Location::AtArea(village)),
-                        sensed_at: self.state.time,
+                        sensed_at: self.host.clock().time,
                         goal: lineage::GuardianGoal::Mentoring,
                         explanation: "Following the lineage; political offices remain separate"
                             .into(),
@@ -309,13 +324,14 @@ impl Simulation {
             })
             .collect();
         for actor in self
+            .host
             .state
             .people
             .iter()
             .filter(|p| p.role == Role::Guardian)
             .map(|p| p.id)
         {
-            game_skills::skills_mut(&mut self.state.components, actor)
+            game_skills::skills_mut(&mut self.host.storage, actor)
                 .unwrap()
                 .records
                 .insert(
@@ -327,10 +343,10 @@ impl Simulation {
                     },
                 );
         }
-        self.state.lineage = Some(lineage::World {
+        self.host.state.lineage = Some(lineage::World {
             incarnations: vec![lineage::Incarnation {
                 person: ruler,
-                bound_at: self.state.time,
+                bound_at: self.host.clock().time,
                 died_at: None,
             }],
             waiting: None,
@@ -338,15 +354,15 @@ impl Simulation {
             rules: config.mentorship.clone(),
             invocation_learning: BTreeMap::new(),
         });
-        self.state.combat = Some(combat::World {
+        self.host.state.combat = Some(combat::World {
             rules: combat::Rules {
                 encounter_limit: 128,
                 round: SimDuration(6_000),
                 movement: 5_000,
                 reach: 2_000,
-                damage: self.state.physical.as_ref().unwrap().rules.max_health / 4,
-                defence: self.state.physical.as_ref().unwrap().rules.max_health / 6,
-                incapacitation: self.state.physical.as_ref().unwrap().rules.max_health / 4,
+                damage: self.host.state.physical.as_ref().unwrap().rules.max_health / 4,
+                defence: self.host.state.physical.as_ref().unwrap().rules.max_health / 6,
+                incapacitation: self.host.state.physical.as_ref().unwrap().rules.max_health / 4,
             },
             profiles: people
                 .iter()
@@ -365,6 +381,7 @@ impl Simulation {
             captivity: BTreeMap::new(),
         });
         let custodians = self
+            .host
             .state
             .inventories
             .values()
@@ -378,20 +395,20 @@ impl Simulation {
                 )
             })
             .collect();
-        self.state.agreements = Some(agreements::World {
+        self.host.state.agreements = Some(agreements::World {
             ledger: game_agreements::State {
                 agreements: BTreeMap::new(),
                 obligations: BTreeMap::new(),
                 amendments: BTreeMap::new(),
-                last_event: self.state.next_event - 1,
+                last_event: self.host.next_event() - 1,
                 next_search: BTreeMap::new(),
                 pending_work: BTreeMap::new(),
                 knowledge: BTreeMap::new(),
-                last_observation_event: self.state.next_event - 1,
+                last_observation_event: self.host.next_event() - 1,
             },
             custodians,
         });
-        self.state.property = Some(property::World {
+        self.host.state.property = Some(property::World {
             reports: BTreeMap::new(),
             claims: BTreeMap::new(),
             incidents: BTreeMap::new(),
@@ -411,6 +428,7 @@ impl Simulation {
                 })
                 .collect(),
             portions: self
+                .host
                 .state
                 .inventories
                 .values()
@@ -426,10 +444,10 @@ impl Simulation {
                 })
                 .collect(),
             pending: BTreeMap::new(),
-            last_event: self.state.next_event - 1,
+            last_event: self.host.next_event() - 1,
             next_search: BTreeMap::new(),
         });
-        self.state.institutions = Some(institutions::World {
+        self.host.state.institutions = Some(institutions::World {
             institutions: BTreeMap::new(),
             proposals: BTreeMap::new(),
             concepts: BTreeMap::new(),
@@ -438,11 +456,11 @@ impl Simulation {
                 .iter()
                 .map(|p| (*p, institutions::SocialMemory::default()))
                 .collect(),
-            last_event: self.state.next_event - 1,
+            last_event: self.host.next_event() - 1,
             exclusions: BTreeMap::new(),
             heard: BTreeMap::new(),
         });
-        self.state.projects = Some(projects::World {
+        self.host.state.projects = Some(projects::World {
             rules: projects::Rules {
                 construction_labor: SimDuration(16 * 3_600_000),
                 recipe_time: SimDuration(3_600_000),
@@ -455,41 +473,42 @@ impl Simulation {
             known_enterprises: BTreeMap::new(),
             timber_hints: people
                 .iter()
-                .map(|p| (*p, BTreeSet::from([self.state.areas[2].id])))
+                .map(|p| (*p, BTreeSet::from([self.host.state.areas[2].id])))
                 .collect(),
             next_search: BTreeMap::new(),
-            last_event: self.state.next_event - 1,
+            last_event: self.host.next_event() - 1,
         });
-        self.state.invocation = Some(invocation::World {
+        self.host.state.invocation = Some(invocation::World {
             control: game_invocation::ControlState::new(config.invocation.clone())?,
             history: BTreeMap::new(),
             records: BTreeMap::new(),
             actions: BTreeMap::new(),
         });
-        self.state.force = Some(force::World {
+        self.host.state.force = Some(force::World {
             yielded: BTreeMap::new(),
             rules: force::Rules::default(),
             escapes: BTreeMap::new(),
             restraints: BTreeMap::new(),
-            last_event: self.state.next_event - 1,
+            last_event: self.host.next_event() - 1,
         });
-        self.state.missions = Some(missions::World {
+        self.host.state.missions = Some(missions::World {
             missions: BTreeMap::new(),
             recruitments: BTreeMap::new(),
             known: BTreeMap::new(),
             talks: BTreeMap::new(),
-            last_event: self.state.next_event - 1,
-            last_review: self.state.time,
+            last_event: self.host.next_event() - 1,
+            last_review: self.host.clock().time,
         });
-        invocation::validate(&self.state)?;
+        invocation::validate(&self.canonical_state())?;
         Ok(())
     }
 
     fn seed_playable_workshop(&mut self, established: bool) -> Result<(), Error> {
-        let area = self.state.areas[0].id;
-        let ruler = self.state.ruler;
-        let residents: BTreeSet<_> = self.state.people.iter().map(|p| p.id).collect();
+        let area = self.host.state.areas[0].id;
+        let ruler = self.host.state.ruler;
+        let residents: BTreeSet<_> = self.host.state.people.iter().map(|p| p.id).collect();
         let timber = self
+            .host
             .state
             .inventories
             .values()
@@ -499,6 +518,7 @@ impl Simulation {
             .unwrap()
             .id;
         let tool = self
+            .host
             .state
             .inventories
             .values()
@@ -507,8 +527,9 @@ impl Simulation {
             })
             .unwrap()
             .id;
-        self.state.inventories.get_mut(&tool).unwrap().quantity = Quantity(3_000);
-        self.state
+        self.host.state.inventories.get_mut(&tool).unwrap().quantity = Quantity(3_000);
+        self.host
+            .state
             .property
             .as_mut()
             .unwrap()
@@ -521,7 +542,8 @@ impl Simulation {
             Quantity(100_000),
             residents.clone(),
         )?;
-        self.state
+        self.host
+            .state
             .agreements
             .as_mut()
             .unwrap()
@@ -534,7 +556,8 @@ impl Simulation {
             Quantity(100_000),
             residents.clone(),
         )?;
-        self.state
+        self.host
+            .state
             .agreements
             .as_mut()
             .unwrap()
@@ -543,7 +566,7 @@ impl Simulation {
         if established {
             // The workshop and existing tools predate character control. Its
             // material and labor history are explicit initial content.
-            let craftsperson = self.state.people[6].id;
+            let craftsperson = self.host.state.people[6].id;
             let materials = self.add_inventory(
                 Good::Timber,
                 InventoryLocation::Area(area),
@@ -551,19 +574,20 @@ impl Simulation {
                 Quantity(100_000),
                 residents.clone(),
             )?;
-            self.state
+            self.host
+                .state
                 .agreements
                 .as_mut()
                 .unwrap()
                 .custodians
                 .insert(materials, ruler);
-            let project = ProjectId(allocate(&mut self.state)?);
-            let enterprise = EnterpriseId(allocate(&mut self.state)?);
-            let site = SiteId(allocate(&mut self.state)?);
-            let rules = self.state.projects.as_ref().unwrap().rules.clone();
+            let project = ProjectId(self.host.allocate_id()?.0);
+            let enterprise = EnterpriseId(self.host.allocate_id()?.0);
+            let site = SiteId(self.host.allocate_id()?.0);
+            let rules = self.host.state.projects.as_ref().unwrap().rules.clone();
             let participants = BTreeSet::from([ruler, craftsperson]);
             game_workshop::insert_site(
-                &mut self.state.components,
+                &mut self.host.storage,
                 physical::Site {
                     id: site,
                     area,
@@ -578,7 +602,8 @@ impl Simulation {
                 },
             )
             .expect("validated site insertion");
-            self.state.projects.as_mut().unwrap().projects.insert(
+            let finish_by = SimTime(self.time().0 + 7 * 86_400_000);
+            self.host.state.projects.as_mut().unwrap().projects.insert(
                 project,
                 projects::Project {
                     kind: ProjectKind::Workshop,
@@ -597,47 +622,61 @@ impl Simulation {
                     progress_ms: rules.construction_labor.0,
                     contributions: BTreeMap::from([(craftsperson, rules.construction_labor.0)]),
                     materials_consumed: true,
-                    finish_by: SimTime(self.state.time.0 + 7 * 86_400_000),
+                    finish_by,
                     enterprise: Some(enterprise),
                 },
             );
-            self.state.projects.as_mut().unwrap().enterprises.insert(
-                enterprise,
-                projects::Enterprise {
-                    inputs: BTreeMap::from([(Good::Timber, 10_000)]),
-                    kind: ProjectKind::Workshop,
-                    produced: BTreeMap::from([(Good::Tool, 5_000)]),
-                    id: enterprise,
-                    project,
-                    sponsor: ruler,
-                    area,
-                    site,
-                    beneficiaries: participants.clone(),
-                    workers: participants,
-                    status: EnterpriseStatus::Ready,
-                    blocker: None,
-                    timber_consumed: 10_000,
-                    tools_produced: 5_000,
-                    labor: BTreeMap::from([(craftsperson, 5 * rules.recipe_time.0)]),
-                    operating_agreements: BTreeSet::new(),
-                },
-            );
-            let epoch = self.state.time;
+            self.host
+                .state
+                .projects
+                .as_mut()
+                .unwrap()
+                .enterprises
+                .insert(
+                    enterprise,
+                    projects::Enterprise {
+                        inputs: BTreeMap::from([(Good::Timber, 10_000)]),
+                        kind: ProjectKind::Workshop,
+                        produced: BTreeMap::from([(Good::Tool, 5_000)]),
+                        id: enterprise,
+                        project,
+                        sponsor: ruler,
+                        area,
+                        site,
+                        beneficiaries: participants.clone(),
+                        workers: participants,
+                        status: EnterpriseStatus::Ready,
+                        blocker: None,
+                        timber_consumed: 10_000,
+                        tools_produced: 5_000,
+                        labor: BTreeMap::from([(craftsperson, 5 * rules.recipe_time.0)]),
+                        operating_agreements: BTreeSet::new(),
+                    },
+                );
+            let epoch = self.host.clock().time;
             let production_labor = rules.recipe_time.0.checked_mul(5).ok_or(Error::Overflow)?;
-            self.state.time = SimTime(
-                epoch
-                    .0
-                    .checked_sub(
-                        rules
-                            .construction_labor
-                            .0
-                            .checked_add(production_labor)
-                            .ok_or(Error::Overflow)?,
-                    )
-                    .ok_or(Error::Overflow)?,
-            );
+            self.host.publish_clock(game_sim::Clock {
+                time: SimTime(
+                    epoch
+                        .0
+                        .checked_sub(
+                            rules
+                                .construction_labor
+                                .0
+                                .checked_add(production_labor)
+                                .ok_or(Error::Overflow)?,
+                        )
+                        .ok_or(Error::Overflow)?,
+                ),
+                ..self.host.clock()
+            });
             self.ensure_event_capacity(18)?;
-            self.state.inventories.get_mut(&materials).unwrap().quantity = Quantity(0);
+            self.host
+                .state
+                .inventories
+                .get_mut(&materials)
+                .unwrap()
+                .quantity = Quantity(0);
             self.emit(EventKind::Consumed {
                 actor: craftsperson,
                 source: materials,
@@ -647,16 +686,21 @@ impl Simulation {
                 project,
                 actor: craftsperson,
             });
-            self.state.time.0 += rules.construction_labor.0;
+            self.host.clock().time.0 += rules.construction_labor.0;
             self.emit(EventKind::ProjectCompleted {
                 project,
                 enterprise,
                 site,
             });
             for _ in 0..5 {
-                self.state.time.0 += rules.recipe_time.0;
-                self.state.inventories.get_mut(&timber).unwrap().quantity.0 -=
-                    rules.recipe_timber.0;
+                self.host.clock().time.0 += rules.recipe_time.0;
+                self.host
+                    .state
+                    .inventories
+                    .get_mut(&timber)
+                    .unwrap()
+                    .quantity
+                    .0 -= rules.recipe_timber.0;
                 self.emit(EventKind::Consumed {
                     actor: craftsperson,
                     source: timber,
@@ -667,7 +711,13 @@ impl Simulation {
                     site,
                     quantity: rules.recipe_timber,
                 });
-                self.state.inventories.get_mut(&output).unwrap().quantity.0 += rules.recipe_tools.0;
+                self.host
+                    .state
+                    .inventories
+                    .get_mut(&output)
+                    .unwrap()
+                    .quantity
+                    .0 += rules.recipe_tools.0;
                 self.emit(EventKind::Produced {
                     actor: craftsperson,
                     site,
@@ -675,11 +725,15 @@ impl Simulation {
                     quantity: rules.recipe_tools,
                 });
             }
-            self.state.time = epoch;
-            self.state.projects.as_mut().unwrap().last_event = self.state.next_event - 1;
-            let level = 10.min(self.state.skills.as_ref().unwrap().rules.max_level);
-            let practice = self.state.skills.as_ref().unwrap().rules.per_level.0 * u64::from(level);
-            game_skills::skills_mut(&mut self.state.components, craftsperson)
+            self.host.publish_clock(game_sim::Clock {
+                time: epoch,
+                ..self.host.clock()
+            });
+            self.host.state.projects.as_mut().unwrap().last_event = self.host.next_event() - 1;
+            let level = 10.min(self.host.state.skills.as_ref().unwrap().rules.max_level);
+            let practice =
+                self.host.state.skills.as_ref().unwrap().rules.per_level.0 * u64::from(level);
+            game_skills::skills_mut(&mut self.host.storage, craftsperson)
                 .unwrap()
                 .records
                 .insert(
@@ -690,7 +744,7 @@ impl Simulation {
                         progress_ms: 0,
                     },
                 );
-            let rules = &self.state.skills.as_ref().unwrap().rules;
+            let rules = &self.host.state.skills.as_ref().unwrap().rules;
             let experiences: BTreeMap<_, _> = [
                 (Skill::Craft, 5_u16),
                 (Skill::Leadership, 5),
@@ -709,14 +763,23 @@ impl Simulation {
                 )
             })
             .collect();
-            game_skills::skills_mut(&mut self.state.components, ruler)
+            game_skills::skills_mut(&mut self.host.storage, ruler)
                 .unwrap()
                 .records
                 .extend(experiences);
-            for guardian in self.state.lineage.as_mut().unwrap().guardians.values_mut() {
+            let observed_at = self.time();
+            for guardian in self
+                .host
+                .state
+                .lineage
+                .as_mut()
+                .unwrap()
+                .guardians
+                .values_mut()
+            {
                 guardian.assessments.insert(ruler, lineage::Assessment {
                     independence: 500, competence: 500, judgment: 450, risks: 200,
-                    observed_stage: Some(LifeStage::Adult), observed_at: self.state.time, ready: true,
+                    observed_stage: Some(LifeStage::Adult), observed_at, ready: true,
                     explanation: "I witnessed this adult's earlier provisioning, craft work and council decisions; I still judge each request individually".into(),
                 });
             }
@@ -726,33 +789,45 @@ impl Simulation {
     }
 
     fn seed_playable_resources(&mut self) -> Result<(), Error> {
-        let residents: BTreeSet<_> = self.state.people.iter().map(|person| person.id).collect();
-        let day = self.state.environment.as_ref().unwrap().calendar.day.0;
-        self.state.ecology = Some(ecology::Runtime {
+        let residents: BTreeSet<_> = self
+            .host
+            .state
+            .people
+            .iter()
+            .map(|person| person.id)
+            .collect();
+        let day = self.host.state.environment.as_ref().unwrap().calendar.day.0;
+        self.host.state.ecology = Some(ecology::Runtime {
             rules: game_ecology::EcologyRules::default(),
-            day: self.state.time.0 / day,
+            day: self.host.clock().time.0 / day,
         });
-        let woodkeeper = self.state.people[5].id;
-        let farmer = self.state.people[3].id;
+        let woodkeeper = self.host.state.people[5].id;
+        let farmer = self.host.state.people[3].id;
         for (kind, area, capacity, growth, contamination) in [
             (
                 ResourceKind::Coppice,
-                self.state.areas[2].id,
+                self.host.state.areas[2].id,
                 200_000,
                 500,
                 0,
             ),
             (
                 ResourceKind::Berries,
-                self.state.areas[2].id,
+                self.host.state.areas[2].id,
                 40_000,
                 1_000,
                 0,
             ),
-            (ResourceKind::Herbs, self.state.areas[2].id, 30_000, 500, 0),
+            (
+                ResourceKind::Herbs,
+                self.host.state.areas[2].id,
+                30_000,
+                500,
+                0,
+            ),
             (
                 ResourceKind::Spring,
-                self.state.areas[1].id,
+                self.host.state.areas[1].id,
                 100_000,
                 30_000,
                 5,
@@ -765,18 +840,19 @@ impl Simulation {
                 Quantity(capacity),
                 Quantity(growth),
                 residents.clone(),
-                Some(if area == self.state.areas[2].id {
+                Some(if area == self.host.state.areas[2].id {
                     woodkeeper
                 } else {
                     farmer
                 }),
                 contamination,
             )?;
-            self.state
+            self.host
+                .state
                 .ecology
                 .as_mut()
                 .unwrap()
-                .resource_mut(&mut self.state.components, resource)
+                .resource_mut(&mut self.host.storage, resource)
                 .unwrap()
                 .labor_per_unit = match kind {
                 ResourceKind::Coppice => SimDuration(3_600_000),
@@ -784,22 +860,28 @@ impl Simulation {
                 _ => SimDuration(30 * MINUTE.0),
             };
         }
-        self.debug_add_plot(self.state.areas[1].id, Some(farmer), residents.clone(), 900)?;
         self.debug_add_plot(
-            self.state.areas[1].id,
+            self.host.state.areas[1].id,
+            Some(farmer),
+            residents.clone(),
+            900,
+        )?;
+        self.debug_add_plot(
+            self.host.state.areas[1].id,
             Some(woodkeeper),
             residents.clone(),
             850,
         )?;
-        let healer = self.state.people[6].id;
+        let healer = self.host.state.people[6].id;
         let herbs = self.add_inventory(
             Good::Herb,
-            InventoryLocation::Area(self.state.areas[0].id),
+            InventoryLocation::Area(self.host.state.areas[0].id),
             Quantity(20_000),
             Quantity(100_000),
             BTreeSet::from([healer]),
         )?;
-        self.state
+        self.host
+            .state
             .agreements
             .as_mut()
             .unwrap()
@@ -807,22 +889,23 @@ impl Simulation {
             .insert(herbs, healer);
         let water = self.add_inventory(
             Good::Water,
-            InventoryLocation::Area(self.state.areas[0].id),
+            InventoryLocation::Area(self.host.state.areas[0].id),
             Quantity(30_000),
             Quantity(100_000),
             residents,
         )?;
-        self.state
+        self.host
+            .state
             .agreements
             .as_mut()
             .unwrap()
             .custodians
             .insert(water, healer);
         self.collected_water_quality(water, Quantity(30_000), 0);
-        let skill_rules = &self.state.skills.as_ref().unwrap().rules;
+        let skill_rules = &self.host.state.skills.as_ref().unwrap().rules;
         let level = 10.min(skill_rules.max_level);
         let practice_ms = skill_rules.per_level.0 * u64::from(level);
-        game_skills::skills_mut(&mut self.state.components, healer)
+        game_skills::skills_mut(&mut self.host.storage, healer)
             .unwrap()
             .records
             .insert(
@@ -834,7 +917,7 @@ impl Simulation {
                 },
             );
         let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut self.state.components,
+            &mut self.host.storage,
             healer,
         )
         .unwrap();
@@ -846,18 +929,20 @@ impl Simulation {
     }
 
     fn seed_playable_family_plans(&mut self) -> Result<(), Error> {
-        let first = self.state.people[3].id;
-        let second = self.state.people[4].id;
+        let first = self.host.state.people[3].id;
+        let second = self.host.state.people[4].id;
         // This particular couple discussed parenthood before control begins.
         // Affection alone never creates family intent for later generations.
-        let effect = self.state.social.as_mut().unwrap().finish_conversation(
-            first,
-            second,
-            SocialTopic::FamilyPlans,
-        )?;
+        let effect = self
+            .host
+            .state
+            .social
+            .as_mut()
+            .unwrap()
+            .finish_conversation(first, second, SocialTopic::FamilyPlans)?;
         for (actor, partner) in [(first, second), (second, first)] {
             let relationship = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.state.components,
+                &mut self.host.storage,
                 actor,
             )
             .unwrap()
@@ -876,10 +961,11 @@ impl Simulation {
     }
 
     fn establish_starting_custom(&mut self, ruling_office: bool) -> Result<(), Error> {
-        let ruler = self.state.ruler;
-        let steward = self.state.people[4].id;
-        let village = self.state.areas[0].id;
+        let ruler = self.host.state.ruler;
+        let steward = self.host.state.people[4].id;
+        let village = self.host.state.areas[0].id;
         let food = self
+            .host
             .state
             .inventories
             .values()
@@ -888,7 +974,7 @@ impl Simulation {
             })
             .unwrap()
             .id;
-        self.state.inventories.get_mut(&food).unwrap().access = BTreeSet::from([ruler]);
+        self.host.state.inventories.get_mut(&food).unwrap().access = BTreeSet::from([ruler]);
         let fund = self.add_inventory(
             Good::Food,
             InventoryLocation::Area(village),
@@ -896,7 +982,8 @@ impl Simulation {
             Quantity(100_000),
             BTreeSet::from([ruler, steward]),
         )?;
-        self.state
+        self.host
+            .state
             .agreements
             .as_mut()
             .unwrap()
@@ -906,9 +993,9 @@ impl Simulation {
         let founders = BTreeSet::from([
             ruler,
             steward,
-            self.state.people[5].id,
-            self.state.people[6].id,
-            self.state.people[7].id,
+            self.host.state.people[5].id,
+            self.host.state.people[6].id,
+            self.host.state.people[7].id,
         ]);
         self.debug_property_action(
             ruler,
@@ -924,6 +1011,7 @@ impl Simulation {
             },
         )?;
         let claim = *self
+            .host
             .state
             .property
             .as_ref()
@@ -979,7 +1067,7 @@ impl Simulation {
                 source: food,
                 destination: fund,
                 quantity: Quantity(1_000),
-                deadline: SimTime(self.state.time.0 + 86_400_000),
+                deadline: SimTime(self.host.clock().time.0 + 86_400_000),
             }],
             evidence: BTreeSet::new(),
         };
@@ -991,6 +1079,7 @@ impl Simulation {
             },
         )?;
         let institution = *self
+            .host
             .state
             .institutions
             .as_ref()
@@ -1003,6 +1092,7 @@ impl Simulation {
             self.debug_institution_action(actor, InstitutionAction::Join { institution })?;
         }
         for actor in self
+            .host
             .state
             .people
             .iter()
@@ -1010,7 +1100,7 @@ impl Simulation {
             .filter(|person| *person != ruler)
             .collect::<Vec<_>>()
         {
-            if !self.state.institutions.as_ref().unwrap().institutions[&institution]
+            if !self.host.state.institutions.as_ref().unwrap().institutions[&institution]
                 .members
                 .contains(&actor)
             {
@@ -1023,7 +1113,7 @@ impl Simulation {
         self.debug_actor_command(
             ruler,
             Command::Load {
-                source: self.state.people[self.person_index[&ruler]].inventory,
+                source: self.host.state.people[self.person_index[&ruler]].inventory,
                 destination: fund,
                 quantity: Quantity(1_000),
             },
@@ -1034,9 +1124,10 @@ impl Simulation {
     }
 
     fn author_child_opening(&mut self) -> Result<(), Error> {
-        let mother = self.state.people[3].id;
-        let father = self.state.people[4].id;
-        if !game_lifecycle::all_pregnancies(&self.state.components)
+        let owner_seed = self.host.seed();
+        let mother = self.host.state.people[3].id;
+        let father = self.host.state.people[4].id;
+        if !game_lifecycle::all_pregnancies(&self.host.storage)
             .map(|(_, row)| row)
             .any(|pregnancy| {
                 pregnancy.gestator == mother
@@ -1049,7 +1140,7 @@ impl Simulation {
         {
             self.debug_actor_command(mother, Command::Conceive { partner: father })?;
         }
-        let pending_conception = game_lifecycle::all_pregnancies(&self.state.components)
+        let pending_conception = game_lifecycle::all_pregnancies(&self.host.storage)
             .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 (pregnancy.gestator == mother)
@@ -1060,9 +1151,9 @@ impl Simulation {
                     })
             });
         if let Some(completes) = pending_conception {
-            self.advance(SimDuration(completes.0 - self.state.time.0))?;
+            self.advance(SimDuration(completes.0 - self.host.clock().time.0))?;
         }
-        let birth = game_lifecycle::all_pregnancies(&self.state.components)
+        let birth = game_lifecycle::all_pregnancies(&self.host.storage)
             .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 (pregnancy.gestator == mother)
@@ -1077,54 +1168,80 @@ impl Simulation {
             .ok_or_else(|| {
                 Error::InvalidConfiguration("the authored parents did not choose conception".into())
             })?;
-        let lead = MINUTE
-            .0
-            .min(self.state.development.as_ref().unwrap().rules.gestation.0);
+        let lead = MINUTE.0.min(
+            self.host
+                .state
+                .development
+                .as_ref()
+                .unwrap()
+                .rules
+                .gestation
+                .0,
+        );
         let death_at = SimTime(birth.1.0.checked_sub(lead).ok_or(Error::Overflow)?);
         // This is authored prenatal history before gameplay, not a fast-forward
         // command or a promise that the simulation will create another birth.
-        self.state.time = death_at;
-        self.state.due.clear();
-        let actors: Vec<_> = game_physiology::bodies(&self.state.components)
+        self.host.publish_clock(game_sim::Clock {
+            time: death_at,
+            ..self.host.clock()
+        });
+        self.host.state.due.clear();
+        let actors: Vec<_> = game_physiology::bodies(&self.host.storage)
             .map(|(actor, _)| actor)
             .collect();
         for actor in actors {
-            *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
-            game_workshop::remove_job(&mut self.state.components, actor).map(|_| ())?;
-            let body = game_physiology::body_mut(&mut self.state.components, actor).unwrap();
+            *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
+            game_workshop::remove_job(&mut self.host.storage, actor).map(|_| ())?;
+            let body = game_physiology::body_mut(&mut self.host.storage, actor).unwrap();
             body.vitals.hunger = 0;
             body.vitals.fatigue = 0;
         }
-        for person in &mut self.state.people {
+        for person in &mut self.host.state.people {
             person.route.clear();
             *game_spatial::location_mut(
-                &mut self.state.components,
+                &mut self.host.storage,
                 game_ecs::StableId((person.id).0),
             )
-            .expect("location exists") = Location::AtArea(self.state.areas[0].id);
+            .expect("location exists") = Location::AtArea(self.host.state.areas[0].id);
         }
-        let lifespan = self.state.development.as_ref().unwrap().rules.lifespan.0;
-        let elderhood = self.state.development.as_ref().unwrap().rules.elderhood.0;
-        let cultivators: Vec<_> = game_agriculture::cultivations(&self.state.components)
+        let lifespan = self
+            .host
+            .state
+            .development
+            .as_ref()
+            .unwrap()
+            .rules
+            .lifespan
+            .0;
+        let elderhood = self
+            .host
+            .state
+            .development
+            .as_ref()
+            .unwrap()
+            .rules
+            .elderhood
+            .0;
+        let cultivators: Vec<_> = game_agriculture::cultivations(&self.host.storage)
             .map(|(actor, _)| actor)
             .collect();
         for actor in cultivators {
-            game_agriculture::remove_cultivation(&mut self.state.components, actor)?;
+            game_agriculture::remove_cultivation(&mut self.host.storage, actor)?;
         }
-        self.state.projects.as_mut().unwrap().jobs.clear();
-        let gatherers: Vec<_> = game_ecology::gatherings(&self.state.components)
+        self.host.state.projects.as_mut().unwrap().jobs.clear();
+        let gatherers: Vec<_> = game_ecology::gatherings(&self.host.storage)
             .map(|(actor, _)| actor)
             .collect();
         for actor in gatherers {
-            game_ecology::remove_gathering(&mut self.state.components, actor)?;
+            game_ecology::remove_gathering(&mut self.host.storage, actor)?;
         }
         // This authored interval ends all previously active social tasks. Its
         // scheduler epoch begins at this snapshot, as do the rebuilt physical
         // deadlines; it does not replay unobserved prenatal interactions.
-        if let Some(traits) = &mut self.state.physical_traits {
+        if let Some(traits) = &mut self.host.state.physical_traits {
             traits.reset_epoch(death_at)?;
         }
-        if let Some(social) = &mut self.state.social {
+        if let Some(social) = &mut self.host.state.social {
             social.interactions.clear();
             social.participants.clear();
             social.last_review = death_at;
@@ -1133,12 +1250,12 @@ impl Simulation {
             }
         }
 
-        for person in game_lifecycle::all_lives(&self.state.components)
+        for person in game_lifecycle::all_lives(&self.host.storage)
             .map(|(id, _)| id)
             .collect::<Vec<_>>()
         {
             let life =
-                game_lifecycle::life_mut(&mut self.state.components, person).expect("life exists");
+                game_lifecycle::life_mut(&mut self.host.storage, person).expect("life exists");
             let age = life
                 .initial_age
                 .0
@@ -1155,10 +1272,18 @@ impl Simulation {
                 LifeStage::Elder
             };
         }
-        for person in self.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+        for person in self
+            .host
+            .state
+            .people
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+        {
             self.schedule_age(person);
         }
-        self.state
+        self.host
+            .state
             .due
             .entry(birth.1)
             .or_default()
@@ -1170,22 +1295,25 @@ impl Simulation {
             .checked_add(1)
             .and_then(|minute| minute.checked_mul(MINUTE.0))
             .ok_or(Error::Overflow)?;
-        self.state
+        self.host
+            .state
             .due
             .entry(SimTime(next_review))
             .or_default()
             .push(Due::Review);
-        let environment = self.state.environment.as_mut().unwrap();
-        let day = self.state.time.0 / environment.calendar.day.0;
-        environment.reset_epoch(&mut self.state.components, self.state.time, self.state.seed)?;
-        self.state.ecology.as_mut().unwrap().day = day;
-        self.state.agriculture.as_mut().unwrap().day = day;
-        let old = self.state.ruler;
+        let epoch = self.time();
+        let environment = self.host.state.environment.as_mut().unwrap();
+        let day = epoch.0 / environment.calendar.day.0;
+        environment.reset_epoch(&mut self.host.storage, epoch, owner_seed)?;
+        self.host.state.ecology.as_mut().unwrap().day = day;
+        self.host.state.agriculture.as_mut().unwrap().day = day;
+        let old = self.host.state.ruler;
         self.debug_injure(old, self.body_rules(old).max_health)?;
         self.observe_invocation_deaths()?;
         // The existing council chooses a living steward. The successor child
         // receives neither this office nor the previous character's assets.
         let institution = *self
+            .host
             .state
             .institutions
             .as_ref()
@@ -1205,6 +1333,7 @@ impl Simulation {
             },
         )?;
         let proposal = *self
+            .host
             .state
             .institutions
             .as_ref()
@@ -1213,7 +1342,7 @@ impl Simulation {
             .keys()
             .next_back()
             .unwrap();
-        for actor in self.state.institutions.as_ref().unwrap().institutions[&institution]
+        for actor in self.host.state.institutions.as_ref().unwrap().institutions[&institution]
             .members
             .iter()
             .copied()
@@ -1229,7 +1358,7 @@ impl Simulation {
                 },
             )?;
         }
-        for actor in self.state.institutions.as_ref().unwrap().institutions[&institution]
+        for actor in self.host.state.institutions.as_ref().unwrap().institutions[&institution]
             .members
             .iter()
             .copied()
@@ -1247,7 +1376,7 @@ impl Simulation {
             )?;
         }
         self.advance(SimDuration(lead))?;
-        if self.state.ruler == old {
+        if self.host.state.ruler == old {
             return Err(Error::InvalidConfiguration(
                 "the actual birth did not bind the successor".into(),
             ));
@@ -1256,13 +1385,14 @@ impl Simulation {
     }
     fn seed_playable_shelters(&mut self, rules: &HealthRules, houses: bool) -> Result<(), Error> {
         self.initialize_health(rules.clone())?;
-        let custodian = self.state.people[4].id;
+        let custodian = self.host.state.people[4].id;
         let access: BTreeSet<_> = self
+            .host
             .state
             .people
             .iter()
             .filter(|person| {
-                game_physiology::body(&self.state.components, person.id)
+                game_physiology::body(&self.host.storage, person.id)
                     .expect("body exists")
                     .vitals
                     .alive
@@ -1272,6 +1402,7 @@ impl Simulation {
         // Residents remember this maintained source's history; later arrivals
         // and newborns still learn water safety through observation or reports.
         let potable: Vec<_> = self
+            .host
             .state
             .inventories
             .values()
@@ -1279,7 +1410,7 @@ impl Simulation {
             .map(|stock| stock.id)
             .collect();
         for observer in access.iter().copied() {
-            if game_lifecycle::life(&self.state.components, observer)
+            if game_lifecycle::life(&self.host.storage, observer)
                 .expect("life exists")
                 .stage
                 == LifeStage::Infant
@@ -1292,11 +1423,11 @@ impl Simulation {
         }
         for (area, capacity, insulation) in [
             (
-                self.state.areas[0].id,
+                self.host.state.areas[0].id,
                 18_u32,
                 if houses { 750_u16 } else { 350 },
             ),
-            (self.state.areas[1].id, 4_u32, 500_u16),
+            (self.host.state.areas[1].id, 4_u32, 500_u16),
         ] {
             let materials = u128::from(capacity)
                 * u128::from(rules.shelter_timber_per_place.0)
@@ -1313,13 +1444,14 @@ impl Simulation {
                 quantity,
                 BTreeSet::from([custodian]),
             )?;
-            self.state
+            self.host
+                .state
                 .agreements
                 .as_mut()
                 .unwrap()
                 .custodians
                 .insert(source, custodian);
-            let built_at = SimTime(self.state.time.0.saturating_sub(2 * 86_400_000));
+            let built_at = SimTime(self.host.clock().time.0.saturating_sub(2 * 86_400_000));
             let shelter = self.seed_shelter(
                 area,
                 custodian,
@@ -1331,13 +1463,14 @@ impl Simulation {
                 built_at,
             )?;
             let occupants: Vec<_> = self
+                .host
                 .state
                 .people
                 .iter()
                 .filter(|person| {
                     access.contains(&person.id)
                         && *game_spatial::location(
-                            &self.state.components,
+                            &self.host.storage,
                             game_ecs::StableId((person.id).0),
                         )
                         .expect("location exists")
@@ -1377,45 +1510,45 @@ mod tests {
         for id in PLAYABLE {
             let sim = opening(id, 1);
             let state = sim.canonical_state();
-            assert_eq!(state.scenario.id, id);
-            assert!(!state.scenario.debug_fixture);
+            assert_eq!(state.state.scenario.id, id);
+            assert!(!state.state.scenario.debug_fixture);
             assert!(
-                state.physical.is_some()
-                    && state.development.is_some()
-                    && state.decisions.is_some()
-                    && state.combat.is_some()
-                    && state.lineage.is_some()
-                    && state.skills.is_some()
-                    && state.agreements.is_some()
-                    && state.property.is_some()
-                    && state.institutions.is_some()
-                    && state.projects.is_some()
-                    && state.invocation.is_some()
-                    && state.environment.is_some()
-                    && state.ecology.is_some()
-                    && state.health.is_some()
-                    && state.force.is_some()
-                    && state.missions.is_some()
-                    && state.social.is_some()
+                state.state.physical.is_some()
+                    && state.state.development.is_some()
+                    && state.state.decisions.is_some()
+                    && state.state.combat.is_some()
+                    && state.state.lineage.is_some()
+                    && state.state.skills.is_some()
+                    && state.state.agreements.is_some()
+                    && state.state.property.is_some()
+                    && state.state.institutions.is_some()
+                    && state.state.projects.is_some()
+                    && state.state.invocation.is_some()
+                    && state.state.environment.is_some()
+                    && state.state.ecology.is_some()
+                    && state.state.health.is_some()
+                    && state.state.force.is_some()
+                    && state.state.missions.is_some()
+                    && state.state.social.is_some()
             );
             assert_eq!(
-                state.environment.as_ref().unwrap().calendar.day,
+                state.state.environment.as_ref().unwrap().calendar.day,
                 SimDuration(86_400_000)
             );
             assert_eq!(
-                state.development.as_ref().unwrap().rules,
+                state.state.development.as_ref().unwrap().rules,
                 development::Rules::human()
             );
             assert_eq!(
-                state.lineage.as_ref().unwrap().rules.lesson_duration,
+                state.state.lineage.as_ref().unwrap().rules.lesson_duration,
                 SimDuration(3_600_000)
             );
             assert_eq!(
-                state.skills.as_ref().unwrap().rules.per_level,
+                state.state.skills.as_ref().unwrap().rules.per_level,
                 SimDuration(3_600_000)
             );
             assert_eq!(
-                state.projects.as_ref().unwrap().rules.recipe_time,
+                state.state.projects.as_ref().unwrap().rules.recipe_time,
                 SimDuration(3_600_000)
             );
             let saved = sim.save().unwrap();
@@ -1435,35 +1568,38 @@ mod tests {
     fn shelters_and_healing_supplies_have_actual_materials_and_personal_knowledge() {
         for id in PLAYABLE {
             let sim = opening(id, 1);
-            let world = sim.state.health.as_ref().unwrap();
+            let world = sim.host.state.health.as_ref().unwrap();
             assert_eq!(world.rules, HealthRules::human());
-            assert_eq!(game_health::shelters(&sim.state.components).count(), 2);
+            assert_eq!(game_health::shelters(&sim.host.storage).count(), 2);
             assert!(
-                game_health::shelters(&sim.state.components)
+                game_health::shelters(&sim.host.storage)
                     .map(|(_, shelter)| shelter)
                     .all(|shelter| shelter.timber_used.0 > 0 && shelter.labor_ms > 0)
             );
             let consumed: u64 = sim
-                .state
-                .events
+                .host
+                .events()
                 .iter()
-                .filter_map(|event| match event.kind {
+                .filter_map(|event| match event.event {
                     EventKind::Consumed {
                         source, quantity, ..
-                    } if sim.state.inventories[&source].good == Good::Timber => Some(quantity.0),
+                    } if sim.host.state.inventories[&source].good == Good::Timber => {
+                        Some(quantity.0)
+                    }
                     _ => None,
                 })
                 .sum();
             assert!(
                 consumed
-                    >= game_health::shelters(&sim.state.components)
+                    >= game_health::shelters(&sim.host.storage)
                         .map(|(_, shelter)| shelter)
                         .map(|shelter| shelter.timber_used.0)
                         .sum::<u64>()
             );
-            let healer = sim.state.people[6].id;
+            let healer = sim.host.state.people[6].id;
             assert!(sim.own_skill_level(healer, Skill::Medicine) > 0);
             let water = sim
+                .host
                 .state
                 .inventories
                 .values()
@@ -1471,22 +1607,23 @@ mod tests {
                 .unwrap()
                 .id;
             assert!(
-                game_health::knowledge(&sim.state.components, healer)
+                game_health::knowledge(&sim.host.storage, healer)
                     .expect("health knowledge exists")
                     .water[&water]
                     .purified
             );
             assert!(
-                sim.state
+                sim.host
+                    .state
                     .inventories
                     .values()
                     .any(|stock| stock.good == Good::Herb && stock.quantity.0 >= 20_000)
             );
-            let ruler = sim.state.ruler;
-            assert!(game_health::occupancy(&sim.state.components, ruler).is_some());
+            let ruler = sim.host.state.ruler;
+            assert!(game_health::occupancy(&sim.host.storage, ruler).is_some());
             if id == "child-successor" {
                 assert!(
-                    game_health::knowledge(&sim.state.components, ruler)
+                    game_health::knowledge(&sim.host.storage, ruler)
                         .is_none_or(|known| !known.water.contains_key(&water))
                 );
             }
@@ -1498,6 +1635,7 @@ mod tests {
         let founder = opening("settlement-founder", 1);
         let established = opening("established-ruler", 1);
         let founder_office = founder
+            .host
             .state
             .institutions
             .as_ref()
@@ -1507,6 +1645,7 @@ mod tests {
             .next()
             .unwrap();
         let ruler_office = established
+            .host
             .state
             .institutions
             .as_ref()
@@ -1517,32 +1656,40 @@ mod tests {
             .unwrap();
         assert_ne!(
             founder_office.charter.offices[0].holder,
-            founder.state.ruler
+            founder.host.state.ruler
         );
         assert_eq!(
             ruler_office.charter.offices[0].holder,
-            established.state.ruler
+            established.host.state.ruler
         );
         assert!(founder_office.funding.iter().all(|id| {
-            founder.state.agreements.as_ref().unwrap().agreements[id].status
+            founder.host.state.agreements.as_ref().unwrap().agreements[id].status
                 == AgreementStatus::Fulfilled
         }));
         assert!(ruler_office.funding.iter().all(|id| {
-            established.state.agreements.as_ref().unwrap().agreements[id].status
+            established
+                .host
+                .state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .agreements[id]
+                .status
                 == AgreementStatus::Fulfilled
         }));
         assert!(
             established
-                .institution_view(established.state.ruler)
+                .institution_view(established.host.state.ruler)
                 .iter()
-                .any(|view| view
-                    .offices
-                    .iter()
-                    .any(|office| office.mandate.holder == established.state.ruler
-                        && office.effective))
+                .any(
+                    |view| view.offices.iter().any(|office| office.mandate.holder
+                        == established.host.state.ruler
+                        && office.effective)
+                )
         );
         assert!(
             founder
+                .host
                 .state
                 .projects
                 .as_ref()
@@ -1552,6 +1699,7 @@ mod tests {
         );
         assert!(
             established
+                .host
                 .state
                 .projects
                 .as_ref()
@@ -1566,27 +1714,27 @@ mod tests {
     fn child_control_follows_an_actual_human_birth_after_actual_death_and_inherits_no_office_or_mastery()
      {
         let sim = opening("child-successor", 1);
-        let lineage = sim.state.lineage.as_ref().unwrap();
+        let lineage = sim.host.state.lineage.as_ref().unwrap();
         assert_eq!(lineage.incarnations.len(), 2);
         let previous = &lineage.incarnations[0];
         let current = &lineage.incarnations[1];
-        let born = game_lifecycle::life(&sim.state.components, current.person)
+        let born = game_lifecycle::life(&sim.host.storage, current.person)
             .expect("life exists")
             .born;
         assert!(previous.died_at.unwrap() < born);
-        assert_eq!(born, sim.state.time);
+        assert_eq!(born, sim.host.clock().time);
         assert_eq!(sim.observe().life_stage, Some(LifeStage::Infant));
-        assert!(sim.state.events.iter().any(|event| event.time == born
-            && matches!(event.kind, EventKind::Born { child, .. } if child == current.person)));
+        assert!(sim.host.events().iter().any(|event| event.at == born
+            && matches!(event.event, EventKind::Born { child, .. } if child == current.person)));
         assert!(
-            sim.state
-                .events
+            sim.host.events()
                 .iter()
-                .any(|event| event.time == previous.died_at.unwrap()
-                    && matches!(event.kind, EventKind::Died { actor } if actor == previous.person))
+                .any(|event| event.at == previous.died_at.unwrap()
+                    && matches!(event.event, EventKind::Died { actor } if actor == previous.person))
         );
         assert!(
-            sim.state
+            sim.host
+                .state
                 .invocation
                 .as_ref()
                 .unwrap()
@@ -1600,7 +1748,8 @@ mod tests {
                 .all(|skill| skill.level == 0 && skill.practice_ms == 0)
         );
         assert!(
-            sim.state
+            sim.host
+                .state
                 .institutions
                 .as_ref()
                 .unwrap()
@@ -1613,7 +1762,8 @@ mod tests {
                     .all(|office| office.holder != current.person))
         );
         assert!(
-            sim.state
+            sim.host
+                .state
                 .property
                 .as_ref()
                 .unwrap()
@@ -1657,16 +1807,16 @@ mod tests {
             config.clone(),
         )
         .unwrap();
-        assert_eq!(a.state.scenario.id, choose(11));
-        assert_eq!(a.state, b.state);
+        assert_eq!(a.host.state.scenario.id, choose(11));
+        assert_eq!(a.host.state, b.host.state);
         assert_eq!(
-            a.state.environment.as_ref().unwrap().climate,
+            a.host.state.environment.as_ref().unwrap().climate,
             config.environment.climate
         );
-        let before = a.state.clone();
+        let before = a.canonical_snapshot().unwrap();
         for _ in 0..100 {
             a.observe();
         }
-        assert_eq!(a.state, before);
+        assert_eq!(a.canonical_snapshot().unwrap(), before);
     }
 }

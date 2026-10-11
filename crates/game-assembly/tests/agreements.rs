@@ -14,7 +14,13 @@ fn fixture(workers: usize) -> Simulation {
         },
     )
     .unwrap();
-    let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
+    let people: Vec<_> = sim
+        .canonical_state()
+        .state
+        .people
+        .iter()
+        .map(|p| p.id)
+        .collect();
     for person in people {
         sim.debug_set_personality(person, Personality::restful(), Aspiration::Comfort)
             .unwrap();
@@ -22,10 +28,10 @@ fn fixture(workers: usize) -> Simulation {
     sim
 }
 fn ruler(sim: &Simulation) -> PersonId {
-    sim.canonical_state().ruler
+    sim.canonical_state().state.ruler
 }
 fn citizen(sim: &Simulation) -> PersonId {
-    sim.canonical_state().people[3].id
+    sim.canonical_state().state.people[3].id
 }
 fn action(sim: &mut Simulation, action: AgreementAction) -> Result<CommandReceipt, Error> {
     sim.submit(Submission {
@@ -42,6 +48,7 @@ fn command(sim: &mut Simulation, command: Command) {
 }
 fn food(sim: &Simulation) -> InventoryId {
     sim.canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
@@ -49,7 +56,7 @@ fn food(sim: &Simulation) -> InventoryId {
         .id
 }
 fn labor(sim: &Simulation, millis: u64) -> AgreementTerm {
-    let site = game_workshop::sites(&sim.canonical_state().components)
+    let site = game_workshop::sites(sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
@@ -88,7 +95,7 @@ fn accept(sim: &mut Simulation, id: AgreementId) {
 fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_delivery() {
     let mut sim = fixture(2);
     let source = food(&sim);
-    let carrier = sim.canonical_state().people[0].inventory;
+    let carrier = sim.canonical_state().state.people[0].inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -107,9 +114,9 @@ fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_deli
         deadline: SimTime(300_000),
     };
     let id = propose(&mut sim, vec![term], None);
-    let before = sim.canonical_state().inventories.clone();
+    let before = sim.canonical_state().state.inventories.clone();
     accept(&mut sim, id);
-    assert_eq!(sim.canonical_state().inventories, before);
+    assert_eq!(sim.canonical_state().state.inventories, before);
     assert_eq!(
         sim.agreement_view(ruler(&sim))[0].obligations[0].performed,
         0
@@ -140,6 +147,7 @@ fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_deli
     assert_eq!(obligation.performed, 1_000);
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -162,7 +170,7 @@ fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_deli
         AgreementStatus::Fulfilled
     );
     assert_eq!(
-        restored.canonical_state().inventories[&destination].quantity,
+        restored.canonical_state().state.inventories[&destination].quantity,
         Quantity(2_000)
     );
 }
@@ -196,11 +204,11 @@ fn default_preserves_debt_and_undelivered_goods() {
     assert!(view.obligations[0].defaulted);
     assert_eq!(view.obligations[0].performed, 0);
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&source].quantity,
+        sim.canonical_state().state.inventories[&source].quantity,
         Quantity(100_000)
     );
 }
@@ -294,7 +302,7 @@ fn amendment_authority_comes_from_the_procedure_people_accepted() {
     let term = labor(&sim, 60_000);
     let id = propose(&mut sim, vec![term.clone()], None);
     accept(&mut sim, id);
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         action(
             &mut sim,
@@ -305,14 +313,14 @@ fn amendment_authority_comes_from_the_procedure_people_accepted() {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
 }
 
 #[test]
 fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade() {
     let mut sim = fixture(1);
     let npc = citizen(&sim);
-    let site = game_workshop::sites(&sim.canonical_state().components)
+    let site = game_workshop::sites(sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
@@ -332,6 +340,7 @@ fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade(
     );
     assert!(matches!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -344,7 +353,7 @@ fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade(
         debtor: ruler(&sim),
         creditor: npc,
         source,
-        destination: sim.canonical_state().people[3].inventory,
+        destination: sim.canonical_state().state.people[3].inventory,
         quantity: Quantity(1_000),
         deadline: SimTime(300_000),
     };
@@ -352,6 +361,7 @@ fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade(
     sim.advance(MINUTE).unwrap();
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -368,11 +378,11 @@ fn permission_is_chosen_by_the_actual_custodian_without_relocating_goods() {
     let owner = ruler(&sim);
     let recipient = citizen(&sim);
     assert!(
-        !sim.canonical_state().inventories[&source]
+        !sim.canonical_state().state.inventories[&source]
             .access
             .contains(&recipient)
     );
-    let before = sim.canonical_state().inventories[&source].clone();
+    let before = sim.canonical_state().state.inventories[&source].clone();
     let id = propose(
         &mut sim,
         vec![AgreementTerm::Access {
@@ -384,7 +394,7 @@ fn permission_is_chosen_by_the_actual_custodian_without_relocating_goods() {
         None,
     );
     accept(&mut sim, id);
-    let after = &sim.canonical_state().inventories[&source];
+    let after = &sim.canonical_state().state.inventories[&source];
     assert!(after.access.contains(&recipient));
     assert_eq!(before.quantity, after.quantity);
     assert_eq!(before.location, after.location);
@@ -394,7 +404,7 @@ fn permission_is_chosen_by_the_actual_custodian_without_relocating_goods() {
         inventory: source,
         allowed: false,
     };
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert!(
         action(
             &mut sim,
@@ -406,7 +416,7 @@ fn permission_is_chosen_by_the_actual_custodian_without_relocating_goods() {
         )
         .is_err()
     );
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
 }
 
 #[test]
@@ -415,7 +425,7 @@ fn competing_deliveries_do_not_double_credit_and_consumed_cargo_remains_owed() {
     let source = food(&sim);
     let actor = ruler(&sim);
     let recipient = citizen(&sim);
-    let cargo = sim.canonical_state().people[0].inventory;
+    let cargo = sim.canonical_state().state.people[0].inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -463,6 +473,7 @@ fn competing_deliveries_do_not_double_credit_and_consumed_cargo_remains_owed() {
     let id = sim.agreement_view(actor)[1].obligations[0].id;
     assert!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -497,8 +508,8 @@ fn accepted_receipt_does_not_allow_remote_loading_or_interrupt_a_valid_action() 
     let actor = ruler(&sim);
     let recipient = citizen(&sim);
     let source = food(&sim);
-    let cargo = sim.canonical_state().people[0].inventory;
-    let destination = sim.canonical_state().people[3].inventory;
+    let cargo = sim.canonical_state().state.people[0].inventory;
+    let destination = sim.canonical_state().state.people[3].inventory;
     let id = propose(
         &mut sim,
         vec![AgreementTerm::Delivery {
@@ -523,7 +534,7 @@ fn accepted_receipt_does_not_allow_remote_loading_or_interrupt_a_valid_action() 
     sim.advance(MINUTE).unwrap();
     sim.debug_move_actor(recipient, AreaId(2)).unwrap();
     command(&mut sim, Command::Rest);
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     let result = sim.submit(Submission {
         caller_sequence: sim.next_caller_sequence().unwrap(),
         command: Command::Load {
@@ -533,7 +544,7 @@ fn accepted_receipt_does_not_allow_remote_loading_or_interrupt_a_valid_action() 
         },
     });
     assert_eq!(result, Err(Error::Unavailable));
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     assert_eq!(sim.observe().physical.unwrap().activity, Activity::Rest);
 }
 
@@ -585,7 +596,7 @@ fn named_term_approvers_can_vote_and_stale_concurrent_amendments_cannot_overwrit
         sim.agreement_view(actor)[0].amendments[1].status,
         AmendmentStatus::Rejected
     );
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert!(
         action(
             &mut sim,
@@ -596,6 +607,6 @@ fn named_term_approvers_can_vote_and_stale_concurrent_amendments_cannot_overwrit
         )
         .is_err()
     );
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
 }

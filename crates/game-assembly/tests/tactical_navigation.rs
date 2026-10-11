@@ -16,8 +16,8 @@ fn author_positions(
     remembered: bool,
 ) -> Simulation {
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    let mut state: CanonicalState = serde_json::from_value(envelope["state"].take()).unwrap();
-    let combat = state.combat.as_mut().unwrap();
+    let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
+    let combat = state.state.combat.as_mut().unwrap();
     let encounter = combat.encounters.get_mut(&id).unwrap();
     let map = combat.maps.get_mut(&encounter.area).unwrap();
     map.obstacles = vec![ObstacleView {
@@ -51,8 +51,8 @@ fn author_positions(
 }
 fn hidden_battle(goal: Point, remembered: bool) -> (Simulation, EncounterId, PersonId, PersonId) {
     let mut sim = Simulation::combat_fixture(1, Execution::default()).unwrap();
-    let ruler = sim.canonical_state().ruler;
-    let npc = sim.canonical_state().people[3].id;
+    let ruler = sim.canonical_state().state.ruler;
+    let npc = sim.canonical_state().state.people[3].id;
     submit(&mut sim, Command::Engage { target: npc });
     let id = sim.observe().combat.unwrap().encounter;
     sim = author_positions(
@@ -92,16 +92,23 @@ fn npc_pursues_a_remembered_position_around_a_wall_and_attacks_only_in_actual_re
         },
         true,
     );
-    let start =
-        sim.canonical_state().combat.as_ref().unwrap().encounters[&id].fighters[&npc].position;
+    let start = sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&id]
+        .fighters[&npc]
+        .position;
     let mut attacked = false;
     for _ in 0..10 {
         wait(&mut sim, id);
-        let combat = sim.canonical_state().combat.as_ref().unwrap();
+        let combat = sim.canonical_state().state.combat.as_ref().unwrap();
         let encounter = &combat.encounters[&id];
         let from = encounter.fighters[&npc].position;
         let target = encounter.fighters[&ruler].position;
-        if sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Struck { actor, target, .. } if actor == npc && target == ruler)) {
+        if sim.canonical_state().events.iter().any(|e| matches!(e.event, EventKind::Struck { actor, target, .. } if actor == npc && target == ruler)) {
             assert!(combat.maps[&encounter.area].clear(from, target));
             assert!(game_conflict::distance(from, target) <= u128::from(combat.rules.reach).pow(2));
             attacked = true;
@@ -114,12 +121,19 @@ fn npc_pursues_a_remembered_position_around_a_wall_and_attacks_only_in_actual_re
         sim.canonical_state()
             .events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::CombatMoved { actor, .. } if actor == npc))
+            .filter(|e| matches!(e.event, EventKind::CombatMoved { actor, .. } if actor == npc))
             .count()
             > 2
     );
     assert_ne!(
-        sim.canonical_state().combat.as_ref().unwrap().encounters[&id].fighters[&npc].position,
+        sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters[&id]
+            .fighters[&npc]
+            .position,
         start
     );
 }
@@ -142,9 +156,22 @@ fn blind_search_does_not_depend_on_hidden_enemy_coordinates_and_survives_save_wo
     );
     wait(&mut first, id);
     wait(&mut second, second_id);
-    let one = &first.canonical_state().combat.as_ref().unwrap().encounters[&id].fighters[&npc];
-    let two = &second.canonical_state().combat.as_ref().unwrap().encounters[&second_id].fighters
-        [&second_npc];
+    let one = &first
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&id]
+        .fighters[&npc];
+    let two = &second
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&second_id]
+        .fighters[&second_npc];
     assert_eq!(one.position, two.position);
     assert_eq!(one.search, two.search);
     assert_ne!(
@@ -184,8 +211,9 @@ fn an_observed_empty_last_position_does_not_pull_search_back_each_round() {
         false,
     );
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    let mut state: CanonicalState = serde_json::from_value(envelope["state"].take()).unwrap();
+    let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
     state
+        .state
         .combat
         .as_mut()
         .unwrap()
@@ -210,13 +238,27 @@ fn an_observed_empty_last_position_does_not_pull_search_back_each_round() {
     )
     .unwrap();
     wait(&mut sim, id);
-    let first = &sim.canonical_state().combat.as_ref().unwrap().encounters[&id].fighters[&npc];
+    let first = &sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&id]
+        .fighters[&npc];
     let goal = first.search.goal;
     let position = first.position;
     assert!(!first.known.contains_key(&ruler));
     sim.advance(SimDuration(6_000)).unwrap();
     wait(&mut sim, id);
-    let second = &sim.canonical_state().combat.as_ref().unwrap().encounters[&id].fighters[&npc];
+    let second = &sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&id]
+        .fighters[&npc];
     assert_eq!(second.search.goal, goal);
     assert!(
         game_conflict::distance(second.position, goal.unwrap())
@@ -227,11 +269,11 @@ fn an_observed_empty_last_position_does_not_pull_search_back_each_round() {
 #[test]
 fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() {
     let mut sim = Simulation::mission_fixture(29, Execution::default()).unwrap();
-    let ruler = sim.canonical_state().ruler;
-    let leader = sim.canonical_state().people[3].id;
-    let enemy = sim.canonical_state().people[6].id;
-    let home = sim.canonical_state().areas[0].id;
-    let destination = sim.canonical_state().areas[2].id;
+    let ruler = sim.canonical_state().state.ruler;
+    let leader = sim.canonical_state().state.people[3].id;
+    let enemy = sim.canonical_state().state.people[6].id;
+    let home = sim.canonical_state().state.areas[0].id;
+    let destination = sim.canonical_state().state.areas[2].id;
     submit(
         &mut sim,
         Command::Mission {
@@ -250,6 +292,7 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
     );
     let mission = *sim
         .canonical_state()
+        .state
         .missions
         .as_ref()
         .unwrap()
@@ -257,8 +300,14 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
         .keys()
         .next_back()
         .unwrap();
-    let recruitment = sim.canonical_state().missions.as_ref().unwrap().missions[&mission].members
-        [&leader]
+    let recruitment = sim
+        .canonical_state()
+        .state
+        .missions
+        .as_ref()
+        .unwrap()
+        .missions[&mission]
+        .members[&leader]
         .recruitment;
     sim.debug_actor_command(
         leader,
@@ -300,8 +349,14 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
         false,
     );
     wait(&mut sim, id);
-    let companion =
-        &sim.canonical_state().combat.as_ref().unwrap().encounters[&id].fighters[&leader];
+    let companion = &sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .encounters[&id]
+        .fighters[&leader];
     assert_ne!(
         companion.position,
         Point {
@@ -312,7 +367,14 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
     assert!(companion.search.goal.is_some());
     assert!(companion.defending);
     assert_eq!(
-        sim.canonical_state().missions.as_ref().unwrap().missions[&mission].members[&leader].status,
+        sim.canonical_state()
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .missions[&mission]
+            .members[&leader]
+            .status,
         CompanionStatus::Accepted
     );
 }
@@ -320,13 +382,13 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
 #[test]
 fn a_nearby_exit_cannot_be_used_through_an_intact_wall() {
     let mut sim = Simulation::combat_fixture(1, Execution::default()).unwrap();
-    let ruler = sim.canonical_state().ruler;
-    let npc = sim.canonical_state().people[3].id;
+    let ruler = sim.canonical_state().state.ruler;
+    let npc = sim.canonical_state().state.people[3].id;
     submit(&mut sim, Command::Engage { target: npc });
     let id = sim.observe().combat.unwrap().encounter;
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    let mut state: CanonicalState = serde_json::from_value(envelope["state"].take()).unwrap();
-    let combat = state.combat.as_mut().unwrap();
+    let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
+    let combat = state.state.combat.as_mut().unwrap();
     let encounter = combat.encounters.get_mut(&id).unwrap();
     let map = combat.maps.get_mut(&encounter.area).unwrap();
     let destination = map.exits[0].0;
@@ -357,7 +419,7 @@ fn a_nearby_exit_cannot_be_used_through_an_intact_wall() {
         Execution::default(),
     )
     .unwrap();
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         sim.submit(Submission {
             caller_sequence: sim.next_caller_sequence().unwrap(),
@@ -369,5 +431,5 @@ fn a_nearby_exit_cannot_be_used_through_an_intact_wall() {
         }),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
 }

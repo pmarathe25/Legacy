@@ -23,12 +23,13 @@ fn move_to(sim: &mut Simulation, sequence: u64, area: u64) -> Result<CommandRece
 fn contested(sim: &mut Simulation) -> InventoryId {
     let state = sim.canonical_state();
     let source = state
+        .state
         .inventories
         .values()
         .find(|i| matches!(i.location, InventoryLocation::Area(_)))
         .unwrap()
         .id;
-    let intentions = state.people[3..5]
+    let intentions = state.state.people[3..5]
         .iter()
         .map(|p| TransferIntent {
             actor: p.id,
@@ -55,17 +56,17 @@ fn arrival_consumes_elapsed_time_and_cannot_credit_travel_as_work() {
             ..
         }
     ));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(2)));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
     sim.advance(MINUTE).unwrap();
-    assert_eq!(sim.canonical_state().people[0].work_units, 1_000);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 1_000);
     assert!(matches!(
         sim.canonical_state().events[1],
-        Event {
-            time: SimTime(120_000),
-            kind: EventKind::Arrived {
+        game_world::Published {
+            at: SimTime(120_000),
+            event: EventKind::Arrived {
                 area: AreaId(2),
                 ..
             },
@@ -80,10 +81,10 @@ fn invalid_commands_preserve_all_logical_state_and_allocator_even_in_transit() {
     let disconnected = sim.debug_add_disconnected_area("island").unwrap();
     move_to(&mut sim, 1, 2).unwrap();
     sim.advance(SimDuration(17)).unwrap();
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(move_to(&mut sim, 2, 999), Err(Error::UnknownArea));
     assert_eq!(move_to(&mut sim, 2, disconnected.0), Err(Error::NoRoute));
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
 }
 
 #[test]
@@ -92,9 +93,10 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
     let source = contested(&mut sim);
     sim.advance(MINUTE).unwrap();
     let state = sim.canonical_state();
-    assert_eq!(state.inventories[&source].quantity, Quantity(0));
+    assert_eq!(state.state.inventories[&source].quantity, Quantity(0));
     assert_eq!(
         state
+            .state
             .inventories
             .values()
             .map(|i| i.quantity.0)
@@ -102,9 +104,9 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
         1_000
     );
     assert_eq!(
-        state.people[3..5]
+        state.state.people[3..5]
             .iter()
-            .filter(|p| state.inventories[&p.inventory].quantity == Quantity(1_000))
+            .filter(|p| state.state.inventories[&p.inventory].quantity == Quantity(1_000))
             .count(),
         1
     );
@@ -112,13 +114,13 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
         state
             .events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::Transferred { .. }))
+            .filter(|e| matches!(e.event, EventKind::Transferred { .. }))
             .count(),
         1
     );
     assert_eq!(
-        state.inventories[&source].last_granted,
-        Some(state.people[3].id)
+        state.state.inventories[&source].last_granted,
+        Some(state.state.people[3].id)
     );
 }
 
@@ -145,12 +147,12 @@ fn chunking_workers_and_perturbed_completion_preserve_state_and_events() {
 fn queries_are_passive_and_normal_views_omit_private_world_state() {
     let mut sim = fixture(4, false);
     move_to(&mut sim, 1, 2).unwrap();
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     for _ in 0..100 {
         let view = sim.observe();
         assert_eq!(view.time, SimTime(0));
     }
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
     let json = serde_json::to_string(&sim.observe()).unwrap();
     assert!(
         !json.contains("work_units") && !json.contains("inventories") && !json.contains("citizen")
@@ -161,9 +163,9 @@ fn queries_are_passive_and_normal_views_omit_private_world_state() {
 fn duplicate_commands_are_idempotent_and_replacement_finishes_current_leg() {
     let mut sim = fixture(2, false);
     let receipt = move_to(&mut sim, 42, 2).unwrap();
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(move_to(&mut sim, 42, 2).unwrap(), receipt);
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
     assert_eq!(move_to(&mut sim, 42, 3), Err(Error::SequenceConflict));
     sim.advance(SimDuration(10_000)).unwrap();
     move_to(&mut sim, 43, 3).unwrap();
@@ -179,7 +181,7 @@ fn duplicate_commands_are_idempotent_and_replacement_finishes_current_leg() {
     ));
     sim.advance(SimDuration(300_000)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
 }
 
 #[test]
@@ -200,9 +202,9 @@ fn save_load_preserves_fractional_progress_pending_transfers_and_idempotency() {
     original.advance(SimDuration(987_654)).unwrap();
     loaded.advance(SimDuration(987_654)).unwrap();
     assert_eq!(original.canonical_state(), loaded.canonical_state());
-    let before = loaded.canonical_state().clone();
+    let before = loaded.canonical_snapshot().unwrap();
     move_to(&mut loaded, 7, 3).unwrap();
-    assert_eq!(&before, loaded.canonical_state());
+    assert_eq!(before, loaded.canonical_snapshot().unwrap());
     let mut json: serde_json::Value = serde_json::from_slice(&loaded.save().unwrap()).unwrap();
     let valid_version = json["version"].clone();
     json["version"] = 999.into();
@@ -227,9 +229,9 @@ fn overflow_and_bad_configuration_leave_committed_state_intact() {
     );
     let mut sim = fixture(1, false);
     sim.advance(SimDuration(1)).unwrap();
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(sim.advance(SimDuration(u64::MAX)), Err(Error::Overflow));
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
     assert_eq!(
         compute::progress(compute::ProgressInput {
             units: u64::MAX,
@@ -260,6 +262,6 @@ fn replacing_a_route_with_the_current_leg_endpoint_stops_after_that_leg() {
     ));
     sim.advance(SimDuration(130_000)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
-    assert!(sim.canonical_state().people[0].route.is_empty());
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
+    assert!(sim.canonical_state().state.people[0].route.is_empty());
 }

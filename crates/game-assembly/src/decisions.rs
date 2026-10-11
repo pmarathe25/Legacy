@@ -48,13 +48,18 @@ impl Simulation {
         &mut self,
         minds: BTreeMap<PersonId, Mind>,
     ) -> Result<(), Error> {
-        if self.state.decisions.is_some()
-            || minds.len() != self.state.people.len()
-            || self.state.people.iter().any(|p| !minds.contains_key(&p.id))
+        if self.host.state.decisions.is_some()
+            || minds.len() != self.host.state.people.len()
+            || self
+                .host
+                .state
+                .people
+                .iter()
+                .any(|p| !minds.contains_key(&p.id))
         {
             return Err(Error::InvalidConfiguration("invalid initial minds".into()));
         }
-        if game_characters::decisions::minds::<game_api::Command>(&self.state.components)
+        if game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
             .next()
             .is_some()
         {
@@ -62,25 +67,26 @@ impl Simulation {
                 "initial minds already exist".into(),
             ));
         }
-        self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+        self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
         let mut batch = game_ecs::Batch::new();
         for (actor, mind) in minds {
             batch.insert(game_ecs::StableId(actor.0), mind);
         }
-        self.state.components.apply_batch(batch)?;
-        let work_concept = ConceptId(allocate(&mut self.state)?);
-        self.state.decisions = Some(Runtime {
+        self.host.storage.apply_batch(batch)?;
+        let work_concept = ConceptId(self.host.allocate_id()?.0);
+        self.host.state.decisions = Some(Runtime {
             concepts: BTreeMap::from([(work_concept, Good::Food)]),
             work_concept,
-            last_learning_event: self.state.next_event - 1,
+            last_learning_event: self.host.next_event() - 1,
             switching_margin: 50,
         });
         Ok(())
     }
     pub fn autonomy_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::survival_fixture(seed, execution)?;
-        sim.state.scenario = scenarios().remove(2);
+        sim.host.state.scenario = scenarios().remove(2);
         let minds = sim
+            .host
             .state
             .people
             .iter()
@@ -93,7 +99,7 @@ impl Simulation {
                         interests: BTreeMap::new(),
                         // These test villagers have an authored map of the three
                         // fixture areas. Newborns learn routes by observation.
-                        routes: fixture_routes(&sim.state.areas),
+                        routes: fixture_routes(&sim.host.state.areas),
                         last_failure: None,
                         child_signals: BTreeMap::new(),
                         personality: if restful {
@@ -131,21 +137,22 @@ impl Simulation {
     }
 
     fn observe_local_facts(&mut self) {
-        if self.state.decisions.is_none() {
+        let owner_now = self.host.clock().time;
+        if self.host.state.decisions.is_none() {
             return;
         }
-        let locations =
-            transport::resolved_locations_for(&self.state).expect("valid physical observations");
+        let locations = transport::resolved_locations_for(&self.canonical_state())
+            .expect("valid physical observations");
         let mut cohorts: BTreeMap<game_transport::PositionKey, Vec<PersonId>> = BTreeMap::new();
-        for person in &self.state.people {
-            if self.state.development.as_ref().is_some_and(|_| {
+        for person in &self.host.state.people {
+            if self.host.state.development.as_ref().is_some_and(|_| {
                 matches!(
-                    game_lifecycle::life(&self.state.components, person.id)
+                    game_lifecycle::life(&self.host.storage, person.id)
                         .unwrap()
                         .stage,
                     LifeStage::Infant | LifeStage::Child
                 )
-            }) && game_physiology::body(&self.state.components, person.id)
+            }) && game_physiology::body(&self.host.storage, person.id)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -164,7 +171,7 @@ impl Simulation {
             .flatten()
             .map(|child| (*child, self.observed_hydration_urgency(*child)))
             .collect();
-        for p in &self.state.people {
+        for p in &self.host.state.people {
             let location = &locations[&p.id];
             let area = match *location {
                 Location::AtArea(area) => area,
@@ -176,7 +183,7 @@ impl Simulation {
                 Location::AtArea(_) | Location::StoppedOnRoad { .. }
             );
             let at_area = matches!(location, Location::AtArea(_));
-            let actor = &game_physiology::body(&self.state.components, p.id).expect("body exists");
+            let actor = &game_physiology::body(&self.host.storage, p.id).expect("body exists");
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 continue;
             }
@@ -196,7 +203,7 @@ impl Simulation {
                 .collect();
             let accessible_stocks: BTreeSet<_> = visible_stocks
                 .iter()
-                .filter(|id| self.has_stock_access(p.id, &self.state.inventories[id]))
+                .filter(|id| self.has_stock_access(p.id, &self.host.state.inventories[id]))
                 .copied()
                 .collect();
             let visible_children = cohorts.get(
@@ -226,7 +233,7 @@ impl Simulation {
                         road_start,
                         arrives,
                     }
-                    .position(self.state.time)
+                    .position(owner_now)
                     .expect("valid current leg"),
                     Location::Carried { .. } => continue,
                 }
@@ -238,6 +245,7 @@ impl Simulation {
                 .filter(|child| {
                     stationary
                         || self
+                            .host
                             .state
                             .transport
                             .as_ref()
@@ -250,7 +258,7 @@ impl Simulation {
                 .collect();
             let mut observed_children = Vec::new();
             for child in &visible_children {
-                let vitals = &game_physiology::body(&self.state.components, *child)
+                let vitals = &game_physiology::body(&self.host.storage, *child)
                     .expect("body exists")
                     .vitals;
                 let rules = &signal_rules[child];
@@ -261,32 +269,30 @@ impl Simulation {
                 } else {
                     0
                 };
-                if game_lifecycle::life(&self.state.components, *child)
+                if game_lifecycle::life(&self.host.storage, *child)
                     .unwrap()
                     .preference
-                    .is_some_and(|(p, until)| {
-                        p == ChildhoodInterest::Food && until >= self.state.time
-                    })
+                    .is_some_and(|(p, until)| p == ChildhoodInterest::Food && until >= owner_now)
                 {
                     urgency = urgency.max(3_000);
                 }
                 observed_children.push((
                     *child,
                     ChildSignal {
-                        preference: game_lifecycle::life(&self.state.components, *child)
+                        preference: game_lifecycle::life(&self.host.storage, *child)
                             .unwrap()
                             .preference
-                            .filter(|(_, until)| *until >= self.state.time)
+                            .filter(|(_, until)| *until >= owner_now)
                             .map(|(p, _)| p),
                         location: locations[child].clone(),
                         urgency,
                         hydration_urgency: hydration_signals[child],
-                        observed_at: self.state.time,
+                        observed_at: owner_now,
                     },
                 ));
             }
             let mut observed_sites = Vec::new();
-            for site in game_workshop::sites(&self.state.components)
+            for site in game_workshop::sites(&self.host.storage)
                 .map(|(_, site)| site)
                 .filter(|s| at_area && s.area == area)
             {
@@ -301,12 +307,13 @@ impl Simulation {
                 });
             }
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.state.components,
+                &mut self.host.storage,
                 p.id,
             )
             .unwrap();
             if at_area {
                 let actual_routes = self
+                    .host
                     .state
                     .areas
                     .iter()
@@ -319,19 +326,19 @@ impl Simulation {
                 mind.routes.insert(area, actual_routes);
             }
             for id in &visible_stocks {
-                let inventory = &self.state.inventories[id];
+                let inventory = &self.host.state.inventories[id];
                 mind.observe_stock(
-                    self.state.time,
+                    owner_now,
                     area,
-                    self.state.physical.as_ref().unwrap().rules.meal_size,
+                    self.host.state.physical.as_ref().unwrap().rules.meal_size,
                     StockKnowledge {
                         inventory: *id,
                         area,
                         good: inventory.good,
                         quantity: inventory.quantity,
                         accessible: accessible_stocks.contains(id),
-                        observed_at: self.state.time,
-                        learned_at: self.state.time,
+                        observed_at: owner_now,
+                        learned_at: owner_now,
                         source: KnowledgeSource::Observed(p.id),
                     },
                 );
@@ -349,7 +356,8 @@ impl Simulation {
     }
 
     pub(crate) fn review_decisions(&mut self) -> Result<(), Error> {
-        let Some(_) = self.state.decisions else {
+        let owner_now = self.host.clock().time;
+        let Some(_) = self.host.state.decisions else {
             return Ok(());
         };
         let phase_started = Instant::now();
@@ -415,9 +423,9 @@ impl Simulation {
         let phase_started = Instant::now();
         let mut intentions: Vec<_> = {
             let resources = self.prepare_ranking_resources()?;
-            let world = self.state.decisions.as_ref().unwrap();
+            let world = self.host.state.decisions.as_ref().unwrap();
             let jobs: Vec<_> =
-                game_characters::decisions::minds::<game_api::Command>(&self.state.components)
+                game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
                     .map(|(id, mind)| (id, (id, mind)))
                     .collect();
             self.engine
@@ -435,11 +443,11 @@ impl Simulation {
         intentions.sort_by_key(|i| {
             let (resource, cursor) = match i.decision.plan.as_ref().map(|plan| &plan.action) {
                 Some(Command::Eat { source }) | Some(Command::Care { source, .. }) => {
-                    (source.0, self.state.inventories[source].last_granted)
+                    (source.0, self.host.state.inventories[source].last_granted)
                 }
                 Some(Command::Work { site }) => (
                     site.0,
-                    game_workshop::site(&self.state.components, *site)
+                    game_workshop::site(&self.host.storage, *site)
                         .expect("site exists")
                         .last_granted,
                 ),
@@ -475,16 +483,11 @@ impl Simulation {
             };
             self.profile.record_phase(kind, phase_started);
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.state.components,
+                &mut self.host.storage,
                 i.actor,
             )
             .unwrap();
-            mind.record_attempt(
-                self.state.time,
-                plan,
-                i.decision.explanation,
-                accepted.is_ok(),
-            )?;
+            mind.record_attempt(owner_now, plan, i.decision.explanation, accepted.is_ok())?;
         }
         self.profile.record_phase("review.apply", phase_started);
         Ok(())
@@ -497,8 +500,8 @@ impl Simulation {
         margin: i64,
         resources: Option<&equipment::RankingResources>,
     ) -> Intention {
-        let p = &self.state.people[self.person_index[&id]];
-        let actor = &game_physiology::body(&self.state.components, id).expect("body exists");
+        let p = &self.host.state.people[self.person_index[&id]];
+        let actor = &game_physiology::body(&self.host.storage, id).expect("body exists");
         let rules = self.body_rules(id);
         let place = match self.resolved_location(id) {
             Location::AtArea(area) => Place::Area(area),
@@ -510,7 +513,7 @@ impl Simulation {
             .child_signals
             .iter()
             .filter(|(_, signal)| {
-                signal.observed_at == self.state.time
+                signal.observed_at == self.host.clock().time
                     && match place {
                         Place::Area(area) => signal.location == Location::AtArea(area),
                         _ => transport::location_position(&signal.location, signal.observed_at)
@@ -524,7 +527,7 @@ impl Simulation {
             .collect();
         let facts = PersonalFacts {
             actor: id,
-            now: self.state.time,
+            now: self.host.clock().time,
             vitals: actor.vitals.clone(),
             limits: NeedLimits {
                 meal_relief: rules.meal_relief,
@@ -534,25 +537,27 @@ impl Simulation {
                 fatigue_limit: rules.fatigue_limit,
                 max_health: rules.max_health,
                 drink_quantity: self
+                    .host
                     .state
                     .health
                     .as_ref()
                     .map_or(Quantity(u64::MAX), |world| world.rules.drink_quantity),
             },
-            activity: match *self.state.components.activity(id).expect("activity exists") {
+            activity: match *self.host.storage.activity(id).expect("activity exists") {
                 Activity::Idle => PersonalActivity::Idle,
                 Activity::Rest => PersonalActivity::Rest,
                 Activity::Work { .. } => PersonalActivity::Working,
                 _ => PersonalActivity::Committed,
             },
             place,
-            control: if id == self.state.ruler {
+            control: if id == self.host.state.ruler {
                 Control::Manual
             } else if self.in_combat(id)
                 || self.lineage_handles(id)
                 || self.mission_actor_busy(id)
                 || self.health_actor_busy(id)
                 || self
+                    .host
                     .state
                     .transport
                     .as_ref()
@@ -566,11 +571,8 @@ impl Simulation {
                 || self.realm_actor_busy(id)
                 || self.property_actor_talking(id),
             independent: self.independent(id),
-            child: self.state.development.as_ref().is_some_and(|_| {
-                game_lifecycle::life(&self.state.components, id)
-                    .unwrap()
-                    .stage
-                    == LifeStage::Child
+            child: self.host.state.development.as_ref().is_some_and(|_| {
+                game_lifecycle::life(&self.host.storage, id).unwrap().stage == LifeStage::Child
             }),
             hunger_exempt: p.hunger_exempt,
             work_units: p.work_units,
@@ -586,6 +588,7 @@ impl Simulation {
             hydration_urgency: self.observed_hydration_urgency(id),
             exposure_urgency: self.observed_exposure_urgency(id),
             freedom_restricted: self
+                .host
                 .state
                 .combat
                 .as_ref()
@@ -597,7 +600,7 @@ impl Simulation {
                 decision: mind.decide(
                     &facts,
                     &[],
-                    self.state.decisions.as_ref().unwrap().work_concept,
+                    self.host.state.decisions.as_ref().unwrap().work_concept,
                     margin,
                 ),
             };
@@ -720,13 +723,13 @@ impl Simulation {
                         action:
                             EcologyAction::Gather { resource, .. }
                             | EcologyAction::RequestAccess { resource },
-                    } => game_ecology::knowledge(&self.state.components, id)
+                    } => game_ecology::knowledge(&self.host.storage, id)
                         .map(|row| &row.known_resources)
                         .and_then(|known| known.get(resource))
                         .map(|source| BTreeSet::from([source.kind.good()]))
                         .unwrap_or_default(),
                     Command::Move { destination } => {
-                        game_ecology::knowledge(&self.state.components, id)
+                        game_ecology::knowledge(&self.host.storage, id)
                             .map(|row| &row.known_resources)
                             .into_iter()
                             .flat_map(|known| known.values())
@@ -781,6 +784,7 @@ impl Simulation {
                     action: ProjectAction::Work { project },
                 } = &action
                     && let Some(plan) = self
+                        .host
                         .state
                         .projects
                         .as_ref()
@@ -800,7 +804,7 @@ impl Simulation {
                         beneficiary: id,
                         subject: Some(Subject::Project(*project)),
                     };
-                    if let Some(obligation)=self.state.agreements.as_ref().and_then(|world|world.knowledge.get(&id)).into_iter().flat_map(|known|known.values()).flat_map(|agreement|agreement.obligations.iter()).find(|obligation|matches!(obligation.term,AgreementTerm::ConstructionLabor {debtor,project:target,..} if debtor==id&&target==*project)&&obligation.performed<obligation.term.amount()) {
+                    if let Some(obligation)=self.host.state.agreements.as_ref().and_then(|world|world.knowledge.get(&id)).into_iter().flat_map(|known|known.values()).flat_map(|agreement|agreement.obligations.iter()).find(|obligation|matches!(obligation.term,AgreementTerm::ConstructionLabor {debtor,project:target,..} if debtor==id&&target==*project)&&obligation.performed<obligation.term.amount()) {
                             motives.push(Motive::Fulfil {commitment:CommitmentRef::Obligation(obligation.id)});key=IntentionKey::Commitment(CommitmentRef::Obligation(obligation.id));
                         }
                 }
@@ -986,7 +990,7 @@ impl Simulation {
             decision: mind.decide(
                 &facts,
                 &candidates,
-                self.state.decisions.as_ref().unwrap().work_concept,
+                self.host.state.decisions.as_ref().unwrap().work_concept,
                 margin,
             ),
         }
@@ -1062,39 +1066,41 @@ impl Simulation {
         else {
             return;
         };
-        let Some(good) = self.state.inventories.get(source).map(|stock| stock.good) else {
+        let Some(good) = self
+            .host
+            .state
+            .inventories
+            .get(source)
+            .map(|stock| stock.good)
+        else {
             return;
         };
-        if let Some(mind) = self.state.decisions.as_mut().and_then(|_| {
+        if let Some(mind) = self.host.state.decisions.as_mut().and_then(|_| {
             game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.state.components,
+                &mut self.host.storage,
                 *caregiver,
             )
         }) {
             let _ = mind.record_care_receipt(*child, good, *quantity, sequence.0);
         }
-        if let Some(lineage) = &mut self.state.lineage {
+        if let Some(lineage) = &mut self.host.state.lineage {
             let _ = lineage.record_care_receipt(*caregiver, *child, good, *quantity, sequence.0);
         }
     }
 
     pub(crate) fn learn_from_work(&mut self) {
-        let Some(world) = &mut self.state.decisions else {
+        let parts = self.host.parts_mut();
+        let Some(world) = &mut parts.state.decisions else {
             return;
         };
-        for event in self
-            .state
-            .events
-            .iter()
-            .skip(world.last_learning_event as usize)
-        {
+        for event in parts.events.iter().skip(world.last_learning_event as usize) {
             if let EventKind::Produced { actor, .. } | EventKind::CropHarvested { actor, .. } =
-                event.kind
+                event.event
             {
-                world.learn_production::<Command>(&mut self.state.components, actor);
+                world.learn_production::<Command>(parts.store, actor);
             }
         }
-        world.last_learning_event = self.state.next_event - 1;
+        world.last_learning_event = parts.next_event - 1;
     }
 
     pub fn debug_set_personality(
@@ -1107,12 +1113,13 @@ impl Simulation {
             return Err(Error::InvalidFixture("traits must be 0..=1000".into()));
         }
         let mind = self
+            .host
             .state
             .decisions
             .as_mut()
             .and_then(|_| {
                 game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut self.state.components,
+                    &mut self.host.storage,
                     id,
                 )
             })
@@ -1124,19 +1131,20 @@ impl Simulation {
 
     /// Explicit setup of an authored belief for false/stale-information scenarios.
     pub fn debug_set_knowledge(&mut self, id: PersonId, fact: StockKnowledge) -> Result<(), Error> {
-        if !self.state.inventories.contains_key(&fact.inventory)
-            || fact.observed_at > self.state.time
-            || fact.learned_at > self.state.time
+        if !self.host.state.inventories.contains_key(&fact.inventory)
+            || fact.observed_at > self.host.clock().time
+            || fact.learned_at > self.host.clock().time
         {
             return Err(Error::InvalidFixture("invalid knowledge".into()));
         }
         let mind = self
+            .host
             .state
             .decisions
             .as_mut()
             .and_then(|_| {
                 game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut self.state.components,
+                    &mut self.host.storage,
                     id,
                 )
             })
@@ -1151,17 +1159,18 @@ impl Simulation {
         recipient: PersonId,
         fact: StockKnowledge,
     ) -> bool {
-        let Some(_) = &mut self.state.decisions else {
+        let owner_now = self.host.clock().time;
+        let Some(_) = &mut self.host.state.decisions else {
             return false;
         };
         let Some(receiver) = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut self.state.components,
+            &mut self.host.storage,
             recipient,
         ) else {
             return false;
         };
         let inventory = fact.inventory;
-        if !receiver.receive_report(sender, self.state.time, fact) {
+        if !receiver.receive_report(sender, owner_now, fact) {
             return false;
         }
         self.emit(EventKind::Reported {

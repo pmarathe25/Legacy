@@ -43,8 +43,8 @@ fn main() {
                 )
                 .unwrap();
                 let state = sim.canonical_state();
-                let source = *state.inventories.keys().next_back().unwrap();
-                let intents = state.people[3..]
+                let source = *state.state.inventories.keys().next_back().unwrap();
+                let intents = state.state.people[3..]
                     .iter()
                     .map(|p| TransferIntent {
                         actor: p.id,
@@ -59,7 +59,7 @@ fn main() {
                 sim.advance(SimDuration(60 * 60_000)).unwrap();
                 let _view = std::hint::black_box(sim.observe());
                 samples.push(start.elapsed().as_secs_f64());
-                let checksum = serde_json::to_vec(sim.canonical_state()).unwrap();
+                let checksum = serde_json::to_vec(&sim.canonical_state()).unwrap();
                 if let Some(expected) = &expected {
                     assert_eq!(expected, &checksum);
                 } else {
@@ -68,6 +68,7 @@ fn main() {
                 profile = sim.profile().clone();
                 assert_eq!(
                     sim.canonical_state()
+                        .state
                         .inventories
                         .values()
                         .map(|i| i.quantity.0)

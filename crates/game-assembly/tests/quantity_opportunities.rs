@@ -9,7 +9,7 @@ fn add(
     quantity: u64,
     capacity: u64,
 ) -> InventoryId {
-    let actor = sim.canonical_state().ruler;
+    let actor = sim.canonical_state().state.ruler;
     sim.debug_add_inventory(
         good,
         place,
@@ -41,7 +41,7 @@ fn health_fixture() -> Simulation {
     let mut rules = HealthRules::fixture();
     rules.drink_quantity = Quantity(250);
     sim.initialize_health(rules).unwrap();
-    for person in sim.canonical_state().people.clone() {
+    for person in sim.canonical_state().state.people.clone() {
         sim.debug_actor_command(person.id, Command::Cancel).unwrap();
         sim.debug_set_personality(person.id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
@@ -53,7 +53,7 @@ fn health_fixture() -> Simulation {
 fn small_food_and_timber_loads_are_public_and_oversized_examples_are_absent() {
     for good in [Good::Food, Good::Timber] {
         let mut sim = Simulation::survival_fixture(1, Execution::default()).unwrap();
-        let actor = sim.canonical_state().ruler;
+        let actor = sim.canonical_state().state.ruler;
         let source = add(&mut sim, good, InventoryLocation::Area(AreaId(1)), 250, 250);
         let destination = add(&mut sim, good, InventoryLocation::Carried(actor), 0, 250);
         submit_choice(
@@ -66,16 +66,16 @@ fn small_food_and_timber_loads_are_public_and_oversized_examples_are_absent() {
         );
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.canonical_state().inventories[&source].quantity,
+            sim.canonical_state().state.inventories[&source].quantity,
             Quantity(0)
         );
         assert_eq!(
-            sim.canonical_state().inventories[&destination].quantity,
+            sim.canonical_state().state.inventories[&destination].quantity,
             Quantity(250)
         );
     }
     let mut sim = Simulation::survival_fixture(1, Execution::default()).unwrap();
-    let actor = sim.canonical_state().ruler;
+    let actor = sim.canonical_state().state.ruler;
     let source = add(
         &mut sim,
         Good::Timber,
@@ -115,7 +115,7 @@ fn small_food_and_timber_loads_are_public_and_oversized_examples_are_absent() {
     submit_choice(&mut sim, action, Quantity(500));
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(500)
     );
 }
@@ -130,11 +130,12 @@ fn public_small_pickups_work_without_an_existing_compartment() {
         250,
         250,
     );
-    let actor = sim.canonical_state().ruler;
+    let actor = sim.canonical_state().state.ruler;
     submit_choice(&mut sim, QuantityAction::Carry { source }, Quantity(250));
     sim.advance(MINUTE).unwrap();
     let carried = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| {
@@ -143,7 +144,7 @@ fn public_small_pickups_work_without_an_existing_compartment() {
         .unwrap();
     assert_eq!(carried.quantity, Quantity(250));
     assert_eq!(
-        sim.canonical_state().inventories[&source].quantity,
+        sim.canonical_state().state.inventories[&source].quantity,
         Quantity(0)
     );
 }
@@ -151,7 +152,7 @@ fn public_small_pickups_work_without_an_existing_compartment() {
 #[test]
 fn public_split_tool_consolidation_enables_a_native_small_gather() {
     let mut sim = Simulation::ecology_fixture(67, Execution::default()).unwrap();
-    let actor = sim.canonical_state().ruler;
+    let actor = sim.canonical_state().state.ruler;
     let destination = add(
         &mut sim,
         Good::Tool,
@@ -189,11 +190,11 @@ fn public_split_tool_consolidation_enables_a_native_small_gather() {
     );
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(1000)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&source].quantity,
+        sim.canonical_state().state.inventories[&source].quantity,
         Quantity(0)
     );
     submit_choice(
@@ -204,7 +205,7 @@ fn public_split_tool_consolidation_enables_a_native_small_gather() {
         },
         Quantity(250),
     );
-    let job = game_ecology::gathering(&sim.canonical_state().components, actor).unwrap();
+    let job = game_ecology::gathering(sim.canonical_state().components, actor).unwrap();
     assert_eq!(job.quantity, Quantity(250));
     assert_eq!(job.tool, Some(destination));
 }
@@ -212,7 +213,7 @@ fn public_split_tool_consolidation_enables_a_native_small_gather() {
 #[test]
 fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_replay() {
     let mut sim = health_fixture();
-    let actor = sim.canonical_state().ruler;
+    let actor = sim.canonical_state().state.ruler;
     let spring = sim
         .debug_add_resource(
             ResourceKind::Spring,
@@ -233,7 +234,7 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
         },
         Quantity(500),
     );
-    let completes = game_ecology::gathering(&sim.canonical_state().components, actor)
+    let completes = game_ecology::gathering(sim.canonical_state().components, actor)
         .unwrap()
         .completes;
     sim.advance(SimDuration(completes.0 - sim.canonical_state().time.0))
@@ -242,7 +243,7 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
         .canonical_state()
         .events
         .iter()
-        .find_map(|event| match event.kind {
+        .find_map(|event| match event.event {
             EventKind::ResourceCollected {
                 resource,
                 destination,
@@ -268,7 +269,7 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     );
     sim.advance(MINUTE).unwrap();
     assert!(
-        game_health::water_lot(&sim.canonical_state().components, bulk)
+        game_health::water_lot(sim.canonical_state().components, bulk)
             .expect("water lot exists")
             .load()
             > 0
@@ -280,11 +281,11 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
         9750,
         9750,
     );
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     for _ in 0..20 {
         sim.observe();
     }
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     let choice = QuantityAction::Carry { source: bulk };
     let opportunity = sim
         .observe()
@@ -307,11 +308,11 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     replay.advance(SimDuration(30_000)).unwrap();
     assert_eq!(sim.canonical_state(), replay.canonical_state());
     assert_eq!(
-        sim.canonical_state().inventories[&water].quantity,
+        sim.canonical_state().state.inventories[&water].quantity,
         Quantity(250)
     );
     assert_eq!(
-        sim.canonical_state().inventories[&bulk].quantity,
+        sim.canonical_state().state.inventories[&bulk].quantity,
         Quantity(250)
     );
     let boil = sim.observe().available_commands.into_iter().find(|command| matches!(command, Command::Health { action: HealthAction::Boil { source, .. } } if *source == water)).unwrap();
@@ -321,7 +322,7 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     else {
         unreachable!()
     };
-    let before_fuel = sim.canonical_state().inventories[&fuel].quantity.0;
+    let before_fuel = sim.canonical_state().state.inventories[&fuel].quantity.0;
     for run in [&mut sim, &mut replay] {
         run.submit(Submission {
             caller_sequence: run.next_caller_sequence().unwrap(),
@@ -332,12 +333,12 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     }
     assert_eq!(sim.canonical_state(), replay.canonical_state());
     assert_eq!(
-        game_health::water_lot(&sim.canonical_state().components, water)
+        game_health::water_lot(sim.canonical_state().components, water)
             .expect("water lot exists")
             .load(),
         0
     );
-    assert!(sim.canonical_state().inventories[&fuel].quantity.0 <= before_fuel - 1000);
+    assert!(sim.canonical_state().state.inventories[&fuel].quantity.0 <= before_fuel - 1000);
     let drink = Command::Health {
         action: HealthAction::Drink { source: water },
     };
@@ -352,7 +353,7 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     }
     assert_eq!(sim.canonical_state(), replay.canonical_state());
     assert_eq!(
-        sim.canonical_state().inventories[&water].quantity,
+        sim.canonical_state().state.inventories[&water].quantity,
         Quantity(0)
     );
     assert_eq!(sim.observe().health.as_ref().unwrap().thirst, 0);
@@ -361,7 +362,7 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
 #[test]
 fn quantity_choices_do_not_read_remote_or_inaccessible_stock_or_create_records() {
     let mut sim = Simulation::survival_fixture(1, Execution::default()).unwrap();
-    let actor = sim.canonical_state().ruler;
+    let actor = sim.canonical_state().state.ruler;
     let before = sim.observe().quantity_opportunities;
     sim.debug_add_inventory(
         Good::Timber,
@@ -386,9 +387,9 @@ fn quantity_choices_do_not_read_remote_or_inaccessible_stock_or_create_records()
         1000,
         1000,
     );
-    let state = sim.canonical_state().clone();
+    let state = sim.canonical_snapshot().unwrap();
     assert_eq!(sim.observe().quantity_opportunities, before);
-    assert_eq!(sim.canonical_state(), &state);
+    assert_eq!(sim.canonical_snapshot().unwrap(), state);
     assert!(
         !sim.observe()
             .available_commands

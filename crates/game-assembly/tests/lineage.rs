@@ -18,9 +18,10 @@ fn fixture(workers: usize) -> Simulation {
 }
 
 fn kill_ruler(sim: &mut Simulation) -> PersonId {
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let health = sim
         .canonical_state()
+        .state
         .physical
         .as_ref()
         .unwrap()
@@ -32,6 +33,7 @@ fn kill_ruler(sim: &mut Simulation) -> PersonId {
 
 fn guardians(sim: &Simulation) -> Vec<PersonId> {
     sim.canonical_state()
+        .state
         .lineage
         .as_ref()
         .unwrap()
@@ -44,6 +46,7 @@ fn guardians(sim: &Simulation) -> Vec<PersonId> {
 fn quiet_other_caregivers(sim: &mut Simulation, child: PersonId) {
     let citizens: Vec<_> = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .filter(|p| p.role == Role::Citizen)
@@ -70,7 +73,7 @@ fn child_for_mentorship(workers: usize) -> Simulation {
     let mut sim = fixture(workers);
     kill_ruler(&mut sim);
     sim.advance(SimDuration(900_000)).unwrap();
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     quiet_other_caregivers(&mut sim, child);
     send(
         &mut sim,
@@ -94,7 +97,7 @@ fn send(sim: &mut Simulation, command: Command) {
 #[test]
 fn guided_childhood_learning_takes_two_real_primary_actions_and_does_not_grant_readiness() {
     let mut sim = child_for_mentorship(1);
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     let teacher = guardians(&sim)[0];
     assert!(
         sim.observe()
@@ -125,7 +128,7 @@ fn guided_childhood_learning_takes_two_real_primary_actions_and_does_not_grant_r
             Activity::Lesson { .. }
         ));
     }
-    let pending = sim.canonical_state().clone();
+    let pending = sim.canonical_snapshot().unwrap();
     let other_teacher = guardians(&sim)[1];
     assert!(
         sim.submit(Submission {
@@ -137,7 +140,7 @@ fn guided_childhood_learning_takes_two_real_primary_actions_and_does_not_grant_r
         })
         .is_err()
     );
-    assert_eq!(sim.canonical_state(), &pending);
+    assert_eq!(sim.canonical_snapshot().unwrap(), pending);
     sim.advance(SimDuration(59_999)).unwrap();
     assert_eq!(sim.observe().lineage.unwrap().invocation_learning, 0);
     sim.advance(SimDuration(1)).unwrap();
@@ -155,7 +158,7 @@ fn guided_childhood_learning_takes_two_real_primary_actions_and_does_not_grant_r
     assert_eq!(view.invocation_learning, 200);
     assert!(view.invocation_ready);
     assert!(view.guardians.iter().all(|g| !g.ready));
-    assert_eq!(sim.canonical_state().events.iter().filter(|event| matches!(event.kind,
+    assert_eq!(sim.canonical_state().events.iter().filter(|event| matches!(event.event,
         EventKind::LessonCompleted { student, topic: LessonTopic::Invocation, gain: 100, .. } if student == child)).count(), 2);
 }
 
@@ -163,7 +166,7 @@ fn guided_childhood_learning_takes_two_real_primary_actions_and_does_not_grant_r
 fn interrupting_either_lesson_participant_discards_unfinished_learning() {
     for interrupt_teacher in [false, true] {
         let mut sim = child_for_mentorship(1);
-        let child = sim.canonical_state().ruler;
+        let child = sim.canonical_state().state.ruler;
         let teacher = guardians(&sim)[0];
         send(
             &mut sim,
@@ -200,6 +203,7 @@ fn interrupting_either_lesson_participant_discards_unfinished_learning() {
         sim.advance(SimDuration(90_000)).unwrap();
         assert_eq!(
             sim.canonical_state()
+                .state
                 .lineage
                 .as_ref()
                 .unwrap()
@@ -213,7 +217,7 @@ fn interrupting_either_lesson_participant_discards_unfinished_learning() {
             !sim.canonical_state()
                 .events
                 .iter()
-                .any(|event| matches!(event.kind,
+                .any(|event| matches!(event.event,
             EventKind::LessonCompleted { student, .. } if student == child))
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -223,7 +227,7 @@ fn interrupting_either_lesson_participant_discards_unfinished_learning() {
 #[test]
 fn guardians_disagree_from_observed_conduct_and_do_not_credit_unseen_practice() {
     let mut sim = child_for_mentorship(1);
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     let observers = guardians(&sim);
     sim.debug_set_personality(
         observers[0],
@@ -250,7 +254,7 @@ fn guardians_disagree_from_observed_conduct_and_do_not_credit_unseen_practice() 
             destination: AreaId(2),
         },
     );
-    let world = sim.canonical_state().lineage.as_ref().unwrap();
+    let world = sim.canonical_state().state.lineage.as_ref().unwrap();
     let flexible = &world.guardians[&observers[0]].assessments[&child];
     let careful = &world.guardians[&observers[1]].assessments[&child];
     assert!(flexible.ready);
@@ -260,7 +264,7 @@ fn guardians_disagree_from_observed_conduct_and_do_not_credit_unseen_practice() 
     assert_ne!(flexible.explanation, careful.explanation);
 
     let mut unseen = child_for_mentorship(1);
-    let child = unseen.canonical_state().ruler;
+    let child = unseen.canonical_state().state.ruler;
     for observer in guardians(&unseen) {
         unseen.debug_move_actor(observer, AreaId(3)).unwrap();
     }
@@ -278,6 +282,7 @@ fn guardians_disagree_from_observed_conduct_and_do_not_credit_unseen_practice() 
     assert!(
         unseen
             .canonical_state()
+            .state
             .lineage
             .as_ref()
             .unwrap()
@@ -290,7 +295,7 @@ fn guardians_disagree_from_observed_conduct_and_do_not_credit_unseen_practice() 
 #[test]
 fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
     let mut sim = child_for_mentorship(1);
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     let guardian = guardians(&sim)[0];
     sim.debug_set_personality(guardian, Personality::restful(), Aspiration::SupportOthers)
         .unwrap();
@@ -313,10 +318,16 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
     send(&mut sim, Command::Eat { source: food });
     sim.advance(MINUTE).unwrap();
     assert!(
-        sim.canonical_state().lineage.as_ref().unwrap().guardians[&guardian].assessments[&child]
+        sim.canonical_state()
+            .state
+            .lineage
+            .as_ref()
+            .unwrap()
+            .guardians[&guardian]
+            .assessments[&child]
             .ready
     );
-    let site = game_workshop::sites(&sim.canonical_state().components)
+    let site = game_workshop::sites(sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()
@@ -336,9 +347,14 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
         Activity::Work { .. }
     ));
     sim.advance(MINUTE).unwrap();
-    assert!(sim.canonical_state().events.iter().any(|event| matches!(event.kind, EventKind::Produced { actor, site: source, .. } if actor == guardian && source == site)));
+    assert!(sim.canonical_state().events.iter().any(|event| matches!(event.event, EventKind::Produced { actor, site: source, .. } if actor == guardian && source == site)));
     assert!(
-        sim.canonical_state().lineage.as_ref().unwrap().guardians[&guardian]
+        sim.canonical_state()
+            .state
+            .lineage
+            .as_ref()
+            .unwrap()
+            .guardians[&guardian]
             .assignment
             .is_none()
     );
@@ -351,7 +367,7 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
         serde_json::json!(false);
     let mut restricted =
         Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
-    let stocks = restricted.canonical_state().inventories.clone();
+    let stocks = restricted.canonical_state().state.inventories.clone();
     send(
         &mut restricted,
         Command::RequestGuardian {
@@ -359,13 +375,14 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
             request: GuardianRequest::Work { site },
         },
     );
-    assert_eq!(restricted.canonical_state().inventories, stocks);
+    assert_eq!(restricted.canonical_state().state.inventories, stocks);
     assert!(
-        matches!(restricted.canonical_state().events.last().unwrap().kind, EventKind::GuardianRefused { guardian: person, .. } if person == guardian)
+        matches!(restricted.canonical_state().events.last().unwrap().event, EventKind::GuardianRefused { guardian: person, .. } if person == guardian)
     );
     assert_eq!(
         restricted
             .canonical_state()
+            .state
             .lineage
             .as_ref()
             .unwrap()
@@ -390,7 +407,7 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
 #[test]
 fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknown_craft() {
     let sim = child_for_mentorship(1);
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     let teacher = guardians(&sim)[0];
     let mut save: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     support::component(&mut save, "characters/mind", teacher)["routes"]
@@ -401,7 +418,7 @@ fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknow
         Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
     assert!(
         !game_characters::decisions::mind::<game_api::Command>(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             child
         )
         .expect("mind exists")
@@ -417,7 +434,7 @@ fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknow
     );
     sim.advance(MINUTE).unwrap();
     let routes = &game_characters::decisions::mind::<game_api::Command>(
-        &sim.canonical_state().components,
+        sim.canonical_state().components,
         child,
     )
     .expect("mind exists")
@@ -448,7 +465,7 @@ fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknow
 fn pending_coupled_lessons_preserve_exactly_once_learning_across_workers_saves_and_queries() {
     let mut a = child_for_mentorship(1);
     let teacher = guardians(&a)[0];
-    let child = a.canonical_state().ruler;
+    let child = a.canonical_state().state.ruler;
     send(
         &mut a,
         Command::Learn {
@@ -472,11 +489,11 @@ fn pending_coupled_lessons_preserve_exactly_once_learning_across_workers_saves_a
         },
     )
     .unwrap();
-    let before = a.canonical_state().clone();
+    let before = a.canonical_snapshot().unwrap();
     for _ in 0..100 {
         a.observe();
     }
-    assert_eq!(a.canonical_state(), &before);
+    assert_eq!(a.canonical_snapshot().unwrap(), before);
     a.advance(SimDuration(90_000)).unwrap();
     for dt in [1, 29_999, 60_000] {
         b.advance(SimDuration(dt)).unwrap();
@@ -487,7 +504,7 @@ fn pending_coupled_lessons_preserve_exactly_once_learning_across_workers_saves_a
         a.canonical_state()
             .events
             .iter()
-            .filter(|event| matches!(event.kind,
+            .filter(|event| matches!(event.event,
         EventKind::LessonCompleted { student, .. } if student == child))
             .count(),
         1
@@ -504,7 +521,7 @@ fn guardian_spectating_exists_only_in_the_gap_and_never_reveals_a_future_child()
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(sim.observe().lineage.unwrap().guardians.is_empty());
     kill_ruler(&mut sim);
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     for _ in 0..100 {
         let view = sim.observe().lineage.unwrap();
         assert_eq!(view.current, None);
@@ -514,6 +531,7 @@ fn guardian_spectating_exists_only_in_the_gap_and_never_reveals_a_future_child()
         for guardian in view.guardians {
             let person = sim
                 .canonical_state()
+                .state
                 .people
                 .iter()
                 .find(|p| p.id == guardian.guardian)
@@ -521,17 +539,17 @@ fn guardian_spectating_exists_only_in_the_gap_and_never_reveals_a_future_child()
             assert_eq!(
                 guardian.location,
                 *game_spatial::location(
-                    &sim.canonical_state().components,
+                    sim.canonical_state().components,
                     game_ecs::StableId((person.id).0)
                 )
                 .expect("location exists")
             );
         }
     }
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     sim.advance(SimDuration(120_000)).unwrap();
     let view = sim.observe().lineage.unwrap();
-    assert_eq!(view.current, Some(sim.canonical_state().ruler));
+    assert_eq!(view.current, Some(sim.canonical_state().state.ruler));
     assert_eq!(view.waiting_since, None);
     assert!(view.guardians.is_empty());
 }
@@ -539,7 +557,7 @@ fn guardian_spectating_exists_only_in_the_gap_and_never_reveals_a_future_child()
 #[test]
 fn simultaneous_births_use_persistent_order_without_rebinding_to_the_second_child() {
     let mut sim = fixture(4);
-    let pairs: Vec<_> = sim.canonical_state().people[3..7]
+    let pairs: Vec<_> = sim.canonical_state().state.people[3..7]
         .chunks(2)
         .map(|pair| (pair[0].id, pair[1].id))
         .collect();
@@ -563,15 +581,16 @@ fn simultaneous_births_use_persistent_order_without_rebinding_to_the_second_chil
     kill_ruler(&mut sim);
     let result = sim.advance(SimDuration(900_000)).unwrap();
     assert_eq!(result.reached, SimTime(240_000));
-    let newborns: Vec<_> = game_lifecycle::all_lives(&sim.canonical_state().components)
+    let newborns: Vec<_> = game_lifecycle::all_lives(sim.canonical_state().components)
         .map(|(_, row)| row)
         .filter(|life| life.born == SimTime(240_000))
         .map(|life| life.id)
         .collect();
     assert_eq!(newborns.len(), 2);
-    assert_eq!(sim.canonical_state().ruler, newborns[0]);
+    assert_eq!(sim.canonical_state().state.ruler, newborns[0]);
     assert_eq!(
         sim.canonical_state()
+            .state
             .lineage
             .as_ref()
             .unwrap()
@@ -584,12 +603,12 @@ fn simultaneous_births_use_persistent_order_without_rebinding_to_the_second_chil
 #[test]
 fn a_birth_at_the_death_timestamp_waits_for_a_strictly_later_birth() {
     let original = fixture(1);
-    let ruler = original.canonical_state().ruler;
+    let ruler = original.canonical_state().state.ruler;
     let mut save: serde_json::Value = serde_json::from_slice(&original.save().unwrap()).unwrap();
     let life = support::component(&mut save, "lifecycle/life", ruler);
     life["initial_age"] = serde_json::json!(1_200_000);
     life["stage"] = serde_json::json!("Elder");
-    let state = save["state"].as_object_mut().unwrap();
+    let state = save["state"]["state"].as_object_mut().unwrap();
     let due = state.get_mut("due").unwrap().as_object_mut().unwrap();
     let age = serde_json::json!({"Age": ruler.0});
     for events in due.values_mut() {
@@ -605,11 +624,11 @@ fn a_birth_at_the_death_timestamp_waits_for_a_strictly_later_birth() {
         Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
     let result = sim.advance(SimDuration(300_000)).unwrap();
     assert_eq!(result.reason, StopReason::TargetReached);
-    let world = sim.canonical_state().lineage.as_ref().unwrap();
+    let world = sim.canonical_state().state.lineage.as_ref().unwrap();
     assert_eq!(world.current(), None);
     assert_eq!(world.waiting.as_ref().unwrap().died_at, SimTime(300_000));
     assert!(
-        game_lifecycle::all_lives(&sim.canonical_state().components)
+        game_lifecycle::all_lives(sim.canonical_state().components)
             .map(|(_, row)| row)
             .any(|life| life.born == SimTime(300_000) && !life.parents.is_empty())
     );
@@ -651,23 +670,41 @@ fn a_confined_guardian_senses_the_newborn_but_regeneration_does_not_free_them() 
     })
     .unwrap();
     sim.advance(SimDuration(6_000)).unwrap();
-    let custody = sim.canonical_state().combat.as_ref().unwrap().captivity[&guardian].clone();
+    let custody = sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .captivity[&guardian]
+        .clone();
     kill_ruler(&mut sim);
     let result = sim.advance(SimDuration(900_000)).unwrap();
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     assert_eq!(result.reason, StopReason::SuccessorBorn { ruler: child });
     assert_eq!(
-        sim.canonical_state().combat.as_ref().unwrap().captivity[&guardian],
+        sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .captivity[&guardian],
         custody
     );
     assert_eq!(
-        game_physiology::body(&sim.canonical_state().components, guardian)
+        game_physiology::body(sim.canonical_state().components, guardian)
             .expect("body exists")
             .vitals
             .health,
         180_000
     );
-    let search = &sim.canonical_state().lineage.as_ref().unwrap().guardians[&guardian];
+    let search = &sim
+        .canonical_state()
+        .state
+        .lineage
+        .as_ref()
+        .unwrap()
+        .guardians[&guardian];
     assert_eq!(search.target, Some(child));
     assert_eq!(search.goal, GuardianGoal::Confined);
     assert_eq!(
@@ -689,23 +726,29 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
     let mut sim = fixture(1);
     let predecessor = kill_ruler(&mut sim);
     assert_eq!(
-        sim.canonical_state().lineage.as_ref().unwrap().current(),
+        sim.canonical_state()
+            .state
+            .lineage
+            .as_ref()
+            .unwrap()
+            .current(),
         None
     );
     let possessions: Vec<_> = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .filter(|i| i.location == InventoryLocation::Carried(predecessor))
         .cloned()
         .collect();
     let result = sim.advance(SimDuration(900_000)).unwrap();
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     assert_ne!(child, predecessor);
     assert_eq!(result.reached, SimTime(300_000));
     assert_eq!(result.reason, StopReason::SuccessorBorn { ruler: child });
     assert_eq!(sim.observe().life_stage, Some(LifeStage::Infant));
-    let world = sim.canonical_state().lineage.as_ref().unwrap();
+    let world = sim.canonical_state().state.lineage.as_ref().unwrap();
     assert_eq!(world.current(), Some(child));
     assert_eq!(
         world
@@ -718,23 +761,24 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
     assert_eq!(world.incarnations[0].died_at, Some(SimTime(0)));
     assert_eq!(world.incarnations[1].bound_at, SimTime(300_000));
     for original in possessions {
-        let now = &sim.canonical_state().inventories[&original.id];
+        let now = &sim.canonical_state().state.inventories[&original.id];
         assert_eq!(now, &original);
         assert!(!now.access.contains(&child));
     }
     let newborn = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.id == child)
         .unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&newborn.inventory].quantity,
+        sim.canonical_state().state.inventories[&newborn.inventory].quantity,
         Quantity(0)
     );
     assert!(
         game_characters::decisions::mind::<game_api::Command>(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             child
         )
         .expect("mind exists")
@@ -756,15 +800,16 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
 fn births_before_death_are_ineligible_and_an_unbounded_gap_manufactures_nothing() {
     let mut sim = fixture(1);
     sim.advance(SimDuration(300_000)).unwrap();
-    let previous_child = game_lifecycle::all_lives(&sim.canonical_state().components)
+    let previous_child = game_lifecycle::all_lives(sim.canonical_state().components)
         .map(|(_, row)| row)
         .find(|l| !l.parents.is_empty())
         .unwrap()
         .id;
     let predecessor = kill_ruler(&mut sim);
-    assert_ne!(sim.canonical_state().ruler, previous_child);
+    assert_ne!(sim.canonical_state().state.ruler, previous_child);
     let citizens: Vec<_> = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .filter(|p| p.role != Role::Guardian && p.id != predecessor)
@@ -776,23 +821,29 @@ fn births_before_death_are_ineligible_and_an_unbounded_gap_manufactures_nothing(
         sim.debug_set_personality(citizen, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
-    let count = sim.canonical_state().people.len();
+    let count = sim.canonical_state().state.people.len();
     let result = sim.advance(SimDuration(86_400_000)).unwrap();
     assert_eq!(result.reason, StopReason::TargetReached);
-    assert_eq!(sim.canonical_state().people.len(), count);
+    assert_eq!(sim.canonical_state().state.people.len(), count);
     assert_eq!(
-        sim.canonical_state().lineage.as_ref().unwrap().current(),
+        sim.canonical_state()
+            .state
+            .lineage
+            .as_ref()
+            .unwrap()
+            .current(),
         None
     );
-    assert_eq!(sim.canonical_state().ruler, predecessor);
+    assert_eq!(sim.canonical_state().state.ruler, predecessor);
     assert!(
         sim.canonical_state()
             .events
             .iter()
-            .any(|e| matches!(e.kind, EventKind::Died { actor } if actor == previous_child))
+            .any(|e| matches!(e.event, EventKind::Died { actor } if actor == previous_child))
     );
     assert!(
         sim.canonical_state()
+            .state
             .lineage
             .as_ref()
             .unwrap()
@@ -811,17 +862,18 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
     }
     kill_ruler(&mut sim);
     sim.advance(SimDuration(900_000)).unwrap();
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     for guardian in &guardians {
         let person = sim
             .canonical_state()
+            .state
             .people
             .iter()
             .find(|p| p.id == *guardian)
             .unwrap();
         assert_eq!(
             *game_spatial::location(
-                &sim.canonical_state().components,
+                sim.canonical_state().components,
                 game_ecs::StableId((person.id).0)
             )
             .expect("location exists"),
@@ -833,7 +885,13 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
                 road_start: None,
             }
         );
-        let knowledge = &sim.canonical_state().lineage.as_ref().unwrap().guardians[guardian];
+        let knowledge = &sim
+            .canonical_state()
+            .state
+            .lineage
+            .as_ref()
+            .unwrap()
+            .guardians[guardian];
         assert_eq!(knowledge.target, Some(child));
         assert_eq!(knowledge.sensed_location, Some(Location::AtArea(AreaId(1))));
         assert_eq!(knowledge.goal, GuardianGoal::Searching);
@@ -849,7 +907,7 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
     sim.advance(SimDuration(179_999)).unwrap();
     assert!(guardians.iter().all(|id| {
         matches!(
-            *game_spatial::location(&sim.canonical_state().components, game_ecs::StableId(id.0))
+            *game_spatial::location(sim.canonical_state().components, game_ecs::StableId(id.0))
                 .expect("location exists"),
             Location::InTransit { .. }
         )
@@ -860,15 +918,15 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
         .events
         .iter()
         .find(|event| {
-            matches!(event.kind,
+            matches!(event.event,
                 EventKind::Cared { caregiver, child: recipient, quantity: Quantity(1_000), .. }
                     if recipient == child && guardians.contains(&caregiver)
             )
         })
         .unwrap();
-    assert_eq!(care.time, SimTime(540_000));
+    assert_eq!(care.at, SimTime(540_000));
     assert!(
-        game_lifecycle::life(&sim.canonical_state().components, child)
+        game_lifecycle::life(sim.canonical_state().components, child)
             .expect("life exists")
             .caregivers
             .iter()
@@ -887,13 +945,14 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
     sim.advance(SimDuration(180_000)).unwrap();
     kill_ruler(&mut sim);
     let location = game_spatial::location(
-        &sim.canonical_state().components,
+        sim.canonical_state().components,
         game_ecs::StableId((guardian).0),
     )
     .expect("location exists")
     .clone();
     let health = sim
         .canonical_state()
+        .state
         .physical
         .as_ref()
         .unwrap()
@@ -901,30 +960,36 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
         .max_health;
     sim.debug_injure(guardian, health).unwrap();
     assert!(
-        game_physiology::body(&sim.canonical_state().components, guardian)
+        game_physiology::body(sim.canonical_state().components, guardian)
             .expect("body exists")
             .vitals
             .alive
     );
     sim.advance(SimDuration(60_000)).unwrap();
     let body =
-        &game_physiology::body(&sim.canonical_state().components, guardian).expect("body exists");
+        &game_physiology::body(sim.canonical_state().components, guardian).expect("body exists");
     assert_eq!(body.vitals.health, 60_000);
     assert_eq!(
         *game_spatial::location(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             game_ecs::StableId((guardian).0)
         )
         .expect("location exists"),
         location
     );
     assert_eq!(
-        sim.canonical_state().lineage.as_ref().unwrap().guardians[&guardian].target,
+        sim.canonical_state()
+            .state
+            .lineage
+            .as_ref()
+            .unwrap()
+            .guardians[&guardian]
+            .target,
         None
     );
     sim.advance(SimDuration(120_000)).unwrap();
     assert_eq!(
-        game_physiology::body(&sim.canonical_state().components, guardian)
+        game_physiology::body(sim.canonical_state().components, guardian)
             .expect("body exists")
             .vitals
             .health,
@@ -948,11 +1013,11 @@ fn waiting_and_pending_guardian_journeys_survive_saves_workers_queries_and_slice
         },
     )
     .unwrap();
-    let before = a.canonical_state().clone();
+    let before = a.canonical_snapshot().unwrap();
     for _ in 0..100 {
         a.observe();
     }
-    assert_eq!(a.canonical_state(), &before);
+    assert_eq!(a.canonical_snapshot().unwrap(), before);
     let one = a.advance(SimDuration(170_000)).unwrap();
     for dt in [1, 29_999, 60_000, 79_999] {
         b.advance(SimDuration(dt)).unwrap();

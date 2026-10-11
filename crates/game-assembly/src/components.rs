@@ -4,7 +4,7 @@ use game_ecs::{Schema, Snapshot, Store};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{Deref, DerefMut};
 
-fn schema() -> Result<Schema, Error> {
+pub(crate) fn schema() -> Result<Schema, Error> {
     let mut schema = Schema::new();
     game_agriculture::register_components(&mut schema)?;
     game_physiology::register_components(&mut schema)?;
@@ -63,6 +63,19 @@ impl Components {
         self.0.insert(game_ecs::StableId(actor.0), activity)
     }
 }
+impl From<Store> for Components {
+    fn from(store: Store) -> Self {
+        Self(store)
+    }
+}
+impl game_world::StorageAccess for Components {
+    fn store(&self) -> &Store {
+        &self.0
+    }
+    fn store_mut(&mut self) -> &mut Store {
+        &mut self.0
+    }
+}
 impl Deref for Components {
     type Target = Store;
     fn deref(&self) -> &Self::Target {
@@ -93,14 +106,15 @@ impl<'de> Deserialize<'de> for Components {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Execution, Simulation};
+    use crate::{CanonicalState, Execution, GameHost, Simulation};
     use game_core::{SimDuration, SimTime};
+    use game_sim::ClockWorld;
 
     #[test]
     fn one_host_snapshot_and_metadata_only_runtime_survive_clone_and_restore() {
         let mut sim = Simulation::farming_fixture(77, Execution::default()).unwrap();
         let state = sim.canonical_state();
-        let json = serde_json::to_value(state).unwrap();
+        let json = serde_json::to_value(&state).unwrap();
         assert!(
             json["components"]["columns"]["agriculture/field"]
                 .as_array()
@@ -108,21 +122,21 @@ mod tests {
                 .len()
                 >= 2
         );
-        let agriculture = json["agriculture"].as_object().unwrap();
+        let agriculture = json["state"]["agriculture"].as_object().unwrap();
         assert!(!agriculture.contains_key("components"));
         assert!(!agriculture.contains_key("fields"));
         assert!(!agriculture.contains_key("crops"));
         assert!(!agriculture.contains_key("soils"));
-        let cloned = state.clone();
-        assert_eq!(state, &cloned);
-        assert!(sim.agriculture_queries.refresh(&cloned.components).is_err());
-        let mut rebound = Simulation::from_state(
-            cloned,
+        let cloned = sim.canonical_snapshot().unwrap();
+        let host =
+            super::super::GameHost::restore(super::schema().unwrap(), cloned, |_| Ok(())).unwrap();
+        assert!(sim.agriculture_queries.refresh(&host.storage).is_err());
+        let mut rebound = Simulation::from_host(
+            host,
             Execution {
                 workers: 2,
                 reverse_jobs: true,
             },
-            0,
         )
         .unwrap();
         let mut restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -135,28 +149,33 @@ mod tests {
     #[test]
     fn body_activity_and_workshop_jobs_are_independent_canonical_columns() {
         let mut sim = Simulation::survival_fixture(13, Execution::default()).unwrap();
-        let ruler = sim.state.ruler;
-        let site = game_workshop::sites(&sim.state.components)
+        let ruler = sim.host.state.ruler;
+        let site = game_workshop::sites(&sim.host.storage)
             .map(|(id, _)| id)
             .next()
             .unwrap();
         sim.debug_actor_command(ruler, game_api::Command::Work { site })
             .unwrap();
         let json = serde_json::to_value(sim.canonical_state()).unwrap();
-        assert!(!json["physical"].as_object().unwrap().contains_key("actors"));
+        assert!(
+            !json["state"]["physical"]
+                .as_object()
+                .unwrap()
+                .contains_key("actors")
+        );
         assert_eq!(
             json["components"]["columns"]["physiology/body"]
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.state.people.len()
+            sim.host.state.people.len()
         );
         assert_eq!(
             json["components"]["columns"]["coordination/activity"]
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.state.people.len()
+            sim.host.state.people.len()
         );
         assert!(
             !json["components"]["columns"]["workshop/job"]
@@ -166,14 +185,14 @@ mod tests {
         );
         let restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         assert_eq!(sim.canonical_state(), restored.canonical_state());
-        assert!(game_workshop::job(&restored.state.components, ruler).is_some());
+        assert!(game_workshop::job(&restored.host.storage, ruler).is_some());
     }
 
     #[test]
     fn obsolete_actor_payload_is_rejected_in_the_physical_metadata_header() {
         let sim = Simulation::survival_fixture(16, Execution::default()).unwrap();
         let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-        saved["state"]["physical"]["actors"] = serde_json::json!({});
+        saved["state"]["state"]["physical"]["actors"] = serde_json::json!({});
         assert!(
             Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()).is_err()
         );
@@ -182,23 +201,24 @@ mod tests {
     #[test]
     fn stale_physical_trait_development_fails_before_publication() {
         let mut sim = Simulation::genetics_fixture(85, Execution::default()).unwrap();
-        sim.physical_query.refresh(&sim.state.components).unwrap();
+        sim.physical_query.refresh(&sim.host.storage).unwrap();
         let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
-        let actor = sim.state.ruler;
-        game_physiology::traits::development_mut(&mut sim.state.components, actor)
+        let actor = sim.host.state.ruler;
+        game_physiology::traits::development_mut(&mut sim.host.storage, actor)
             .unwrap()
             .physical_training_milli += 1;
-        let before = sim.canonical_state().clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert!(sim.commit_prepared_step(prepared).is_err());
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
     }
 
     #[test]
     fn stale_expressed_alleles_fail_before_publication() {
         let mut sim = Simulation::genetics_fixture(86, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         let locus = game_genetics::LocusId(
-            sim.state
+            sim.host
+                .state
                 .physical_traits
                 .as_ref()
                 .unwrap()
@@ -212,42 +232,41 @@ mod tests {
                 .clone(),
         );
         let opening = sim
+            .host
             .state
             .genetics
             .as_ref()
             .unwrap()
-            .alleles(&sim.state.components, actor, &locus)
+            .alleles(&sim.host.storage, actor, &locus)
             .unwrap();
-        sim.physical_query.refresh(&sim.state.components).unwrap();
+        sim.physical_query.refresh(&sim.host.storage).unwrap();
         let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
         let new_value = if opening == [0; 2] { 1_000 } else { 0 };
-        sim.state
+        sim.host
+            .state
             .genetics
             .as_mut()
             .unwrap()
-            .set_alleles(&mut sim.state.components, actor, &locus, [new_value; 2])
+            .set_alleles(&mut sim.host.storage, actor, &locus, [new_value; 2])
             .unwrap();
-        let before = sim.canonical_state().clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert!(sim.commit_prepared_step(prepared).is_err());
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
     }
 
     #[test]
     fn invalid_final_founder_traits_leave_admission_inert() {
         let mut sim = Simulation::skills_fixture(87, Execution::default()).unwrap();
-        let last = sim.state.people.last().unwrap().id;
-        game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            last,
-        )
-        .unwrap()
-        .personality
-        .empathy = 1_001;
-        let before = sim.canonical_state().clone();
+        let last = sim.host.state.people.last().unwrap().id;
+        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, last)
+            .unwrap()
+            .personality
+            .empathy = 1_001;
+        let before = sim.canonical_snapshot().unwrap();
         let content =
             crate::genetics::Content::read(crate::genetics::Config::default().content_dir).unwrap();
         assert!(sim.initialize_trait_content(content).is_err());
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
     }
 
     #[test]
@@ -258,7 +277,11 @@ mod tests {
         for header in ["genetics", "physical_traits", "temperament"] {
             assert!(json["state"][header].get("people").is_none());
         }
-        assert!(json["state"]["genetics"].get("pregnancies").is_none());
+        assert!(
+            json["state"]["state"]["genetics"]
+                .get("pregnancies")
+                .is_none()
+        );
         for column in [
             "genetics/genome",
             "physiology/development",
@@ -269,7 +292,7 @@ mod tests {
                     .as_array()
                     .unwrap()
                     .len(),
-                sim.state.people.len()
+                sim.host.state.people.len()
             );
             let mut malformed = json.clone();
             malformed["state"]["components"]["columns"][column]
@@ -308,9 +331,9 @@ mod tests {
         let mut sim = Simulation::combat_fixture(89, Execution::default()).unwrap();
         sim.initialize_health(game_health::Rules::fixture())
             .unwrap();
-        let ruler = sim.state.ruler;
-        let enemy = sim.state.people[3].id;
-        let area = game_spatial::location(&sim.state.components, game_ecs::StableId((ruler).0))
+        let ruler = sim.host.state.ruler;
+        let enemy = sim.host.state.people[3].id;
+        let area = game_spatial::location(&sim.host.storage, game_ecs::StableId((ruler).0))
             .unwrap()
             .cell()
             .unwrap();
@@ -339,7 +362,7 @@ mod tests {
         let encounter = sim
             .debug_start_encounter(vec![(ruler, 0), (enemy, 1)])
             .unwrap();
-        for stock in sim.state.inventories.values_mut() {
+        for stock in sim.host.state.inventories.values_mut() {
             if stock.good == game_api::Good::Binding
                 && stock.location == crate::InventoryLocation::Carried(enemy)
             {
@@ -348,7 +371,7 @@ mod tests {
         }
         let damage = sim.body_rules(ruler).max_health - 1;
         sim.debug_injure(ruler, damage).unwrap();
-        let combat = sim.state.combat.as_mut().unwrap();
+        let combat = sim.host.state.combat.as_mut().unwrap();
         let map = combat.encounters[&encounter].map;
         combat.map_mut(map).unwrap().obstacles.clear();
         let battle = combat.encounters.get_mut(&encounter).unwrap();
@@ -357,36 +380,35 @@ mod tests {
         // An authored pending NPC turn runs through the normal advance path.
         battle.order = vec![enemy, ruler];
         battle.cursor = 0;
-        assert!(game_health::occupancy(&sim.state.components, ruler).is_some());
+        assert!(game_health::occupancy(&sim.host.storage, ruler).is_some());
         let advanced = sim.advance(game_api::SimDuration(1)).unwrap();
         assert_eq!(advanced.reached, SimTime(1));
-        assert!(game_health::occupancy(&sim.state.components, ruler).is_none());
-        assert!(sim.state.events.iter().any(|event| matches!(event.kind,game_api::EventKind::Struck {actor,target,..} if actor == enemy && target == ruler)));
-        assert!(
-            sim.state.events.iter().any(
-                |event| matches!(event.kind,game_api::EventKind::Died {actor} if actor == ruler)
-            )
-        );
+        assert!(game_health::occupancy(&sim.host.storage, ruler).is_none());
+        assert!(sim.host.events().iter().any(|event| matches!(event.event,game_api::EventKind::Struck {actor,target,..} if actor == enemy && target == ruler)));
+        assert!(sim.host.events().iter().any(
+            |event| matches!(event.event,game_api::EventKind::Died {actor} if actor == ruler)
+        ));
     }
 
     #[test]
     fn work_and_foraging_rows_are_saved_outside_runtime_headers() {
         let mut farm = Simulation::farming_fixture(95, Execution::default()).unwrap();
         let (field, area) = farm
+            .host
             .state
             .agriculture
             .as_ref()
             .unwrap()
-            .fields(&farm.state.components)
+            .fields(&farm.host.storage)
             .map(|(id, row)| (id, row.area))
             .last()
             .unwrap();
-        let ruler = farm.state.ruler;
+        let ruler = farm.host.state.ruler;
         farm.debug_move_actor(ruler, area).unwrap();
         if let game_api::Location::InTransit { arrives, .. } =
-            *game_spatial::location(&farm.state.components, game_ecs::StableId((ruler).0)).unwrap()
+            *game_spatial::location(&farm.host.storage, game_ecs::StableId((ruler).0)).unwrap()
         {
-            farm.advance(game_api::SimDuration(arrives.0 - farm.state.time.0))
+            farm.advance(game_api::SimDuration(arrives.0 - farm.host.clock().time.0))
                 .unwrap();
         }
         farm.debug_actor_command(
@@ -399,7 +421,7 @@ mod tests {
         .unwrap();
         let saved = farm.save().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-        assert!(json["state"]["agriculture"].get("jobs").is_none());
+        assert!(json["state"]["state"]["agriculture"].get("jobs").is_none());
         assert!(
             !json["state"]["components"]["columns"]["agriculture/cultivation"]
                 .as_array()
@@ -422,7 +444,7 @@ mod tests {
             "observed_areas",
             "next_request",
         ] {
-            assert!(json["state"]["ecology"].get(old).is_none());
+            assert!(json["state"]["state"]["ecology"].get(old).is_none());
         }
         assert!(
             !json["state"]["components"]["columns"]["ecology/knowledge"]
@@ -443,13 +465,13 @@ mod tests {
         let sim = Simulation::autonomy_fixture(93, Execution::default()).unwrap();
         let saved = sim.save().unwrap();
         let mut json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-        assert!(json["state"]["decisions"].get("minds").is_none());
+        assert!(json["state"]["state"]["decisions"].get("minds").is_none());
         assert_eq!(
             json["state"]["components"]["columns"]["characters/mind"]
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.state.people.len()
+            sim.host.state.people.len()
         );
         assert_eq!(
             sim.canonical_state(),
@@ -471,13 +493,13 @@ mod tests {
         let source = Simulation::autonomy_fixture(94, Execution::default()).unwrap();
         let mut sim = Simulation::survival_fixture(94, Execution::default()).unwrap();
         let mut rows: std::collections::BTreeMap<_, _> =
-            game_characters::decisions::minds::<game_api::Command>(&source.state.components)
+            game_characters::decisions::minds::<game_api::Command>(&source.host.storage)
                 .map(|(id, mind)| (id, mind.clone()))
                 .collect();
         rows.last_entry().unwrap().get_mut().personality.empathy = 1_001;
-        let before = sim.canonical_state().clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert!(sim.initialize_decision_people(rows).is_err());
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
     }
 
     #[test]
@@ -485,14 +507,18 @@ mod tests {
         let sim = Simulation::life_fixture(90, Execution::default()).unwrap();
         let saved = sim.save().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-        assert!(json["state"]["development"].get("lives").is_none());
-        assert!(json["state"]["development"].get("pregnancies").is_none());
+        assert!(json["state"]["state"]["development"].get("lives").is_none());
+        assert!(
+            json["state"]["state"]["development"]
+                .get("pregnancies")
+                .is_none()
+        );
         assert_eq!(
             json["state"]["components"]["columns"]["lifecycle/life"]
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.state.people.len()
+            sim.host.state.people.len()
         );
         assert_eq!(
             sim.canonical_state(),
@@ -509,11 +535,11 @@ mod tests {
             Simulation::load(&serde_json::to_vec(&missing).unwrap(), Execution::default()).is_err()
         );
         let mut orphan = Simulation::survival_fixture(92, Execution::default()).unwrap();
-        let mut life = game_lifecycle::life(&sim.state.components, sim.state.ruler)
+        let mut life = game_lifecycle::life(&sim.host.storage, sim.host.state.ruler)
             .unwrap()
             .clone();
-        life.id = orphan.state.ruler;
-        game_lifecycle::insert_life(&mut orphan.state.components, life).unwrap();
+        life.id = orphan.host.state.ruler;
+        game_lifecycle::insert_life(&mut orphan.host.storage, life).unwrap();
         assert!(
             matches!(Simulation::load(&orphan.save().unwrap(), Execution::default()), Err(game_api::Error::InvalidSave(message)) if message == "lifecycle components require lifecycle runtime")
         );
@@ -522,61 +548,70 @@ mod tests {
     #[test]
     fn stale_lifecycle_actions_leave_rows_clock_and_events_unchanged() {
         let mut sim = Simulation::life_fixture(91, Execution::default()).unwrap();
-        let actor = sim.state.people[3].id;
-        let partner = sim.state.people[4].id;
+        let actor = sim.host.state.people[3].id;
+        let partner = sim.host.state.people[4].id;
         sim.debug_actor_command(actor, game_api::Command::Conceive { partner })
             .unwrap();
-        let pregnancy = game_lifecycle::all_pregnancies(&sim.state.components)
+        let pregnancy = game_lifecycle::all_pregnancies(&sim.host.storage)
             .next()
             .unwrap()
             .0;
         let age = sim
+            .host
             .state
             .development
             .as_ref()
             .unwrap()
-            .prepare_age(&sim.state.components, actor, sim.state.time, true, 0, true)
+            .prepare_age(
+                &sim.host.storage,
+                actor,
+                sim.host.clock().time,
+                true,
+                0,
+                true,
+            )
             .unwrap();
-        game_lifecycle::life_mut(&mut sim.state.components, actor)
+        game_lifecycle::life_mut(&mut sim.host.storage, actor)
             .unwrap()
             .preference = Some((game_api::ChildhoodInterest::Company, SimTime(1)));
-        let before = sim.canonical_state().clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert!(
             age.commit(
-                sim.state.development.as_ref().unwrap(),
-                &mut sim.state.components
+                sim.host.state.development.as_ref().unwrap(),
+                &mut sim.host.storage
             )
             .is_err()
         );
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
         let interruption = sim
+            .host
             .state
             .development
             .as_ref()
             .unwrap()
-            .prepare_interruption(&sim.state.components, actor, false, [pregnancy]);
-        game_lifecycle::pregnancy_mut(&mut sim.state.components, pregnancy)
+            .prepare_interruption(&sim.host.storage, actor, false, [pregnancy]);
+        game_lifecycle::pregnancy_mut(&mut sim.host.storage, pregnancy)
             .unwrap()
             .state = game_lifecycle::PregnancyState::Ended;
-        let before = sim.canonical_state().clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert!(
             interruption
                 .commit(
-                    sim.state.development.as_ref().unwrap(),
-                    &mut sim.state.components
+                    sim.host.state.development.as_ref().unwrap(),
+                    &mut sim.host.storage
                 )
                 .is_err()
         );
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
     }
 
     #[test]
     fn health_knowledge_without_the_health_runtime_is_rejected() {
         let mut sim = Simulation::survival_fixture(88, Execution::default()).unwrap();
-        assert!(sim.state.health.is_none());
+        assert!(sim.host.state.health.is_none());
         game_health::insert_knowledge(
-            &mut sim.state.components,
-            sim.state.ruler,
+            &mut sim.host.storage,
+            sim.host.state.ruler,
             game_health::Knowledge::default(),
         )
         .unwrap();
@@ -590,7 +625,7 @@ mod tests {
     fn health_columns_are_authoritative_and_orphans_fail_restore() {
         let sim = Simulation::health_fixture(82, Execution::default()).unwrap();
         let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-        let header = saved["state"]["health"].as_object().unwrap();
+        let header = saved["state"]["state"]["health"].as_object().unwrap();
         for obsolete in [
             "clinical",
             "jobs",
@@ -618,11 +653,11 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.state.people.len()
+            sim.host.state.people.len()
         );
         let restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         assert_eq!(sim.canonical_state(), restored.canonical_state());
-        saved["state"]["health"] = serde_json::Value::Null;
+        saved["state"]["state"]["health"] = serde_json::Value::Null;
         assert!(
             Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()).is_err()
         );
@@ -632,13 +667,13 @@ mod tests {
     fn stale_clinical_and_health_job_inputs_fail_before_publication() {
         for change_job in [false, true] {
             let mut sim = Simulation::health_fixture(83, Execution::default()).unwrap();
-            let actor = sim.state.ruler;
-            let area = game_spatial::location(&sim.state.components, game_ecs::StableId((actor).0))
+            let actor = sim.host.state.ruler;
+            let area = game_spatial::location(&sim.host.storage, game_ecs::StableId((actor).0))
                 .unwrap()
                 .cell()
                 .unwrap();
             game_health::insert_job(
-                &mut sim.state.components,
+                &mut sim.host.storage,
                 game_health::Job {
                     actor,
                     area,
@@ -651,8 +686,8 @@ mod tests {
                 },
             )
             .unwrap();
-            sim.state
-                .components
+            sim.host
+                .storage
                 .set_activity(
                     actor,
                     game_api::Activity::HealthWork {
@@ -661,73 +696,73 @@ mod tests {
                     },
                 )
                 .unwrap();
-            sim.physical_query.refresh(&sim.state.components).unwrap();
+            sim.physical_query.refresh(&sim.host.storage).unwrap();
             let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
             if change_job {
-                game_health::job_mut(&mut sim.state.components, actor)
+                game_health::job_mut(&mut sim.host.storage, actor)
                     .unwrap()
                     .completes = SimTime(60_001);
             } else {
-                game_health::clinical_mut(&mut sim.state.components, actor)
+                game_health::clinical_mut(&mut sim.host.storage, actor)
                     .unwrap()
                     .thirst += 1;
             }
-            let before = sim.canonical_state().clone();
+            let before = sim.canonical_snapshot().unwrap();
             assert!(sim.commit_prepared_step(prepared).is_err());
-            assert_eq!(&before, sim.canonical_state());
+            assert_eq!(before, sim.canonical_snapshot().unwrap());
         }
     }
 
     #[test]
     fn a_stale_body_batch_fails_before_clock_or_events_are_published() {
         let mut sim = Simulation::survival_fixture(14, Execution::default()).unwrap();
-        sim.physical_query.refresh(&sim.state.components).unwrap();
+        sim.physical_query.refresh(&sim.host.storage).unwrap();
         let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
-        game_physiology::body_mut(&mut sim.state.components, sim.state.ruler)
+        game_physiology::body_mut(&mut sim.host.storage, sim.host.state.ruler)
             .unwrap()
             .vitals
             .hunger += 1;
-        let before = sim.canonical_state().clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert_eq!(
             sim.commit_prepared_step(prepared),
             Err(game_core::Error::InvalidSave(
                 "stale physical component batch".into()
             ))
         );
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
     }
 
     #[test]
     fn physical_batch_guards_opening_population_membership() {
         let mut sim = Simulation::survival_fixture(15, Execution::default()).unwrap();
-        sim.physical_query.refresh(&sim.state.components).unwrap();
+        sim.physical_query.refresh(&sim.host.storage).unwrap();
         let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
-        let mut newcomer = sim.state.people[0].clone();
-        newcomer.id = game_api::PersonId(crate::allocate(&mut sim.state).unwrap());
+        let mut newcomer = sim.host.state.people[0].clone();
+        newcomer.id = game_api::PersonId(sim.host.allocate_id().unwrap().0);
         newcomer.role = game_api::Role::Citizen;
-        let body = game_physiology::body(&sim.state.components, sim.state.ruler)
+        let body = game_physiology::body(&sim.host.storage, sim.host.state.ruler)
             .unwrap()
             .clone();
-        game_physiology::insert_body(&mut sim.state.components, newcomer.id, body).unwrap();
+        game_physiology::insert_body(&mut sim.host.storage, newcomer.id, body).unwrap();
         let location = game_spatial::location(
-            &sim.state.components,
-            game_ecs::StableId((sim.state.ruler).0),
+            &sim.host.storage,
+            game_ecs::StableId((sim.host.state.ruler).0),
         )
         .unwrap()
         .clone();
         game_spatial::set_location(
-            &mut sim.state.components,
+            &mut sim.host.storage,
             game_ecs::StableId((newcomer.id).0),
             location,
         )
         .unwrap();
-        sim.state
-            .components
+        sim.host
+            .storage
             .set_activity(newcomer.id, game_api::Activity::Idle)
             .unwrap();
         let id = newcomer.id;
-        let index = sim.state.people.len();
-        sim.state.people.push(newcomer);
+        let index = sim.host.state.people.len();
+        sim.host.state.people.push(newcomer);
         sim.person_index.insert(id, index);
         let inventory = sim
             .debug_add_inventory(
@@ -738,16 +773,16 @@ mod tests {
                 std::collections::BTreeSet::from([id]),
             )
             .unwrap();
-        sim.state.people[index].inventory = inventory;
+        sim.host.state.people[index].inventory = inventory;
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
-        let before = sim.canonical_state().clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert_eq!(
             sim.commit_prepared_step(prepared),
             Err(game_core::Error::InvalidSave(
                 "stale physical component batch".into()
             ))
         );
-        assert_eq!(&before, sim.canonical_state());
+        assert_eq!(before, sim.canonical_snapshot().unwrap());
     }
 
     #[test]
@@ -756,7 +791,7 @@ mod tests {
         let saved = sim.save().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
         assert!(
-            json["state"]["people"]
+            json["state"]["state"]["people"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -769,30 +804,39 @@ mod tests {
                 .len(),
             5
         );
-        let first = sim.state.people[0].id;
-        let second = sim.state.people[1].id;
-        let mut state = sim.canonical_state().clone();
+        let first = sim.host.state.people[0].id;
+        let second = sim.host.state.people[1].id;
+        let mut state = GameHost::restore(
+            super::schema().unwrap(),
+            sim.canonical_snapshot().unwrap(),
+            |_| Ok(()),
+        )
+        .unwrap();
         game_spatial::set_location(
-            &mut state.components,
+            &mut state.storage,
             game_ecs::StableId((first).0),
             game_api::Location::Carried { carrier: second },
         )
         .unwrap();
         game_spatial::set_location(
-            &mut state.components,
+            &mut state.storage,
             game_ecs::StableId((second).0),
             game_api::Location::Carried { carrier: first },
         )
         .unwrap();
         let mut corrupt = json.clone();
-        corrupt["state"] = serde_json::to_value(&state).unwrap();
+        corrupt["state"] = serde_json::to_value(state.snapshot().unwrap()).unwrap();
         assert!(
             Simulation::load(&serde_json::to_vec(&corrupt).unwrap(), Execution::default()).is_err()
         );
-        let mut missing = sim.canonical_state().clone();
-        game_spatial::remove_location(&mut missing.components, game_ecs::StableId(first.0))
-            .unwrap();
-        corrupt["state"] = serde_json::to_value(missing).unwrap();
+        let mut missing = GameHost::restore(
+            super::schema().unwrap(),
+            sim.canonical_snapshot().unwrap(),
+            |_| Ok(()),
+        )
+        .unwrap();
+        game_spatial::remove_location(&mut missing.storage, game_ecs::StableId(first.0)).unwrap();
+        corrupt["state"] = serde_json::to_value(missing.snapshot().unwrap()).unwrap();
         assert!(
             Simulation::load(&serde_json::to_vec(&corrupt).unwrap(), Execution::default()).is_err()
         );
@@ -805,7 +849,7 @@ mod tests {
         let saved = sim.save().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
         assert!(
-            !json["state"]["physical"]
+            !json["state"]["state"]["physical"]
                 .as_object()
                 .unwrap()
                 .contains_key("sites")
@@ -815,7 +859,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            game_workshop::sites(&sim.state.components).count()
+            game_workshop::sites(&sim.host.storage).count()
         );
         let restored = Simulation::load(
             &saved,
@@ -828,14 +872,14 @@ mod tests {
         assert_eq!(sim.canonical_state(), restored.canonical_state());
 
         let mut kernel = Simulation::kernel_fixture(19, 5, Execution::default()).unwrap();
-        let person = &kernel.state.people[0];
+        let person = &kernel.host.state.people[0];
         let id = game_api::SiteId(person.id.0);
         let stock = person.inventory;
         game_workshop::insert_site(
-            &mut kernel.state.components,
+            &mut kernel.host.storage,
             game_workshop::Site {
                 id,
-                area: kernel.state.areas[0].id,
+                area: kernel.host.state.areas[0].id,
                 input: stock,
                 input_quantity: game_api::Quantity(1),
                 tool: stock,
@@ -855,7 +899,7 @@ mod tests {
         let sim = Simulation::skills_fixture(20, Execution::default()).unwrap();
         let saved = sim.save().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-        let metadata = json["state"]["skills"].as_object().unwrap();
+        let metadata = json["state"]["state"]["skills"].as_object().unwrap();
         assert!(!metadata.contains_key("records"));
         assert!(!metadata.contains_key("semantic_ticks"));
         assert_eq!(
@@ -863,7 +907,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.state.people.len()
+            sim.host.state.people.len()
         );
         let restored = Simulation::load(
             &saved,
@@ -874,9 +918,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sim.canonical_state(), restored.canonical_state());
-        let mut missing_runtime = sim.canonical_state().clone();
-        missing_runtime.skills = None;
-        assert!(crate::skills::validate(&missing_runtime).is_err());
+        let mut missing_runtime = GameHost::restore(
+            super::schema().unwrap(),
+            sim.canonical_snapshot().unwrap(),
+            |_| Ok(()),
+        )
+        .unwrap();
+        missing_runtime.state.skills = None;
+        assert!(crate::skills::validate(&CanonicalState::from_host(&missing_runtime)).is_err());
     }
 
     #[test]
@@ -884,13 +933,18 @@ mod tests {
         let mut sim = Simulation::ecology_fixture(21, Execution::default()).unwrap();
         let plot = sim
             .debug_add_plot(
-                sim.state.areas[1].id,
+                sim.host.state.areas[1].id,
                 None,
-                sim.state.people.iter().map(|person| person.id).collect(),
+                sim.host
+                    .state
+                    .people
+                    .iter()
+                    .map(|person| person.id)
+                    .collect(),
                 900,
             )
             .unwrap();
-        sim.state.components.validate_land().unwrap();
+        sim.host.storage.validate_land().unwrap();
         let json = serde_json::to_value(sim.canonical_state()).unwrap();
         assert!(
             json["components"]["columns"]
@@ -899,14 +953,24 @@ mod tests {
         );
         assert!(json["components"]["columns"]["land/soil"].is_array());
 
-        let mut missing = sim.canonical_state().clone();
-        game_land::remove_soil(&mut missing.components, plot).unwrap();
-        assert!(missing.components.validate_land().is_err());
+        let mut missing = GameHost::restore(
+            super::schema().unwrap(),
+            sim.canonical_snapshot().unwrap(),
+            |_| Ok(()),
+        )
+        .unwrap();
+        game_land::remove_soil(&mut missing.storage, plot).unwrap();
+        assert!(missing.storage.validate_land().is_err());
 
-        let mut orphan = sim.canonical_state().clone();
-        let person = game_core::SiteId(orphan.people[0].id.0);
+        let mut orphan = GameHost::restore(
+            super::schema().unwrap(),
+            sim.canonical_snapshot().unwrap(),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let person = game_core::SiteId(orphan.state.people[0].id.0);
         game_land::insert_soil(
-            &mut orphan.components,
+            &mut orphan.storage,
             person,
             game_land::Soil {
                 fertility: 500,
@@ -915,14 +979,20 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(orphan.components.validate_land().is_err());
+        assert!(orphan.storage.validate_land().is_err());
 
-        let mut ambiguous = sim.canonical_state().clone();
+        let mut ambiguous = GameHost::restore(
+            super::schema().unwrap(),
+            sim.canonical_snapshot().unwrap(),
+            |_| Ok(()),
+        )
+        .unwrap();
         let field = ambiguous
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .fields(&ambiguous.components)
+            .fields(&ambiguous.storage)
             .next()
             .unwrap()
             .1
@@ -930,15 +1000,16 @@ mod tests {
         let mut duplicate = field;
         duplicate.id = plot;
         ambiguous
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .insert_field(&mut ambiguous.components, duplicate)
+            .insert_field(&mut ambiguous.storage, duplicate)
             .unwrap();
-        assert!(ambiguous.components.validate_land().is_err());
+        assert!(ambiguous.storage.validate_land().is_err());
         let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
         for invalid in [missing, orphan, ambiguous] {
-            envelope["state"] = serde_json::to_value(invalid).unwrap();
+            envelope["state"] = serde_json::to_value(invalid.snapshot().unwrap()).unwrap();
             assert!(
                 Simulation::load(
                     &serde_json::to_vec(&envelope).unwrap(),
@@ -946,6 +1017,49 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+    #[test]
+    fn generic_host_fields_exist_once_and_metadata_shadows_fail_restore() {
+        let mut sim = Simulation::survival_fixture(37, Execution::default()).unwrap();
+        sim.submit(game_api::Submission {
+            caller_sequence: sim.next_caller_sequence().unwrap(),
+            command: game_api::Command::Move {
+                destination: game_api::AreaId(2),
+            },
+        })
+        .unwrap();
+        let before = sim.save().unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        let host = &saved["state"];
+        let metadata = host["state"].as_object().unwrap();
+        for field in [
+            "components",
+            "seed",
+            "time",
+            "next_id",
+            "next_event",
+            "events",
+        ] {
+            assert!(host.get(field).is_some());
+            assert!(!metadata.contains_key(field));
+            let mut forged = saved.clone();
+            forged["state"]["state"][field] = host[field].clone();
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err(),
+                "metadata must reject the host field {field}"
+            );
+            assert_eq!(sim.save().unwrap(), before);
+        }
+        assert!(host["components"]["columns"]["physiology/body"].is_array());
+        for record in host["events"].as_array().unwrap() {
+            assert!(record.get("sequence").is_some());
+            assert!(record.get("at").is_some());
+            assert!(record.get("event").is_some());
+            assert!(record.get("id").is_none());
+            assert!(record.get("time").is_none());
+            assert!(record.get("kind").is_none());
         }
     }
 }

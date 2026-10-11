@@ -106,7 +106,7 @@ impl Simulation {
     /// commander are distinct ordinary people before recruitment begins.
     pub fn army_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::kernel_fixture(seed, 69, execution)?;
-        sim.state.scenario = ScenarioInfo {
+        sim.host.state.scenario = ScenarioInfo {
             id: "army-fixture".into(),
             version: 1,
             debug_fixture: true,
@@ -121,10 +121,11 @@ impl Simulation {
             loading_time: MINUTE,
             carrying_capacity: Quantity(10_000),
         })?;
-        let food = *sim.state.inventories.keys().next_back().unwrap();
-        sim.state.inventories.get_mut(&food).unwrap().quantity = Quantity(200_000);
-        let routes = decisions::fixture_routes(&sim.state.areas);
+        let food = *sim.host.state.inventories.keys().next_back().unwrap();
+        sim.host.state.inventories.get_mut(&food).unwrap().quantity = Quantity(200_000);
+        let routes = decisions::fixture_routes(&sim.host.state.areas);
         let minds = sim
+            .host
             .state
             .people
             .iter()
@@ -148,7 +149,7 @@ impl Simulation {
                             food,
                             StockKnowledge {
                                 inventory: food,
-                                area: sim.state.areas[0].id,
+                                area: sim.host.state.areas[0].id,
                                 good: Good::Food,
                                 quantity: Quantity(200_000),
                                 accessible: true,
@@ -176,7 +177,7 @@ impl Simulation {
             })
             .collect();
         sim.initialize_decision_people(minds)?;
-        sim.state.combat = Some(combat::World {
+        sim.host.state.combat = Some(combat::World {
             rules: combat::Rules {
                 encounter_limit: 128,
                 round: SimDuration(6_000),
@@ -187,6 +188,7 @@ impl Simulation {
                 incapacitation: 45_000,
             },
             profiles: sim
+                .host
                 .state
                 .people
                 .iter()
@@ -204,18 +206,19 @@ impl Simulation {
             encounters: BTreeMap::new(),
             captivity: BTreeMap::new(),
         });
-        sim.state.agreements = Some(agreements::World {
+        sim.host.state.agreements = Some(agreements::World {
             ledger: game_agreements::State {
                 knowledge: BTreeMap::new(),
-                last_observation_event: sim.state.next_event - 1,
+                last_observation_event: sim.host.next_event() - 1,
                 agreements: BTreeMap::new(),
                 obligations: BTreeMap::new(),
                 amendments: BTreeMap::new(),
-                last_event: sim.state.next_event - 1,
+                last_event: sim.host.next_event() - 1,
                 next_search: BTreeMap::new(),
                 pending_work: BTreeMap::new(),
             },
             custodians: sim
+                .host
                 .state
                 .inventories
                 .values()
@@ -224,48 +227,48 @@ impl Simulation {
                         i.id,
                         match i.location {
                             InventoryLocation::Carried(p) => p,
-                            InventoryLocation::Area(_) => sim.state.ruler,
+                            InventoryLocation::Area(_) => sim.host.state.ruler,
                         },
                     )
                 })
                 .collect(),
         });
-        sim.state.missions = Some(missions::World {
+        sim.host.state.missions = Some(missions::World {
             missions: BTreeMap::new(),
             recruitments: BTreeMap::new(),
             known: BTreeMap::new(),
             talks: BTreeMap::new(),
-            last_event: sim.state.next_event - 1,
-            last_review: sim.state.time,
+            last_event: sim.host.next_event() - 1,
+            last_review: sim.host.clock().time,
         });
         sim.initialize_armies(Rules::default())?;
-        let village = sim.state.areas[0].id;
+        let village = sim.host.state.areas[0].id;
         sim.debug_add_inventory(
             Good::Binding,
             InventoryLocation::Area(village),
             Quantity(3_000),
             Quantity(3_000),
-            sim.state.people.iter().map(|p| p.id).collect(),
+            sim.host.state.people.iter().map(|p| p.id).collect(),
         )?;
         Ok(sim)
     }
     pub fn initialize_armies(&mut self, rules: Rules) -> Result<(), Error> {
         rules.validate()?;
-        if self.state.armies.is_some()
-            || self.state.missions.is_none()
-            || self.state.physical.is_none()
-            || self.state.decisions.is_none()
-            || self.state.combat.is_none()
+        if self.host.state.armies.is_some()
+            || self.host.state.missions.is_none()
+            || self.host.state.physical.is_none()
+            || self.host.state.decisions.is_none()
+            || self.host.state.combat.is_none()
         {
             return Err(Error::Unavailable);
         }
-        self.state.armies = Some(World {
+        self.host.state.armies = Some(World {
             kernel: game_armies::World::default(),
             rules,
             talks: BTreeMap::new(),
             queues: BTreeMap::new(),
             approaches: BTreeMap::new(),
-            last_review: self.state.time,
+            last_review: self.host.clock().time,
         });
         Ok(())
     }
@@ -277,10 +280,11 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         let body = self
+            .host
             .state
             .physical
             .as_ref()
-            .and_then(|_| game_physiology::body(&self.state.components, actor))
+            .and_then(|_| game_physiology::body(&self.host.storage, actor))
             .ok_or(Error::Unavailable)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return Err(Error::Unavailable);
@@ -292,6 +296,7 @@ impl Simulation {
     }
     fn army_facts(&self, mission: MissionId) -> Result<DetachmentFacts, Error> {
         let m = self
+            .host
             .state
             .missions
             .as_ref()
@@ -311,7 +316,7 @@ impl Simulation {
         })
     }
     fn army_queue_capacity(&self, speaker: PersonId, additional: usize) -> Result<(), Error> {
-        let w = self.state.armies.as_ref().ok_or(Error::Unavailable)?;
+        let w = self.host.state.armies.as_ref().ok_or(Error::Unavailable)?;
         if w.queues
             .get(&speaker)
             .map_or(0, VecDeque::len)
@@ -320,7 +325,8 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        self.state
+        self.host
+            .clock()
             .time
             .0
             .checked_add(w.rules.talk_time.0)
@@ -328,8 +334,9 @@ impl Simulation {
         Ok(())
     }
     fn queue_army_message(&mut self, speaker: PersonId, listener: PersonId, message: Message) {
-        let queued_at = self.state.time;
-        self.state
+        let queued_at = self.host.clock().time;
+        self.host
+            .state
             .armies
             .as_mut()
             .unwrap()
@@ -352,6 +359,7 @@ impl Simulation {
             army,
             mission,
             statement: self
+                .host
                 .state
                 .armies
                 .as_ref()
@@ -364,7 +372,7 @@ impl Simulation {
         }
     }
     fn commit_army_patch(&mut self, patch: PreparedChange) -> Result<(), Error> {
-        patch.check(&self.state.armies.as_ref().unwrap().kernel)?;
+        patch.check(&self.host.state.armies.as_ref().unwrap().kernel)?;
         // Every native request is preflighted before either domain publishes.
         for effect in &patch.effects {
             match effect {
@@ -374,7 +382,7 @@ impl Simulation {
                     objective,
                 } => self.validate_mission_combat_order(*leader, *mission, objective)?,
                 Effect::OfferRetreat { mission, leader } => {
-                    let home = self.state.missions.as_ref().unwrap().missions[mission]
+                    let home = self.host.state.missions.as_ref().unwrap().missions[mission]
                         .proposal
                         .home;
                     self.validate_mission_combat_order(
@@ -388,7 +396,7 @@ impl Simulation {
                     leader,
                     reason: Departure::Defect,
                 } => {
-                    if self.state.missions.as_ref().unwrap().missions[mission]
+                    if self.host.state.missions.as_ref().unwrap().missions[mission]
                         .members
                         .get(leader)
                         .is_none_or(|m| m.status != CompanionStatus::Accepted)
@@ -400,7 +408,7 @@ impl Simulation {
             }
         }
         self.ensure_event_capacity(self.army_event_bound())?;
-        let effects = patch.commit(&mut self.state.armies.as_mut().unwrap().kernel)?;
+        let effects = patch.commit(&mut self.host.state.armies.as_mut().unwrap().kernel)?;
         for effect in effects {
             match effect {
                 Effect::OfferObjective {
@@ -409,7 +417,7 @@ impl Simulation {
                     objective,
                 } => self.apply_accepted_leader_objective(leader, mission, objective)?,
                 Effect::OfferRetreat { mission, leader } => {
-                    let home = self.state.missions.as_ref().unwrap().missions[&mission]
+                    let home = self.host.state.missions.as_ref().unwrap().missions[&mission]
                         .proposal
                         .home;
                     self.apply_accepted_leader_objective(
@@ -418,6 +426,7 @@ impl Simulation {
                         MissionObjective::Visit { destination: home },
                     )?;
                     let m = self
+                        .host
                         .state
                         .missions
                         .as_mut()
@@ -446,7 +455,7 @@ impl Simulation {
     ) -> Result<(), Error> {
         let area = self.army_area(actor)?;
         self.preflight_armies()?;
-        let w = self.state.armies.as_ref().ok_or(Error::Unavailable)?;
+        let w = self.host.state.armies.as_ref().ok_or(Error::Unavailable)?;
         match action {
             ArmyAction::Approach {
                 army,
@@ -481,17 +490,18 @@ impl Simulation {
                     facts.insert(*id, self.army_facts(*id)?);
                 }
                 self.army_queue_capacity(actor, missions.len())?;
-                self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-                let id = ArmyId(self.state.next_id);
-                let patch = w
-                    .kernel
-                    .prepare_form(id, actor, missions, &facts, self.state.time)?;
+                self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
+                let id = ArmyId(self.host.next_id());
+                let patch =
+                    w.kernel
+                        .prepare_form(id, actor, missions, &facts, self.host.clock().time)?;
                 self.commit_army_patch(patch)?;
-                allocate(&mut self.state)?;
+                self.host.allocate_id()?;
                 for mission in missions {
                     let leader = facts[mission].leader;
                     if leader == actor {
                         let p = self
+                            .host
                             .state
                             .armies
                             .as_ref()
@@ -501,7 +511,7 @@ impl Simulation {
                                 id,
                                 *mission,
                                 actor,
-                                self.state.time,
+                                self.host.clock().time,
                             )?;
                         self.commit_army_patch(p)?;
                     } else {
@@ -542,7 +552,7 @@ impl Simulation {
                         },
                     },
                     &facts,
-                    self.state.time,
+                    self.host.clock().time,
                 )?;
                 self.commit_army_patch(patch)?;
                 if commander != actor {
@@ -570,8 +580,8 @@ impl Simulation {
                     }
                 }
                 self.army_queue_capacity(actor, missions.len())?;
-                self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-                let id = ArmyOrderId(self.state.next_id);
+                self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
+                let id = ArmyOrderId(self.host.next_id());
                 let p = w.kernel.prepare_order(
                     OrderProposal {
                         army: *army,
@@ -581,17 +591,18 @@ impl Simulation {
                         objective: objective.clone(),
                         expires: *expires,
                     },
-                    self.state.time,
+                    self.host.clock().time,
                 )?;
                 self.commit_army_patch(p)?;
-                allocate(&mut self.state)?;
+                self.host.allocate_id()?;
                 for mission in missions {
-                    let leader = self.state.armies.as_ref().unwrap().kernel.armies[army]
+                    let leader = self.host.state.armies.as_ref().unwrap().kernel.armies[army]
                         .detachments[mission]
                         .leader;
                     if leader == actor {
                         let f = self.army_facts(*mission)?;
                         let p = self
+                            .host
                             .state
                             .armies
                             .as_ref()
@@ -603,7 +614,7 @@ impl Simulation {
                                 *mission,
                                 actor,
                                 &f,
-                                self.state.time,
+                                self.host.clock().time,
                             )?;
                         self.commit_army_patch(p)?;
                     } else {
@@ -634,7 +645,7 @@ impl Simulation {
                     .commander;
                 self.army_queue_capacity(actor, usize::from(actor != commander))?;
                 let p=w.kernel.prepare_respond_order(OrderDecision {army:*army,order:*order,mission:*mission,actor,response:*response,
-                    explanation:format!("Personally chose {response:?} after considering the received army objective")},&facts,self.state.time)?;
+                    explanation:format!("Personally chose {response:?} after considering the received army objective")},&facts,self.host.clock().time)?;
                 self.commit_army_patch(p)?;
                 if commander != actor {
                     self.queue_army_message(
@@ -662,8 +673,8 @@ impl Simulation {
                     .into_iter()
                     .find(|m| m.id == *mission)
                     .ok_or(Error::Unavailable)?;
-                self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
-                let report = ArmyReportId(self.state.next_id);
+                self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
+                let report = ArmyReportId(self.host.next_id());
                 let p = w.kernel.prepare_report(
                     *army,
                     game_armies::ArmyReport {
@@ -671,13 +682,13 @@ impl Simulation {
                         army: *army,
                         mission: *mission,
                         speaker: actor,
-                        sent_at: self.state.time,
+                        sent_at: self.host.clock().time,
                         snapshot,
                     },
-                    self.state.time,
+                    self.host.clock().time,
                 )?;
                 self.commit_army_patch(p)?;
-                allocate(&mut self.state)?;
+                self.host.allocate_id()?;
                 self.queue_army_message(
                     actor,
                     *recipient,
@@ -705,7 +716,7 @@ impl Simulation {
                     actor,
                     *reason,
                     "Personally withdrew support for this command relationship".into(),
-                    self.state.time,
+                    self.host.clock().time,
                 )?;
                 self.commit_army_patch(p)?;
                 if commander != actor {
@@ -717,7 +728,9 @@ impl Simulation {
                 }
             }
             ArmyAction::Disband { army } => {
-                let p = w.kernel.prepare_disband(*army, actor, self.state.time)?;
+                let p = w
+                    .kernel
+                    .prepare_disband(*army, actor, self.host.clock().time)?;
                 self.commit_army_patch(p)?;
             }
         }
@@ -726,7 +739,8 @@ impl Simulation {
         Ok(())
     }
     fn start_queued_army_talk(&mut self, speaker: PersonId) -> Result<(), Error> {
-        let w = self.state.armies.as_ref().ok_or(Error::Unavailable)?;
+        let owner_now = self.host.clock().time;
+        let w = self.host.state.armies.as_ref().ok_or(Error::Unavailable)?;
         if w.talks
             .values()
             .any(|t| t.speaker == speaker || t.listener == speaker)
@@ -752,14 +766,14 @@ impl Simulation {
             return Ok(());
         }
         let completes = SimTime(
-            self.state
-                .time
+            owner_now
                 .0
                 .checked_add(w.rules.talk_time.0)
                 .ok_or(Error::Overflow)?,
         );
         self.interrupt_actor_activity(speaker);
-        self.state
+        self.host
+            .state
             .armies
             .as_mut()
             .unwrap()
@@ -767,18 +781,18 @@ impl Simulation {
             .get_mut(&speaker)
             .unwrap()
             .pop_front();
-        *self.state.components.activity_mut(speaker).unwrap() = Activity::ArmyTalk {
+        *self.host.storage.activity_mut(speaker).unwrap() = Activity::ArmyTalk {
             army: message.message.army(),
             listener: message.listener,
             completes,
         };
-        self.state.armies.as_mut().unwrap().talks.insert(
+        self.host.state.armies.as_mut().unwrap().talks.insert(
             speaker,
             Talk {
                 speaker,
                 listener: message.listener,
                 area,
-                started: self.state.time,
+                started: owner_now,
                 completes,
                 message: message.message,
             },
@@ -786,7 +800,7 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn interrupt_army_talk(&mut self, actor: PersonId) {
-        let Some(w) = &self.state.armies else {
+        let Some(w) = &self.host.state.armies else {
             return;
         };
         let talks: Vec<_> = w
@@ -796,18 +810,20 @@ impl Simulation {
             .cloned()
             .collect();
         for talk in talks {
-            self.state
+            self.host
+                .state
                 .armies
                 .as_mut()
                 .unwrap()
                 .talks
                 .remove(&talk.speaker);
-            if matches!(*self.state.components.activity(talk.speaker).expect("body exists"),Activity::ArmyTalk {completes,..} if completes==talk.completes)
+            if matches!(*self.host.storage.activity(talk.speaker).expect("body exists"),Activity::ArmyTalk {completes,..} if completes==talk.completes)
             {
-                *self.state.components.activity_mut(talk.speaker).unwrap() = Activity::Idle;
+                *self.host.storage.activity_mut(talk.speaker).unwrap() = Activity::Idle;
             }
         }
         if self
+            .host
             .state
             .armies
             .as_mut()
@@ -816,36 +832,36 @@ impl Simulation {
             .remove(&actor)
             .is_some()
             && matches!(
-                *self.state.components.activity(actor).expect("body exists"),
+                *self.host.storage.activity(actor).expect("body exists"),
                 Activity::ArmyApproach { .. }
             )
         {
-            *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
+            *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
         }
         // Interrupted speech is not received or silently retried.
     }
     pub(crate) fn army_boundary(&self, limit: SimTime) -> SimTime {
-        let Some(w) = &self.state.armies else {
+        let Some(w) = &self.host.state.armies else {
             return limit;
         };
         w.talks
             .values()
             .map(|t| t.completes)
             .chain(w.approaches.values().map(|a| a.completes))
-            .chain(w.kernel.next_boundary(self.state.time))
-            .filter(|at| *at > self.state.time)
+            .chain(w.kernel.next_boundary(self.host.clock().time))
+            .filter(|at| *at > self.host.clock().time)
             .min()
             .map_or(limit, |at| at.min(limit))
     }
     pub(crate) fn army_actor_talking(&self, actor: PersonId) -> bool {
-        self.state.armies.as_ref().is_some_and(|w| {
+        self.host.state.armies.as_ref().is_some_and(|w| {
             w.talks
                 .values()
                 .any(|t| t.speaker == actor || t.listener == actor)
         })
     }
     pub(crate) fn army_allied_missions(&self, mission: MissionId) -> BTreeSet<MissionId> {
-        let Some(w) = &self.state.armies else {
+        let Some(w) = &self.host.state.armies else {
             return BTreeSet::from([mission]);
         };
         let Some(id) = w.kernel.commanding_army(mission) else {
@@ -863,7 +879,7 @@ impl Simulation {
         mission: MissionId,
         target: PersonId,
     ) -> Option<(ArmyId, ArmyOrderId)> {
-        let w = self.state.armies.as_ref()?;
+        let w = self.host.state.armies.as_ref()?;
         let army = w.kernel.commanding_army(mission)?;
         let a = &w.kernel.armies[&army];
         a.orders
@@ -885,9 +901,9 @@ impl Simulation {
         mission: MissionId,
         area: AreaId,
     ) -> Option<PersonId> {
-        let w = self.state.armies.as_ref()?;
+        let w = self.host.state.armies.as_ref()?;
         let a = w.kernel.armies.get(&army)?;
-        let m = self.state.missions.as_ref()?.missions.get(&mission)?;
+        let m = self.host.state.missions.as_ref()?.missions.get(&mission)?;
         if let Some(member) = m.members.get(&actor) {
             let target = member
                 .directive
@@ -898,7 +914,7 @@ impl Simulation {
             {
                 return None;
             }
-            if actor != self.state.ruler {
+            if actor != self.host.state.ruler {
                 return Some(target);
             }
             let known = w.kernel.view(actor, army)?;
@@ -929,11 +945,11 @@ impl Simulation {
             .and_then(|o| o.value.objective.target_person())
     }
     fn army_entrance(&self, actor: PersonId, encounter: EncounterId) -> Option<Point> {
-        let w = self.state.combat.as_ref()?;
+        let w = self.host.state.combat.as_ref()?;
         let e = w.encounters.get(&encounter)?;
         let map = w.map(e.map)?;
         let routes =
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
                 .routes;
         map.exits
             .iter()
@@ -951,13 +967,14 @@ impl Simulation {
     ) -> Result<(), Error> {
         let area = self.army_area(actor)?;
         if *game_spatial::location(
-            &self.state.components,
-            game_ecs::StableId((self.state.people[self.person_index[&actor]].id).0),
+            &self.host.storage,
+            game_ecs::StableId((self.host.state.people[self.person_index[&actor]].id).0),
         )
         .expect("location exists")
             != Location::AtArea(area)
             || self.army_actor_talking(actor)
             || self
+                .host
                 .state
                 .armies
                 .as_ref()
@@ -966,6 +983,7 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         let army = self
+            .host
             .state
             .armies
             .as_ref()
@@ -980,10 +998,11 @@ impl Simulation {
             .army_order_for_approach(mission, target)
             .ok_or(Error::Unavailable)?;
         let completes = SimTime(
-            self.state
+            self.host
+                .clock()
                 .time
                 .0
-                .checked_add(self.state.combat.as_ref().unwrap().rules.round.0)
+                .checked_add(self.host.state.combat.as_ref().unwrap().rules.round.0)
                 .ok_or(Error::Overflow)?,
         );
         let approach = Approach {
@@ -994,17 +1013,18 @@ impl Simulation {
             encounter,
             area,
             target,
-            started: self.state.time,
+            started: self.host.clock().time,
             completes,
         };
         self.validate_army_approach(&approach, false)?;
         self.interrupt_actor_activity(actor);
-        *self.state.components.activity_mut(actor).unwrap() = Activity::ArmyApproach {
+        *self.host.storage.activity_mut(actor).unwrap() = Activity::ArmyApproach {
             mission,
             encounter,
             completes,
         };
-        self.state
+        self.host
+            .state
             .armies
             .as_mut()
             .unwrap()
@@ -1017,10 +1037,11 @@ impl Simulation {
         a: &Approach,
         completed: bool,
     ) -> Result<(u32, Point), Error> {
-        let w = self.state.armies.as_ref().ok_or(Error::Unavailable)?;
+        let w = self.host.state.armies.as_ref().ok_or(Error::Unavailable)?;
         let army = w.kernel.armies.get(&a.army).ok_or(Error::Unavailable)?;
         let order = army.orders.get(&a.order).ok_or(Error::Unavailable)?;
         let e = self
+            .host
             .state
             .combat
             .as_ref()
@@ -1044,14 +1065,14 @@ impl Simulation {
             || e.fighters.contains_key(&a.actor)
             || self.army_area(a.actor).ok() != Some(a.area)
             || !self.can_fight(a.actor)
-            || game_physiology::body(&self.state.components, a.actor)
+            || game_physiology::body(&self.host.storage, a.actor)
                 .expect("body exists")
                 .vitals
                 .fatigue
                 >= self.body_rules(a.actor).fatigue_limit
             || *game_spatial::location(
-                &self.state.components,
-                game_ecs::StableId((self.state.people[self.person_index[&a.actor]].id).0),
+                &self.host.storage,
+                game_ecs::StableId((self.host.state.people[self.person_index[&a.actor]].id).0),
             )
             .expect("location exists")
                 != Location::AtArea(a.area)
@@ -1059,17 +1080,17 @@ impl Simulation {
                 && !self.mission_force_willing(a.actor, a.mission, a.target))
             || self.army_personal_force_target(a.actor, a.army, a.mission, a.area) != Some(a.target)
             || !matches!(
-                self.state.missions.as_ref().unwrap().missions[&a.mission].status,
+                self.host.state.missions.as_ref().unwrap().missions[&a.mission].status,
                 MissionStatus::Traveling | MissionStatus::Operating
             )
             || e.fighters
                 .get(&a.target)
                 .is_none_or(|f| f.withdrawn || f.surrendered)
-            || !game_physiology::body(&self.state.components, a.target)
+            || !game_physiology::body(&self.host.storage, a.target)
                 .expect("body exists")
                 .vitals
                 .alive
-            || (completed && a.completes != self.state.time)
+            || (completed && a.completes != self.host.clock().time)
         {
             return Err(Error::Unavailable);
         }
@@ -1082,7 +1103,7 @@ impl Simulation {
                 linked
                     .iter()
                     .any(|id| {
-                        self.state.missions.as_ref().unwrap().missions[id]
+                        self.host.state.missions.as_ref().unwrap().missions[id]
                             .members
                             .get(&f.actor)
                             .is_some_and(|m| m.status == CompanionStatus::Accepted)
@@ -1099,7 +1120,7 @@ impl Simulation {
         Ok((team, entry))
     }
     pub(crate) fn reconcile_armies(&mut self) -> Result<(), Error> {
-        let Some(w) = &self.state.armies else {
+        let Some(w) = &self.host.state.armies else {
             return Ok(());
         };
         let invalid: Vec<_> = w
@@ -1115,6 +1136,7 @@ impl Simulation {
             self.interrupt_army_talk(speaker);
         }
         let approaches: Vec<_> = self
+            .host
             .state
             .armies
             .as_ref()
@@ -1128,28 +1150,29 @@ impl Simulation {
                 self.interrupt_army_talk(approach.actor);
                 continue;
             }
-            if approach.completes == self.state.time
+            if approach.completes == self.host.clock().time
                 && self.admit_local_army_approach(&approach).is_err()
             {
                 self.interrupt_army_talk(approach.actor);
             }
         }
         let talks: Vec<_> = self
+            .host
             .state
             .armies
             .as_ref()
             .unwrap()
             .talks
             .values()
-            .filter(|t| t.completes <= self.state.time)
+            .filter(|t| t.completes <= self.host.clock().time)
             .cloned()
             .collect();
         for talk in talks {
             let valid = self.army_area(talk.speaker).ok() == Some(talk.area)
                 && self.army_area(talk.listener).ok() == Some(talk.area)
                 && *self
-                    .state
-                    .components
+                    .host
+                    .storage
                     .activity(talk.speaker)
                     .expect("body exists")
                     == Activity::ArmyTalk {
@@ -1157,15 +1180,16 @@ impl Simulation {
                         listener: talk.listener,
                         completes: talk.completes,
                     };
-            self.state
+            self.host
+                .state
                 .armies
                 .as_mut()
                 .unwrap()
                 .talks
                 .remove(&talk.speaker);
-            if matches!(*self.state.components.activity(talk.speaker).expect("body exists"),Activity::ArmyTalk {completes,..} if completes==talk.completes)
+            if matches!(*self.host.storage.activity(talk.speaker).expect("body exists"),Activity::ArmyTalk {completes,..} if completes==talk.completes)
             {
-                *self.state.components.activity_mut(talk.speaker).unwrap() = Activity::Idle;
+                *self.host.storage.activity_mut(talk.speaker).unwrap() = Activity::Idle;
             }
             if !valid {
                 continue;
@@ -1174,12 +1198,12 @@ impl Simulation {
                 speaker: talk.speaker,
                 listener: talk.listener,
                 started_at: talk.started,
-                completed_at: self.state.time,
+                completed_at: self.host.clock().time,
             };
-            let k = &self.state.armies.as_ref().unwrap().kernel;
+            let k = &self.host.state.armies.as_ref().unwrap().kernel;
             let patch = match talk.message {
                 Message::Invitation { army, mission } => {
-                    k.prepare_hear_invitation(army, mission, receipt, self.state.time)
+                    k.prepare_hear_invitation(army, mission, receipt, self.host.clock().time)
                 }
                 Message::Participation {
                     army,
@@ -1190,22 +1214,28 @@ impl Simulation {
                     mission,
                     &statement,
                     receipt,
-                    self.state.time,
+                    self.host.clock().time,
                 ),
                 Message::Order {
                     army,
                     order,
                     mission,
                 } => self.army_facts(mission).and_then(|f| {
-                    k.prepare_hear_order(army, order, mission, receipt, &f, self.state.time)
+                    k.prepare_hear_order(army, order, mission, receipt, &f, self.host.clock().time)
                 }),
                 Message::Reply {
                     army,
                     order,
                     mission,
-                } => k.prepare_hear_order_response(army, order, mission, receipt, self.state.time),
+                } => k.prepare_hear_order_response(
+                    army,
+                    order,
+                    mission,
+                    receipt,
+                    self.host.clock().time,
+                ),
                 Message::Report { army, report } => {
-                    k.prepare_hear_report(army, report, receipt, self.state.time)
+                    k.prepare_hear_report(army, report, receipt, self.host.clock().time)
                 }
             };
             if let Ok(p) = patch {
@@ -1214,6 +1244,7 @@ impl Simulation {
             self.start_queued_army_talk(talk.speaker)?;
         }
         let ids: Vec<_> = self
+            .host
             .state
             .armies
             .as_ref()
@@ -1224,9 +1255,9 @@ impl Simulation {
             .copied()
             .collect();
         for id in ids {
-            let a = &self.state.armies.as_ref().unwrap().kernel.armies[&id];
+            let a = &self.host.state.armies.as_ref().unwrap().kernel.armies[&id];
             if a.orders.values().any(|o| {
-                o.expires <= self.state.time
+                o.expires <= self.host.clock().time
                     && o.recipients.values().any(|r| {
                         matches!(
                             r.status,
@@ -1235,15 +1266,16 @@ impl Simulation {
                     })
             }) {
                 let expired = self
+                    .host
                     .state
                     .armies
                     .as_ref()
                     .unwrap()
                     .kernel
-                    .prepare_expire(id, self.state.time)?;
+                    .prepare_expire(id, self.host.clock().time)?;
                 self.commit_army_patch(expired)?;
             }
-            let missions: Vec<_> = self.state.armies.as_ref().unwrap().kernel.armies[&id]
+            let missions: Vec<_> = self.host.state.armies.as_ref().unwrap().kernel.armies[&id]
                 .detachments
                 .values()
                 .filter(|d| d.participation.active())
@@ -1256,12 +1288,13 @@ impl Simulation {
                     MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
                 ) {
                     let p = self
+                        .host
                         .state
                         .armies
                         .as_ref()
                         .unwrap()
                         .kernel
-                        .prepare_native_termination(id, &f, self.state.time)?;
+                        .prepare_native_termination(id, &f, self.host.clock().time)?;
                     self.commit_army_patch(p)?;
                 }
             }
@@ -1269,15 +1302,18 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn review_armies(&mut self) -> Result<(), Error> {
-        let Some(w) = &self.state.armies else {
+        let Some(w) = &self.host.state.armies else {
             return Ok(());
         };
-        if w.last_review == self.state.time || !self.state.time.0.is_multiple_of(MINUTE.0) {
+        if w.last_review == self.host.clock().time
+            || !self.host.clock().time.0.is_multiple_of(MINUTE.0)
+        {
             return Ok(());
         }
         self.preflight_armies()?;
-        self.state.armies.as_mut().unwrap().last_review = self.state.time;
+        self.host.state.armies.as_mut().unwrap().last_review = self.host.clock().time;
         let actors: Vec<_> = self
+            .host
             .state
             .armies
             .as_ref()
@@ -1288,9 +1324,10 @@ impl Simulation {
             .copied()
             .collect();
         for actor in actors {
-            if actor == self.state.ruler
+            if actor == self.host.state.ruler
                 || self.army_area(actor).is_err()
                 || self
+                    .host
                     .state
                     .armies
                     .as_ref()
@@ -1310,7 +1347,7 @@ impl Simulation {
                         continue;
                     }
                     let mission = d.value.mission;
-                    let objective = &self.state.missions.as_ref().unwrap().missions[&mission]
+                    let objective = &self.host.state.missions.as_ref().unwrap().missions[&mission]
                         .members[&actor]
                         .directive;
                     let accept = self
@@ -1329,7 +1366,7 @@ impl Simulation {
                     for (mission, r) in o.value.recipients {
                         if r.leader != actor
                             || r.status != OrderStatus::Received
-                            || self.state.time >= o.value.expires
+                            || self.host.clock().time >= o.value.expires
                         {
                             continue;
                         }
@@ -1355,6 +1392,7 @@ impl Simulation {
             }
         }
         let speakers: Vec<_> = self
+            .host
             .state
             .armies
             .as_ref()
@@ -1370,6 +1408,7 @@ impl Simulation {
     }
     pub(crate) fn army_view(&self, actor: PersonId) -> Vec<ArmyView> {
         let mut views = self
+            .host
             .state
             .armies
             .as_ref()
@@ -1384,6 +1423,7 @@ impl Simulation {
                     continue;
                 };
                 for e in self
+                    .host
                     .state
                     .combat
                     .as_ref()
@@ -1399,14 +1439,14 @@ impl Simulation {
                     let Some(entry) = self.army_entrance(actor, e.id) else {
                         continue;
                     };
-                    let map = self.state.combat.as_ref().unwrap().map(e.map).unwrap();
+                    let map = self.host.state.combat.as_ref().unwrap().map(e.map).unwrap();
                     let linked = self.army_allied_missions(*mission);
                     let visible_ally = e.fighters.values().any(|f| {
                         !f.withdrawn
                             && !f.surrendered
                             && map.clear(entry, f.position)
                             && linked.iter().any(|id| {
-                                self.state.missions.as_ref().unwrap().missions[id]
+                                self.host.state.missions.as_ref().unwrap().missions[id]
                                     .members
                                     .get(&f.actor)
                                     .is_some_and(|p| p.status == CompanionStatus::Accepted)
@@ -1417,7 +1457,7 @@ impl Simulation {
                             mission: *mission,
                             encounter: e.id,
                             target,
-                            observed_at: self.state.time,
+                            observed_at: self.host.clock().time,
                         });
                     }
                 }
@@ -1463,7 +1503,7 @@ impl Simulation {
                 }
             }
             for (order, o) in view.knowledge.orders {
-                if self.state.time >= o.value.expires {
+                if self.host.clock().time >= o.value.expires {
                     continue;
                 }
                 for (mission, r) in o.value.recipients {
@@ -1498,7 +1538,7 @@ impl Simulation {
         0
     }
     pub(crate) fn army_event_bound(&self) -> usize {
-        self.state.armies.as_ref().map_or(0, |w| {
+        self.host.state.armies.as_ref().map_or(0, |w| {
             w.kernel
                 .armies
                 .values()
@@ -1508,49 +1548,49 @@ impl Simulation {
         })
     }
     pub(crate) fn preflight_armies(&self) -> Result<(), Error> {
-        self.preflight_armies_at(self.state.time)
+        self.preflight_armies_at(self.host.clock().time)
     }
     pub(crate) fn preflight_armies_at(&self, at: SimTime) -> Result<(), Error> {
-        if let Some(w) = &self.state.armies {
+        if let Some(w) = &self.host.state.armies {
             at.0.checked_add(w.rules.talk_time.0)
                 .ok_or(Error::Overflow)?;
-            at.0.checked_add(self.state.combat.as_ref().unwrap().rules.round.0)
+            at.0.checked_add(self.host.state.combat.as_ref().unwrap().rules.round.0)
                 .ok_or(Error::Overflow)?;
             self.ensure_event_capacity(self.army_event_bound())?;
         }
         Ok(())
     }
     pub(crate) fn validate_armies(&self) -> Result<(), Error> {
-        let Some(w) = &self.state.armies else {
+        let Some(w) = &self.host.state.armies else {
             return Ok(());
         };
         w.rules.validate()?;
         let bad = || Error::InvalidSave("Invalid army communication or native references".into());
-        let missions = self.state.missions.as_ref().ok_or_else(bad)?;
+        let missions = self.host.state.missions.as_ref().ok_or_else(bad)?;
         let people = self.person_index.keys().copied().collect();
         let mission_ids = missions.missions.keys().copied().collect();
         w.kernel.validate(
             &game_armies::ValidationCatalog {
                 people: &people,
                 missions: &mission_ids,
-                now: self.state.time,
+                now: self.host.clock().time,
             },
             |o| {
-                if army_saved_objective_valid(&self.state, o) {
+                if army_saved_objective_valid(&self.canonical_state(), o) {
                     Ok(())
                 } else {
                     Err(bad())
                 }
             },
-            |v| validate_army_mission_snapshot(&self.state, v),
+            |v| validate_army_mission_snapshot(&self.canonical_state(), v),
         )?;
-        if w.last_review > self.state.time {
+        if w.last_review > self.host.clock().time {
             return Err(bad());
         }
         for a in w.kernel.armies.values() {
-            if a.id.0 >= self.state.next_id
-                || a.orders.keys().any(|id| id.0 >= self.state.next_id)
-                || a.reports.keys().any(|id| id.0 >= self.state.next_id)
+            if a.id.0 >= self.host.next_id()
+                || a.orders.keys().any(|id| id.0 >= self.host.next_id())
+                || a.reports.keys().any(|id| id.0 >= self.host.next_id())
             {
                 return Err(bad());
             }
@@ -1560,16 +1600,12 @@ impl Simulation {
             if *speaker != t.speaker
                 || !occupied.insert(*speaker)
                 || !occupied.insert(t.listener)
-                || t.started > self.state.time
-                || t.completes <= self.state.time
+                || t.started > self.host.clock().time
+                || t.completes <= self.host.clock().time
                 || t.started.0.checked_add(w.rules.talk_time.0) != Some(t.completes.0)
                 || self.army_area(*speaker).ok() != Some(t.area)
                 || self.army_area(t.listener).ok() != Some(t.area)
-                || *self
-                    .state
-                    .components
-                    .activity(*speaker)
-                    .expect("body exists")
+                || *self.host.storage.activity(*speaker).expect("body exists")
                     != (Activity::ArmyTalk {
                         army: t.message.army(),
                         listener: t.listener,
@@ -1585,7 +1621,7 @@ impl Simulation {
                 return Err(bad());
             }
             for message in q {
-                if message.queued_at > self.state.time
+                if message.queued_at > self.host.clock().time
                     || !self.person_index.contains_key(&message.listener)
                     || *speaker == message.listener
                     || !army_message_valid(w, *speaker, message.listener, &message.message)
@@ -1597,13 +1633,13 @@ impl Simulation {
         for (actor, a) in &w.approaches {
             if *actor != a.actor
                 || !self.person_index.contains_key(actor)
-                || a.started > self.state.time
-                || a.completes <= self.state.time
+                || a.started > self.host.clock().time
+                || a.completes <= self.host.clock().time
                 || a.started
                     .0
-                    .checked_add(self.state.combat.as_ref().unwrap().rules.round.0)
+                    .checked_add(self.host.state.combat.as_ref().unwrap().rules.round.0)
                     != Some(a.completes.0)
-                || *self.state.components.activity(*actor).expect("body exists")
+                || *self.host.storage.activity(*actor).expect("body exists")
                     != (Activity::ArmyApproach {
                         mission: a.mission,
                         encounter: a.encounter,
@@ -1614,7 +1650,7 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        for (actor, activity) in self.state.components.activities() {
+        for (actor, activity) in self.host.storage.activities() {
             if matches!(activity, Activity::ArmyTalk { .. }) != w.talks.contains_key(&actor) {
                 return Err(bad());
             }
@@ -1675,8 +1711,8 @@ fn army_message_valid(w: &World, speaker: PersonId, listener: PersonId, message:
     }
 }
 fn army_saved_objective_valid(s: &CanonicalState, objective: &MissionObjective) -> bool {
-    let area = |a: &AreaId| s.areas.iter().any(|p| p.id == *a);
-    let person = |id: &PersonId| s.people.iter().any(|p| p.id == *id);
+    let area = |a: &AreaId| s.state.areas.iter().any(|p| p.id == *a);
+    let person = |id: &PersonId| s.state.people.iter().any(|p| p.id == *id);
     match objective {
         MissionObjective::Visit { destination } => area(destination),
         MissionObjective::Deliver {
@@ -1686,9 +1722,10 @@ fn army_saved_objective_valid(s: &CanonicalState, objective: &MissionObjective) 
         } => {
             quantity.0 > 0
                 && source != destination
-                && s.inventories
+                && s.state
+                    .inventories
                     .get(source)
-                    .zip(s.inventories.get(destination))
+                    .zip(s.state.inventories.get(destination))
                     .is_some_and(|(a, b)| a.good == b.good)
         }
         MissionObjective::Defeat { person: p } | MissionObjective::Confine { person: p, .. } => {
@@ -1705,9 +1742,9 @@ fn army_saved_objective_valid(s: &CanonicalState, objective: &MissionObjective) 
 }
 fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result<(), Error> {
     let bad = || Error::InvalidSave("Invalid dated army mission report".into());
-    let people: BTreeSet<_> = s.people.iter().map(|p| p.id).collect();
-    let areas: BTreeSet<_> = s.areas.iter().map(|a| a.id).collect();
-    let missions = s.missions.as_ref().ok_or_else(bad)?;
+    let people: BTreeSet<_> = s.state.people.iter().map(|p| p.id).collect();
+    let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
+    let missions = s.state.missions.as_ref().ok_or_else(bad)?;
     if !missions.missions.contains_key(&v.id)
         || !people.contains(&v.sponsor)
         || !people.contains(&v.leader)
@@ -1763,7 +1800,8 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
             .get(&r.id)
             .is_some_and(|a| a.person == r.person && a.mission == v.id)
             || r.payment_agreement.is_some_and(|id| {
-                s.agreements
+                s.state
+                    .agreements
                     .as_ref()
                     .is_none_or(|a| !a.agreements.contains_key(&id))
             })
@@ -1775,11 +1813,11 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
                             destination,
                             ..
                         } => {
-                            !s.inventories.contains_key(source)
-                                || !s.inventories.contains_key(destination)
+                            !s.state.inventories.contains_key(source)
+                                || !s.state.inventories.contains_key(destination)
                         }
                         AgreementTerm::Access { inventory, .. } => {
-                            !s.inventories.contains_key(inventory)
+                            !s.state.inventories.contains_key(inventory)
                         }
                         _ => true,
                     }
@@ -1790,7 +1828,7 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
     }
     if v.supplies.iter().any(|supply| {
         !people.contains(&supply.carrier)
-            || !s.inventories.contains_key(&supply.source)
+            || !s.state.inventories.contains_key(&supply.source)
             || supply.quantity.0 == 0
     }) {
         return Err(bad());

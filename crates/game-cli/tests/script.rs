@@ -27,10 +27,10 @@ fn text_adapter_and_direct_api_produce_identical_logical_results() {
         game_cli::execute(&mut text, line, &execution).unwrap();
     }
     assert_eq!(direct.canonical_state(), text.canonical_state());
-    let before = text.canonical_state().clone();
+    let before = text.canonical_snapshot().unwrap();
     assert!(game_cli::execute(&mut text, "move 999", &execution).is_err());
     assert!(game_cli::execute(&mut text, "run 18446744073709551615d", &execution).is_err());
-    assert_eq!(&before, text.canonical_state());
+    assert_eq!(before, text.canonical_snapshot().unwrap());
 }
 
 #[test]
@@ -106,8 +106,8 @@ fn newborn_care_is_reachable_through_normal_observations_and_the_text_adapter() 
     )
     .unwrap();
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
-    let ruler = sim.canonical_state().ruler;
-    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { caregiver, child: target, .. } if caregiver == ruler && target == child)));
+    let ruler = sim.canonical_state().state.ruler;
+    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.event, EventKind::Cared { caregiver, child: target, .. } if caregiver == ruler && target == child)));
 }
 
 #[test]
@@ -177,6 +177,7 @@ fn an_encounter_is_playable_through_the_text_client_and_ordinary_views() {
     assert_eq!(sim.time(), SimTime(24_000));
     assert!(
         sim.canonical_state()
+            .state
             .combat
             .as_ref()
             .unwrap()
@@ -345,6 +346,7 @@ fn agreement_text_commands_record_promises_and_deliver_actual_cargo() {
         .id;
     let cargo = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.id == ruler)
@@ -352,6 +354,7 @@ fn agreement_text_commands_record_promises_and_deliver_actual_cargo() {
         .inventory;
     let destination = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.id == recipient)
@@ -369,14 +372,14 @@ fn agreement_text_commands_record_promises_and_deliver_actual_cargo() {
         }],
         procedure: None,
     };
-    let stocks = sim.canonical_state().inventories.clone();
+    let stocks = sim.canonical_state().state.inventories.clone();
     game_cli::execute(
         &mut sim,
         &format!("agreement {}", serde_json::to_string(&proposal).unwrap()),
         &execution,
     )
     .unwrap();
-    assert_eq!(&stocks, &sim.canonical_state().inventories);
+    assert_eq!(&stocks, &sim.canonical_state().state.inventories);
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
     let view: PlayerView =
         serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
@@ -410,6 +413,7 @@ fn session_stops_at_successor_birth_and_switches_to_the_newborns_real_agency() {
     sim.debug_injure(
         old,
         sim.canonical_state()
+            .state
             .physical
             .as_ref()
             .unwrap()
@@ -469,6 +473,7 @@ fn text_client_exposes_refusal_and_resistance_without_granting_goods() {
         .id;
     let cargo = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.id == view.ruler)
@@ -490,7 +495,7 @@ fn text_client_exposes_refusal_and_resistance_without_granting_goods() {
             .unwrap()
             .can_access
     );
-    let stock = sim.canonical_state().inventories[&source].quantity;
+    let stock = sim.canonical_state().state.inventories[&source].quantity;
     game_cli::execute(
         &mut sim,
         &format!("take {} {} 1000", source.0, cargo.0),
@@ -504,9 +509,12 @@ fn text_client_exposes_refusal_and_resistance_without_granting_goods() {
         IncidentOutcome::Interrupted
     );
     assert!(view.combat.is_some());
-    assert_eq!(sim.canonical_state().inventories[&source].quantity, stock);
     assert_eq!(
-        sim.canonical_state().inventories[&cargo].quantity,
+        sim.canonical_state().state.inventories[&source].quantity,
+        stock
+    );
+    assert_eq!(
+        sim.canonical_state().state.inventories[&cargo].quantity,
         Quantity(0)
     );
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
@@ -519,6 +527,7 @@ fn childhood_guidance_requires_completed_lessons_in_the_text_client() {
     sim.debug_injure(
         sim.observe().ruler,
         sim.canonical_state()
+            .state
             .physical
             .as_ref()
             .unwrap()
@@ -617,14 +626,14 @@ fn institution_charters_and_supported_offices_have_real_access_effects_through_c
         charter,
         origin: None,
     };
-    let before = sim.canonical_state().inventories.clone();
+    let before = sim.canonical_state().state.inventories.clone();
     game_cli::execute(
         &mut sim,
         &format!("institution {}", serde_json::to_string(&action).unwrap()),
         &execution,
     )
     .unwrap();
-    assert_eq!(sim.canonical_state().inventories, before);
+    assert_eq!(sim.canonical_state().state.inventories, before);
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
     let view: PlayerView =
         serde_json::from_str(&game_cli::execute(&mut sim, "status", &execution).unwrap()).unwrap();
@@ -690,7 +699,7 @@ fn carrying_a_new_good_creates_only_an_empty_compartment_then_loads_real_stock()
     );
     game_cli::execute(&mut sim, "run 1m", &execution).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&tool].quantity,
+        sim.canonical_state().state.inventories[&tool].quantity,
         Quantity(0)
     );
     assert_eq!(
@@ -735,8 +744,14 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
     let execution = Execution::default();
     let mut sim = Simulation::new("force-fixture", 88, execution.clone()).unwrap();
     let ruler = sim.observe().ruler;
-    let captor = sim.canonical_state().people[3].id;
-    let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
+    let captor = sim.canonical_state().state.people[3].id;
+    let people: Vec<_> = sim
+        .canonical_state()
+        .state
+        .people
+        .iter()
+        .map(|p| p.id)
+        .collect();
     for actor in people {
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.debug_set_personality(
@@ -748,6 +763,7 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
     }
     let tool = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| {
@@ -779,8 +795,8 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
     let execution = Execution::default();
     let mut sim = Simulation::new("invocation-fixture", 9, execution.clone()).unwrap();
     let actor = sim.observe().ruler;
-    let world = sim.canonical_state().development.as_ref().unwrap();
-    let childhood = game_lifecycle::life(&sim.canonical_state().components, actor)
+    let world = sim.canonical_state().state.development.as_ref().unwrap();
+    let childhood = game_lifecycle::life(sim.canonical_state().components, actor)
         .unwrap()
         .born
         .0
@@ -789,6 +805,7 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
     game_cli::execute(&mut sim, &format!("run {delta}ms"), &execution).unwrap();
     let teacher = *sim
         .canonical_state()
+        .state
         .lineage
         .as_ref()
         .unwrap()
@@ -801,7 +818,7 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
         for _ in 0..12 {
             if matches!(
                 game_spatial::location(
-                    &sim.canonical_state().components,
+                    sim.canonical_state().components,
                     game_ecs::StableId(teacher.0),
                 )
                 .expect("location exists"),
@@ -868,6 +885,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
     let mut sim = Simulation::new("force-fixture", 88, execution.clone()).unwrap();
     let guardian = *sim
         .canonical_state()
+        .state
         .lineage
         .as_ref()
         .unwrap()
@@ -878,6 +896,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
     let ruler = sim.observe().ruler;
     for person in sim
         .canonical_state()
+        .state
         .people
         .iter()
         .map(|p| p.id)
@@ -893,6 +912,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
     }
     let source = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| {
@@ -900,30 +920,37 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         })
         .unwrap()
         .id;
-    let stock = sim.canonical_state().inventories[&source].quantity.0;
+    let stock = sim.canonical_state().state.inventories[&source].quantity.0;
     let cargo = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.id == ruler)
         .unwrap()
         .inventory;
-    let held = sim.canonical_state().inventories[&cargo].quantity.0;
+    let held = sim.canonical_state().state.inventories[&cargo].quantity.0;
     game_cli::execute(
         &mut sim,
         &format!("guardian {} supply food {} 1000", guardian.0, source.0),
         &execution,
     )
     .unwrap();
-    assert_eq!(sim.canonical_state().inventories[&source].quantity.0, stock);
-    assert_eq!(sim.canonical_state().inventories[&cargo].quantity.0, held);
+    assert_eq!(
+        sim.canonical_state().state.inventories[&source].quantity.0,
+        stock
+    );
+    assert_eq!(
+        sim.canonical_state().state.inventories[&cargo].quantity.0,
+        held
+    );
     game_cli::execute(&mut sim, "run 2m", &execution).unwrap();
-    assert!(sim.canonical_state().inventories[&source].quantity.0 <= stock - 1000);
+    assert!(sim.canonical_state().state.inventories[&source].quantity.0 <= stock - 1000);
     let loaded: u64 = sim
         .canonical_state()
         .events
         .iter()
-        .filter_map(|e| match e.kind {
+        .filter_map(|e| match e.event {
             EventKind::Transferred {
                 actor,
                 source: from,
@@ -935,10 +962,10 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         .sum();
     assert_eq!(loaded, 1000);
     assert_eq!(
-        sim.canonical_state().inventories[&cargo].quantity.0,
+        sim.canonical_state().state.inventories[&cargo].quantity.0,
         held + 1000
     );
-    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::GuardianAccepted { guardian: actor, requester } if actor == guardian && requester == ruler)));
+    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.event, EventKind::GuardianAccepted { guardian: actor, requester } if actor == guardian && requester == ruler)));
     Simulation::load(&sim.save().unwrap(), execution).unwrap();
 }
 
@@ -987,7 +1014,7 @@ fn normal_openings_and_seeded_random_selection_launch_through_the_cli() {
 fn roadside_transport_is_playable_with_carried_food_through_the_text_client() {
     let execution = Execution::default();
     let mut sim = Simulation::new("transport-fixture", 1, execution.clone()).unwrap();
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let food = sim
         .debug_add_inventory(
             Good::Food,
@@ -1015,7 +1042,7 @@ fn roadside_transport_is_playable_with_carried_food_through_the_text_client() {
     game_cli::execute(&mut sim, &format!("eat {}", food.0), &execution).unwrap();
     game_cli::execute(&mut sim, "run 60000ms", &execution).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&food].quantity,
+        sim.canonical_state().state.inventories[&food].quantity,
         Quantity(1_000)
     );
     let mut restored = Simulation::load(&sim.save().unwrap(), execution.clone()).unwrap();

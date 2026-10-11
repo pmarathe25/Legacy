@@ -8,25 +8,25 @@ impl Simulation {
     /// not create a general rule assigning unused land or stores to inhabitants.
     pub fn farm_enterprise_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::ecology_fixture(seed, execution)?;
-        sim.state.scenario = ScenarioInfo {
+        sim.host.state.scenario = ScenarioInfo {
             id: "farm-enterprise-fixture".into(),
             version: 1,
             debug_fixture: true,
         };
-        sim.state.agreements = Some(agreements::World {
+        sim.host.state.agreements = Some(agreements::World {
             ledger: game_agreements::State {
                 agreements: BTreeMap::new(),
                 obligations: BTreeMap::new(),
                 amendments: BTreeMap::new(),
-                last_event: sim.state.next_event - 1,
+                last_event: sim.host.next_event() - 1,
                 next_search: BTreeMap::new(),
                 pending_work: BTreeMap::new(),
                 knowledge: BTreeMap::new(),
-                last_observation_event: sim.state.next_event - 1,
+                last_observation_event: sim.host.next_event() - 1,
             },
             custodians: BTreeMap::new(),
         });
-        sim.state.projects = Some(World {
+        sim.host.state.projects = Some(World {
             rules: Rules::default(),
             projects: BTreeMap::new(),
             enterprises: BTreeMap::new(),
@@ -35,19 +35,19 @@ impl Simulation {
             known_enterprises: BTreeMap::new(),
             timber_hints: BTreeMap::new(),
             next_search: BTreeMap::new(),
-            last_event: sim.state.next_event - 1,
+            last_event: sim.host.next_event() - 1,
         });
-        let farmer = sim.state.people[3].id;
-        let supporter = sim.state.people[5].id;
+        let farmer = sim.host.state.people[3].id;
+        let supporter = sim.host.state.people[5].id;
         let area = AreaId(1);
         *game_spatial::location_mut(
-            &mut sim.state.components,
-            game_ecs::StableId((sim.state.people[sim.person_index[&farmer]].id).0),
+            &mut sim.host.storage,
+            game_ecs::StableId((sim.host.state.people[sim.person_index[&farmer]].id).0),
         )
         .expect("location exists") = Location::AtArea(area);
         *game_spatial::location_mut(
-            &mut sim.state.components,
-            game_ecs::StableId((sim.state.people[sim.person_index[&supporter]].id).0),
+            &mut sim.host.storage,
+            game_ecs::StableId((sim.host.state.people[sim.person_index[&supporter]].id).0),
         )
         .expect("location exists") = Location::AtArea(area);
         sim.debug_add_plot(area, Some(farmer), BTreeSet::from([farmer]), 900)?;
@@ -85,7 +85,8 @@ impl Simulation {
                 Quantity(capacity),
                 access,
             )?;
-            sim.state
+            sim.host
+                .state
                 .agreements
                 .as_mut()
                 .unwrap()
@@ -106,7 +107,14 @@ impl Simulation {
             Quantity(10_000),
             BTreeSet::from([farmer]),
         )?;
-        for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+        for actor in sim
+            .host
+            .state
+            .people
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+        {
             sim.debug_actor_command(actor, Command::Cancel)?;
             sim.debug_set_personality(
                 actor,
@@ -135,18 +143,19 @@ impl Simulation {
     }
     pub fn project_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::agreement_fixture(seed, execution)?;
-        sim.state.scenario = ScenarioInfo {
+        sim.host.state.scenario = ScenarioInfo {
             id: "project-fixture".into(),
             version: 1,
             debug_fixture: true,
         };
         let hour = 3_600_000;
-        let rules = &mut sim.state.physical.as_mut().unwrap().rules;
+        let rules = &mut sim.host.state.physical.as_mut().unwrap().rules;
         rules.hunger_harm = 72 * hour;
         rules.meal_relief = 24 * hour;
         rules.fatigue_limit = 16 * hour;
         rules.max_health = 48 * hour;
         let people = sim
+            .host
             .state
             .people
             .iter()
@@ -154,7 +163,7 @@ impl Simulation {
             .collect::<Vec<_>>();
         for person in &people {
             sim.debug_actor_command(*person, Command::Cancel)?;
-            game_physiology::body_mut(&mut sim.state.components, *person)
+            game_physiology::body_mut(&mut sim.host.storage, *person)
                 .unwrap()
                 .vitals
                 .health = 48 * hour;
@@ -165,28 +174,28 @@ impl Simulation {
             )?;
         }
         // The old continuous food fixture is not the workshop's recipe.
-        let sites: Vec<_> = game_workshop::sites(&sim.state.components)
+        let sites: Vec<_> = game_workshop::sites(&sim.host.storage)
             .map(|(id, _)| id)
             .collect();
         for site in sites {
-            game_workshop::remove_site(&mut sim.state.components, site)?;
+            game_workshop::remove_site(&mut sim.host.storage, site)?;
         }
         let actors: Vec<_> =
-            game_characters::decisions::minds::<game_api::Command>(&sim.state.components)
+            game_characters::decisions::minds::<game_api::Command>(&sim.host.storage)
                 .map(|(id, _)| id)
                 .collect();
         for actor in actors {
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.state.components,
+                &mut sim.host.storage,
                 actor,
             )
             .unwrap();
             mind.sites.clear();
             mind.plan = None;
         }
-        let sponsor = sim.state.people[3].id;
-        let financier = sim.state.people[5].id;
-        let area = sim.state.areas[0].id;
+        let sponsor = sim.host.state.people[3].id;
+        let financier = sim.host.state.people[5].id;
+        let area = sim.host.state.areas[0].id;
         let materials = sim.debug_add_inventory(
             Good::Timber,
             InventoryLocation::Area(area),
@@ -239,6 +248,7 @@ impl Simulation {
             )?;
         }
         let timber = sim
+            .host
             .state
             .inventories
             .values()
@@ -249,8 +259,8 @@ impl Simulation {
             })
             .unwrap()
             .id;
-        sim.state.inventories.get_mut(&timber).unwrap().access = BTreeSet::from([financier]);
-        let custodians = &mut sim.state.agreements.as_mut().unwrap().custodians;
+        sim.host.state.inventories.get_mut(&timber).unwrap().access = BTreeSet::from([financier]);
+        let custodians = &mut sim.host.state.agreements.as_mut().unwrap().custodians;
         for inventory in [materials, tool, output, provisions] {
             custodians.insert(inventory, sponsor);
         }
@@ -265,7 +275,7 @@ impl Simulation {
         let mut investor = decisions::Personality::industrious();
         investor.risk_tolerance = 850;
         sim.debug_set_personality(financier, investor, decisions::Aspiration::Independence)?;
-        sim.state.projects = Some(World {
+        sim.host.state.projects = Some(World {
             rules: Rules::default(),
             projects: BTreeMap::new(),
             enterprises: BTreeMap::new(),
@@ -273,23 +283,25 @@ impl Simulation {
             known_projects: BTreeMap::new(),
             known_enterprises: BTreeMap::new(),
             timber_hints: BTreeMap::from([
-                (sponsor, BTreeSet::from([sim.state.areas[2].id])),
-                (financier, BTreeSet::from([sim.state.areas[2].id])),
+                (sponsor, BTreeSet::from([sim.host.state.areas[2].id])),
+                (financier, BTreeSet::from([sim.host.state.areas[2].id])),
             ]),
             next_search: BTreeMap::new(),
-            last_event: sim.state.next_event - 1,
+            last_event: sim.host.next_event() - 1,
         });
         // Fresh authored knowledge includes these physically present stocks.
         for person in people {
             let inventories = sim
+                .host
                 .state
                 .inventories
                 .values()
                 .filter(|stock| sim.inventory_area(stock) == Some(area))
                 .cloned()
                 .collect::<Vec<_>>();
+            let observed_at = sim.time();
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.state.components,
+                &mut sim.host.storage,
                 person,
             )
             .unwrap();
@@ -302,8 +314,8 @@ impl Simulation {
                         good: stock.good,
                         quantity: stock.quantity,
                         accessible: stock.access.contains(&person),
-                        observed_at: sim.state.time,
-                        learned_at: sim.state.time,
+                        observed_at,
+                        learned_at: observed_at,
                         source: KnowledgeSource::Observed(person),
                     },
                 );
@@ -312,11 +324,11 @@ impl Simulation {
         Ok(sim)
     }
     fn project_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = game_physiology::body(&self.state.components, actor)?;
+        let body = game_physiology::body(&self.host.storage, actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
-        match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))? {
+        match *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))? {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -326,9 +338,9 @@ impl Simulation {
             && self.independent(actor)
             && !self.combat_restricts(actor)
             && !self.care_index.contains_key(&actor)
-            && self.state.development.as_ref().is_none_or(|_| {
+            && self.host.state.development.as_ref().is_none_or(|_| {
                 matches!(
-                    game_lifecycle::life(&self.state.components, actor)
+                    game_lifecycle::life(&self.host.storage, actor)
                         .unwrap()
                         .stage,
                     LifeStage::Adult | LifeStage::Elder
@@ -353,16 +365,22 @@ impl Simulation {
         quantity: u64,
         resources: Option<&equipment::RankingResources>,
     ) -> bool {
-        self.state.inventories.get(&inventory).is_some_and(|stock| {
-            stock.good == good
-                && stock.access.contains(&actor)
-                && self.inventory_area(stock) == self.project_area(actor)
-                && (quantity == 0
-                    || self.unreserved_stock_for_planning(inventory, actor, resources) >= quantity)
-        })
+        self.host
+            .state
+            .inventories
+            .get(&inventory)
+            .is_some_and(|stock| {
+                stock.good == good
+                    && stock.access.contains(&actor)
+                    && self.inventory_area(stock) == self.project_area(actor)
+                    && (quantity == 0
+                        || self.unreserved_stock_for_planning(inventory, actor, resources)
+                            >= quantity)
+            })
     }
     pub(crate) fn project_is_known(&self, actor: PersonId, project: ProjectId) -> bool {
-        self.state
+        self.host
+            .state
             .projects
             .as_ref()
             .and_then(|world| world.known_projects.get(&actor))
@@ -375,7 +393,7 @@ impl Simulation {
     ) -> game_projects::ActorFacts {
         game_projects::ActorFacts {
             actor,
-            now: self.state.time,
+            now: self.host.clock().time,
             area: self.project_area(actor),
             capable: self.project_able(actor),
             knows_project: project.is_some_and(|id| self.project_is_known(actor, id)),
@@ -387,21 +405,32 @@ impl Simulation {
         project: ProjectId,
         resources: Option<&equipment::RankingResources>,
     ) -> Result<game_projects::ConstructionFacts, Error> {
-        let world = self.state.projects.as_ref().ok_or(Error::Unavailable)?;
+        let world = self
+            .host
+            .state
+            .projects
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
         let plan = world.projects.get(&project).ok_or(Error::Unavailable)?;
-        let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
+        let physical = self
+            .host
+            .state
+            .physical
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
         let mut facts = self.project_actor_facts(actor, Some(project));
-        facts.capable &= game_physiology::body(&self.state.components, actor)
+        facts.capable &= game_physiology::body(&self.host.storage, actor)
             .is_some_and(|body| body.vitals.fatigue < physical.rules.fatigue_limit);
         Ok(game_projects::ConstructionFacts {
             actor: facts,
             land_accessible: match plan.kind {
                 ProjectKind::Workshop => true,
                 ProjectKind::Farm { plot, .. } => self
+                    .host
                     .state
                     .ecology
                     .as_ref()
-                    .and_then(|w| w.plot(&self.state.components, plot))
+                    .and_then(|w| w.plot(&self.host.storage, plot))
                     .is_some_and(|p| p.access.contains(&actor)),
             },
             tool_available: self.project_usable_for_planning(
@@ -428,7 +457,8 @@ impl Simulation {
         self.construction_facts(actor, project, None)
             .ok()
             .is_some_and(|facts| {
-                self.state
+                self.host
+                    .state
                     .projects
                     .as_ref()
                     .unwrap()
@@ -441,7 +471,8 @@ impl Simulation {
         actor: PersonId,
         action: ProjectAction,
     ) -> Result<(), Error> {
-        if self.state.projects.is_none() {
+        self.host.preflight_records(0, 0, 1)?;
+        if self.host.state.projects.is_none() {
             return Err(Error::Unavailable);
         }
         let change = match &action {
@@ -467,7 +498,7 @@ impl Simulation {
                 let stocks = stock_ids
                     .into_iter()
                     .filter_map(|id| {
-                        self.state.inventories.get(&id).map(|stock| {
+                        self.host.state.inventories.get(&id).map(|stock| {
                             (
                                 id,
                                 game_projects::StockFact {
@@ -484,32 +515,39 @@ impl Simulation {
                 let people = self.person_index.keys().copied().collect();
                 let land = match &action {
                     ProjectAction::ProposeFarm { plot, .. } => self
+                        .host
                         .state
                         .ecology
                         .as_ref()
-                        .and_then(|w| w.plot(&self.state.components, *plot)),
+                        .and_then(|w| w.plot(&self.host.storage, *plot)),
                     _ => None,
                 };
-                self.state.projects.as_ref().unwrap().prepare_proposal(
-                    ProjectId(self.state.next_id),
-                    &action,
-                    game_projects::ProposalFacts {
-                        actor: self.project_actor_facts(actor, None),
-                        people: &people,
-                        stocks: &stocks,
-                        land_area: land.map(|p| p.area),
-                        land_accessible: land.is_some_and(|p| p.access.contains(&actor)),
-                    },
-                )?
+                self.host
+                    .state
+                    .projects
+                    .as_ref()
+                    .unwrap()
+                    .prepare_proposal(
+                        ProjectId(self.host.next_id()),
+                        &action,
+                        game_projects::ProposalFacts {
+                            actor: self.project_actor_facts(actor, None),
+                            people: &people,
+                            stocks: &stocks,
+                            land_area: land.map(|p| p.area),
+                            land_accessible: land.is_some_and(|p| p.access.contains(&actor)),
+                        },
+                    )?
             }
             ProjectAction::Support { project, agreement } => {
                 let contract = self
+                    .host
                     .state
                     .agreements
                     .as_ref()
                     .and_then(|w| w.agreements.get(agreement))
                     .ok_or(Error::Unavailable)?;
-                self.state.projects.as_ref().unwrap().prepare_support(
+                self.host.state.projects.as_ref().unwrap().prepare_support(
                     *project,
                     contract,
                     self.project_actor_facts(actor, Some(*project)),
@@ -517,13 +555,15 @@ impl Simulation {
             }
             ProjectAction::Work { project } => {
                 let facts = self.construction_facts(actor, *project, None)?;
-                self.state
+                self.host
+                    .state
                     .projects
                     .as_ref()
                     .unwrap()
                     .prepare_construction(*project, facts)?
             }
             ProjectAction::Cancel { project } => self
+                .host
                 .state
                 .projects
                 .as_ref()
@@ -534,12 +574,14 @@ impl Simulation {
                 agreement,
             } => {
                 let contract = self
+                    .host
                     .state
                     .agreements
                     .as_ref()
                     .and_then(|w| w.agreements.get(agreement))
                     .ok_or(Error::Unavailable)?;
                 let known = self
+                    .host
                     .state
                     .projects
                     .as_ref()
@@ -547,22 +589,27 @@ impl Simulation {
                     .known_enterprises
                     .get(&actor)
                     .is_some_and(|k| k.contains_key(enterprise));
-                self.state.projects.as_ref().unwrap().prepare_operation(
-                    *enterprise,
-                    contract,
-                    self.project_actor_facts(actor, None),
-                    known,
-                )?
+                self.host
+                    .state
+                    .projects
+                    .as_ref()
+                    .unwrap()
+                    .prepare_operation(
+                        *enterprise,
+                        contract,
+                        self.project_actor_facts(actor, None),
+                        known,
+                    )?
             }
         };
         self.apply_project_change(change)?;
         self.observe_projects();
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         Ok(())
     }
     fn apply_project_change(&mut self, change: game_projects::PreparedChange) -> Result<(), Error> {
         use game_projects::{AssetEffect, Effect};
-        let mut next_id = self.state.next_id;
+        let mut next_id = self.host.next_id();
         let mut land = BTreeMap::new();
         let mut consumed = BTreeMap::<InventoryId, u128>::new();
         for effect in change.effects() {
@@ -585,8 +632,8 @@ impl Simulation {
                     match asset {
                         AssetEffect::Workshop(_) => {
                             if site.0 != next_id
-                                || self.state.physical.as_ref().is_none_or(|_| {
-                                    game_workshop::site(&self.state.components, *site).is_some()
+                                || self.host.state.physical.as_ref().is_none_or(|_| {
+                                    game_workshop::site(&self.host.storage, *site).is_some()
                                 })
                             {
                                 return Err(Error::Unavailable);
@@ -595,17 +642,19 @@ impl Simulation {
                         }
                         AssetEffect::Farm { plot, .. } => {
                             let source = self
+                                .host
                                 .state
                                 .ecology
                                 .as_ref()
-                                .and_then(|w| w.plot(&self.state.components, *plot))
+                                .and_then(|w| w.plot(&self.host.storage, *plot))
                                 .ok_or(Error::Unavailable)?
                                 .clone();
                             if self
+                                .host
                                 .state
                                 .agriculture
                                 .as_ref()
-                                .is_none_or(|w| w.field(&self.state.components, *plot).is_some())
+                                .is_none_or(|w| w.field(&self.host.storage, *plot).is_some())
                             {
                                 return Err(Error::Unavailable);
                             }
@@ -621,7 +670,8 @@ impl Simulation {
             }
         }
         if consumed.iter().any(|(id, quantity)| {
-            self.state
+            self.host
+                .state
                 .inventories
                 .get(id)
                 .is_none_or(|s| u128::from(s.quantity.0) < *quantity)
@@ -632,10 +682,11 @@ impl Simulation {
             let count = match effect {
                 Effect::Interrupt { actor } => {
                     if self
+                        .host
                         .state
                         .physical
                         .as_ref()
-                        .and_then(|_| self.state.components.activity(*actor))
+                        .and_then(|_| self.host.storage.activity(*actor))
                         .is_some_and(|activity| matches!(activity, Activity::Construct { .. }))
                     {
                         0
@@ -648,8 +699,18 @@ impl Simulation {
             total.checked_add(count).ok_or(Error::Overflow)
         })?;
         self.ensure_event_capacity(event_bound)?;
-        let effects = change.commit(self.state.projects.as_mut().ok_or(Error::Unavailable)?)?;
-        self.state.next_id = next_id;
+        let effects = change.commit(
+            self.host
+                .state
+                .projects
+                .as_mut()
+                .ok_or(Error::Unavailable)?,
+        )?;
+        self.host.allocate_ids(
+            (next_id)
+                .checked_sub(self.host.next_id())
+                .ok_or(Error::Overflow)?,
+        )?;
         for effect in effects {
             match effect {
                 Effect::InputUsed {
@@ -669,7 +730,13 @@ impl Simulation {
                     source,
                     quantity,
                 } => {
-                    self.state.inventories.get_mut(&source).unwrap().quantity.0 -= quantity.0;
+                    self.host
+                        .state
+                        .inventories
+                        .get_mut(&source)
+                        .unwrap()
+                        .quantity
+                        .0 -= quantity.0;
                     self.emit(EventKind::Consumed {
                         actor,
                         source,
@@ -695,9 +762,10 @@ impl Simulation {
                     actor,
                     completes,
                 } => {
-                    *self.state.components.activity_mut(actor).unwrap() =
+                    *self.host.storage.activity_mut(actor).unwrap() =
                         Activity::Construct { project, completes };
-                    self.state
+                    self.host
+                        .state
                         .due
                         .entry(completes)
                         .or_default()
@@ -720,7 +788,7 @@ impl Simulation {
                     match asset {
                         AssetEffect::Workshop(asset) => {
                             game_workshop::insert_site(
-                                &mut self.state.components,
+                                &mut self.host.storage,
                                 physical::Site {
                                     id: site,
                                     area: asset.area,
@@ -746,18 +814,20 @@ impl Simulation {
                         } => {
                             assert_eq!(site, plot, "farm conversion preserves the land entity");
                             let source = land.remove(&plot).unwrap();
-                            self.state
+                            self.host
+                                .state
                                 .ecology
                                 .as_ref()
                                 .unwrap()
-                                .remove_plot(&mut self.state.components, plot)
+                                .remove_plot(&mut self.host.storage, plot)
                                 .expect("validated plot removal");
-                            self.state
+                            self.host
+                                .state
                                 .agriculture
                                 .as_mut()
                                 .unwrap()
                                 .insert_field(
-                                    &mut self.state.components,
+                                    &mut self.host.storage,
                                     agriculture::Field {
                                         id: site,
                                         area,
@@ -770,10 +840,10 @@ impl Simulation {
                                     },
                                 )
                                 .expect("validated component insertion");
-                            let world = self.state.agriculture.as_mut().unwrap();
+                            let world = self.host.state.agriculture.as_mut().unwrap();
                             world
                                 .insert_crop(
-                                    &mut self.state.components,
+                                    &mut self.host.storage,
                                     site,
                                     agriculture::Crop::new(world.catalog.default_crop.clone()),
                                 )
@@ -782,7 +852,7 @@ impl Simulation {
                             // closing weather update and all prior physical history.
                         }
                     }
-                    *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
+                    *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
                     self.emit(EventKind::ProjectCompleted {
                         project,
                         enterprise,
@@ -794,46 +864,50 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn interrupt_construction(&mut self, actor: PersonId) {
-        if let Some(world) = &mut self.state.projects
+        if let Some(world) = &mut self.host.state.projects
             && let Ok(change) = world.prepare_interrupt(actor)
         {
             let _ = change.commit(world);
         }
     }
     pub(crate) fn project_boundary(&self, limit: SimTime) -> SimTime {
-        self.state
+        self.host
+            .state
             .projects
             .as_ref()
-            .map_or(limit, |world| world.boundary(self.state.time, limit))
+            .map_or(limit, |world| world.boundary(self.host.clock().time, limit))
     }
     pub(crate) fn project_allocation_bound(&self, next: SimTime) -> Result<u64, Error> {
-        self.state
+        self.host
+            .state
             .projects
             .as_ref()
             .map_or(Ok(0), |world| world.allocation_bound(next))
     }
     pub(crate) fn project_funding_proposal_bound(&self, next: SimTime) -> Result<u64, Error> {
-        if self.state.decisions.is_none() || !next.0.is_multiple_of(60_000) {
+        if self.host.state.decisions.is_none() || !next.0.is_multiple_of(60_000) {
             return Ok(0);
         }
-        self.state
+        self.host
+            .state
             .projects
             .as_ref()
             .map_or(Ok(0), |world| world.funding_proposal_bound(next))
     }
     pub(crate) fn evaluate_projects(&self, next: SimTime) -> Result<Option<World>, Error> {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return Ok(None);
         };
         let work = self
+            .host
             .state
             .physical
             .as_ref()
             .into_iter()
-            .flat_map(|_| game_physiology::bodies(&self.state.components))
+            .flat_map(|_| game_physiology::bodies(&self.host.storage))
             .filter_map(|(actor, body)| {
                 if let Activity::Work { site } | Activity::Cultivate { field: site, .. } =
-                    self.state.components.activity(actor)?
+                    self.host.storage.activity(actor)?
                     && body.vitals.alive
                     && body.vitals.health > 0
                 {
@@ -843,16 +917,16 @@ impl Simulation {
                 }
             })
             .collect::<Vec<_>>();
-        let output = world.advance(self.state.time, next, &work)?;
+        let output = world.advance(self.host.clock().time, next, &work)?;
         Ok(Some(output))
     }
     pub(crate) fn commit_projects(&mut self, output: Option<World>) {
         if let Some(output) = output {
-            self.state.projects = Some(output);
+            self.host.state.projects = Some(output);
         }
     }
     pub(crate) fn complete_construction(&mut self, actor: PersonId) {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return;
         };
         let Some(job) = world.jobs.get(&actor) else {
@@ -862,19 +936,20 @@ impl Simulation {
             return;
         };
         let asset_available = match plan.kind {
-            ProjectKind::Workshop => self.state.physical.is_some(),
+            ProjectKind::Workshop => self.host.state.physical.is_some(),
             ProjectKind::Farm { plot, .. } => {
-                self.state
+                self.host
+                    .state
                     .ecology
                     .as_ref()
-                    .is_some_and(|w| w.plot(&self.state.components, plot).is_some())
-                    && self.state.agriculture.is_some()
+                    .is_some_and(|w| w.plot(&self.host.storage, plot).is_some())
+                    && self.host.state.agriculture.is_some()
             }
         };
-        let site = SiteId(self.state.next_id);
+        let site = SiteId(self.host.next_id());
         let Some(enterprise_id) = self
-            .state
-            .next_id
+            .host
+            .next_id()
             .checked_add(u64::from(matches!(plan.kind, ProjectKind::Workshop)))
         else {
             return;
@@ -882,7 +957,7 @@ impl Simulation {
         let prepared = world.prepare_completion(
             actor,
             game_projects::CompletionFacts {
-                now: self.state.time,
+                now: self.host.clock().time,
                 capable: self.project_able(actor),
                 asset_available,
                 site,
@@ -898,7 +973,8 @@ impl Simulation {
         site: SiteId,
         quantity: Quantity,
     ) -> Result<Option<game_projects::PreparedChange>, Error> {
-        self.state
+        self.host
+            .state
             .projects
             .as_ref()
             .map(|world| world.prepare_input(site, Good::Timber, quantity))
@@ -910,10 +986,13 @@ impl Simulation {
         source: InventoryId,
         quantity: Quantity,
     ) -> Result<Option<game_projects::PreparedChange>, Error> {
-        self.state
+        self.host
+            .state
             .projects
             .as_ref()
-            .map(|world| world.prepare_input(site, self.state.inventories[&source].good, quantity))
+            .map(|world| {
+                world.prepare_input(site, self.host.state.inventories[&source].good, quantity)
+            })
             .transpose()
     }
     pub(crate) fn commit_project_input(
@@ -926,12 +1005,13 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn observe_projects(&mut self) {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return;
         };
         let projects = world.projects.values().cloned().collect::<Vec<_>>();
         let enterprises = world.enterprises.values().cloned().collect::<Vec<_>>();
         let people = self
+            .host
             .state
             .people
             .iter()
@@ -960,9 +1040,10 @@ impl Simulation {
                     materials_consumed: project.materials_consumed,
                     finish_by: project.finish_by,
                     enterprise: project.enterprise,
-                    observed_at: self.state.time,
+                    observed_at: self.host.clock().time,
                 };
-                self.state
+                self.host
+                    .state
                     .projects
                     .as_mut()
                     .unwrap()
@@ -979,7 +1060,7 @@ impl Simulation {
                 // workshop's records while physically present, not from afar.
                 let books = enterprise.beneficiaries.contains(&actor)
                     || enterprise.operating_agreements.iter().any(|id| {
-                        self.state.agreements.as_ref().unwrap().agreements[id]
+                        self.host.state.agreements.as_ref().unwrap().agreements[id]
                             .parties
                             .contains(&actor)
                     });
@@ -998,9 +1079,10 @@ impl Simulation {
                     status: enterprise.status,
                     blocker: enterprise.blocker,
                     accounts,
-                    observed_at: self.state.time,
+                    observed_at: self.host.clock().time,
                 };
-                self.state
+                self.host
+                    .state
                     .projects
                     .as_mut()
                     .unwrap()
@@ -1012,7 +1094,7 @@ impl Simulation {
         }
     }
     fn enterprise_accounts(&self, enterprise: &Enterprise) -> Option<EnterpriseAccountView> {
-        let agreements = self.state.agreements.as_ref()?;
+        let agreements = self.host.state.agreements.as_ref()?;
         let obligations = enterprise
             .operating_agreements
             .iter()
@@ -1021,7 +1103,7 @@ impl Simulation {
                 let obligation = &agreements.obligations[id];
                 let delivery_good = match obligation.term {
                     AgreementTerm::Delivery { source, .. } => {
-                        Some(self.state.inventories[&source].good)
+                        Some(self.host.state.inventories[&source].good)
                     }
                     _ => None,
                 };
@@ -1037,7 +1119,7 @@ impl Simulation {
         game_projects::account_view(enterprise, &obligations).ok()
     }
     pub fn project_view(&self, actor: PersonId) -> ProjectsView {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return ProjectsView::default();
         };
         ProjectsView {
@@ -1054,20 +1136,20 @@ impl Simulation {
         }
     }
     fn pending_project_outputs(&self) -> Vec<(SiteId, Good, Quantity)> {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return Vec::new();
         };
-        self.state
-            .events
+        self.host
+            .events()
             .iter()
-            .filter(|e| e.id.0 > world.last_event)
-            .flat_map(|event| match event.kind {
+            .filter(|e| e.sequence > world.last_event)
+            .flat_map(|event| match event.event {
                 EventKind::Produced {
                     site,
                     output,
                     quantity,
                     ..
-                } => vec![(site, self.state.inventories[&output].good, quantity)],
+                } => vec![(site, self.host.state.inventories[&output].good, quantity)],
                 EventKind::CropHarvested {
                     field, food, seed, ..
                 } => vec![(field, Good::Food, food), (field, Good::Seed, seed)],
@@ -1079,7 +1161,7 @@ impl Simulation {
         &self,
         outputs: &[(SiteId, Good, Quantity)],
     ) -> Result<(), Error> {
-        if let Some(world) = &self.state.projects {
+        if let Some(world) = &self.host.state.projects {
             let mut pending = self.pending_project_outputs();
             pending.extend_from_slice(outputs);
             world.prepare_outputs(&pending, None)?;
@@ -1087,7 +1169,7 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn update_projects(&mut self) -> Result<(), Error> {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return Ok(());
         };
         let outputs = self.pending_project_outputs();
@@ -1121,20 +1203,20 @@ impl Simulation {
         let enterprise_facts=world.enterprises.values().map(|asset| {
             let (active,crop_failed,output_room,required_input,required_output)=match asset.kind {
                 ProjectKind::Farm {..}=>{
-                    (game_agriculture::cultivations(&self.state.components).any(|(_,j)|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crop(&self.state.components, asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
+                    (game_agriculture::cultivations(&self.host.storage).any(|(_,j)|j.field==asset.site),self.host.state.agriculture.as_ref().unwrap().crop(&self.host.storage, asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
                 }
                 ProjectKind::Workshop=>{
-                    let site=&game_workshop::site(&self.state.components,asset.site).expect("site exists");
-                    let output=&self.state.inventories[&site.output];
-                    (self.state.components.activities().any(|(_,activity)|matches!(activity,Activity::Work {site:id} if *id==site.id)),false,
+                    let site=&game_workshop::site(&self.host.storage,asset.site).expect("site exists");
+                    let output=&self.host.state.inventories[&site.output];
+                    (self.host.storage.activities().any(|(_,activity)|matches!(activity,Activity::Work {site:id} if *id==site.id)),false,
                         Quantity(output.capacity.0.saturating_sub(output.quantity.0)),site.input_quantity,site.output_quantity)
                 }
             };
             let workers=asset.workers.iter().map(|actor| {
                 let (land_accessible,tool_available,materials_available)=match asset.kind {
-                    ProjectKind::Farm {..}=>(self.state.agriculture.as_ref().unwrap().field(&self.state.components, asset.site).expect("component exists").access.contains(actor),false,Quantity(0)),
+                    ProjectKind::Farm {..}=>(self.host.state.agriculture.as_ref().unwrap().field(&self.host.storage, asset.site).expect("component exists").access.contains(actor),false,Quantity(0)),
                     ProjectKind::Workshop=>{
-                        let site=&game_workshop::site(&self.state.components,asset.site).expect("site exists");
+                        let site=&game_workshop::site(&self.host.storage,asset.site).expect("site exists");
                         (true,self.project_usable(*actor,site.tool,Good::Tool,1_000),if self.project_usable(*actor,site.input,Good::Timber,0) {Quantity(self.unreserved_stock(site.input,*actor))} else {Quantity(0)})
                     }
                 };
@@ -1143,11 +1225,11 @@ impl Simulation {
             game_projects::EnterpriseCondition {enterprise:asset.id,active,workers,crop_failed,output_room,required_input,required_output}
         }).collect::<Vec<_>>();
         let change = world.prepare_reconcile(
-            self.state.time,
+            self.host.clock().time,
             &project_facts,
             &enterprise_facts,
             &outputs,
-            self.state.next_event - 1,
+            self.host.next_event() - 1,
         )?;
         let changed = !outputs.is_empty() || !change.effects().is_empty();
         self.apply_project_change(change)?;
@@ -1163,7 +1245,7 @@ impl Simulation {
         self.seek_workshop_support()
     }
     fn seek_farm_support(&mut self) -> Result<(), Error> {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return Ok(());
         };
         let plans = world
@@ -1178,14 +1260,15 @@ impl Simulation {
             .collect::<Vec<_>>();
         for plan in plans {
             let actor = plan.sponsor;
-            if actor == self.state.ruler
+            if actor == self.host.state.ruler
                 || !self.project_able(actor)
                 || !self.project_is_known(actor, plan.id)
                 || self.project_usable(
                     actor,
                     plan.materials,
                     Good::Timber,
-                    self.state
+                    self.host
+                        .state
                         .projects
                         .as_ref()
                         .unwrap()
@@ -1194,16 +1277,17 @@ impl Simulation {
                         .0,
                 )
                 || self
+                    .host
                     .state
                     .projects
                     .as_ref()
                     .unwrap()
                     .next_search
                     .get(&actor)
-                    .is_some_and(|t| *t > self.state.time)
+                    .is_some_and(|t| *t > self.host.clock().time)
                 || plan.support.iter().any(|id| {
                     matches!(
-                        self.state.agreements.as_ref().unwrap().agreements[id].status,
+                        self.host.state.agreements.as_ref().unwrap().agreements[id].status,
                         AgreementStatus::Proposed
                             | AgreementStatus::Active
                             | AgreementStatus::Breached
@@ -1212,16 +1296,15 @@ impl Simulation {
             {
                 continue;
             }
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
-                &self.state.components,
-                actor,
-            )
-            .unwrap();
+            let mind =
+                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .unwrap();
             if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
             {
                 continue;
             }
             let required = self
+                .host
                 .state
                 .projects
                 .as_ref()
@@ -1238,7 +1321,8 @@ impl Simulation {
                         && f.inventory != plan.materials
                 })
                 .find_map(|f| {
-                    self.state
+                    self.host
+                        .state
                         .agreements
                         .as_ref()
                         .unwrap()
@@ -1258,7 +1342,8 @@ impl Simulation {
                     f.good == Good::Food && f.area == plan.area && f.inventory != plan.output
                 })
                 .find(|f| {
-                    self.state
+                    self.host
+                        .state
                         .agreements
                         .as_ref()
                         .unwrap()
@@ -1270,11 +1355,11 @@ impl Simulation {
             let Some(destination) = destination else {
                 continue;
             };
-            let calendar = &self.state.environment.as_ref().unwrap().calendar;
+            let calendar = &self.host.state.environment.as_ref().unwrap().calendar;
             let game_projects::FundingChoice::Available(funding) = plan.prepare_farm_funding(
-                &self.state.projects.as_ref().unwrap().rules,
+                &self.host.state.projects.as_ref().unwrap().rules,
                 game_projects::FundingFacts {
-                    now: self.state.time,
+                    now: self.host.clock().time,
                     financier: supporter,
                     source,
                     repayment_destination: destination,
@@ -1288,7 +1373,7 @@ impl Simulation {
                 // No agreement, support record or retry state has been changed.
                 continue;
             };
-            let before = self.state.next_id;
+            let before = self.host.next_id();
             self.agreement_command(
                 actor,
                 &AgreementAction::Propose {
@@ -1298,6 +1383,7 @@ impl Simulation {
                 },
             )?;
             let agreement = self
+                .host
                 .state
                 .agreements
                 .as_ref()
@@ -1314,7 +1400,8 @@ impl Simulation {
                     agreement,
                 },
             )?;
-            self.state
+            self.host
+                .state
                 .projects
                 .as_mut()
                 .unwrap()
@@ -1324,7 +1411,7 @@ impl Simulation {
         Ok(())
     }
     fn seek_workshop_support(&mut self) -> Result<(), Error> {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return Ok(());
         };
         let plans = world
@@ -1334,7 +1421,7 @@ impl Simulation {
                 plan.kind == ProjectKind::Workshop
                     && plan.support.iter().all(|id| {
                         matches!(
-                            self.state.agreements.as_ref().unwrap().agreements[id].status,
+                            self.host.state.agreements.as_ref().unwrap().agreements[id].status,
                             AgreementStatus::Fulfilled
                                 | AgreementStatus::Rejected
                                 | AgreementStatus::Withdrawn
@@ -1344,7 +1431,7 @@ impl Simulation {
             .cloned()
             .collect::<Vec<_>>();
         for plan in plans {
-            if plan.sponsor == self.state.ruler
+            if plan.sponsor == self.host.state.ruler
                 || !self.project_able(plan.sponsor)
                 || matches!(
                     plan.status,
@@ -1354,32 +1441,31 @@ impl Simulation {
                 continue;
             }
             let actor = plan.sponsor;
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
-                &self.state.components,
-                actor,
-            )
-            .unwrap();
+            let mind =
+                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .unwrap();
             if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
             {
                 continue;
             }
             if self
+                .host
                 .state
                 .projects
                 .as_ref()
                 .unwrap()
                 .next_search
                 .get(&actor)
-                .is_some_and(|time| *time > self.state.time)
+                .is_some_and(|time| *time > self.host.clock().time)
             {
                 continue;
             }
             let Ok(needed) =
-                plan.workshop_funding_materials(&self.state.projects.as_ref().unwrap().rules)
+                plan.workshop_funding_materials(&self.host.state.projects.as_ref().unwrap().rules)
             else {
                 continue;
             };
-            if self.state.inventories[&plan.materials].quantity >= needed {
+            if self.host.state.inventories[&plan.materials].quantity >= needed {
                 continue;
             }
             let donor = mind
@@ -1392,7 +1478,8 @@ impl Simulation {
                         && fact.quantity >= needed
                 })
                 .find_map(|fact| {
-                    self.state
+                    self.host
+                        .state
                         .agreements
                         .as_ref()
                         .unwrap()
@@ -1407,6 +1494,7 @@ impl Simulation {
                 continue;
             };
             let recipient = self
+                .host
                 .state
                 .inventories
                 .values()
@@ -1416,6 +1504,7 @@ impl Simulation {
                         && stock.id != plan.tool
                         && stock.id != plan.output
                         && self
+                            .host
                             .state
                             .agreements
                             .as_ref()
@@ -1429,18 +1518,24 @@ impl Simulation {
                 continue;
             };
             let game_projects::FundingChoice::Available(funding) = plan.prepare_workshop_funding(
-                &self.state.projects.as_ref().unwrap().rules,
+                &self.host.state.projects.as_ref().unwrap().rules,
                 game_projects::FundingFacts {
-                    now: self.state.time,
+                    now: self.host.clock().time,
                     financier,
                     source,
                     repayment_destination: destination,
                 },
-                self.state.physical.as_ref().unwrap().rules.loading_time,
+                self.host
+                    .state
+                    .physical
+                    .as_ref()
+                    .unwrap()
+                    .rules
+                    .loading_time,
             ) else {
                 continue;
             };
-            let before = self.state.next_id;
+            let before = self.host.next_id();
             self.debug_agreement_action(
                 actor,
                 AgreementAction::Propose {
@@ -1450,6 +1545,7 @@ impl Simulation {
                 },
             )?;
             let agreement = self
+                .host
                 .state
                 .agreements
                 .as_ref()
@@ -1466,7 +1562,8 @@ impl Simulation {
                     agreement,
                 },
             )?;
-            self.state
+            self.host
+                .state
                 .projects
                 .as_mut()
                 .unwrap()
@@ -1484,7 +1581,7 @@ impl Simulation {
         use game_logistics::{
             AcquisitionOffer, Delivery, Destination, OfferYield, Requirement, Step,
         };
-        let world = self.state.projects.as_ref()?;
+        let world = self.host.state.projects.as_ref()?;
         let plan = world
             .known_projects
             .get(&actor)?
@@ -1514,10 +1611,10 @@ impl Simulation {
         };
         let fact = mind.knowledge.get(&target)?;
         let destination = self.delivery_known_inventory_destination(actor, target)?;
-        let available = if destination.observed_at == self.state.time
+        let available = if destination.observed_at == self.host.clock().time
             && destination.location == self.delivery_observed_location(actor)
         {
-            self.state.inventories[&target].quantity.0
+            self.host.state.inventories[&target].quantity.0
         } else {
             fact.quantity.0
         };
@@ -1576,14 +1673,14 @@ impl Simulation {
         actor: PersonId,
         resources: Option<&equipment::RankingResources>,
     ) -> Vec<Command> {
-        let Some(world) = self.state.projects.as_ref() else {
+        let Some(world) = self.host.state.projects.as_ref() else {
             return Vec::new();
         };
         if !self.project_able(actor) {
             return Vec::new();
         }
-        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) else {
             return Vec::new();
         };
@@ -1619,7 +1716,7 @@ impl Simulation {
                 continue;
             }
             let site =
-                &game_workshop::site(&self.state.components, workshop.site).expect("site exists");
+                &game_workshop::site(&self.host.storage, workshop.site).expect("site exists");
             if self.project_usable_for_planning(
                 actor,
                 site.input,
@@ -1627,8 +1724,8 @@ impl Simulation {
                 site.input_quantity.0,
                 resources,
             ) && self.project_usable_for_planning(actor, site.tool, Good::Tool, 1_000, resources)
-                && self.state.inventories[&site.output].capacity.0
-                    - self.state.inventories[&site.output].quantity.0
+                && self.host.state.inventories[&site.output].capacity.0
+                    - self.host.state.inventories[&site.output].quantity.0
                     >= site.output_quantity.0
             {
                 opportunities.push(Command::Work { site: site.id });
@@ -1645,7 +1742,7 @@ impl Simulation {
         }) || world
             .next_search
             .get(&actor)
-            .is_some_and(|time| *time > self.state.time)
+            .is_some_and(|time| *time > self.host.clock().time)
         {
             return opportunities;
         }
@@ -1653,11 +1750,13 @@ impl Simulation {
         let own = |fact: &&StockKnowledge| {
             fact.area == area
                 && self
+                    .host
                     .state
                     .inventories
                     .get(&fact.inventory)
                     .is_some_and(|stock| stock.location == InventoryLocation::Area(area))
                 && self
+                    .host
                     .state
                     .agreements
                     .as_ref()
@@ -1685,11 +1784,12 @@ impl Simulation {
             return opportunities;
         };
         if let Some(plot) = self
+            .host
             .state
             .ecology
             .as_ref()
             .and_then(|_| {
-                game_ecology::knowledge(&self.state.components, actor).map(|row| &row.known_plots)
+                game_ecology::knowledge(&self.host.storage, actor).map(|row| &row.known_plots)
             })
             .and_then(|k| k.values().find(|p| p.area == area && p.accessible))
         {
@@ -1714,7 +1814,7 @@ impl Simulation {
                         beneficiaries: BTreeSet::from([actor]),
                         workers: BTreeSet::from([actor]),
                         finish_by: SimTime(
-                            self.state.time.0.saturating_add(
+                            self.host.clock().time.0.saturating_add(
                                 world
                                     .rules
                                     .construction_labor
@@ -1747,7 +1847,8 @@ impl Simulation {
             .0
             .saturating_mul(4)
             .saturating_add(
-                self.state
+                self.host
+                    .state
                     .physical
                     .as_ref()
                     .unwrap()
@@ -1757,7 +1858,7 @@ impl Simulation {
                     .saturating_mul(8),
             )
             .saturating_add(120_000);
-        let Some(finish_by) = self.state.time.0.checked_add(expected).map(SimTime) else {
+        let Some(finish_by) = self.host.clock().time.0.checked_add(expected).map(SimTime) else {
             return opportunities;
         };
         opportunities.push(Command::Project {
@@ -1781,11 +1882,11 @@ impl Simulation {
         actor: PersonId,
         terms: &[AgreementTerm],
     ) -> i64 {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return 0;
         };
-        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) else {
             return 0;
         };
@@ -1795,6 +1896,7 @@ impl Simulation {
         let own = |fact: &&StockKnowledge| {
             fact.accessible
                 && self
+                    .host
                     .state
                     .agreements
                     .as_ref()
@@ -1891,7 +1993,7 @@ impl Simulation {
                 .saturating_add(output_batches.saturating_mul(world.rules.recipe_time.0))
                 .saturating_add(240_000);
             if pledged < required
-                || deadline.0.saturating_sub(self.state.time.0) < minimum_time
+                || deadline.0.saturating_sub(self.host.clock().time.0) < minimum_time
                 || mind
                     .knowledge
                     .get(&plan.tool)
@@ -1907,7 +2009,7 @@ impl Simulation {
     }
 
     pub(crate) fn available_project_commands(&self, actor: PersonId) -> Vec<Command> {
-        let Some(world) = &self.state.projects else {
+        let Some(world) = &self.host.state.projects else {
             return Vec::new();
         };
         if !self.project_able(actor) {
@@ -1940,25 +2042,26 @@ impl Simulation {
 }
 
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
-    let Some(world) = &state.projects else {
+    let Some(world) = &state.state.projects else {
         return Ok(());
     };
     let fail = || Error::InvalidSave("invalid workshop project or enterprise".into());
     let people = state
+        .state
         .people
         .iter()
         .map(|person| (person.id, person))
         .collect::<BTreeMap<_, _>>();
-    state.physical.as_ref().ok_or_else(fail)?;
-    let agreements = state.agreements.as_ref().ok_or_else(fail)?;
+    state.state.physical.as_ref().ok_or_else(fail)?;
+    let agreements = state.state.agreements.as_ref().ok_or_else(fail)?;
     let rules = &world.rules;
-    if state.decisions.is_none()
+    if state.state.decisions.is_none()
         || world.last_event >= state.next_event
         || world.timber_hints.iter().any(|(actor, areas)| {
             !people.contains_key(actor)
                 || areas
                     .iter()
-                    .any(|area| !state.areas.iter().any(|known| known.id == *area))
+                    .any(|area| !state.state.areas.iter().any(|known| known.id == *area))
         })
         || world
             .next_search
@@ -1972,7 +2075,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         if *id != plan.id
             || id.0 >= state.next_id
             || !people.contains_key(&plan.sponsor)
-            || !state.areas.iter().any(|area| area.id == plan.area)
+            || !state.state.areas.iter().any(|area| area.id == plan.area)
             || plan
                 .beneficiaries
                 .iter()
@@ -2008,7 +2111,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 },
             ),
         ] {
-            if state.inventories.get(&inventory).is_none_or(|stock| {
+            if state.state.inventories.get(&inventory).is_none_or(|stock| {
                 stock.good != good || stock.location != InventoryLocation::Area(plan.area)
             }) {
                 return Err(fail());
@@ -2016,16 +2119,17 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         }
         if let ProjectKind::Farm { plot, water } = plan.kind {
             let live_plot = state
+                .state
                 .ecology
                 .as_ref()
-                .and_then(|world| world.plot(&state.components, plot))
+                .and_then(|world| world.plot(state.components, plot))
                 .is_some_and(|source| source.area == plan.area);
             // A terminal proposal retains its original land reference after a
             // different, completed farm project converts that same plot.
             let historical_conversion = matches!(plan.status,
                 ProjectStatus::Cancelled | ProjectStatus::Failed)
-                && state.agriculture.as_ref().and_then(|world| {
-                    world.field(&state.components, plot)
+                && state.state.agriculture.as_ref().and_then(|world| {
+                    world.field(state.components, plot)
                 }).is_some_and(|field| field.id == plot && field.area == plan.area)
                 && world.enterprises.values().any(|enterprise| {
                     enterprise.project != plan.id
@@ -2033,22 +2137,22 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                         && enterprise.area == plan.area
                         && matches!(enterprise.kind, ProjectKind::Farm { plot: source, .. } if source == plot)
                 });
-            if state.inventories.get(&water).is_none_or(|i| {
+            if state.state.inventories.get(&water).is_none_or(|i| {
                 i.good != Good::Water || i.location != InventoryLocation::Area(plan.area)
             }) || plan.enterprise.is_none() && !live_plot && !historical_conversion
             {
                 return Err(fail());
             }
         }
-        if plan.materials_consumed&&!state.events.iter().any(|event|matches!(event.kind,EventKind::ConstructionStarted {project,..} if project==*id)) {return Err(fail());}
+        if plan.materials_consumed&&!state.events.iter().any(|event|matches!(event.event,EventKind::ConstructionStarted {project,..} if project==*id)) {return Err(fail());}
     }
     for (actor, job) in &world.jobs {
         let plan = world.projects.get(&job.project).ok_or_else(fail)?;
         if !people.contains_key(actor)
-            || *game_spatial::location(&state.components, game_ecs::StableId(actor.0))
+            || *game_spatial::location(state.components, game_ecs::StableId(actor.0))
                 .ok_or_else(fail)?
                 != Location::AtArea(plan.area)
-            || game_physiology::body(&state.components, *actor).is_none_or(|body| {
+            || game_physiology::body(state.components, *actor).is_none_or(|body| {
                 !body.vitals.alive
                     || state.components.activity(*actor)
                         != Some(&Activity::Construct {
@@ -2056,7 +2160,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                             completes: job.completes,
                         })
             })
-            || !state.due.get(&job.completes).is_some_and(|events| {
+            || !state.state.due.get(&job.completes).is_some_and(|events| {
                 events
                     .iter()
                     .any(|event| matches!(event,Due::Physical(id) if id==actor))
@@ -2074,9 +2178,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         let plan = world.projects.get(&enterprise.project).ok_or_else(fail)?;
         if let ProjectKind::Farm { plot, water } = plan.kind {
             let field = state
+                .state
                 .agriculture
                 .as_ref()
-                .and_then(|w| w.field(&state.components, plot))
+                .and_then(|w| w.field(state.components, plot))
                 .ok_or_else(fail)?;
             if enterprise.site != plot
                 || field.seed != plan.input
@@ -2088,13 +2193,17 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 return Err(fail());
             }
             let mut produced = BTreeMap::<Good, u64>::new();
-            for event in state.events.iter().filter(|e| e.id.0 <= world.last_event) {
+            for event in state
+                .events
+                .iter()
+                .filter(|e| e.sequence <= world.last_event)
+            {
                 if let EventKind::CropHarvested {
                     field: site,
                     food,
                     seed,
                     ..
-                } = event.kind
+                } = event.event
                     && site == plot
                 {
                     for (good, quantity) in [(Good::Food, food), (Good::Seed, seed)] {
@@ -2115,7 +2224,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             }
             continue;
         }
-        let site = game_workshop::site(&state.components, enterprise.site).ok_or_else(fail)?;
+        let site = game_workshop::site(state.components, enterprise.site).ok_or_else(fail)?;
         if *id != enterprise.id
             || id.0 >= state.next_id
             || site.area != plan.area
@@ -2141,8 +2250,8 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         let produced = state
             .events
             .iter()
-            .filter(|event| event.id.0 <= world.last_event)
-            .filter_map(|event| match event.kind {
+            .filter(|event| event.sequence <= world.last_event)
+            .filter_map(|event| match event.event {
                 EventKind::Produced { site, quantity, .. } if site == enterprise.site => {
                     Some(quantity.0)
                 }
@@ -2153,7 +2262,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         let used = state
             .events
             .iter()
-            .filter_map(|event| match event.kind {
+            .filter_map(|event| match event.event {
                 EventKind::EnterpriseInputUsed {
                     enterprise: target,
                     site,
@@ -2246,16 +2355,18 @@ mod farm_tests {
     use super::*;
     fn fixture() -> Simulation {
         let mut sim = Simulation::farm_enterprise_fixture(67, Execution::default()).unwrap();
-        let environment = sim.state.environment.as_mut().unwrap();
+        let epoch = sim.time();
+        let seed = sim.host.seed();
+        let environment = sim.host.state.environment.as_mut().unwrap();
         environment.calendar.day = SimDuration(600_000);
         environment.climate.seasonal_temperature = [20; 4];
         environment.climate.temperature_variation = 0;
         environment.climate.seasonal_rain = [30; 4];
         environment.climate.rainfall_variation = 0;
         environment
-            .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+            .reset_epoch(&mut sim.host.storage, epoch, seed)
             .unwrap();
-        let agriculture = sim.state.agriculture.as_mut().unwrap();
+        let agriculture = sim.host.state.agriculture.as_mut().unwrap();
         agriculture.content = None;
         let crop = agriculture
             .catalog
@@ -2272,6 +2383,7 @@ mod farm_tests {
 
     fn ensure_unfunded_proposal(sim: &mut Simulation, actor: PersonId, farm: bool) {
         if sim
+            .host
             .state
             .projects
             .as_ref()
@@ -2309,15 +2421,18 @@ mod farm_tests {
     #[test]
     fn farm_conversion_at_a_day_boundary_consumes_the_closing_plot_once() {
         let mut sim = fixture();
-        let farmer = sim.state.people[3].id;
-        let area = sim.state.areas[0].id;
-        let environment = sim.state.environment.as_mut().unwrap();
+        let farmer = sim.host.state.people[3].id;
+        let area = sim.host.state.areas[0].id;
+        let epoch = sim.time();
+        let seed = sim.host.seed();
+        let environment = sim.host.state.environment.as_mut().unwrap();
         environment.calendar.day = SimDuration(300_000);
         environment.climate.seasonal_evaporation = [2; 4];
         environment
-            .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+            .reset_epoch(&mut sim.host.storage, epoch, seed)
             .unwrap();
         let proposals: Vec<_> = sim
+            .host
             .state
             .projects
             .as_ref()
@@ -2337,16 +2452,18 @@ mod farm_tests {
             .unwrap();
         }
         let plot = sim
+            .host
             .state
             .ecology
             .as_ref()
             .unwrap()
-            .plots(&sim.state.components)
+            .plots(&sim.host.storage)
             .find(|(_, plot)| plot.custodian == Some(farmer))
             .unwrap()
             .0;
         let stock = |good| {
-            sim.state
+            sim.host
+                .state
                 .inventories
                 .values()
                 .find(|i| {
@@ -2390,6 +2507,7 @@ mod farm_tests {
         )
         .unwrap();
         let project = sim
+            .host
             .state
             .projects
             .as_ref()
@@ -2407,28 +2525,29 @@ mod farm_tests {
         )
         .unwrap();
         assert_eq!(
-            sim.state.projects.as_ref().unwrap().jobs[&farmer].completes,
+            sim.host.state.projects.as_ref().unwrap().jobs[&farmer].completes,
             SimTime(300_000)
         );
         sim.advance(SimDuration(300_000)).unwrap();
-        let agriculture = sim.state.agriculture.as_ref().unwrap();
+        let agriculture = sim.host.state.agriculture.as_ref().unwrap();
         assert!(
-            !sim.state
+            !sim.host
+                .state
                 .ecology
                 .as_ref()
                 .unwrap()
-                .plot(&sim.state.components, plot)
+                .plot(&sim.host.storage, plot)
                 .is_some()
         );
         assert_eq!(
             agriculture
-                .fields(&sim.state.components)
+                .fields(&sim.host.storage)
                 .filter(|(id, _)| *id == plot)
                 .count(),
             1
         );
         assert_eq!(
-            agriculture.soil(&sim.state.components, plot),
+            agriculture.soil(&sim.host.storage, plot),
             Some(&agriculture::Soil {
                 fertility: 901,
                 water: 103,
@@ -2437,6 +2556,7 @@ mod farm_tests {
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         let historical = sim
+            .host
             .state
             .projects
             .as_ref()
@@ -2449,7 +2569,7 @@ mod farm_tests {
             })
             .expect("the cancelled proposal preserves its converted plot reference")
             .id;
-        let mut invalid = sim.state.clone();
+        let mut invalid = sim.host.state.clone();
         invalid
             .projects
             .as_mut()
@@ -2459,7 +2579,11 @@ mod farm_tests {
             .unwrap()
             .status = ProjectStatus::SeekingSupport;
         assert!(
-            validate(&invalid).is_err(),
+            validate(&CanonicalState {
+                state: &invalid,
+                ..sim.canonical_state()
+            })
+            .is_err(),
             "an unfinished proposal still needs a live plot"
         );
     }
@@ -2467,11 +2591,12 @@ mod farm_tests {
     #[test]
     fn valid_farm_with_unrepresentable_harvest_promise_declines_funding_without_mutation() {
         let mut sim = fixture();
-        let farmer = sim.state.people[3].id;
+        let farmer = sim.host.state.people[3].id;
         ensure_unfunded_proposal(&mut sim, farmer, true);
         let saved = sim.save().unwrap();
         let mut representable = Simulation::load(&saved, Execution::default()).unwrap();
         let agreements_before = representable
+            .host
             .state
             .agreements
             .as_ref()
@@ -2481,6 +2606,7 @@ mod farm_tests {
         representable.seek_farm_support().unwrap();
         assert!(
             representable
+                .host
                 .state
                 .agreements
                 .as_ref()
@@ -2490,17 +2616,17 @@ mod farm_tests {
                 > agreements_before
         );
 
-        let environment = sim.state.environment.as_ref().unwrap();
+        let environment = sim.host.state.environment.as_ref().unwrap();
         let mut calendar = environment.calendar.clone();
         calendar.day = SimDuration(u64::MAX / calendar.year_days());
-        sim.state.environment = Some(
+        sim.host.state.environment = Some(
             game_environment::Runtime::new(
                 game_environment::Config {
                     calendar,
                     climate: environment.climate.clone(),
                 },
-                sim.state.time,
-                sim.state.seed,
+                sim.host.clock().time,
+                sim.host.seed(),
             )
             .unwrap(),
         );
@@ -2512,7 +2638,7 @@ mod farm_tests {
         // decisions and physical production continue at their configured rates.
         sim.advance(MINUTE).unwrap();
         assert!(
-            game_physiology::body(&sim.state.components, farmer)
+            game_physiology::body(&sim.host.storage, farmer)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -2523,11 +2649,12 @@ mod farm_tests {
     #[test]
     fn valid_workshop_with_unrepresentable_financing_windows_declines_before_publication() {
         let mut sim = Simulation::project_fixture(73, Execution::default()).unwrap();
-        let sponsor = sim.state.people[3].id;
+        let sponsor = sim.host.state.people[3].id;
         ensure_unfunded_proposal(&mut sim, sponsor, false);
         let saved = sim.save().unwrap();
         let mut representable = Simulation::load(&saved, Execution::default()).unwrap();
         let agreements_before = representable
+            .host
             .state
             .agreements
             .as_ref()
@@ -2537,6 +2664,7 @@ mod farm_tests {
         representable.seek_workshop_support().unwrap();
         assert!(
             representable
+                .host
                 .state
                 .agreements
                 .as_ref()
@@ -2546,7 +2674,7 @@ mod farm_tests {
                 > agreements_before
         );
 
-        sim.state.physical.as_mut().unwrap().rules.loading_time = SimDuration(u64::MAX / 10);
+        sim.host.state.physical.as_mut().unwrap().rules.loading_time = SimDuration(u64::MAX / 10);
         let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         let before = sim.save().unwrap();
         sim.seek_workshop_support().unwrap();
@@ -2555,9 +2683,10 @@ mod farm_tests {
     #[test]
     fn citizen_bargains_for_actual_timber_constructs_farmland_and_accrues_harvest_rent() {
         let mut sim = fixture();
-        let farmer = sim.state.people[3].id;
+        let farmer = sim.host.state.people[3].id;
         sim.advance(SimDuration(2_400_000)).unwrap();
         let project = sim
+            .host
             .state
             .projects
             .as_ref()
@@ -2568,40 +2697,43 @@ mod farm_tests {
             .unwrap();
         assert_eq!(project.status, ProjectStatus::Completed);
         let enterprise =
-            &sim.state.projects.as_ref().unwrap().enterprises[&project.enterprise.unwrap()];
+            &sim.host.state.projects.as_ref().unwrap().enterprises[&project.enterprise.unwrap()];
         assert!(enterprise.produced.get(&Good::Food).copied().unwrap_or(0) > 0);
         assert!(enterprise.labor.get(&farmer).copied().unwrap_or(0) > 0);
         let field = enterprise.site;
         assert!(
-            sim.state
+            sim.host
+                .state
                 .agriculture
                 .as_ref()
                 .unwrap()
-                .field(&sim.state.components, field)
+                .field(&sim.host.storage, field)
                 .is_some()
         );
         assert!(
-            !sim.state
+            !sim.host
+                .state
                 .ecology
                 .as_ref()
                 .unwrap()
-                .plot(&sim.state.components, field)
+                .plot(&sim.host.storage, field)
                 .is_some()
         );
         assert_eq!(
-            sim.state
+            sim.host
+                .state
                 .agriculture
                 .as_ref()
                 .unwrap()
-                .field(&sim.state.components, field)
+                .field(&sim.host.storage, field)
                 .expect("component exists")
                 .custodian,
             Some(farmer)
         );
-        let contract = &sim.state.agreements.as_ref().unwrap().agreements
+        let contract = &sim.host.state.agreements.as_ref().unwrap().agreements
             [project.support.iter().next().unwrap()];
         assert_eq!(contract.accepted, contract.parties);
-        let obligations = &sim.state.agreements.as_ref().unwrap().obligations;
+        let obligations = &sim.host.state.agreements.as_ref().unwrap().obligations;
         assert!(contract.obligations.iter().any(|id| matches!(
             obligations[id].term,
             AgreementTerm::Delivery { .. }
@@ -2611,15 +2743,15 @@ mod farm_tests {
             AgreementTerm::OutputShare { .. }
         ) && obligations[id].accrued > 0
             && obligations[id].performed > 0));
-        validate(&sim.state).unwrap();
+        validate(&sim.canonical_state()).unwrap();
         sim.validate_environment().unwrap();
-        agreements::validate(&sim.state).unwrap();
+        agreements::validate(&sim.canonical_state()).unwrap();
     }
     #[test]
     fn cautious_supporter_refuses_future_harvest_and_no_promised_material_appears() {
         let mut sim = fixture();
-        let supporter = sim.state.people[5].id;
-        let farmer = sim.state.people[3].id;
+        let supporter = sim.host.state.people[5].id;
+        let farmer = sim.host.state.people[3].id;
         let mut personality = decisions::Personality::restful();
         personality.risk_tolerance = 0;
         personality.empathy = 0;
@@ -2627,6 +2759,7 @@ mod farm_tests {
             .unwrap();
         sim.advance(SimDuration(600_000)).unwrap();
         let project = sim
+            .host
             .state
             .projects
             .as_ref()
@@ -2638,11 +2771,12 @@ mod farm_tests {
         assert!(project.enterprise.is_none());
         assert!(!project.materials_consumed);
         assert_eq!(
-            sim.state.inventories[&project.materials].quantity,
+            sim.host.state.inventories[&project.materials].quantity,
             Quantity(0)
         );
         assert!(
-            sim.state
+            sim.host
+                .state
                 .agreements
                 .as_ref()
                 .unwrap()
@@ -2654,7 +2788,14 @@ mod farm_tests {
     #[test]
     fn share_remainders_and_debt_survive_end_and_need_real_delivery() {
         let mut sim = Simulation::project_fixture(69, Execution::default()).unwrap();
-        for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+        for actor in sim
+            .host
+            .state
+            .people
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+        {
             sim.debug_actor_command(actor, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 actor,
@@ -2663,9 +2804,9 @@ mod farm_tests {
             )
             .unwrap();
         }
-        let debtor = sim.state.ruler;
-        let creditor = sim.state.people[5].id;
-        let site = game_workshop::sites(&sim.state.components)
+        let debtor = sim.host.state.ruler;
+        let creditor = sim.host.state.people[5].id;
+        let site = game_workshop::sites(&sim.host.storage)
             .next()
             .map_or(SiteId(0), |(id, _)| id);
         // An authored existing productive asset; actual production events are the accrual trigger.
@@ -2706,12 +2847,12 @@ mod farm_tests {
             )
             .unwrap();
         let site = if site.0 == 0 {
-            SiteId(allocate(&mut sim.state).unwrap())
+            SiteId(sim.host.allocate_id().unwrap().0)
         } else {
             site
         };
         game_workshop::insert_site(
-            &mut sim.state.components,
+            &mut sim.host.storage,
             physical::Site {
                 id: site,
                 area: AreaId(1),
@@ -2746,6 +2887,7 @@ mod farm_tests {
         )
         .unwrap();
         let agreement = *sim
+            .host
             .state
             .agreements
             .as_ref()
@@ -2757,26 +2899,26 @@ mod farm_tests {
         sim.debug_agreement_action(creditor, AgreementAction::Accept { agreement })
             .unwrap();
         let obligation =
-            sim.state.agreements.as_ref().unwrap().agreements[&agreement].obligations[0];
+            sim.host.state.agreements.as_ref().unwrap().agreements[&agreement].obligations[0];
         for _ in 0..3 {
             sim.debug_actor_command(debtor, Command::Work { site })
                 .unwrap();
             sim.advance(SimDuration(120_000)).unwrap();
         }
         assert_eq!(
-            sim.state.agreements.as_ref().unwrap().obligations[&obligation].accrued,
+            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].accrued,
             1
         );
         assert_eq!(
-            sim.state.agreements.as_ref().unwrap().obligations[&obligation].share_remainder,
+            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].share_remainder,
             0
         );
         sim.advance(SimDuration(480_000)).unwrap();
         assert_eq!(
-            sim.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
+            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
             0
         );
-        assert!(sim.state.agreements.as_ref().unwrap().obligations[&obligation].defaulted);
+        assert!(sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].defaulted);
         assert!(
             sim.agreement_accepts_delivery(debtor, destination, Quantity(1)),
             "share delivery permission"
@@ -2801,7 +2943,7 @@ mod farm_tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
+            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
             0
         );
         sim.debug_actor_command(
@@ -2815,13 +2957,16 @@ mod farm_tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
+            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
             1
         );
         assert_eq!(
-            sim.state.agreements.as_ref().unwrap().agreements[&agreement].status,
+            sim.host.state.agreements.as_ref().unwrap().agreements[&agreement].status,
             AgreementStatus::Fulfilled
         );
-        assert_eq!(sim.state.inventories[&destination].quantity, Quantity(1));
+        assert_eq!(
+            sim.host.state.inventories[&destination].quantity,
+            Quantity(1)
+        );
     }
 }

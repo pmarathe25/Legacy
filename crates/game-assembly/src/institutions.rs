@@ -10,21 +10,23 @@ pub use game_society::institutions::{Institution, RuleProposal, SocialMemory, Wo
 impl Simulation {
     pub fn institution_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::agreement_fixture(seed, execution)?;
-        sim.state.scenario = ScenarioInfo {
+        sim.host.state.scenario = ScenarioInfo {
             id: "institution-fixture".into(),
             version: 1,
             debug_fixture: true,
         };
-        let owner = sim.state.people[3].id;
-        let area = sim.state.areas[0].id;
+        let owner = sim.host.state.people[3].id;
+        let area = sim.host.state.areas[0].id;
         for inventory in sim
+            .host
             .state
             .inventories
             .values_mut()
             .filter(|i| i.location == InventoryLocation::Area(area) && i.good == Good::Food)
         {
             inventory.access = BTreeSet::from([owner]);
-            sim.state
+            sim.host
+                .state
                 .agreements
                 .as_mut()
                 .unwrap()
@@ -39,18 +41,19 @@ impl Simulation {
             },
             decisions::Aspiration::SupportOthers,
         )?;
-        sim.state.institutions = Some(World {
+        sim.host.state.institutions = Some(World {
             institutions: BTreeMap::new(),
             proposals: BTreeMap::new(),
             concepts: BTreeMap::new(),
             cases: BTreeMap::new(),
             memories: sim
+                .host
                 .state
                 .people
                 .iter()
                 .map(|p| (p.id, SocialMemory::default()))
                 .collect(),
-            last_event: sim.state.next_event - 1,
+            last_event: sim.host.next_event() - 1,
             exclusions: BTreeMap::new(),
             heard: BTreeMap::new(),
         });
@@ -61,18 +64,18 @@ impl Simulation {
         let p = self
             .person_index
             .get(&actor)
-            .map(|i| &self.state.people[*i])
+            .map(|i| &self.host.state.people[*i])
             .ok_or(Error::Unavailable)?;
         if !self.independent(actor)
             || self.combat_restricts(actor)
-            || !self.state.physical.as_ref().is_some_and(|_| {
-                game_physiology::body(&self.state.components, actor)
+            || !self.host.state.physical.as_ref().is_some_and(|_| {
+                game_physiology::body(&self.host.storage, actor)
                     .is_some_and(|body| body.vitals.alive)
             })
         {
             return Err(Error::Unavailable);
         }
-        match *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
+        match *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
             .ok_or(Error::Unavailable)?
         {
             Location::AtArea(area) => Ok(area),
@@ -81,7 +84,8 @@ impl Simulation {
     }
 
     pub fn institution_view(&self, actor: PersonId) -> Vec<InstitutionView> {
-        self.state
+        self.host
+            .state
             .institutions
             .as_ref()
             .and_then(|w| w.memories.get(&actor))
@@ -90,7 +94,7 @@ impl Simulation {
             })
     }
     pub fn social_case_view(&self, actor: PersonId) -> Vec<SocialCaseView> {
-        let Some(w) = &self.state.institutions else {
+        let Some(w) = &self.host.state.institutions else {
             return Vec::new();
         };
         w.memories.get(&actor).map_or_else(Vec::new, |m| {
@@ -116,6 +120,7 @@ impl Simulation {
         precedents: bool,
     ) -> Result<(), Error> {
         let m = self
+            .host
             .state
             .institutions
             .as_mut()
@@ -136,7 +141,12 @@ impl Simulation {
         action: &InstitutionAction,
     ) -> Result<(), Error> {
         let area = self.social_area(actor)?;
-        let w = self.state.institutions.as_ref().ok_or(Error::Unavailable)?;
+        let w = self
+            .host
+            .state
+            .institutions
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
         self.preflight_institutions()?;
         if !matches!(
             action,
@@ -177,7 +187,8 @@ impl Simulation {
                 let subject = c.subject;
                 if *share {
                     let concept = i.concepts.iter().copied().find(|id| matches!(w.concepts[id].effect, SocialEffect::Access { inventory: target, allowed: true } if target == inventory) && w.concepts[id].authority == *office).ok_or(Error::Unavailable)?;
-                    self.state
+                    self.host
+                        .state
                         .institutions
                         .as_mut()
                         .unwrap()
@@ -189,7 +200,8 @@ impl Simulation {
                         .or_default()
                         .insert(subject);
                 }
-                self.state
+                self.host
+                    .state
                     .institutions
                     .as_mut()
                     .unwrap()
@@ -200,13 +212,14 @@ impl Simulation {
                         SocialCaseView {
                             id: CaseId(0),
                             outcome: SocialOutcome::Refused,
-                            observed_at: self.state.time,
+                            observed_at: self.host.clock().time,
                             ..c
                         },
                         None,
                         false,
                     )?;
-                    self.state
+                    self.host
+                        .state
                         .institutions
                         .as_mut()
                         .unwrap()
@@ -225,7 +238,8 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                self.state
+                self.host
+                    .state
                     .institutions
                     .as_mut()
                     .unwrap()
@@ -241,21 +255,21 @@ impl Simulation {
     }
 
     fn reserve_social_ids(&self, count: u64) -> Result<(), Error> {
-        self.state
-            .next_id
+        self.host
+            .next_id()
             .checked_add(count)
             .ok_or(Error::Overflow)?;
-        self.state
-            .next_event
+        self.host
+            .next_event()
             .checked_add(count.checked_add(4).ok_or(Error::Overflow)?)
             .ok_or(Error::Overflow)?;
         Ok(())
     }
     pub(crate) fn preflight_institutions(&self) -> Result<(), Error> {
-        self.preflight_institutions_at(self.state.time)
+        self.preflight_institutions_at(self.host.clock().time)
     }
     pub(crate) fn preflight_institutions_at(&self, at: SimTime) -> Result<(), Error> {
-        let Some(w) = &self.state.institutions else {
+        let Some(w) = &self.host.state.institutions else {
             return Ok(());
         };
         for rule in w
@@ -283,20 +297,22 @@ impl Simulation {
         ledger: game_agreements::ClosingReceiptDemand,
         direct: u64,
     ) -> Result<game_society::institutions::InstitutionResourceDemand, Error> {
-        let Some(world) = &self.state.institutions else {
+        let Some(world) = &self.host.state.institutions else {
             return Ok(Default::default());
         };
         use game_society::institutions::CaseReceipt;
         let mut receipts = Vec::new();
-        for event in self.state.events.iter().skip(world.last_event as usize) {
-            let receipt = match event.kind {
+        for event in self.host.events().iter().skip(world.last_event as usize) {
+            let receipt = match event.event {
                 EventKind::ObligationPerformed {
                     obligation, actor, ..
-                } => match self.state.agreements.as_ref().unwrap().obligations[&obligation].term {
+                } => match self.host.state.agreements.as_ref().unwrap().obligations[&obligation]
+                    .term
+                {
                     AgreementTerm::Labor { site, .. } => Some(CaseReceipt::Labor { actor, site }),
                     AgreementTerm::Delivery { destination, .. }
                         if self
-                            .inventory_area(&self.state.inventories[&destination])
+                            .inventory_area(&self.host.state.inventories[&destination])
                             .is_some() =>
                     {
                         Some(CaseReceipt::Ledger)
@@ -305,15 +321,16 @@ impl Simulation {
                 },
                 EventKind::ObligationDefaulted { obligation } => {
                     let term =
-                        &self.state.agreements.as_ref().unwrap().obligations[&obligation].term;
+                        &self.host.state.agreements.as_ref().unwrap().obligations[&obligation].term;
                     (matches!(
                         term,
                         AgreementTerm::Labor { .. } | AgreementTerm::Delivery { .. }
                     ) && matches!(
                         *game_spatial::location(
-                            &self.state.components,
+                            &self.host.storage,
                             game_ecs::StableId(
-                                (self.state.people[self.person_index[&term.parties()[0]]].id).0
+                                (self.host.state.people[self.person_index[&term.parties()[0]]].id)
+                                    .0
                             )
                         )
                         .expect("location exists"),
@@ -327,6 +344,7 @@ impl Simulation {
                     output,
                     ..
                 } if self
+                    .host
                     .state
                     .agreements
                     .as_ref()
@@ -350,8 +368,8 @@ impl Simulation {
                     source,
                     destination,
                     ..
-                } if self.state.inventories[&source].good == Good::Food
-                    && self.state.inventories[&destination].location
+                } if self.host.state.inventories[&source].good == Good::Food
+                    && self.host.state.inventories[&destination].location
                         == InventoryLocation::Carried(actor)
                     && world
                         .exclusions
@@ -389,10 +407,11 @@ impl Simulation {
             alive: needed
                 .into_iter()
                 .filter(|id| {
-                    self.state
+                    self.host
+                        .state
                         .physical
                         .as_ref()
-                        .and_then(|_| game_physiology::body(&self.state.components, *id))
+                        .and_then(|_| game_physiology::body(&self.host.storage, *id))
                         .is_some_and(|body| body.vitals.alive)
                 })
                 .collect(),
@@ -409,7 +428,7 @@ impl Simulation {
         actor: PersonId,
         inventory: InventoryId,
     ) -> bool {
-        let Some(world) = &self.state.institutions else {
+        let Some(world) = &self.host.state.institutions else {
             return false;
         };
         let authority = game_society::institutions::AuthorityFacts {
@@ -423,7 +442,7 @@ impl Simulation {
     }
 
     fn actual_institution_view(&self, i: &Institution) -> InstitutionView {
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         InstitutionView {
             id: i.id,
             origin: i.origin,
@@ -461,11 +480,11 @@ impl Simulation {
                 .values()
                 .flat_map(|by_actor| by_actor.values().copied())
                 .collect(),
-            observed_at: self.state.time,
+            observed_at: self.host.clock().time,
         }
     }
     fn publish_institution(&mut self, id: InstitutionId) {
-        let i = &self.state.institutions.as_ref().unwrap().institutions[&id];
+        let i = &self.host.state.institutions.as_ref().unwrap().institutions[&id];
         let area = i.charter.jurisdiction;
         let view = self.actual_institution_view(i);
         let public = i.charter.open_membership;
@@ -476,14 +495,22 @@ impl Simulation {
             .chain(i.members.iter())
             .chain(i.invited.iter())
             .copied()
-            .chain(self.state.people.iter().filter(|_| public).map(|p| p.id))
+            .chain(
+                self.host
+                    .state
+                    .people
+                    .iter()
+                    .filter(|_| public)
+                    .map(|p| p.id),
+            )
             .collect::<BTreeSet<_>>()
             .into_iter()
             .filter(|actor| self.social_area(*actor).ok() == Some(area))
             .take(64)
             .collect();
         for actor in witnesses {
-            self.state
+            self.host
+                .state
                 .institutions
                 .as_mut()
                 .unwrap()
@@ -512,12 +539,13 @@ impl Simulation {
                 .stocks
                 .iter()
                 .filter_map(|id| {
-                    self.state.inventories.get(id).map(|stock| {
+                    self.host.state.inventories.get(id).map(|stock| {
                         (
                             *id,
                             StockReference {
                                 area: self.inventory_area(stock),
                                 custodian: self
+                                    .host
                                     .state
                                     .agreements
                                     .as_ref()
@@ -534,10 +562,11 @@ impl Simulation {
                 .sites
                 .iter()
                 .filter_map(|id| {
-                    self.state
+                    self.host
+                        .state
                         .physical
                         .as_ref()
-                        .and_then(|_| game_workshop::site(&self.state.components, *id))
+                        .and_then(|_| game_workshop::site(&self.host.storage, *id))
                         .map(|site| (*id, site.area))
                 })
                 .collect(),
@@ -569,7 +598,12 @@ impl Simulation {
         area: AreaId,
         action: &InstitutionAction,
     ) -> Result<(), Error> {
-        let world = self.state.institutions.as_ref().ok_or(Error::Unavailable)?;
+        let world = self
+            .host
+            .state
+            .institutions
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
         let request = world.command_references(actor, action)?;
         let references = self.institution_reference_facts(&request);
         let authority = game_society::institutions::AuthorityFacts {
@@ -577,10 +611,11 @@ impl Simulation {
                 .people
                 .iter()
                 .filter(|id| {
-                    self.state
+                    self.host
+                        .state
                         .physical
                         .as_ref()
-                        .and_then(|_| game_physiology::body(&self.state.components, **id))
+                        .and_then(|_| game_physiology::body(&self.host.storage, **id))
                         .is_some_and(|body| body.vitals.alive)
                 })
                 .copied()
@@ -638,13 +673,13 @@ impl Simulation {
             &CommandFacts {
                 actor,
                 area,
-                now: self.state.time,
+                now: self.host.clock().time,
                 references: &references,
                 authority: &authority,
                 external_permit: permit.as_ref(),
             },
             CommandIds {
-                first: self.state.next_id,
+                first: self.host.next_id(),
             },
         )?;
         let external_ids = plan
@@ -661,7 +696,7 @@ impl Simulation {
             })?;
         self.reserve_social_ids(
             plan.next_id
-                .checked_sub(self.state.next_id)
+                .checked_sub(self.host.next_id())
                 .and_then(|count| count.checked_add(external_ids))
                 .ok_or(Error::Overflow)?,
         )?;
@@ -687,12 +722,13 @@ impl Simulation {
             None
         } else {
             Some(
-                self.state
+                self.host
+                    .state
                     .agreements
                     .as_ref()
                     .ok_or(Error::Unavailable)?
                     .ledger
-                    .prepare_institutional_duties(&duties, self.state.time)?,
+                    .prepare_institutional_duties(&duties, self.host.clock().time)?,
             )
         };
         for effect in &plan.effects {
@@ -712,17 +748,21 @@ impl Simulation {
                 }
             }
         }
-        plan.verify(self.state.institutions.as_ref().unwrap())?;
+        plan.verify(self.host.state.institutions.as_ref().unwrap())?;
         let effects = plan.effects.clone();
         let next_id = plan.next_id;
         if let Some(funding) = &funding {
-            funding.check(&self.state.agreements.as_ref().unwrap().ledger)?;
+            funding.check(&self.host.state.agreements.as_ref().unwrap().ledger)?;
         }
-        plan.commit(self.state.institutions.as_mut().unwrap())?;
+        plan.commit(self.host.state.institutions.as_mut().unwrap())?;
         if let Some(funding) = funding {
-            funding.commit(&mut self.state.agreements.as_mut().unwrap().ledger)?;
+            funding.commit(&mut self.host.state.agreements.as_mut().unwrap().ledger)?;
         }
-        self.state.next_id = next_id;
+        self.host.allocate_ids(
+            (next_id)
+                .checked_sub(self.host.next_id())
+                .ok_or(Error::Overflow)?,
+        )?;
         for effect in effects {
             match effect {
                 CommandEffect::Funding { agreement, .. } => {
@@ -784,10 +824,11 @@ impl Simulation {
         term: AgreementTerm,
     ) -> Result<AgreementId, Error> {
         self.reserve_social_ids(2)?;
-        let agreement = AgreementId(self.state.next_id);
-        let obligation = ObligationId(self.state.next_id.checked_add(1).ok_or(Error::Overflow)?);
-        let next_id = self.state.next_id.checked_add(2).ok_or(Error::Overflow)?;
+        let agreement = AgreementId(self.host.next_id());
+        let obligation = ObligationId(self.host.next_id().checked_add(1).ok_or(Error::Overflow)?);
+        let next_id = self.host.next_id().checked_add(2).ok_or(Error::Overflow)?;
         let plan = self
+            .host
             .state
             .agreements
             .as_ref()
@@ -800,10 +841,14 @@ impl Simulation {
                     obligation,
                     term,
                 }],
-                self.state.time,
+                self.host.clock().time,
             )?;
-        plan.commit(&mut self.state.agreements.as_mut().unwrap().ledger)?;
-        self.state.next_id = next_id;
+        plan.commit(&mut self.host.state.agreements.as_mut().unwrap().ledger)?;
+        self.host.allocate_ids(
+            (next_id)
+                .checked_sub(self.host.next_id())
+                .ok_or(Error::Overflow)?,
+        )?;
         self.emit(EventKind::AgreementActivated { agreement });
         Ok(agreement)
     }
@@ -814,7 +859,8 @@ impl Simulation {
         subject: PersonId,
         kind: SocialCaseKind,
     ) -> usize {
-        self.state
+        self.host
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -822,6 +868,7 @@ impl Simulation {
     }
     fn apply_institution_rules(&mut self) -> Result<(), Error> {
         let ids = self
+            .host
             .state
             .institutions
             .as_ref()
@@ -832,7 +879,8 @@ impl Simulation {
             .map(|i| i.id)
             .collect::<Vec<_>>();
         for id in ids {
-            let institution = self.state.institutions.as_ref().unwrap().institutions[&id].clone();
+            let institution =
+                self.host.state.institutions.as_ref().unwrap().institutions[&id].clone();
             let authority = self.institution_authority_facts(&institution);
             for (index, rule) in institution.charter.rules.iter().enumerate() {
                 let office = institution
@@ -853,30 +901,31 @@ impl Simulation {
                         subject: actor,
                         subject_local: self.social_area(actor).ok()
                             == Some(institution.charter.jurisdiction),
-                        own_hunger: game_physiology::body(&self.state.components, office.holder)
+                        own_hunger: game_physiology::body(&self.host.storage, office.holder)
                             .expect("body exists")
                             .vitals
                             .hunger,
                         known_stocks: &game_characters::decisions::mind::<game_api::Command>(
-                            &self.state.components,
+                            &self.host.storage,
                             office.holder,
                         )
                         .unwrap()
                         .knowledge,
                     };
-                    let Some(intent) = self.state.institutions.as_ref().unwrap().rule_intent(
+                    let Some(intent) = self.host.state.institutions.as_ref().unwrap().rule_intent(
                         &institution,
                         index,
                         &input,
                         &authority,
                         true,
-                        self.state.time,
+                        self.host.clock().time,
                     ) else {
                         continue;
                     };
                     match &intent {
                         game_society::institutions::RuleIntent::Access { .. } => {
                             if self
+                                .host
                                 .state
                                 .institutions
                                 .as_mut()
@@ -893,7 +942,8 @@ impl Simulation {
                         }
                         game_society::institutions::RuleIntent::Duty { term, .. } => {
                             let agreement = self.institutional_agreement(id, term.clone())?;
-                            self.state
+                            self.host
+                                .state
                                 .institutions
                                 .as_mut()
                                 .unwrap()
@@ -920,18 +970,19 @@ impl Simulation {
         public: bool,
     ) -> Result<CaseId, Error> {
         self.reserve_social_ids(1)?;
-        let id = CaseId(allocate(&mut self.state)?);
+        let id = CaseId(self.host.allocate_id()?.0);
         case.id = id;
         let observers: BTreeSet<_> = self
+            .host
             .state
             .people
             .iter()
             .filter(|p| {
-                *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
+                *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
                     .expect("location exists")
                     == Location::AtArea(case.area)
                     && self.independent(p.id)
-                    && game_physiology::body(&self.state.components, p.id)
+                    && game_physiology::body(&self.host.storage, p.id)
                         .expect("body exists")
                         .vitals
                         .alive
@@ -947,7 +998,7 @@ impl Simulation {
                 (
                     observer,
                     game_characters::decisions::mind::<game_api::Command>(
-                        &self.state.components,
+                        &self.host.storage,
                         observer,
                     )
                     .unwrap()
@@ -956,7 +1007,8 @@ impl Simulation {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        self.state
+        self.host
+            .state
             .institutions
             .as_mut()
             .unwrap()
@@ -969,7 +1021,7 @@ impl Simulation {
     }
 
     fn case_need_band(&self, actor: PersonId) -> u8 {
-        let hunger = game_physiology::body(&self.state.components, actor)
+        let hunger = game_physiology::body(&self.host.storage, actor)
             .expect("body exists")
             .vitals
             .hunger;
@@ -984,7 +1036,8 @@ impl Simulation {
         }
     }
     fn linked_rule_concept(&self, agreement: AgreementId) -> Option<ConceptId> {
-        self.state
+        self.host
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -1000,7 +1053,7 @@ impl Simulation {
             })
     }
     fn sharing_concept(&self, actor: PersonId, source: InventoryId) -> Option<ConceptId> {
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         w.institutions.values().find_map(|i| i.concepts.iter().find(|id| matches!(w.concepts[id].effect, SocialEffect::Access { inventory, allowed: true } if inventory == source) && i.grants.get(id).is_some_and(|actors| actors.contains(&actor))).copied())
     }
     fn record_received_support(
@@ -1008,7 +1061,7 @@ impl Simulation {
         actor: PersonId,
         source: InventoryId,
     ) -> Result<(), Error> {
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         let Some(case) = w
             .exclusions
             .get(&actor)
@@ -1023,13 +1076,14 @@ impl Simulation {
             SocialCaseView {
                 id: CaseId(0),
                 outcome: SocialOutcome::Shared,
-                observed_at: self.state.time,
+                observed_at: self.host.clock().time,
                 ..case
             },
             concept,
             true,
         )?;
-        self.state
+        self.host
+            .state
             .institutions
             .as_mut()
             .unwrap()
@@ -1041,23 +1095,24 @@ impl Simulation {
     }
 
     pub(crate) fn reconcile_institutions(&mut self) -> Result<(), Error> {
-        let Some(w) = &self.state.institutions else {
+        let Some(w) = &self.host.state.institutions else {
             return Ok(());
         };
         let cursor = w.last_event;
         let events: Vec<_> = self
-            .state
-            .events
+            .host
+            .events()
             .iter()
             .skip(cursor as usize)
             .cloned()
             .collect();
-        let last = self.state.next_event - 1;
+        let last = self.host.next_event() - 1;
         // Memory keys are validated person IDs, including the dead. Only new
         // people can change coverage; ordinary actions need no population scan.
-        if w.memories.len() != self.state.people.len() {
-            for person in &self.state.people {
-                self.state
+        if w.memories.len() != self.host.state.people.len() {
+            for person in &self.host.state.people {
+                self.host
+                    .state
                     .institutions
                     .as_mut()
                     .unwrap()
@@ -1071,9 +1126,10 @@ impl Simulation {
             .filter_map(|e| {
                 if let EventKind::ObligationPerformed {
                     obligation, actor, ..
-                } = e.kind
+                } = e.event
                 {
-                    match self.state.agreements.as_ref().unwrap().obligations[&obligation].term {
+                    match self.host.state.agreements.as_ref().unwrap().obligations[&obligation].term
+                    {
                         AgreementTerm::Labor { site, .. } => Some((actor, site)),
                         _ => None,
                     }
@@ -1083,24 +1139,24 @@ impl Simulation {
             })
             .collect();
         for event in events {
-            match event.kind {
+            match event.event {
                 EventKind::ObligationPerformed {
                     obligation, actor, ..
                 } => {
-                    let o =
-                        self.state.agreements.as_ref().unwrap().obligations[&obligation].clone();
+                    let o = self.host.state.agreements.as_ref().unwrap().obligations[&obligation]
+                        .clone();
                     let (area, good, inventory) = match o.term {
                         AgreementTerm::Labor { site, .. } => {
-                            let site = &game_workshop::site(&self.state.components, site)
+                            let site = &game_workshop::site(&self.host.storage, site)
                                 .expect("site exists");
                             (
                                 site.area,
-                                self.state.inventories[&site.output].good,
+                                self.host.state.inventories[&site.output].good,
                                 Some(site.output),
                             )
                         }
                         AgreementTerm::Delivery { destination, .. } => {
-                            let inventory = &self.state.inventories[&destination];
+                            let inventory = &self.host.state.inventories[&destination];
                             let Some(area) = self.inventory_area(inventory) else {
                                 continue;
                             };
@@ -1120,7 +1176,7 @@ impl Simulation {
                             need_band: self.case_need_band(actor),
                             reciprocal: true,
                             outcome: SocialOutcome::Contributed,
-                            observed_at: self.state.time,
+                            observed_at: self.host.clock().time,
                         },
                         self.linked_rule_concept(o.agreement),
                         true,
@@ -1132,9 +1188,9 @@ impl Simulation {
                     output,
                     ..
                 } if !attributable.contains(&(actor, site)) => {
-                    let site =
-                        &game_workshop::site(&self.state.components, site).expect("site exists");
+                    let site = &game_workshop::site(&self.host.storage, site).expect("site exists");
                     let counterpart = self
+                        .host
                         .state
                         .agreements
                         .as_ref()
@@ -1154,41 +1210,42 @@ impl Simulation {
                             counterpart,
                             area: site.area,
                             inventory: Some(output),
-                            good: self.state.inventories[&output].good,
+                            good: self.host.state.inventories[&output].good,
                             need_band: self.case_need_band(actor),
                             reciprocal: true,
                             outcome: SocialOutcome::Contributed,
-                            observed_at: self.state.time,
+                            observed_at: self.host.clock().time,
                         },
                         None,
                         true,
                     )?;
                 }
                 EventKind::ObligationDefaulted { obligation } => {
-                    let o =
-                        self.state.agreements.as_ref().unwrap().obligations[&obligation].clone();
+                    let o = self.host.state.agreements.as_ref().unwrap().obligations[&obligation]
+                        .clone();
                     let actor = o.term.parties()[0];
                     let counterpart = o.term.parties()[1];
-                    let Some(area) =
-                        self.state
-                            .people
-                            .get(self.person_index[&actor])
-                            .and_then(|p| {
-                                if let Some(Location::AtArea(area)) = game_spatial::location(
-                                    &self.state.components,
-                                    game_ecs::StableId((p.id).0),
-                                ) {
-                                    Some(*area)
-                                } else {
-                                    None
-                                }
-                            })
+                    let Some(area) = self
+                        .host
+                        .state
+                        .people
+                        .get(self.person_index[&actor])
+                        .and_then(|p| {
+                            if let Some(Location::AtArea(area)) = game_spatial::location(
+                                &self.host.storage,
+                                game_ecs::StableId((p.id).0),
+                            ) {
+                                Some(*area)
+                            } else {
+                                None
+                            }
+                        })
                     else {
                         continue;
                     };
                     let inventory = match o.term {
                         AgreementTerm::Labor { site, .. } => {
-                            game_workshop::site(&self.state.components, site)
+                            game_workshop::site(&self.host.storage, site)
                                 .expect("site exists")
                                 .output
                         }
@@ -1204,7 +1261,7 @@ impl Simulation {
                             counterpart,
                             area,
                             inventory: Some(inventory),
-                            good: self.state.inventories[&inventory].good,
+                            good: self.host.state.inventories[&inventory].good,
                             need_band: self.case_need_band(actor),
                             reciprocal: self.known_case_count(
                                 actor,
@@ -1212,7 +1269,7 @@ impl Simulation {
                                 SocialCaseKind::Cooperation,
                             ) > 0,
                             outcome: SocialOutcome::Defaulted,
-                            observed_at: self.state.time,
+                            observed_at: self.host.clock().time,
                         },
                         concept,
                         concept.is_some(),
@@ -1226,24 +1283,24 @@ impl Simulation {
                     source,
                     destination,
                     ..
-                } if self.state.inventories[&destination].location
+                } if self.host.state.inventories[&destination].location
                     == InventoryLocation::Carried(actor)
-                    && self.state.inventories[&source].good == Good::Food =>
+                    && self.host.state.inventories[&source].good == Good::Food =>
                 {
                     self.record_received_support(actor, source)?
                 }
                 _ => {}
             }
         }
-        self.state.institutions.as_mut().unwrap().last_event = last;
+        self.host.state.institutions.as_mut().unwrap().last_event = last;
         Ok(())
     }
 
     fn observe_exclusions(&mut self) -> Result<(), Error> {
         let mut requests = Vec::new();
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         for (actor, mind) in
-            game_characters::decisions::minds::<game_api::Command>(&self.state.components)
+            game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
         {
             let actor = &actor;
             let Ok(area) = self.social_area(*actor) else {
@@ -1267,6 +1324,7 @@ impl Simulation {
                 .take(8)
             {
                 let Some(owner) = self
+                    .host
                     .state
                     .agreements
                     .as_ref()
@@ -1297,7 +1355,7 @@ impl Simulation {
                     reciprocal: self.known_case_count(*actor, *actor, SocialCaseKind::Cooperation)
                         > 0,
                     outcome: SocialOutcome::Unresolved,
-                    observed_at: self.state.time,
+                    observed_at: self.host.clock().time,
                 });
             }
         }
@@ -1305,7 +1363,8 @@ impl Simulation {
             let actor = request.subject;
             let inventory = request.inventory.unwrap();
             let id = self.record_social_case(request, None, false)?;
-            self.state
+            self.host
+                .state
                 .institutions
                 .as_mut()
                 .unwrap()
@@ -1318,7 +1377,7 @@ impl Simulation {
     }
 
     fn learned_rule_score(&self, actor: PersonId, rule: &InstitutionalRule) -> i64 {
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         let Some(memory) = w.memories.get(&actor) else {
             return 0;
         };
@@ -1369,7 +1428,7 @@ impl Simulation {
         rule: &InstitutionalRule,
     ) -> i64 {
         let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .unwrap();
         let recipient = rule.subjects.members
             || rule.subjects.named.contains(&actor)
@@ -1391,6 +1450,7 @@ impl Simulation {
                     score += if allowed { 1_200 } else { -1_200 };
                 }
                 if self
+                    .host
                     .state
                     .agreements
                     .as_ref()
@@ -1444,7 +1504,7 @@ impl Simulation {
             .map(|rule| self.rule_vote_score(actor, charter, rule))
             .sum();
         let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .unwrap();
         for office in &charter.offices {
             score += i64::from(
@@ -1488,14 +1548,11 @@ impl Simulation {
                 -self.rule_vote_score(actor, &i.charter, &i.charter.rules[*index as usize])
             }
             InstitutionChange::Appoint { holder, .. } => i64::from(
-                game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
-                    actor,
-                )
-                .unwrap()
-                .relationships
-                .get(holder)
-                .map_or(0, |r| r.trust),
+                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .unwrap()
+                    .relationships
+                    .get(holder)
+                    .map_or(0, |r| r.trust),
             ),
             InstitutionChange::Procedure(_) | InstitutionChange::Invite(_) => 0,
             InstitutionChange::Dissolve => -self.charter_vote_score(actor, &i.charter),
@@ -1503,14 +1560,15 @@ impl Simulation {
     }
 
     fn precedent_score(&self, actor: PersonId, case: &SocialCaseView) -> i64 {
-        self.state
+        self.host
+            .state
             .institutions
             .as_ref()
             .unwrap()
             .precedent_score(actor, case)
     }
     fn hear_known_cases(&mut self) -> Result<(), Error> {
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         let mut choices = Vec::new();
         for i in w
             .institutions
@@ -1518,7 +1576,7 @@ impl Simulation {
             .filter(|i| i.status == InstitutionStatus::Active)
         {
             for office in i.charter.offices.iter().filter(|o| {
-                o.holder != self.state.ruler
+                o.holder != self.host.state.ruler
                     && o.powers.contains(&OfficePower::HearAccessCases)
                     && self.office_effective(i, o)
             }) {
@@ -1538,7 +1596,7 @@ impl Simulation {
                     let score = i64::from(c.need_band) * 100
                         + i64::from(
                             game_characters::decisions::mind::<game_api::Command>(
-                                &self.state.components,
+                                &self.host.storage,
                                 office.holder,
                             )
                             .unwrap()
@@ -1566,12 +1624,12 @@ impl Simulation {
     }
 
     pub(crate) fn review_institutions(&mut self) -> Result<(), Error> {
-        if self.state.institutions.is_none() {
+        if self.host.state.institutions.is_none() {
             return Ok(());
         }
         self.reconcile_institutions()?;
         self.observe_exclusions()?;
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         let mut replies = Vec::new();
         for i in w
             .institutions
@@ -1579,7 +1637,7 @@ impl Simulation {
             .filter(|i| i.status == InstitutionStatus::Proposed)
         {
             for actor in i.charter.founders.iter().filter(|id| {
-                **id != self.state.ruler && !i.members.contains(id) && !i.declined.contains(id)
+                **id != self.host.state.ruler && !i.members.contains(id) && !i.declined.contains(id)
             }) {
                 if self.social_area(*actor).ok() != Some(i.charter.jurisdiction) {
                     continue;
@@ -1601,7 +1659,7 @@ impl Simulation {
             for actor in self
                 .subjects(i, &i.charter.procedure.voters)
                 .intersection(&i.members)
-                .filter(|id| **id != self.state.ruler && !p.votes.contains_key(id))
+                .filter(|id| **id != self.host.state.ruler && !p.votes.contains_key(id))
             {
                 if self.social_area(*actor).ok() != Some(i.charter.jurisdiction) {
                     continue;
@@ -1633,7 +1691,7 @@ impl Simulation {
     }
 
     fn perform_institution_duties(&mut self) {
-        let w = self.state.institutions.as_ref().unwrap();
+        let w = self.host.state.institutions.as_ref().unwrap();
         let agreements: BTreeSet<_> = w
             .institutions
             .values()
@@ -1646,9 +1704,9 @@ impl Simulation {
             .collect();
         let mut intentions = BTreeMap::new();
         for agreement in agreements {
-            let a = &self.state.agreements.as_ref().unwrap().agreements[&agreement];
+            let a = &self.host.state.agreements.as_ref().unwrap().agreements[&agreement];
             for id in &a.obligations {
-                let o = &self.state.agreements.as_ref().unwrap().obligations[id];
+                let o = &self.host.state.agreements.as_ref().unwrap().obligations[id];
                 let AgreementTerm::Labor {
                     debtor,
                     site,
@@ -1658,7 +1716,7 @@ impl Simulation {
                 else {
                     continue;
                 };
-                if debtor == self.state.ruler
+                if debtor == self.host.state.ruler
                     || o.performed >= millis
                     || intentions.contains_key(&debtor)
                 {
@@ -1668,19 +1726,14 @@ impl Simulation {
                     continue;
                 };
                 let mind = &game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
+                    &self.host.storage,
                     debtor,
                 )
                 .unwrap();
-                let body =
-                    game_physiology::body(&self.state.components, debtor).expect("body exists");
-                let rules = &self.state.physical.as_ref().unwrap().rules;
+                let body = game_physiology::body(&self.host.storage, debtor).expect("body exists");
+                let rules = &self.host.state.physical.as_ref().unwrap().rules;
                 if !matches!(
-                    *self
-                        .state
-                        .components
-                        .activity(debtor)
-                        .expect("activity exists"),
+                    *self.host.storage.activity(debtor).expect("activity exists"),
                     Activity::Idle | Activity::Rest
                 ) || body.vitals.fatigue >= rules.fatigue_limit
                     || body
@@ -1707,18 +1760,19 @@ impl Simulation {
 
     fn construct_social_arrangements(&mut self) -> Result<(), Error> {
         let actors: Vec<_> = self
+            .host
             .state
             .people
             .iter()
-            .filter(|p| p.id != self.state.ruler)
+            .filter(|p| p.id != self.host.state.ruler)
             .map(|p| p.id)
             .collect();
         for actor in actors {
             let Ok(area) = self.social_area(actor) else {
                 continue;
             };
-            let w = self.state.institutions.as_ref().unwrap();
-            if w.memories[&actor].search_after > self.state.time {
+            let w = self.host.state.institutions.as_ref().unwrap();
+            if w.memories[&actor].search_after > self.host.clock().time {
                 continue;
             }
             let existing: Vec<_> = w
@@ -1773,17 +1827,18 @@ impl Simulation {
                 }
             }
             if acted {
-                self.state
+                self.host
+                    .state
                     .institutions
                     .as_mut()
                     .unwrap()
                     .memories
                     .get_mut(&actor)
                     .unwrap()
-                    .search_after = SimTime(self.state.time.0.saturating_add(300_000));
+                    .search_after = SimTime(self.host.clock().time.0.saturating_add(300_000));
                 continue;
             }
-            let w = self.state.institutions.as_ref().unwrap();
+            let w = self.host.state.institutions.as_ref().unwrap();
             let Some(case) = w.memories[&actor]
                 .cases
                 .iter()
@@ -1802,14 +1857,12 @@ impl Simulation {
             let inventory = case.inventory.unwrap();
             if w.institutions.values().any(|i| i.charter.jurisdiction == area && matches!(i.status, InstitutionStatus::Active | InstitutionStatus::Proposed) && i.charter.rules.iter().any(|r| matches!(r.effect, SocialEffect::Access { inventory: target, .. } if target == inventory))) { continue; }
             let owner = case.counterpart;
-            if owner == self.state.ruler || self.social_area(owner).ok() != Some(area) {
+            if owner == self.host.state.ruler || self.social_area(owner).ok() != Some(area) {
                 continue;
             }
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
-                &self.state.components,
-                actor,
-            )
-            .unwrap();
+            let mind =
+                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .unwrap();
             let Some(site) = mind
                 .sites
                 .values()
@@ -1820,18 +1873,19 @@ impl Simulation {
             };
             let mut founders = BTreeSet::from([actor, owner]);
             founders.extend(
-                self.state
+                self.host
+                    .state
                     .people
                     .iter()
                     .filter(|p| {
                         p.role == Role::Citizen
                             && *game_spatial::location(
-                                &self.state.components,
+                                &self.host.storage,
                                 game_ecs::StableId((p.id).0),
                             )
                             .expect("location exists")
                                 == Location::AtArea(area)
-                            && p.id != self.state.ruler
+                            && p.id != self.host.state.ruler
                             && self.social_area(p.id).is_ok()
                     })
                     .map(|p| p.id)
@@ -1915,14 +1969,15 @@ impl Simulation {
                         origin: None,
                     },
                 )?;
-                self.state
+                self.host
+                    .state
                     .institutions
                     .as_mut()
                     .unwrap()
                     .memories
                     .get_mut(&actor)
                     .unwrap()
-                    .search_after = SimTime(self.state.time.0.saturating_add(300_000));
+                    .search_after = SimTime(self.host.clock().time.0.saturating_add(300_000));
             }
         }
         Ok(())
@@ -1932,7 +1987,7 @@ impl Simulation {
         let Ok(area) = self.social_area(actor) else {
             return Vec::new();
         };
-        let Some(w) = &self.state.institutions else {
+        let Some(w) = &self.host.state.institutions else {
             return Vec::new();
         };
         let Some(memory) = w.memories.get(&actor) else {
@@ -2013,15 +2068,15 @@ fn expression_has_defaults(expression: &RuleExpression) -> bool {
 }
 
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
-    let Some(w) = &s.institutions else {
+    let Some(w) = &s.state.institutions else {
         return Ok(());
     };
     let fail = || Error::InvalidSave("invalid institution state".into());
-    let people: BTreeSet<_> = s.people.iter().map(|p| p.id).collect();
-    let areas: BTreeSet<_> = s.areas.iter().map(|a| a.id).collect();
-    s.physical.as_ref().ok_or_else(fail)?;
-    let agreements = s.agreements.as_ref().ok_or_else(fail)?;
-    if s.decisions.is_none()
+    let people: BTreeSet<_> = s.state.people.iter().map(|p| p.id).collect();
+    let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
+    s.state.physical.as_ref().ok_or_else(fail)?;
+    let agreements = s.state.agreements.as_ref().ok_or_else(fail)?;
+    if s.state.decisions.is_none()
         || w.last_event >= s.next_event
         || w.memories.keys().any(|id| !people.contains(id))
     {
@@ -2049,9 +2104,9 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             RuleExpression::Fact(SocialCondition::KnownStockAtLeast {
                 inventory,
                 quantity,
-            }) => s.inventories.contains_key(inventory) && quantity.0 > 0,
+            }) => s.state.inventories.contains_key(inventory) && quantity.0 > 0,
             RuleExpression::Fact(SocialCondition::Excluded { inventory }) => {
-                s.inventories.contains_key(inventory)
+                s.state.inventories.contains_key(inventory)
             }
             RuleExpression::Fact(SocialCondition::HungerAtLeast(n)) => *n > 0,
             RuleExpression::Fact(
@@ -2083,14 +2138,14 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             Beneficiary::Office(_) => true,
         };
         match &rule.effect {
-            SocialEffect::Access { inventory, .. } => s.inventories.contains_key(inventory),
+            SocialEffect::Access { inventory, .. } => s.state.inventories.contains_key(inventory),
             SocialEffect::Labor {
                 site,
                 millis,
                 beneficiary: b,
                 due_after,
             } => {
-                game_workshop::site(&s.components, *site).is_some()
+                game_workshop::site(s.components, *site).is_some()
                     && *millis > 0
                     && due_after.0 >= *millis
                     && beneficiary(b)
@@ -2105,9 +2160,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 source != destination
                     && quantity.0 > 0
                     && due_after.0 >= 120_000
-                    && s.inventories
+                    && s.state
+                        .inventories
                         .get(source)
-                        .zip(s.inventories.get(destination))
+                        .zip(s.state.inventories.get(destination))
                         .is_some_and(|(a, b)| a.good == b.good && quantity.0 <= b.capacity.0)
                     && beneficiary(b)
             }
@@ -2157,11 +2213,11 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 || office
                     .inventories
                     .iter()
-                    .any(|id| !s.inventories.contains_key(id))
+                    .any(|id| !s.state.inventories.contains_key(id))
                 || office
                     .sites
                     .iter()
-                    .any(|id| game_workshop::site(&s.components, *id).is_none())
+                    .any(|id| game_workshop::site(s.components, *id).is_none())
             {
                 return Err(fail());
             }
@@ -2278,7 +2334,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             || !areas.contains(&case.area)
             || case
                 .inventory
-                .is_some_and(|id| !s.inventories.contains_key(&id))
+                .is_some_and(|id| !s.state.inventories.contains_key(&id))
             || case.need_band > 3
             || case.observed_at > s.time
         {
@@ -2328,7 +2384,7 @@ mod closing_resource_tests {
     use super::*;
     fn many_defaults() -> Simulation {
         let mut sim = Simulation::institution_fixture(61, Execution::default()).unwrap();
-        for person in sim.state.people.clone() {
+        for person in sim.host.state.people.clone() {
             sim.debug_actor_command(person.id, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 person.id,
@@ -2337,10 +2393,11 @@ mod closing_resource_tests {
             )
             .unwrap();
         }
-        let debtor = sim.state.ruler;
-        let creditor = sim.state.people[3].id;
-        let area = sim.state.areas[0].id;
+        let debtor = sim.host.state.ruler;
+        let creditor = sim.host.state.people[3].id;
+        let area = sim.host.state.areas[0].id;
         let source = sim
+            .host
             .state
             .inventories
             .values()
@@ -2360,8 +2417,8 @@ mod closing_resource_tests {
             .unwrap();
         let parties = BTreeSet::from([debtor, creditor]);
         for _ in 0..1000 {
-            let agreement = AgreementId(allocate(&mut sim.state).unwrap());
-            let obligation = ObligationId(allocate(&mut sim.state).unwrap());
+            let agreement = AgreementId(sim.host.allocate_id().unwrap().0);
+            let obligation = ObligationId(sim.host.allocate_id().unwrap().0);
             let term = AgreementTerm::Delivery {
                 debtor,
                 creditor,
@@ -2370,7 +2427,7 @@ mod closing_resource_tests {
                 quantity: Quantity(1),
                 deadline: SimTime(1),
             };
-            let world = sim.state.agreements.as_mut().unwrap();
+            let world = sim.host.state.agreements.as_mut().unwrap();
             world.agreements.insert(
                 agreement,
                 game_agreements::Agreement {
@@ -2401,7 +2458,16 @@ mod closing_resource_tests {
                 },
             );
         }
-        sim.state.next_id = u64::MAX - 500;
+        {
+            let mut authored: serde_json::Value =
+                serde_json::from_slice(&sim.save().unwrap()).unwrap();
+            authored["state"]["next_id"] = serde_json::json!(u64::MAX - 500);
+            sim = Simulation::load(
+                &serde_json::to_vec(&authored).unwrap(),
+                sim.execution.clone(),
+            )
+            .unwrap();
+        }
         // Loading is the full canonical validator, not an unchecked test setup.
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap()
     }
@@ -2409,42 +2475,72 @@ mod closing_resource_tests {
     fn closing_defaults_must_preflight_every_social_case_before_publishing() {
         let mut sim = many_defaults();
         assert!(
-            sim.state
+            sim.host
+                .state
                 .institutions
                 .as_ref()
                 .unwrap()
                 .institutions
                 .is_empty()
         );
-        assert_eq!(sim.state.people.len(), 15);
-        let before = sim.state.clone();
+        assert_eq!(sim.host.state.people.len(), 15);
+        let before = sim.canonical_snapshot().unwrap();
         assert_eq!(sim.advance(SimDuration(1)), Err(Error::Overflow));
         assert!(
-            sim.state == before,
+            sim.canonical_snapshot().unwrap() == before,
             "overflow must precede clock, defaults, social cases and counters"
         );
     }
     #[test]
     fn pending_unreconciled_default_receipts_are_also_preflighted_from_a_valid_save() {
         let mut sim = many_defaults();
-        sim.state.next_id = 10000;
-        sim.state.time = SimTime(1);
+        {
+            let mut authored: serde_json::Value =
+                serde_json::from_slice(&sim.save().unwrap()).unwrap();
+            authored["state"]["next_id"] = serde_json::json!(10000);
+            sim = Simulation::load(
+                &serde_json::to_vec(&authored).unwrap(),
+                sim.execution.clone(),
+            )
+            .unwrap();
+        }
+        sim.host.publish_clock(game_sim::Clock {
+            time: SimTime(1),
+            ..sim.host.clock()
+        });
         sim.reconcile_agreements().unwrap();
         assert_eq!(
-            sim.state
-                .events
+            sim.host
+                .events()
                 .iter()
-                .filter(|event| matches!(event.kind, EventKind::ObligationDefaulted { .. }))
+                .filter(|event| matches!(event.event, EventKind::ObligationDefaulted { .. }))
                 .count(),
             1000
         );
-        assert!(sim.state.institutions.as_ref().unwrap().cases.is_empty());
-        sim.state.next_id = u64::MAX - 500;
+        assert!(
+            sim.host
+                .state
+                .institutions
+                .as_ref()
+                .unwrap()
+                .cases
+                .is_empty()
+        );
+        {
+            let mut authored: serde_json::Value =
+                serde_json::from_slice(&sim.save().unwrap()).unwrap();
+            authored["state"]["next_id"] = serde_json::json!(u64::MAX - 500);
+            sim = Simulation::load(
+                &serde_json::to_vec(&authored).unwrap(),
+                sim.execution.clone(),
+            )
+            .unwrap();
+        }
         let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
-        let before = sim.state.clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert_eq!(sim.advance(SimDuration(1)), Err(Error::Overflow));
         assert!(
-            sim.state == before,
+            sim.canonical_snapshot().unwrap() == before,
             "unreconciled receipts must not publish partial cases"
         );
     }
@@ -2452,13 +2548,26 @@ mod closing_resource_tests {
     fn sufficient_closing_case_headroom_commits_the_whole_valid_ledger_without_unused_review_reserves()
      {
         let mut sim = many_defaults();
-        sim.state.next_id = u64::MAX - 1000;
+        {
+            let mut authored: serde_json::Value =
+                serde_json::from_slice(&sim.save().unwrap()).unwrap();
+            authored["state"]["next_id"] = serde_json::json!(u64::MAX - 1000);
+            sim = Simulation::load(
+                &serde_json::to_vec(&authored).unwrap(),
+                sim.execution.clone(),
+            )
+            .unwrap();
+        }
         let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         sim.advance(SimDuration(1)).unwrap();
-        assert_eq!(sim.state.next_id, u64::MAX);
-        assert_eq!(sim.state.institutions.as_ref().unwrap().cases.len(), 1000);
+        assert_eq!(sim.host.next_id(), u64::MAX);
+        assert_eq!(
+            sim.host.state.institutions.as_ref().unwrap().cases.len(),
+            1000
+        );
         assert!(
-            sim.state
+            sim.host
+                .state
                 .agreements
                 .as_ref()
                 .unwrap()

@@ -80,16 +80,23 @@ mod pending_entries {
 impl Simulation {
     pub fn realm_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::enforcement_fixture(seed, execution)?;
-        sim.state.scenario = ScenarioInfo {
+        sim.host.state.scenario = ScenarioInfo {
             id: "realm-fixture".into(),
             version: 1,
             debug_fixture: true,
         };
-        let a = sim.state.ruler;
-        let av = sim.state.people[3].id;
-        let b = sim.state.people[4].id;
-        let bv = sim.state.people[5].id;
-        for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+        let a = sim.host.state.ruler;
+        let av = sim.host.state.people[3].id;
+        let b = sim.host.state.people[4].id;
+        let bv = sim.host.state.people[5].id;
+        for actor in sim
+            .host
+            .state
+            .people
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>()
+        {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
@@ -99,8 +106,8 @@ impl Simulation {
         }
         for actor in [b, bv] {
             *game_spatial::location_mut(
-                &mut sim.state.components,
-                game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0),
+                &mut sim.host.storage,
+                game_ecs::StableId((sim.host.state.people[sim.person_index[&actor]].id).0),
             )
             .expect("location exists") = Location::AtArea(AreaId(3));
         }
@@ -133,7 +140,8 @@ impl Simulation {
             BTreeSet::from([b]),
         )?;
         for (id, holder) in [(food_a, a), (timber_a, a), (food_b, b), (timber_b, b)] {
-            sim.state
+            sim.host
+                .state
                 .agreements
                 .as_mut()
                 .unwrap()
@@ -190,6 +198,7 @@ impl Simulation {
                 },
             )?;
             let institution = *sim
+                .host
                 .state
                 .institutions
                 .as_ref()
@@ -203,7 +212,7 @@ impl Simulation {
         sim.initialize_realm(Rules::default())?;
         // These fixture delegates await the scripted negotiating choices. Their
         // ordinary biological needs, voting, and real agreement tasks continue.
-        sim.state.realm.as_mut().unwrap().reconsider_after = sim
+        sim.host.state.realm.as_mut().unwrap().reconsider_after = sim
             .person_index
             .keys()
             .map(|id| (*id, SimTime(86_400_000)))
@@ -213,21 +222,21 @@ impl Simulation {
     }
     pub fn initialize_realm(&mut self, rules: Rules) -> Result<(), Error> {
         rules.validate()?;
-        if self.state.realm.is_some()
-            || self.state.institutions.is_none()
-            || self.state.agreements.is_none()
+        if self.host.state.realm.is_some()
+            || self.host.state.institutions.is_none()
+            || self.host.state.agreements.is_none()
         {
             return Err(Error::Unavailable);
         }
-        self.state.realm = Some(World {
+        self.host.state.realm = Some(World {
             rules,
-            last_event: self.state.next_event - 1,
+            last_event: self.host.next_event() - 1,
             ..World::default()
         });
         Ok(())
     }
     fn realm_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = game_physiology::body(&self.state.components, actor)?;
+        let body = game_physiology::body(&self.host.storage, actor)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -247,11 +256,12 @@ impl Simulation {
         fresh_local: bool,
     ) -> Result<ProposalFacts, Error> {
         let mind = self
+            .host
             .state
             .decisions
             .as_ref()
             .and_then(|_| {
-                game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
             })
             .ok_or(Error::Unavailable)?;
         let cached = self.institution_view(actor);
@@ -267,12 +277,13 @@ impl Simulation {
         };
         for (id, k) in &mind.knowledge {
             let capacity = self
+                .host
                 .state
                 .inventories
                 .get(id)
                 .filter(|i| {
                     self.inventory_area(i) == self.realm_area(actor)
-                        && k.observed_at == self.state.time
+                        && k.observed_at == self.host.clock().time
                 })
                 .map(|i| i.capacity);
             facts.inventories.insert(
@@ -302,6 +313,7 @@ impl Simulation {
             let mut authorized = known.status == InstitutionStatus::Active;
             if fresh_local && p.representative == actor {
                 let actual = self
+                    .host
                     .state
                     .institutions
                     .as_ref()
@@ -363,6 +375,7 @@ impl Simulation {
     pub(crate) fn realm_view(&self, actor: PersonId) -> game_realm::View {
         game_realm::View {
             commitments: self
+                .host
                 .state
                 .realm
                 .as_ref()
@@ -381,24 +394,27 @@ impl Simulation {
         }
     }
     pub(crate) fn realm_command(&mut self, actor: PersonId, action: &Action) -> Result<(), Error> {
+        self.host.preflight_records(0, 0, 1)?;
         let area = self.realm_area(actor).ok_or(Error::Unavailable)?;
-        let world = self.state.realm.as_ref().ok_or(Error::Unavailable)?;
+        let world = self.host.state.realm.as_ref().ok_or(Error::Unavailable)?;
         match action {
             Action::Propose { proposal } => {
                 if proposal.proposer != actor {
                     return Err(Error::Unavailable);
                 }
                 let facts = self.realm_facts(actor, proposal, true)?;
-                self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+                self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
                 self.ensure_event_capacity(1)?;
-                let id = RealmCommitmentId(self.state.next_id);
-                let prepared =
-                    world
-                        .kernel
-                        .prepare_propose(id, proposal.clone(), &facts, self.state.time)?;
-                let allocated = allocate(&mut self.state)?;
+                let id = RealmCommitmentId(self.host.next_id());
+                let prepared = world.kernel.prepare_propose(
+                    id,
+                    proposal.clone(),
+                    &facts,
+                    self.host.clock().time,
+                )?;
+                let allocated = self.host.allocate_id()?.0;
                 debug_assert_eq!(allocated, id.0);
-                prepared.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+                prepared.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
                 self.emit(EventKind::RealmProposed {
                     commitment: id,
                     actor,
@@ -418,11 +434,12 @@ impl Simulation {
                     *commitment,
                     proposal.clone(),
                     &facts,
-                    self.state.time,
+                    self.host.clock().time,
                 )?;
                 self.ensure_event_capacity(1)?;
-                prepared.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
-                let revision = self.state.realm.as_ref().unwrap().kernel.commitments[commitment]
+                prepared.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
+                let revision = self.host.state.realm.as_ref().unwrap().kernel.commitments
+                    [commitment]
                     .current()
                     .number;
                 self.emit(EventKind::RealmProposed {
@@ -443,16 +460,17 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                let report = world
-                    .kernel
-                    .prepare_report(actor, *commitment, self.state.time)?;
+                let report =
+                    world
+                        .kernel
+                        .prepare_report(actor, *commitment, self.host.clock().time)?;
                 let referenced = report
                     .snapshot
                     .revisions
                     .values()
                     .flat_map(|r| r.proposal.value.participants.keys().copied())
                     .collect::<BTreeSet<_>>();
-                let stocks=game_characters::decisions::mind::<game_api::Command>(&self.state.components,actor).unwrap().knowledge.values()
+                let stocks=game_characters::decisions::mind::<game_api::Command>(&self.host.storage,actor).unwrap().knowledge.values()
                     .filter(|k|report.snapshot.revisions.values().any(|r|r.proposal.value.terms.iter().any(|term|match term {
                         Term::Delivery {term:AgreementTerm::Delivery {source,destination,..},..}=>k.inventory==*source || k.inventory==*destination,
                         Term::Protection {patrol,..}=>patrol.supplies.iter().any(|s|s.source==k.inventory)
@@ -465,7 +483,8 @@ impl Simulation {
                     .filter(|i| referenced.contains(&i.id))
                     .collect();
                 let completes = SimTime(
-                    self.state
+                    self.host
+                        .clock()
                         .time
                         .0
                         .checked_add(world.rules.talk_time.0)
@@ -473,7 +492,7 @@ impl Simulation {
                 );
                 self.ensure_event_capacity(1)?;
                 self.interrupt_actor_activity(actor);
-                self.state.realm.as_mut().unwrap().talks.insert(
+                self.host.state.realm.as_mut().unwrap().talks.insert(
                     actor,
                     Talk {
                         recipient: *recipient,
@@ -484,12 +503,13 @@ impl Simulation {
                         stocks,
                     },
                 );
-                *self.state.components.activity_mut(actor).unwrap() = Activity::RealmTalk {
+                *self.host.storage.activity_mut(actor).unwrap() = Activity::RealmTalk {
                     commitment: *commitment,
                     recipient: *recipient,
                     completes,
                 };
-                self.state
+                self.host
+                    .state
                     .due
                     .entry(completes)
                     .or_default()
@@ -497,7 +517,7 @@ impl Simulation {
             }
             Action::RequestWork { key } => self.realm_request_work(actor, *key)?,
         }
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         Ok(())
     }
     fn realm_publish_proposal(
@@ -517,21 +537,24 @@ impl Simulation {
                 observer: actor,
                 observer_area: area,
                 statement_area: area,
-                observed_at: self.state.time,
+                observed_at: self.host.clock().time,
             };
             let prepared = self
+                .host
                 .state
                 .realm
                 .as_ref()
                 .unwrap()
                 .kernel
-                .prepare_observe_proposal(witness, id, revision, self.state.time)?;
-            prepared.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+                .prepare_observe_proposal(witness, id, revision, self.host.clock().time)?;
+            prepared.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
         }
         Ok(())
     }
     pub(crate) fn complete_realm_talk(&mut self, actor: PersonId) {
+        let owner_now = self.host.clock().time;
         let Some(talk) = self
+            .host
             .state
             .realm
             .as_mut()
@@ -544,25 +567,27 @@ impl Simulation {
             && self.transport_same_place(actor, talk.recipient)
             && matches!(
                 *self
-                    .state
-                    .components
+                    .host
+                    .storage
                     .activity(talk.recipient)
                     .expect("body exists"),
                 Activity::Idle | Activity::Rest
             )
         {
             if let Ok(prepared) = self
+                .host
                 .state
                 .realm
                 .as_ref()
                 .unwrap()
                 .kernel
-                .prepare_receive_report(talk.recipient, &talk.report, self.state.time)
+                .prepare_receive_report(talk.recipient, &talk.report, owner_now)
                 && prepared
-                    .commit(&mut self.state.realm.as_mut().unwrap().kernel)
+                    .commit(&mut self.host.state.realm.as_mut().unwrap().kernel)
                     .is_ok()
             {
                 let memory = self
+                    .host
                     .state
                     .institutions
                     .as_mut()
@@ -580,7 +605,7 @@ impl Simulation {
                     }
                 }
                 let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut self.state.components,
+                    &mut self.host.storage,
                     talk.recipient,
                 )
                 .unwrap();
@@ -595,7 +620,7 @@ impl Simulation {
                             .knowledge
                             .get(&fact.inventory)
                             .is_some_and(|old| old.accessible);
-                        fact.learned_at = self.state.time;
+                        fact.learned_at = owner_now;
                         fact.source = KnowledgeSource::Reported(actor);
                         mind.knowledge.insert(fact.inventory, fact);
                     }
@@ -611,17 +636,17 @@ impl Simulation {
         } else {
             self.emit(EventKind::Interrupted { actor });
         }
-        *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
+        *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
     }
     pub(crate) fn realm_actor_busy(&self, actor: PersonId) -> bool {
-        self.state.realm.as_ref().is_some_and(|w| {
+        self.host.state.realm.as_ref().is_some_and(|w| {
             w.talks
                 .iter()
                 .any(|(speaker, t)| *speaker == actor || t.recipient == actor)
         })
     }
     pub(crate) fn interrupt_realm(&mut self, actor: PersonId) {
-        let speakers = self.state.realm.as_ref().map_or_else(Vec::new, |w| {
+        let speakers = self.host.state.realm.as_ref().map_or_else(Vec::new, |w| {
             w.talks
                 .iter()
                 .filter(|(speaker, t)| **speaker == actor || t.recipient == actor)
@@ -629,17 +654,19 @@ impl Simulation {
                 .collect()
         });
         for speaker in speakers {
-            self.state.realm.as_mut().unwrap().talks.remove(&speaker);
+            self.host
+                .state
+                .realm
+                .as_mut()
+                .unwrap()
+                .talks
+                .remove(&speaker);
             if matches!(
-                *self
-                    .state
-                    .components
-                    .activity(speaker)
-                    .expect("body exists"),
+                *self.host.storage.activity(speaker).expect("body exists"),
                 Activity::RealmTalk { .. }
             ) {
-                *self.state.components.activity_mut(speaker).unwrap() = Activity::Idle;
-                for due in self.state.due.values_mut() {
+                *self.host.storage.activity_mut(speaker).unwrap() = Activity::Idle;
+                for due in self.host.state.due.values_mut() {
                     due.retain(|d| *d != Due::Physical(speaker));
                 }
             }
@@ -658,7 +685,7 @@ impl Simulation {
         ) {
             return Ok(());
         }
-        let Some(world) = &self.state.realm else {
+        let Some(world) = &self.host.state.realm else {
             return Err(Error::Unavailable);
         };
         match change {
@@ -675,7 +702,7 @@ impl Simulation {
                 let r = c.current();
                 if r.number != *revision
                     || !r.proposal.participants.contains_key(&i.id)
-                    || r.proposal.ratify_by < self.state.time
+                    || r.proposal.ratify_by < self.host.clock().time
                     || r.status() != game_realm::Status::AwaitingRatification
                 {
                     return Err(Error::Unavailable);
@@ -692,7 +719,7 @@ impl Simulation {
                     .get(commitment)
                     .and_then(|c| c.revision(*revision))
                     .ok_or(Error::Unavailable)?;
-                if !matches!(r.proposal.terms.get(usize::from(*index)),Some(Term::Passage {grantor,until,..}) if *grantor==i.id && *until>self.state.time)
+                if !matches!(r.proposal.terms.get(usize::from(*index)),Some(Term::Passage {grantor,until,..}) if *grantor==i.id && *until>self.host.clock().time)
                     || r.ratifications.len() != r.proposal.participants.len()
                     || r.ratifications
                         .values()
@@ -726,6 +753,7 @@ impl Simulation {
             _ => return true,
         };
         let Some(known) = self
+            .host
             .state
             .realm
             .as_ref()
@@ -755,6 +783,7 @@ impl Simulation {
         status: RuleProposalStatus,
     ) -> Result<Option<game_realm::PreparedChange>, Error> {
         let record = self
+            .host
             .state
             .institutions
             .as_ref()
@@ -774,7 +803,7 @@ impl Simulation {
         if !support && status == RuleProposalStatus::Rejected {
             return Ok(None);
         }
-        let world = self.state.realm.as_ref().ok_or(Error::Unavailable)?;
+        let world = self.host.state.realm.as_ref().ok_or(Error::Unavailable)?;
         let decision = Ratification {
             proposal,
             outcome: if support && status == RuleProposalStatus::Adopted {
@@ -782,11 +811,17 @@ impl Simulation {
             } else {
                 game_realm::Decision::Rejected
             },
-            decided_at: self.state.time,
+            decided_at: self.host.clock().time,
         };
         world
             .kernel
-            .prepare_native_decision(commitment, revision, institution, decision, self.state.time)
+            .prepare_native_decision(
+                commitment,
+                revision,
+                institution,
+                decision,
+                self.host.clock().time,
+            )
             .map(Some)
     }
     pub(crate) fn preflight_realm_outcome(
@@ -804,11 +839,11 @@ impl Simulation {
         proposal: RuleProposalId,
         status: RuleProposalStatus,
     ) -> Result<(), Error> {
-        let record = self.state.institutions.as_ref().unwrap().proposals[&proposal].clone();
+        let record = self.host.state.institutions.as_ref().unwrap().proposals[&proposal].clone();
         let Some(plan) = self.realm_native_plan(institution, proposal, status)? else {
             return Ok(());
         };
-        plan.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+        plan.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
         let InstitutionChange::RatifyRegional {
             commitment,
             revision,
@@ -825,7 +860,7 @@ impl Simulation {
             proposal,
             adopted,
         });
-        let area = self.state.institutions.as_ref().unwrap().institutions[&institution]
+        let area = self.host.state.institutions.as_ref().unwrap().institutions[&institution]
             .charter
             .jurisdiction;
         self.realm_publish_proposal(commitment, revision, area)?;
@@ -840,9 +875,10 @@ impl Simulation {
                 observer: actor,
                 observer_area: area,
                 statement_area: area,
-                observed_at: self.state.time,
+                observed_at: self.host.clock().time,
             };
             let p = self
+                .host
                 .state
                 .realm
                 .as_ref()
@@ -853,14 +889,14 @@ impl Simulation {
                     commitment,
                     revision,
                     institution,
-                    self.state.time,
+                    self.host.clock().time,
                 )?;
-            p.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+            p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
         }
         Ok(())
     }
     fn realm_request_work(&mut self, actor: PersonId, key: TermKey) -> Result<(), Error> {
-        let world = self.state.realm.as_ref().unwrap();
+        let world = self.host.state.realm.as_ref().unwrap();
         let r = world
             .kernel
             .commitments
@@ -870,7 +906,7 @@ impl Simulation {
         let facts = self.realm_facts(actor, &r.proposal, true)?;
         let plan = world
             .kernel
-            .prepare_work_request(key, actor, &facts, self.state.time)?;
+            .prepare_work_request(key, actor, &facts, self.host.clock().time)?;
         let request = plan.requests.first().ok_or(Error::Unavailable)?.clone();
         self.ensure_event_capacity(65)?;
         let owner = match request {
@@ -885,7 +921,7 @@ impl Simulation {
                 }) {
                     PendingOwner::Agreement(existing.id)
                 } else {
-                    let before = self.state.next_id;
+                    let before = self.host.next_id();
                     self.agreement_command(
                         actor,
                         &AgreementAction::Propose {
@@ -895,6 +931,7 @@ impl Simulation {
                         },
                     )?;
                     let id = self
+                        .host
                         .state
                         .agreements
                         .as_ref()
@@ -908,9 +945,10 @@ impl Simulation {
                 }
             }
             Request::Protection { patrol, .. } => {
-                let before = self.state.next_id;
+                let before = self.host.next_id();
                 self.mission_command(actor, &MissionAction::Propose { proposal: patrol })?;
                 let id = self
+                    .host
                     .state
                     .missions
                     .as_ref()
@@ -923,7 +961,7 @@ impl Simulation {
                 PendingOwner::Mission(id)
             }
             Request::Passage { institution, .. } => {
-                let before = self.state.next_id;
+                let before = self.host.next_id();
                 self.institution_command(
                     actor,
                     &InstitutionAction::Propose {
@@ -936,6 +974,7 @@ impl Simulation {
                     },
                 )?;
                 let id = self
+                    .host
                     .state
                     .institutions
                     .as_ref()
@@ -949,8 +988,9 @@ impl Simulation {
             }
             Request::Ratification { .. } => return Err(Error::Unavailable),
         };
-        plan.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
-        self.state
+        plan.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
+        self.host
+            .state
             .realm
             .as_mut()
             .unwrap()
@@ -974,6 +1014,7 @@ impl Simulation {
             _ => return 0,
         };
         let Some(known) = self
+            .host
             .state
             .realm
             .as_ref()
@@ -984,7 +1025,7 @@ impl Simulation {
         };
         let proposal = &known.proposal.value;
         let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .unwrap();
         let affiliations = self
             .institution_view(actor)
@@ -1044,20 +1085,21 @@ impl Simulation {
         let rules = self.body_rules(actor);
         let context = Context {
             affiliations: &affiliations,
-            hunger: game_physiology::body(&self.state.components, actor)
+            hunger: game_physiology::body(&self.host.storage, actor)
                 .expect("body exists")
                 .vitals
                 .hunger,
-            hunger_exempt: self.state.people[self.person_index[&actor]].hunger_exempt,
+            hunger_exempt: self.host.state.people[self.person_index[&actor]].hunger_exempt,
             meal_relief: rules.meal_relief,
             meal_size: rules.meal_size,
             hydration_urgency: self.observed_hydration_urgency(actor),
             drink_quantity: self
+                .host
                 .state
                 .health
                 .as_ref()
                 .map_or(Quantity(u64::MAX), |health| health.rules.drink_quantity),
-            concepts: &self.state.decisions.as_ref().unwrap().concepts,
+            concepts: &self.host.state.decisions.as_ref().unwrap().concepts,
         };
         let score = game_characters::proposals::assess(
             &mind.personality,
@@ -1076,11 +1118,11 @@ impl Simulation {
         }
     }
     pub(crate) fn observe_realm(&mut self) -> Result<(), Error> {
-        let Some(world) = &self.state.realm else {
+        let Some(world) = &self.host.state.realm else {
             return Ok(());
         };
         if world.kernel.commitments.is_empty() {
-            self.state.realm.as_mut().unwrap().last_event = self.state.next_event - 1;
+            self.host.state.realm.as_mut().unwrap().last_event = self.host.next_event() - 1;
             return Ok(());
         }
         let _cursor = world.last_event;
@@ -1089,11 +1131,9 @@ impl Simulation {
             let Some(area) = self.realm_area(actor) else {
                 continue;
             };
-            for i in self
-                .institution_view(actor)
-                .into_iter()
-                .filter(|i| i.observed_at == self.state.time && i.charter.jurisdiction == area)
-            {
+            for i in self.institution_view(actor).into_iter().filter(|i| {
+                i.observed_at == self.host.clock().time && i.charter.jurisdiction == area
+            }) {
                 for p in i.proposals {
                     let (commitment, revision) = match p.change {
                         InstitutionChange::RatifyRegional {
@@ -1117,23 +1157,24 @@ impl Simulation {
                 observer: actor,
                 observer_area: area,
                 statement_area: area,
-                observed_at: self.state.time,
+                observed_at: self.host.clock().time,
             };
             if let Ok(p) = self
+                .host
                 .state
                 .realm
                 .as_ref()
                 .unwrap()
                 .kernel
-                .prepare_observe_proposal(witness, commitment, revision, self.state.time)
+                .prepare_observe_proposal(witness, commitment, revision, self.host.clock().time)
             {
-                p.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+                p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
             }
-            let actual = &self.state.institutions.as_ref().unwrap().proposals[&proposal];
+            let actual = &self.host.state.institutions.as_ref().unwrap().proposals[&proposal];
             if matches!(actual.change, InstitutionChange::RatifyRegional { .. })
                 && status == RuleProposalStatus::Proposed
             {
-                let kernel = &self.state.realm.as_ref().unwrap().kernel;
+                let kernel = &self.host.state.realm.as_ref().unwrap().kernel;
                 let missing = kernel
                     .commitments
                     .get(&commitment)
@@ -1145,31 +1186,31 @@ impl Simulation {
                         revision,
                         institution,
                         proposal,
-                        self.state.time,
+                        self.host.clock().time,
                     )
                 {
-                    p.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+                    p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
                 }
             }
         }
-        self.state.realm.as_mut().unwrap().last_event = self.state.next_event - 1;
+        self.host.state.realm.as_mut().unwrap().last_event = self.host.next_event() - 1;
         self.reconcile_realm_work()
     }
     fn reconcile_realm_work(&mut self) -> Result<(), Error> {
-        let pending = self.state.realm.as_ref().map_or_else(Vec::new, |w| {
+        let pending = self.host.state.realm.as_ref().map_or_else(Vec::new, |w| {
             w.pending.iter().map(|(k, p)| (*k, p.clone())).collect()
         });
         for (key, pending) in pending {
-            let world = self.state.realm.as_ref().unwrap();
+            let world = self.host.state.realm.as_ref().unwrap();
             let r = world.kernel.commitments[&key.commitment]
                 .revision(key.revision)
                 .ok_or(Error::Unavailable)?;
             let term = &r.proposal.terms[usize::from(key.index)];
             let receipt = match (&pending.owner, term) {
                 (PendingOwner::Agreement(id), Term::Delivery { term, .. }) => {
-                    let a = &self.state.agreements.as_ref().unwrap().agreements[id];
+                    let a = &self.host.state.agreements.as_ref().unwrap().agreements[id];
                     if let Some(obligation) = a.obligations.iter().find(|o| {
-                        self.state.agreements.as_ref().unwrap().obligations[o].term == *term
+                        self.host.state.agreements.as_ref().unwrap().obligations[o].term == *term
                     }) {
                         Some(WorkReceipt::DeliveryOpened {
                             agreement: *id,
@@ -1195,7 +1236,7 @@ impl Simulation {
                     }
                 }
                 (PendingOwner::Mission(id), Term::Protection { patrol, .. }) => {
-                    let m = &self.state.missions.as_ref().unwrap().missions[id];
+                    let m = &self.host.state.missions.as_ref().unwrap().missions[id];
                     if m.proposal.objective != patrol.objective {
                         Some(WorkReceipt::ProtectionOpened {
                             mission: *id,
@@ -1236,10 +1277,10 @@ impl Simulation {
             {
                 let plan = world
                     .kernel
-                    .prepare_backing(key, receipt, self.state.time)?;
-                plan.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+                    .prepare_backing(key, receipt, self.host.clock().time)?;
+                plan.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
             }
-            let Some(backed) = self.state.realm.as_ref().unwrap().kernel.commitments
+            let Some(backed) = self.host.state.realm.as_ref().unwrap().kernel.commitments
                 [&key.commitment]
                 .revision(key.revision)
                 .unwrap()
@@ -1254,7 +1295,7 @@ impl Simulation {
                     obligation: Some(id),
                     ..
                 } => {
-                    let o = &self.state.agreements.as_ref().unwrap().obligations[&id];
+                    let o = &self.host.state.agreements.as_ref().unwrap().obligations[&id];
                     Some(OutcomeReceipt::Delivery {
                         obligation: id,
                         performed: Quantity(o.performed.min(o.amount())),
@@ -1262,8 +1303,8 @@ impl Simulation {
                     })
                 }
                 Backing::Protection { mission } => {
-                    let m = &self.state.missions.as_ref().unwrap().missions[&mission];
-                    let promised = &self.state.realm.as_ref().unwrap().kernel.commitments
+                    let m = &self.host.state.missions.as_ref().unwrap().missions[&mission];
+                    let promised = &self.host.state.realm.as_ref().unwrap().kernel.commitments
                         [&key.commitment]
                         .revision(key.revision)
                         .unwrap()
@@ -1285,7 +1326,7 @@ impl Simulation {
                 _ => None,
             };
             if let Some(receipt) = receipt {
-                let kernel = &self.state.realm.as_ref().unwrap().kernel;
+                let kernel = &self.host.state.realm.as_ref().unwrap().kernel;
                 let changed = match &receipt {
                     OutcomeReceipt::Delivery {
                         performed,
@@ -1300,8 +1341,8 @@ impl Simulation {
                 };
                 if changed {
                     kernel
-                        .prepare_outcome(key, receipt, self.state.time)?
-                        .commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+                        .prepare_outcome(key, receipt, self.host.clock().time)?
+                        .commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
                 }
             }
             // Only the actor's personally known owner record can yield a local
@@ -1314,7 +1355,7 @@ impl Simulation {
         let Some(area) = self.realm_area(actor) else {
             return Ok(());
         };
-        let Some(r) = self.state.realm.as_ref().unwrap().kernel.commitments[&key.commitment]
+        let Some(r) = self.host.state.realm.as_ref().unwrap().kernel.commitments[&key.commitment]
             .revision(key.revision)
         else {
             return Ok(());
@@ -1324,6 +1365,7 @@ impl Simulation {
         };
         let term = &r.proposal.terms[usize::from(key.index)];
         let known = self
+            .host
             .state
             .realm
             .as_ref()
@@ -1368,7 +1410,7 @@ impl Simulation {
                     Some(game_realm::Dated {
                         value,
                         observed_at: o.observed_at,
-                        learned_at: self.state.time,
+                        learned_at: self.host.clock().time,
                         source: o.source.clone().unwrap_or(KnowledgeSource::Observed(actor)),
                     })
                 } else {
@@ -1393,7 +1435,7 @@ impl Simulation {
                     Some(game_realm::Dated {
                         value,
                         observed_at: a.observed_at,
-                        learned_at: self.state.time,
+                        learned_at: self.host.clock().time,
                         source: a.source.unwrap_or(KnowledgeSource::Observed(actor)),
                     })
                 }
@@ -1440,7 +1482,7 @@ impl Simulation {
                 Some(game_realm::Dated {
                     value,
                     observed_at: m.observed_at,
-                    learned_at: self.state.time,
+                    learned_at: self.host.clock().time,
                     source: m
                         .reported_by
                         .map_or(KnowledgeSource::Observed(actor), KnowledgeSource::Reported),
@@ -1451,19 +1493,20 @@ impl Simulation {
         let _ = area;
         if let Some(snapshot) = snapshot
             && let Ok(p) = self
+                .host
                 .state
                 .realm
                 .as_ref()
                 .unwrap()
                 .kernel
-                .prepare_learn_work(actor, key, snapshot, self.state.time)
+                .prepare_learn_work(actor, key, snapshot, self.host.clock().time)
         {
-            p.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+            p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
         }
         Ok(())
     }
     pub(crate) fn available_realm_commands(&self, actor: PersonId) -> Vec<Command> {
-        let Some(world) = &self.state.realm else {
+        let Some(world) = &self.host.state.realm else {
             return Vec::new();
         };
         let Some(area) = self.realm_area(actor) else {
@@ -1481,7 +1524,7 @@ impl Simulation {
                         };
                         if world
                             .kernel
-                            .prepare_work_request(key, actor, &facts, self.state.time)
+                            .prepare_work_request(key, actor, &facts, self.host.clock().time)
                             .is_ok()
                         {
                             commands.push(Command::Realm {
@@ -1499,7 +1542,7 @@ impl Simulation {
                     *p != actor
                         && self.realm_area(*p) == Some(area)
                         && matches!(
-                            *self.state.components.activity(*p).expect("body exists"),
+                            *self.host.storage.activity(*p).expect("body exists"),
                             Activity::Idle | Activity::Rest
                         )
                 })
@@ -1517,8 +1560,9 @@ impl Simulation {
         commands
     }
     pub(crate) fn review_realm(&mut self) -> Result<(), Error> {
+        let owner_now = self.host.clock().time;
         self.observe_realm()?;
-        let Some(world) = &self.state.realm else {
+        let Some(world) = &self.host.state.realm else {
             return Ok(());
         };
         let expiries = world
@@ -1527,41 +1571,43 @@ impl Simulation {
             .values()
             .filter(|c| {
                 c.current().status() == game_realm::Status::AwaitingRatification
-                    && c.current().proposal.ratify_by < self.state.time
+                    && c.current().proposal.ratify_by < owner_now
             })
             .map(|c| c.id)
             .collect::<Vec<_>>();
         for id in expiries {
             let p = self
+                .host
                 .state
                 .realm
                 .as_ref()
                 .unwrap()
                 .kernel
-                .prepare_expire(id, self.state.time)?;
-            p.commit(&mut self.state.realm.as_mut().unwrap().kernel)?;
+                .prepare_expire(id, owner_now)?;
+            p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
         }
         for actor in self
             .person_index
             .keys()
             .copied()
-            .filter(|p| *p != self.state.ruler)
+            .filter(|p| *p != self.host.state.ruler)
             .collect::<Vec<_>>()
         {
             if self.past_life_controls_actor(actor)
                 || self.realm_area(actor).is_none()
                 || !matches!(
-                    *self.state.components.activity(actor).expect("body exists"),
+                    *self.host.storage.activity(actor).expect("body exists"),
                     Activity::Idle | Activity::Rest
                 )
                 || self
+                    .host
                     .state
                     .realm
                     .as_ref()
                     .unwrap()
                     .reconsider_after
                     .get(&actor)
-                    .is_some_and(|at| *at > self.state.time)
+                    .is_some_and(|at| *at > owner_now)
             {
                 continue;
             }
@@ -1582,6 +1628,7 @@ impl Simulation {
                     .filter(|p| p.representative == actor)
                 {
                     if self
+                        .host
                         .state
                         .realm
                         .as_ref()
@@ -1592,7 +1639,7 @@ impl Simulation {
                             p.institution,
                             actor,
                             &facts,
-                            self.state.time,
+                            owner_now,
                         )
                         .is_err()
                     {
@@ -1638,73 +1685,76 @@ impl Simulation {
                     }
                 }
             }
-            self.state
+            self.host
+                .state
                 .realm
                 .as_mut()
                 .unwrap()
                 .reconsider_after
-                .insert(actor, SimTime(self.state.time.0.saturating_add(180_000)));
+                .insert(actor, SimTime(owner_now.0.saturating_add(180_000)));
         }
         Ok(())
     }
     pub(crate) fn realm_allocation_bound(&self) -> u64 {
-        self.state
-            .realm
-            .as_ref()
-            .map_or(0, |_| (self.state.people.len() as u64).saturating_mul(512))
+        self.host.state.realm.as_ref().map_or(0, |_| {
+            (self.host.state.people.len() as u64).saturating_mul(512)
+        })
     }
     pub(crate) fn realm_boundary(&self, limit: SimTime) -> SimTime {
-        self.state
+        self.host
+            .state
             .realm
             .as_ref()
             .into_iter()
             .flat_map(|w| w.kernel.commitments.values())
             .filter(|c| c.current().status() == game_realm::Status::AwaitingRatification)
             .filter_map(|c| c.current().proposal.ratify_by.0.checked_add(1).map(SimTime))
-            .filter(|at| *at > self.state.time)
+            .filter(|at| *at > self.host.clock().time)
             .min()
             .map_or(limit, |at| at.min(limit))
     }
     pub(crate) fn validate_realm(&self) -> Result<(), Error> {
-        let Some(world) = &self.state.realm else {
+        let Some(world) = &self.host.state.realm else {
             return Ok(());
         };
         world.rules.validate()?;
         let bad = || Error::InvalidSave("invalid realm communication or owner references".into());
-        let institutions = self.state.institutions.as_ref().ok_or_else(bad)?;
-        let agreements = self.state.agreements.as_ref().ok_or_else(bad)?;
+        let institutions = self.host.state.institutions.as_ref().ok_or_else(bad)?;
+        let agreements = self.host.state.agreements.as_ref().ok_or_else(bad)?;
         let refs = game_realm::References {
             people: self.person_index.keys().copied().collect(),
-            areas: self.state.areas.iter().map(|a| a.id).collect(),
+            areas: self.host.state.areas.iter().map(|a| a.id).collect(),
             institutions: institutions.institutions.keys().copied().collect(),
-            inventories: self.state.inventories.keys().copied().collect(),
+            inventories: self.host.state.inventories.keys().copied().collect(),
             agreements: agreements.agreements.keys().copied().collect(),
             obligations: agreements.obligations.keys().copied().collect(),
             proposals: institutions.proposals.keys().copied().collect(),
             missions: self
+                .host
                 .state
                 .missions
                 .as_ref()
                 .map_or_else(BTreeSet::new, |w| w.missions.keys().copied().collect()),
             records: BTreeSet::new(),
         };
-        world.kernel.validate(&refs, self.state.time)?;
-        if world.last_event >= self.state.next_event {
+        world.kernel.validate(&refs, self.host.clock().time)?;
+        if world.last_event >= self.host.next_event() {
             return Err(bad());
         }
         for (actor, talk) in &world.talks {
             if !refs.people.contains(actor)
                 || !refs.people.contains(&talk.recipient)
                 || !refs.areas.contains(&talk.area)
-                || talk.completes <= self.state.time
-                || !matches!(*self.state.components.activity(*actor).expect("body exists"),Activity::RealmTalk {commitment,recipient,completes} if commitment==talk.report.commitment && recipient==talk.recipient && completes==talk.completes)
+                || talk.completes <= self.host.clock().time
+                || !matches!(*self.host.storage.activity(*actor).expect("body exists"),Activity::RealmTalk {commitment,recipient,completes} if commitment==talk.report.commitment && recipient==talk.recipient && completes==talk.completes)
                 || !self
+                    .host
                     .state
                     .due
                     .get(&talk.completes)
                     .is_some_and(|d| d.contains(&Due::Physical(*actor)))
                 || talk.report.speaker != *actor
-                || talk.report.sent_at > self.state.time
+                || talk.report.sent_at > self.host.clock().time
             {
                 return Err(bad());
             }
@@ -1712,7 +1762,7 @@ impl Simulation {
             // current foreign institution view.
             let _ = world
                 .kernel
-                .prepare_receive_report(talk.recipient, &talk.report, self.state.time)
+                .prepare_receive_report(talk.recipient, &talk.report, self.host.clock().time)
                 .map_err(|_| bad())?;
             if talk
                 .institutions
@@ -1744,6 +1794,7 @@ impl Simulation {
                 }
                 (PendingOwner::Mission(id), Some(Term::Protection { patrol, .. })) => {
                     if self
+                        .host
                         .state
                         .missions
                         .as_ref()

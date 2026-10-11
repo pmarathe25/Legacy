@@ -6,7 +6,7 @@ impl SessionEngine for Simulation {
         Simulation::time(self)
     }
     fn revision(&self) -> u64 {
-        self.revision
+        self.host.clock().revision
     }
     fn observe(&self) -> PlayerView {
         Simulation::observe(self)
@@ -27,7 +27,7 @@ impl SessionEngine for Simulation {
         Simulation::load(bytes, self.execution.clone())
     }
     fn debug_json(&self) -> Result<String, Error> {
-        serde_json::to_string(self.canonical_state())
+        serde_json::to_string(&self.canonical_state())
             .map_err(|error| Error::InvalidSave(error.to_string()))
     }
 }

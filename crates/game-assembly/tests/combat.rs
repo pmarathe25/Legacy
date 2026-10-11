@@ -35,7 +35,7 @@ fn turn(
     })
 }
 fn hp(sim: &Simulation, actor: PersonId) -> u64 {
-    game_physiology::body(&sim.canonical_state().components, actor)
+    game_physiology::body(sim.canonical_state().components, actor)
         .expect("body exists")
         .vitals
         .health
@@ -44,8 +44,8 @@ fn hp(sim: &Simulation, actor: PersonId) -> u64 {
 #[test]
 fn earlier_initiative_can_prevent_a_later_turn_and_each_round_costs_one_interval() {
     let mut sim = sim(4);
-    let target = sim.canonical_state().people[3].id;
-    let ruler = sim.canonical_state().ruler;
+    let target = sim.canonical_state().state.people[3].id;
+    let ruler = sim.canonical_state().state.ruler;
     let battle = engage(&mut sim, target);
     assert_eq!(
         sim.advance(SimDuration(60_000)).unwrap().reason,
@@ -64,20 +64,20 @@ fn earlier_initiative_can_prevent_a_later_turn_and_each_round_costs_one_interval
         sim.canonical_state()
             .events
             .iter()
-            .filter(|e| matches!(e.kind,EventKind::Struck {actor,..} if actor == target))
+            .filter(|e| matches!(e.event,EventKind::Struck {actor,..} if actor == target))
             .count(),
         2
     );
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
-    assert_eq!(sim.canonical_state().people[3].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[3].work_units, 0);
 }
 
 #[test]
 fn turn_validation_is_atomic_for_movement_action_range_and_capture_prerequisites() {
     let mut sim = sim(1);
-    let target = sim.canonical_state().people[3].id;
+    let target = sim.canonical_state().state.people[3].id;
     let battle = engage(&mut sim, target);
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert!(
         turn(
             &mut sim,
@@ -87,7 +87,7 @@ fn turn_validation_is_atomic_for_movement_action_range_and_capture_prerequisites
         )
         .is_err()
     );
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
     assert!(
         turn(
             &mut sim,
@@ -112,7 +112,7 @@ fn turn_validation_is_atomic_for_movement_action_range_and_capture_prerequisites
         )
         .is_err()
     );
-    assert_eq!(&before, sim.canonical_state());
+    assert_eq!(before, sim.canonical_snapshot().unwrap());
     turn(
         &mut sim,
         battle,
@@ -126,23 +126,24 @@ fn turn_validation_is_atomic_for_movement_action_range_and_capture_prerequisites
             .unwrap()
             .fighters
             .iter()
-            .find(|f| f.actor == sim.canonical_state().ruler)
+            .find(|f| f.actor == sim.canonical_state().state.ruler)
             .unwrap()
             .position,
         Point { x: 5_123, y: 8_123 }
     );
-    assert!(hp(&sim, sim.canonical_state().ruler) >= 165_000);
+    assert!(hp(&sim, sim.canonical_state().state.ruler) >= 165_000);
     assert_eq!(sim.time(), SimTime(0));
 }
 
 #[test]
 fn capture_uses_actual_bindings_and_release_takes_time() {
     let mut sim = sim(1);
-    let target = sim.canonical_state().people[3].id;
-    let ruler = sim.canonical_state().ruler;
+    let target = sim.canonical_state().state.people[3].id;
+    let ruler = sim.canonical_state().state.ruler;
     let battle = engage(&mut sim, target);
     let bindings: u64 = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .filter(|i| i.good == Good::Binding)
@@ -156,6 +157,7 @@ fn capture_uses_actual_bindings_and_release_takes_time() {
     sim.advance(SimDuration(6_000)).unwrap();
     assert!(
         sim.canonical_state()
+            .state
             .combat
             .as_ref()
             .unwrap()
@@ -164,6 +166,7 @@ fn capture_uses_actual_bindings_and_release_takes_time() {
     );
     assert_eq!(
         sim.canonical_state()
+            .state
             .inventories
             .values()
             .filter(|i| i.good == Good::Binding)
@@ -183,6 +186,7 @@ fn capture_uses_actual_bindings_and_release_takes_time() {
     sim.advance(SimDuration(59_999)).unwrap();
     assert!(
         sim.canonical_state()
+            .state
             .combat
             .as_ref()
             .unwrap()
@@ -192,13 +196,14 @@ fn capture_uses_actual_bindings_and_release_takes_time() {
     sim.advance(SimDuration(1)).unwrap();
     assert!(
         !sim.canonical_state()
+            .state
             .combat
             .as_ref()
             .unwrap()
             .captivity
             .contains_key(&target)
     );
-    assert!(sim.canonical_state().events.iter().any(|e| e.kind
+    assert!(sim.canonical_state().events.iter().any(|e| e.event
         == EventKind::Released {
             actor: ruler,
             target
@@ -208,18 +213,19 @@ fn capture_uses_actual_bindings_and_release_takes_time() {
 #[test]
 fn a_surrendered_person_can_be_captured_without_injury() {
     let mut sim = sim(4);
-    let target = sim.canonical_state().people[3].id;
+    let target = sim.canonical_state().state.people[3].id;
     let battle = engage(&mut sim, target);
     turn(&mut sim, battle, None, CombatAction::Surrender).unwrap();
     assert!(
         sim.canonical_state()
+            .state
             .combat
             .as_ref()
             .unwrap()
             .captivity
-            .contains_key(&sim.canonical_state().ruler)
+            .contains_key(&sim.canonical_state().state.ruler)
     );
-    assert_eq!(hp(&sim, sim.canonical_state().ruler), 180_000);
+    assert_eq!(hp(&sim, sim.canonical_state().state.ruler), 180_000);
     sim.advance(SimDuration(6_000)).unwrap();
     assert!(!sim.observe().combat.unwrap().active);
 }
@@ -227,7 +233,7 @@ fn a_surrendered_person_can_be_captured_without_injury() {
 #[test]
 fn regeneration_in_place_does_not_remove_restraints() {
     let mut sim = sim(1);
-    let guardian = sim.canonical_state().people[1].id;
+    let guardian = sim.canonical_state().state.people[1].id;
     let battle = engage(&mut sim, guardian);
     for _ in 0..4 {
         turn(
@@ -247,11 +253,23 @@ fn regeneration_in_place_does_not_remove_restraints() {
     )
     .unwrap();
     sim.advance(SimDuration(6_000)).unwrap();
-    let custody = sim.canonical_state().combat.as_ref().unwrap().captivity[&guardian].clone();
+    let custody = sim
+        .canonical_state()
+        .state
+        .combat
+        .as_ref()
+        .unwrap()
+        .captivity[&guardian]
+        .clone();
     sim.advance(SimDuration(300_000)).unwrap();
     assert_eq!(hp(&sim, guardian), 180_000);
     assert_eq!(
-        sim.canonical_state().combat.as_ref().unwrap().captivity[&guardian],
+        sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .captivity[&guardian],
         custody
     );
     assert_eq!(
@@ -263,15 +281,15 @@ fn regeneration_in_place_does_not_remove_restraints() {
 #[test]
 fn saved_resolved_turns_are_not_repeated_and_observations_are_passive() {
     let mut original = sim(1);
-    let target = original.canonical_state().people[3].id;
+    let target = original.canonical_state().state.people[3].id;
     let battle = engage(&mut original, target);
     turn(&mut original, battle, None, CombatAction::Attack { target }).unwrap();
     original.advance(SimDuration(1_234)).unwrap();
-    let before = original.canonical_state().clone();
+    let before = original.canonical_snapshot().unwrap();
     for _ in 0..100 {
         original.observe();
     }
-    assert_eq!(&before, original.canonical_state());
+    assert_eq!(before, original.canonical_snapshot().unwrap());
     let mut loaded = Simulation::load(
         &original.save().unwrap(),
         Execution {
@@ -295,17 +313,17 @@ fn saved_resolved_turns_are_not_repeated_and_observations_are_passive() {
 #[test]
 fn independent_encounters_share_the_clock_and_participant_count_does_not_multiply_time() {
     let mut sim = sim(4);
-    let first = sim.canonical_state().people[5].id;
-    let second = sim.canonical_state().people[6].id;
+    let first = sim.canonical_state().state.people[5].id;
+    let second = sim.canonical_state().state.people[6].id;
     sim.debug_move_actor(first, AreaId(3)).unwrap();
     sim.debug_move_actor(second, AreaId(3)).unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     let other = sim
         .debug_start_encounter(vec![(first, 0), (second, 1)])
         .unwrap();
-    let enemy = sim.canonical_state().people[3].id;
-    let friend = sim.canonical_state().people[7].id;
-    let ruler = sim.canonical_state().ruler;
+    let enemy = sim.canonical_state().state.people[3].id;
+    let friend = sim.canonical_state().state.people[7].id;
+    let ruler = sim.canonical_state().state.ruler;
     let battle = sim
         .debug_start_encounter(vec![(ruler, 0), (enemy, 1), (friend, 0)])
         .unwrap();
@@ -313,11 +331,23 @@ fn independent_encounters_share_the_clock_and_participant_count_does_not_multipl
     sim.advance(SimDuration(6_000)).unwrap();
     assert_eq!(sim.time(), SimTime(186_000));
     assert_eq!(
-        sim.canonical_state().combat.as_ref().unwrap().encounters[&battle].round,
+        sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters[&battle]
+            .round,
         1
     );
     assert_eq!(
-        sim.canonical_state().combat.as_ref().unwrap().encounters[&other].round,
+        sim.canonical_state()
+            .state
+            .combat
+            .as_ref()
+            .unwrap()
+            .encounters[&other]
+            .round,
         1
     );
 }
@@ -325,7 +355,7 @@ fn independent_encounters_share_the_clock_and_participant_count_does_not_multipl
 #[test]
 fn retreat_rejoins_actual_travel_without_crediting_the_round_as_travel() {
     let mut sim = sim(1);
-    let target = sim.canonical_state().people[3].id;
+    let target = sim.canonical_state().state.people[3].id;
     let battle = engage(&mut sim, target);
     turn(
         &mut sim,
@@ -350,14 +380,14 @@ fn retreat_rejoins_actual_travel_without_crediting_the_round_as_travel() {
     assert!(matches!(sim.observe().location, Location::InTransit { .. }));
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(2)));
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
     assert!(sim.observe().combat.is_none());
 }
 
 #[test]
 fn generated_geometry_and_damage_persist_across_loading_and_reentry() {
     let mut sim = sim(1);
-    let guardian = sim.canonical_state().people[1].id;
+    let guardian = sim.canonical_state().state.people[1].id;
     let battle = engage(&mut sim, guardian);
     let view = sim.observe().combat.unwrap();
     let map_id = view.map;
@@ -387,7 +417,7 @@ fn generated_geometry_and_damage_persist_across_loading_and_reentry() {
     assert_eq!(sim.observe().combat.unwrap().obstacles[0].integrity, 0);
     let loaded = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     assert_eq!(loaded.observe().combat, sim.observe().combat);
-    let bounds = sim.canonical_state().combat.as_ref().unwrap().maps[&AreaId(1)].clone();
+    let bounds = sim.canonical_state().state.combat.as_ref().unwrap().maps[&AreaId(1)].clone();
     // End this encounter by retreating, then return through the area graph.
     turn(
         &mut sim,
@@ -421,7 +451,7 @@ fn generated_geometry_and_damage_persist_across_loading_and_reentry() {
     engage(&mut sim, guardian);
     assert_eq!(sim.observe().combat.unwrap().map, map_id);
     assert_eq!(
-        sim.canonical_state().combat.as_ref().unwrap().maps[&AreaId(1)],
+        sim.canonical_state().state.combat.as_ref().unwrap().maps[&AreaId(1)],
         bounds
     );
 }
@@ -429,7 +459,7 @@ fn generated_geometry_and_damage_persist_across_loading_and_reentry() {
 #[test]
 fn births_outside_an_encounter_continue_on_the_same_clock() {
     let mut sim = sim(1);
-    let guardian = sim.canonical_state().people[1].id;
+    let guardian = sim.canonical_state().state.people[1].id;
     let battle = engage(&mut sim, guardian);
     for _ in 0..50 {
         turn(&mut sim, battle, None, CombatAction::Defend).unwrap();
@@ -440,8 +470,8 @@ fn births_outside_an_encounter_continue_on_the_same_clock() {
         sim.canonical_state()
             .events
             .iter()
-            .any(|e| matches!(e.kind, EventKind::Born { .. }) && e.time == SimTime(300_000))
+            .any(|e| matches!(e.event, EventKind::Born { .. }) && e.at == SimTime(300_000))
     );
-    assert_eq!(sim.canonical_state().people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
 }

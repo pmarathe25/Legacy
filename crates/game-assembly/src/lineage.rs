@@ -7,24 +7,25 @@ pub use game_lineage::*;
 impl Simulation {
     pub fn lineage_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::combat_fixture(seed, execution)?;
-        sim.state.scenario = scenarios()
+        sim.host.state.scenario = scenarios()
             .into_iter()
             .find(|s| s.id == "lineage-fixture")
             .ok_or_else(|| Error::InvalidFixture("lineage fixture is not registered".into()))?;
-        let ruler = sim.state.ruler;
-        let location = game_spatial::location(&sim.state.components, game_ecs::StableId((ruler).0))
+        let ruler = sim.host.state.ruler;
+        let location = game_spatial::location(&sim.host.storage, game_ecs::StableId((ruler).0))
             .expect("location exists")
             .clone();
-        sim.state.lineage = Some(World {
+        sim.host.state.lineage = Some(World {
             rules: MentorshipRules::default(),
             invocation_learning: BTreeMap::new(),
             incarnations: vec![Incarnation {
                 person: ruler,
-                bound_at: sim.state.time,
+                bound_at: sim.host.clock().time,
                 died_at: None,
             }],
             waiting: None,
             guardians: sim
+                .host
                 .state
                 .people
                 .iter()
@@ -40,7 +41,7 @@ impl Simulation {
                             knows_invocation: true,
                             target: Some(ruler),
                             sensed_location: Some(location.clone()),
-                            sensed_at: sim.state.time,
+                            sensed_at: sim.host.clock().time,
                             goal: GuardianGoal::Mentoring,
                             explanation:
                                 "Assisting the current incarnation; readiness remains unassessed"
@@ -54,10 +55,10 @@ impl Simulation {
     }
 
     pub(crate) fn observe_lineage_deaths(&mut self) {
-        let Some(current) = self.state.lineage.as_ref().and_then(World::current) else {
+        let Some(current) = self.host.state.lineage.as_ref().and_then(World::current) else {
             return;
         };
-        if game_physiology::body(&self.state.components, current)
+        if game_physiology::body(&self.host.storage, current)
             .unwrap()
             .vitals
             .alive
@@ -65,6 +66,7 @@ impl Simulation {
             return;
         }
         let constraints: BTreeMap<_, _> = self
+            .host
             .state
             .lineage
             .as_ref()
@@ -74,12 +76,12 @@ impl Simulation {
             .map(|id| (*id, self.guardian_constraint(*id)))
             .collect();
         let world = game_lineage::observe_death(
-            self.state.lineage.as_ref().unwrap(),
+            self.host.state.lineage.as_ref().unwrap(),
             false,
-            self.state.time,
+            self.host.clock().time,
             &constraints,
         );
-        self.state.lineage = Some(world);
+        self.host.state.lineage = Some(world);
     }
 
     /// Called only after an actual birth has created the person and body. Birth
@@ -87,6 +89,7 @@ impl Simulation {
     /// simultaneous eligible birth is deterministic across workers and saves.
     pub(crate) fn record_lineage_birth(&mut self, child: PersonId) {
         let Some(waiting) = self
+            .host
             .state
             .lineage
             .as_ref()
@@ -95,10 +98,11 @@ impl Simulation {
             return;
         };
         let Some(life) = self
+            .host
             .state
             .development
             .as_ref()
-            .and_then(|_| game_lifecycle::life(&self.state.components, child))
+            .and_then(|_| game_lifecycle::life(&self.host.storage, child))
         else {
             return;
         };
@@ -107,15 +111,16 @@ impl Simulation {
             born: life.born,
             initial_age: life.initial_age,
             parent_count: life.parents.len(),
-            alive: game_physiology::body(&self.state.components, child)
+            alive: game_physiology::body(&self.host.storage, child)
                 .unwrap()
                 .vitals
                 .alive,
-            location: game_spatial::location(&self.state.components, game_ecs::StableId((child).0))
+            location: game_spatial::location(&self.host.storage, game_ecs::StableId((child).0))
                 .expect("location exists")
                 .clone(),
         };
         let constraints = self
+            .host
             .state
             .lineage
             .as_ref()
@@ -125,21 +130,22 @@ impl Simulation {
             .map(|id| (*id, self.guardian_constraint(*id)))
             .collect();
         let Some(binding) = game_lineage::bind_actual_birth(
-            self.state.lineage.as_ref().unwrap(),
+            self.host.state.lineage.as_ref().unwrap(),
             &[birth],
-            self.state.time,
+            self.host.clock().time,
             &constraints,
         ) else {
             return;
         };
-        self.state.people[self.person_index[&waiting.predecessor]].role = Role::Citizen;
-        self.state.people[self.person_index[&binding.successor]].role = Role::Ruler;
-        self.state.ruler = binding.successor;
-        self.state.lineage = Some(binding.lineage);
+        self.host.state.people[self.person_index[&waiting.predecessor]].role = Role::Citizen;
+        self.host.state.people[self.person_index[&binding.successor]].role = Role::Ruler;
+        self.host.state.ruler = binding.successor;
+        self.host.state.lineage = Some(binding.lineage);
     }
 
     pub(crate) fn lineage_handles(&self, person: PersonId) -> bool {
-        self.state
+        self.host
+            .state
             .lineage
             .as_ref()
             .is_some_and(|world| world.guardians.contains_key(&person))
@@ -147,11 +153,12 @@ impl Simulation {
 
     fn guardian_constraint(&self, id: PersonId) -> Option<GuardianGoal> {
         game_lineage::guardian_constraint(
-            self.state
+            self.host
+                .state
                 .combat
                 .as_ref()
                 .is_some_and(|w| w.captivity.contains_key(&id)),
-            game_physiology::body(&self.state.components, id)
+            game_physiology::body(&self.host.storage, id)
                 .unwrap()
                 .vitals
                 .health
@@ -163,7 +170,8 @@ impl Simulation {
     /// Called at the event's physical commit, not from a later query. A guardian
     /// cannot acquire evidence merely because they eventually visit the area.
     pub(crate) fn witness_lineage_event(&mut self, kind: &EventKind) {
-        let Some(current) = self.state.lineage.as_ref().and_then(World::current) else {
+        let owner_now = self.host.clock().time;
+        let Some(current) = self.host.state.lineage.as_ref().and_then(World::current) else {
             return;
         };
         let (actor, departure) = match kind {
@@ -181,7 +189,7 @@ impl Simulation {
             return;
         }
         let area = departure.or_else(|| {
-            match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
+            match *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
                 .expect("location exists")
             {
                 Location::AtArea(area) => Some(area),
@@ -192,6 +200,7 @@ impl Simulation {
         });
         let Some(area) = area else { return };
         let observers: Vec<_> = self
+            .host
             .state
             .lineage
             .as_ref()
@@ -200,10 +209,10 @@ impl Simulation {
             .keys()
             .copied()
             .filter(|id| {
-                *game_spatial::location(&self.state.components, game_ecs::StableId(id.0))
+                *game_spatial::location(&self.host.storage, game_ecs::StableId(id.0))
                     .expect("location exists")
                     == Location::AtArea(area)
-                    && game_physiology::body(&self.state.components, *id)
+                    && game_physiology::body(&self.host.storage, *id)
                         .unwrap()
                         .vitals
                         .health
@@ -211,14 +220,12 @@ impl Simulation {
             })
             .collect();
         for guardian in observers {
-            let known_distress = game_characters::decisions::mind::<game_api::Command>(
-                &self.state.components,
-                guardian,
-            )
-            .expect("mind exists")
-            .child_signals
-            .get(&current)
-            .is_some_and(|signal| signal.urgency > 0);
+            let known_distress =
+                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)
+                    .expect("mind exists")
+                    .child_signals
+                    .get(&current)
+                    .is_some_and(|signal| signal.urgency > 0);
             let conduct = match kind {
                 EventKind::Practiced { gain, .. } => Conduct::Practice { gain: *gain },
                 EventKind::Ate { .. } => Conduct::Meal,
@@ -230,17 +237,16 @@ impl Simulation {
                 EventKind::LessonCompleted { gain, .. } => Conduct::Lesson { gain: *gain },
                 _ => continue,
             };
-            let stage = game_lifecycle::life(&self.state.components, current)
+            let stage = game_lifecycle::life(&self.host.storage, current)
                 .expect("life exists")
                 .stage;
-            let personality = game_characters::decisions::mind::<game_api::Command>(
-                &self.state.components,
-                guardian,
-            )
-            .expect("mind exists")
-            .personality
-            .clone();
+            let personality =
+                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)
+                    .expect("mind exists")
+                    .personality
+                    .clone();
             let assessment = self
+                .host
                 .state
                 .lineage
                 .as_mut()
@@ -257,7 +263,7 @@ impl Simulation {
                 Observation {
                     conduct,
                     stage,
-                    at: self.state.time,
+                    at: owner_now,
                     witnessed: true,
                 },
             );
@@ -270,7 +276,8 @@ impl Simulation {
         teacher: PersonId,
         topic: LessonTopic,
     ) -> Result<(), Error> {
-        let world = self.state.lineage.as_ref().ok_or(Error::Unavailable)?;
+        self.host.preflight_records(0, 0, 1)?;
+        let world = self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?;
         if world.current() != Some(student)
             || !world.guardians.contains_key(&teacher)
             || student == teacher
@@ -285,28 +292,28 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         let student_location =
-            game_spatial::location(&self.state.components, game_ecs::StableId((student).0))
+            game_spatial::location(&self.host.storage, game_ecs::StableId((student).0))
                 .expect("location exists");
         let teacher_location =
-            game_spatial::location(&self.state.components, game_ecs::StableId((teacher).0))
+            game_spatial::location(&self.host.storage, game_ecs::StableId((teacher).0))
                 .expect("location exists");
         if student_location != teacher_location || !matches!(student_location, Location::AtArea(_))
         {
             return Err(Error::Unavailable);
         }
         if [student, teacher].into_iter().any(|id| {
-            let body = game_physiology::body(&self.state.components, id).unwrap();
+            let body = game_physiology::body(&self.host.storage, id).unwrap();
             !body.vitals.alive
                 || body.vitals.health == 0
                 || !matches!(
-                    self.state.components.activity(id).unwrap(),
+                    self.host.storage.activity(id).unwrap(),
                     Activity::Idle | Activity::Rest
                 )
         }) {
             return Err(Error::Unavailable);
         }
         let teacher_mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, teacher)
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, teacher)
                 .expect("mind exists");
         let knows = match topic {
             LessonTopic::Invocation => world.guardians[&teacher].knows_invocation,
@@ -335,7 +342,8 @@ impl Simulation {
                 requester: student,
                 reason: reason.into(),
             });
-            self.state
+            self.host
+                .state
                 .lineage
                 .as_mut()
                 .unwrap()
@@ -343,11 +351,12 @@ impl Simulation {
                 .get_mut(&teacher)
                 .unwrap()
                 .explanation = reason.into();
-            self.revision += 1;
+            self.host.bump_revision(1)?;
             return Ok(());
         }
         let completes = SimTime(
-            self.state
+            self.host
+                .clock()
                 .time
                 .0
                 .checked_add(world.rules.lesson_duration.0)
@@ -355,7 +364,8 @@ impl Simulation {
         );
         self.interrupt_actor_activity(student);
         self.interrupt_actor_activity(teacher);
-        self.state
+        self.host
+            .state
             .lineage
             .as_mut()
             .unwrap()
@@ -363,27 +373,28 @@ impl Simulation {
             .get_mut(&teacher)
             .unwrap()
             .assignment = None;
-        self.state.lineage.as_mut().unwrap().guardians.get_mut(&teacher).unwrap().explanation =
+        self.host.state.lineage.as_mut().unwrap().guardians.get_mut(&teacher).unwrap().explanation =
             "The guided lesson is underway; both pupil and teacher are occupied until it completes or is interrupted".into();
         for actor in [student, teacher] {
-            *self.state.components.activity_mut(actor).unwrap() = Activity::Lesson {
+            *self.host.storage.activity_mut(actor).unwrap() = Activity::Lesson {
                 teacher,
                 student,
                 topic,
                 completes,
             };
-            self.state
+            self.host
+                .state
                 .due
                 .entry(completes)
                 .or_default()
                 .push(Due::Physical(actor));
         }
-        self.revision += 1;
+        self.host.bump_revision(1)?;
         Ok(())
     }
 
     pub(crate) fn available_lesson_commands(&self, student: PersonId) -> Vec<Command> {
-        let Some(world) = &self.state.lineage else {
+        let Some(world) = &self.host.state.lineage else {
             return Vec::new();
         };
         if world.current() != Some(student)
@@ -394,11 +405,10 @@ impl Simulation {
         {
             return Vec::new();
         }
-        let body = game_physiology::body(&self.state.components, student).unwrap();
-        let activity = self.state.components.activity(student).unwrap();
-        let location =
-            game_spatial::location(&self.state.components, game_ecs::StableId((student).0))
-                .expect("location exists");
+        let body = game_physiology::body(&self.host.storage, student).unwrap();
+        let activity = self.host.storage.activity(student).unwrap();
+        let location = game_spatial::location(&self.host.storage, game_ecs::StableId((student).0))
+            .expect("location exists");
         if !body.vitals.alive
             || body.vitals.health == 0
             || !matches!(*activity, Activity::Idle | Activity::Rest)
@@ -408,8 +418,8 @@ impl Simulation {
         }
         let mut commands = Vec::new();
         for (teacher, guard) in &world.guardians {
-            let teacher_activity = self.state.components.activity(*teacher).unwrap();
-            if game_spatial::location(&self.state.components, game_ecs::StableId(teacher.0))
+            let teacher_activity = self.host.storage.activity(*teacher).unwrap();
+            if game_spatial::location(&self.host.storage, game_ecs::StableId(teacher.0))
                 .expect("location exists")
                 != location
                 || self.in_combat(*teacher)
@@ -420,7 +430,7 @@ impl Simulation {
                 continue;
             }
             let mind = &game_characters::decisions::mind::<game_api::Command>(
-                &self.state.components,
+                &self.host.storage,
                 *teacher,
             )
             .expect("mind exists");
@@ -462,7 +472,7 @@ impl Simulation {
                     && k.accessible
                     && k.quantity.0 >= 1_000
                     && game_characters::decisions::mind::<game_api::Command>(
-                        &self.state.components,
+                        &self.host.storage,
                         student,
                     )
                     .expect("mind exists")
@@ -492,7 +502,8 @@ impl Simulation {
                     .is_some_and(|signal| signal.urgency > 0)
                 {
                     for destination in
-                        self.state
+                        self.host
+                            .state
                             .areas
                             .iter()
                             .map(|area| area.id)
@@ -526,21 +537,21 @@ impl Simulation {
     pub(crate) fn interrupt_lesson(&mut self, actor: PersonId) {
         let Some(Activity::Lesson {
             teacher, student, ..
-        }) = self.state.components.activity(actor).cloned()
+        }) = self.host.storage.activity(actor).cloned()
         else {
             return;
         };
         for id in [teacher, student] {
-            if let Some(activity) = self.state.components.activity_mut(id)
+            if let Some(activity) = self.host.storage.activity_mut(id)
                 && matches!(*activity, Activity::Lesson { .. })
             {
                 *activity = Activity::Idle;
             }
-            for due in self.state.due.values_mut() {
+            for due in self.host.state.due.values_mut() {
                 due.retain(|event| !matches!(event, Due::Physical(person) if *person == id));
             }
         }
-        self.state.due.retain(|_, events| !events.is_empty());
+        self.host.state.due.retain(|_, events| !events.is_empty());
     }
 
     pub(crate) fn complete_lesson(&mut self, actor: PersonId) {
@@ -549,20 +560,20 @@ impl Simulation {
             student,
             topic,
             completes,
-        } = *self.state.components.activity(actor).unwrap()
+        } = *self.host.storage.activity(actor).unwrap()
         else {
             return;
         };
-        let paired = *self.state.components.activity(teacher).unwrap()
-            == *self.state.components.activity(student).unwrap();
+        let paired = *self.host.storage.activity(teacher).unwrap()
+            == *self.host.storage.activity(student).unwrap();
         if !paired
-            || completes != self.state.time
-            || *game_spatial::location(&self.state.components, game_ecs::StableId((teacher).0))
+            || completes != self.host.clock().time
+            || *game_spatial::location(&self.host.storage, game_ecs::StableId((teacher).0))
                 .expect("location exists")
-                != *game_spatial::location(&self.state.components, game_ecs::StableId((student).0))
+                != *game_spatial::location(&self.host.storage, game_ecs::StableId((student).0))
                     .expect("location exists")
             || [teacher, student].into_iter().any(|id| {
-                !game_physiology::body(&self.state.components, id)
+                !game_physiology::body(&self.host.storage, id)
                     .unwrap()
                     .vitals
                     .alive
@@ -571,71 +582,71 @@ impl Simulation {
             self.interrupt_lesson(actor);
             return;
         }
-        let lesson_gain = self.state.lineage.as_ref().unwrap().rules.lesson_gain;
-        let gain = match topic {
-            LessonTopic::Invocation => {
-                let learning = self
-                    .state
-                    .lineage
-                    .as_mut()
-                    .unwrap()
-                    .invocation_learning
-                    .entry(student)
-                    .or_default();
-                let gain = lesson_gain.min(1_000 - *learning);
-                *learning += gain;
-                gain
-            }
-            LessonTopic::Craft => {
-                let knowledge = game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
-                    teacher,
-                )
-                .expect("mind exists")
-                .interests
-                .get(&ChildhoodInterest::Craft)
-                .copied()
-                .unwrap_or(0)
-                .max(u64::from(self.own_skill_level(teacher, Skill::Craft)) * 10);
-                let learning = game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut self.state.components,
-                    student,
-                )
-                .unwrap()
-                .interests
-                .entry(ChildhoodInterest::Craft)
-                .or_default();
-                let gain = lesson_gain.min(knowledge.saturating_sub(*learning));
-                *learning += gain;
-                gain
-            }
-            LessonTopic::Travel => {
-                let known = game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
-                    teacher,
-                )
-                .expect("mind exists")
-                .routes
-                .clone();
-                let student_routes =
-                    &mut game_characters::decisions::mind_mut::<game_api::Command>(
-                        &mut self.state.components,
+        let lesson_gain = self.host.state.lineage.as_ref().unwrap().rules.lesson_gain;
+        let gain =
+            match topic {
+                LessonTopic::Invocation => {
+                    let learning = self
+                        .host
+                        .state
+                        .lineage
+                        .as_mut()
+                        .unwrap()
+                        .invocation_learning
+                        .entry(student)
+                        .or_default();
+                    let gain = lesson_gain.min(1_000 - *learning);
+                    *learning += gain;
+                    gain
+                }
+                LessonTopic::Craft => {
+                    let knowledge = game_characters::decisions::mind::<game_api::Command>(
+                        &self.host.storage,
+                        teacher,
+                    )
+                    .expect("mind exists")
+                    .interests
+                    .get(&ChildhoodInterest::Craft)
+                    .copied()
+                    .unwrap_or(0)
+                    .max(u64::from(self.own_skill_level(teacher, Skill::Craft)) * 10);
+                    let learning = game_characters::decisions::mind_mut::<game_api::Command>(
+                        &mut self.host.storage,
                         student,
                     )
                     .unwrap()
+                    .interests
+                    .entry(ChildhoodInterest::Craft)
+                    .or_default();
+                    let gain = lesson_gain.min(knowledge.saturating_sub(*learning));
+                    *learning += gain;
+                    gain
+                }
+                LessonTopic::Travel => {
+                    let known = game_characters::decisions::mind::<game_api::Command>(
+                        &self.host.storage,
+                        teacher,
+                    )
+                    .expect("mind exists")
+                    .routes
+                    .clone();
+                    let student_routes = &mut game_characters::decisions::mind_mut::<
+                        game_api::Command,
+                    >(&mut self.host.storage, student)
+                    .unwrap()
                     .routes;
-                let mut new_links = 0_u64;
-                for (area, links) in known {
-                    let own = student_routes.entry(area).or_default();
-                    for (destination, duration) in links {
-                        if own.insert(destination, duration).is_none() {
-                            new_links += 1;
+                    let mut new_links = 0_u64;
+                    for (area, links) in known {
+                        let own = student_routes.entry(area).or_default();
+                        for (destination, duration) in links {
+                            if own.insert(destination, duration).is_none() {
+                                new_links += 1;
+                            }
                         }
                     }
+                    new_links.min(lesson_gain)
                 }
-                new_links.min(lesson_gain)
-            }
-        };
+            };
         self.interrupt_lesson(actor);
         self.emit(EventKind::LessonCompleted {
             teacher,
@@ -651,6 +662,8 @@ impl Simulation {
         guardian: PersonId,
         request: GuardianRequest,
     ) -> Result<(), Error> {
+        let owner_now = self.host.clock().time;
+        self.host.preflight_records(0, 0, 1)?;
         if let GuardianRequest::Supply {
             good,
             source,
@@ -659,7 +672,7 @@ impl Simulation {
         {
             return self.request_guardian_supply(guardian, requester, good, source, quantity);
         }
-        let world = self.state.lineage.as_ref().ok_or(Error::Unavailable)?;
+        let world = self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?;
         if world.current() != Some(requester)
             || !world.guardians.contains_key(&guardian)
             || !self.independent(requester)
@@ -667,19 +680,19 @@ impl Simulation {
             || self.in_combat(requester)
             || self.care_index.contains_key(&requester)
             || !matches!(
-                *self.state.components.activity(requester).unwrap(),
+                *self.host.storage.activity(requester).unwrap(),
                 Activity::Idle | Activity::Rest
             )
-            || !game_physiology::body(&self.state.components, requester)
+            || !game_physiology::body(&self.host.storage, requester)
                 .unwrap()
                 .vitals
                 .alive
-            || *game_spatial::location(&self.state.components, game_ecs::StableId((requester).0))
+            || *game_spatial::location(&self.host.storage, game_ecs::StableId((requester).0))
                 .expect("location exists")
-                != *game_spatial::location(&self.state.components, game_ecs::StableId((guardian).0))
+                != *game_spatial::location(&self.host.storage, game_ecs::StableId((guardian).0))
                     .expect("location exists")
             || !matches!(
-                *game_spatial::location(&self.state.components, game_ecs::StableId((requester).0))
+                *game_spatial::location(&self.host.storage, game_ecs::StableId((requester).0))
                     .expect("location exists"),
                 Location::AtArea(_)
             )
@@ -688,7 +701,7 @@ impl Simulation {
         }
         let guard = &world.guardians[&guardian];
         let ready = guard.assessments.get(&requester).is_some_and(|a| a.ready);
-        let activity = self.state.components.activity(guardian).unwrap();
+        let activity = self.host.storage.activity(guardian).unwrap();
         let command = match request {
             GuardianRequest::Move { destination } => Command::Move { destination },
             GuardianRequest::Rest => Command::Rest,
@@ -703,7 +716,7 @@ impl Simulation {
                 physical_duty_pending: !matches!(*activity, Activity::Idle | Activity::Rest),
                 ready,
                 known_distress: game_characters::decisions::mind::<game_api::Command>(
-                    &self.state.components,
+                    &self.host.storage,
                     guardian,
                 )
                 .expect("mind exists")
@@ -721,7 +734,8 @@ impl Simulation {
                 requester,
                 reason: reason.into(),
             });
-            self.state
+            self.host
+                .state
                 .lineage
                 .as_mut()
                 .unwrap()
@@ -729,7 +743,7 @@ impl Simulation {
                 .get_mut(&guardian)
                 .unwrap()
                 .explanation = reason.into();
-            self.revision += 1;
+            self.host.bump_revision(1)?;
             return Ok(());
         }
         let accepted = if let Command::Move { destination } = command {
@@ -745,6 +759,7 @@ impl Simulation {
                     requester,
                 });
                 let guard = self
+                    .host
                     .state
                     .lineage
                     .as_mut()
@@ -754,7 +769,7 @@ impl Simulation {
                     .unwrap();
                 guard.assignment = Some(Assignment {
                     request,
-                    accepted_at: self.state.time,
+                    accepted_at: owner_now,
                 });
                 guard.explanation =
                     "I accept this physical task while retaining my judgment and lineage duty"
@@ -765,16 +780,17 @@ impl Simulation {
             Err(_) => {
                 self.emit(EventKind::GuardianRefused { guardian, requester,
                     reason: "I cannot carry this out with my knowledge, permissions, or physical resources".into() });
-                self.state.lineage.as_mut().unwrap().guardians.get_mut(&guardian).unwrap().explanation =
+                self.host.state.lineage.as_mut().unwrap().guardians.get_mut(&guardian).unwrap().explanation =
                     "The task exceeds my known routes, permissions, or physical resources; I remain committed to the lineage".into();
-                self.revision += 1;
+                self.host.bump_revision(1)?;
                 Ok(())
             }
         }
     }
 
     pub(crate) fn review_lineage(&mut self) -> Result<(), Error> {
-        let Some(world) = &self.state.lineage else {
+        let owner_now = self.host.clock().time;
+        let Some(world) = &self.host.state.lineage else {
             return Ok(());
         };
         let current = world.current();
@@ -782,38 +798,36 @@ impl Simulation {
         for id in guardians {
             if let Some(person) = current {
                 let same_place =
-                    *game_spatial::location(&self.state.components, game_ecs::StableId((id).0))
+                    *game_spatial::location(&self.host.storage, game_ecs::StableId((id).0))
                         .expect("location exists")
                         == *game_spatial::location(
-                            &self.state.components,
+                            &self.host.storage,
                             game_ecs::StableId((person).0),
                         )
                         .expect("location exists")
                         && matches!(
-                            *game_spatial::location(
-                                &self.state.components,
-                                game_ecs::StableId((id).0)
-                            )
-                            .expect("location exists"),
+                            *game_spatial::location(&self.host.storage, game_ecs::StableId((id).0))
+                                .expect("location exists"),
                             Location::AtArea(_)
                         )
-                        && game_physiology::body(&self.state.components, id)
+                        && game_physiology::body(&self.host.storage, id)
                             .unwrap()
                             .vitals
                             .health
                             > 0;
                 if same_place {
                     let personality = game_characters::decisions::mind::<game_api::Command>(
-                        &self.state.components,
+                        &self.host.storage,
                         id,
                     )
                     .expect("mind exists")
                     .personality
                     .clone();
-                    let stage = game_lifecycle::life(&self.state.components, person)
+                    let stage = game_lifecycle::life(&self.host.storage, person)
                         .expect("life exists")
                         .stage;
                     let assessment = self
+                        .host
                         .state
                         .lineage
                         .as_mut()
@@ -828,7 +842,7 @@ impl Simulation {
                         assessment,
                         guardian_traits(&personality),
                         stage,
-                        self.state.time,
+                        owner_now,
                         true,
                     );
                 }
@@ -838,10 +852,10 @@ impl Simulation {
                 continue;
             }
             let sensed = current.map(|person| self.resolved_location(person));
-            let body = game_physiology::body(&self.state.components, id).unwrap();
-            let activity = self.state.components.activity(id).unwrap();
+            let body = game_physiology::body(&self.host.storage, id).unwrap();
+            let activity = self.host.storage.activity(id).unwrap();
             let own_location = self.resolved_location(id);
-            let pending = self.state.lineage.as_ref().unwrap().guardians[&id]
+            let pending = self.host.state.lineage.as_ref().unwrap().guardians[&id]
                 .assignment
                 .as_ref()
                 .is_some_and(|assignment| match assignment.request {
@@ -852,7 +866,7 @@ impl Simulation {
                     GuardianRequest::Work { site } => {
                         matches!(*activity, Activity::Work { site: active } if active == site)
                     }
-                    GuardianRequest::Rest => self.state.time <= assignment.accepted_at,
+                    GuardianRequest::Rest => owner_now <= assignment.accepted_at,
                     GuardianRequest::Supply { .. } => false,
                 });
             let (goal, explanation, command) = if let Some(command) = force_command {
@@ -862,6 +876,7 @@ impl Simulation {
                     Some(command),
                 )
             } else if self
+                .host
                 .state
                 .combat
                 .as_ref()
@@ -903,6 +918,7 @@ impl Simulation {
                 )
             };
             let guardian = self
+                .host
                 .state
                 .lineage
                 .as_mut()
@@ -912,7 +928,7 @@ impl Simulation {
                 .unwrap();
             guardian.target = current;
             guardian.sensed_location = sensed;
-            guardian.sensed_at = self.state.time;
+            guardian.sensed_at = owner_now;
             guardian.goal = goal;
             guardian.explanation = explanation;
             if !pending {
@@ -925,7 +941,7 @@ impl Simulation {
                     self.debug_actor_command(id, command)
                 };
                 if accepted.is_err() {
-                    self.state
+                    self.host.state
                         .lineage
                         .as_mut()
                         .unwrap()
@@ -946,7 +962,7 @@ impl Simulation {
         own_location: &Location,
         target_location: &Location,
     ) -> (GuardianGoal, String, Option<Command>) {
-        let activity = self.state.components.activity(guardian).unwrap();
+        let activity = self.host.storage.activity(guardian).unwrap();
         if let Some(command) = self.transport_guardian_rescue(guardian, target) {
             return (
                 GuardianGoal::Searching,
@@ -961,11 +977,9 @@ impl Simulation {
                 Some(command),
             );
         }
-        let mind = &game_characters::decisions::mind::<game_api::Command>(
-            &self.state.components,
-            guardian,
-        )
-        .expect("mind exists");
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)
+                .expect("mind exists");
         let mut need = mind
             .child_signals
             .get(&target)
@@ -987,30 +1001,32 @@ impl Simulation {
         };
         let together = self.transport_same_place(guardian, target);
         let applicable = self.dependent_signal_visible(guardian, target).then(|| {
-            self.state.development.as_ref().is_some_and(|_| {
-                game_lifecycle::life(&self.state.components, target)
+            self.host.state.development.as_ref().is_some_and(|_| {
+                game_lifecycle::life(&self.host.storage, target)
                     .is_some_and(|life| matches!(life.stage, LifeStage::Infant | LifeStage::Child))
             })
         });
         if applicable == Some(false) {
             need = None;
-            self.state
+            self.host
+                .state
                 .lineage
                 .as_mut()
                 .unwrap()
                 .observe_care_unavailable(guardian);
         }
         let provision = game_lineage::review_care_provision(
-            self.state.lineage.as_ref().unwrap().guardians[&guardian]
+            self.host.state.lineage.as_ref().unwrap().guardians[&guardian]
                 .provision
                 .as_ref(),
             target,
-            self.state.time,
+            self.host.clock().time,
             together,
             need.as_ref().filter(|_| applicable != Some(false)),
             doses,
         );
-        self.state
+        self.host
+            .state
             .lineage
             .as_mut()
             .unwrap()
@@ -1025,7 +1041,7 @@ impl Simulation {
             let destination = game_logistics::KnownDestination {
                 destination: provision.delivery.destination,
                 location,
-                observed_at: self.state.time,
+                observed_at: self.host.clock().time,
                 accessible: true,
                 room: None,
                 direct_transfer: true,
@@ -1049,10 +1065,10 @@ impl Simulation {
             target,
             own_location,
             target_location,
-            now: self.state.time,
+            now: self.host.clock().time,
             can_reconsider,
             should_rest,
-            ready: self.state.lineage.as_ref().unwrap().guardians[&guardian]
+            ready: self.host.state.lineage.as_ref().unwrap().guardians[&guardian]
                 .assessments
                 .get(&target)
                 .is_some_and(|a| a.ready),
@@ -1088,23 +1104,23 @@ fn guardian_traits(personality: &decisions::Personality) -> GuardianTraits {
     }
 }
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
-    let Some(world) = &state.lineage else {
+    let Some(world) = &state.state.lineage else {
         return Ok(());
     };
     let fail = || Error::InvalidSave("inconsistent lineage state".into());
-    let Some(_) = &state.physical else {
+    let Some(_) = &state.state.physical else {
         return Err(fail());
     };
-    let Some(development) = &state.development else {
+    let Some(development) = &state.state.development else {
         return Err(fail());
     };
-    if state.decisions.is_none()
+    if state.state.decisions.is_none()
         || world.incarnations.is_empty()
         || world.rules.lesson_duration.0 == 0
         || !(1..=1_000).contains(&world.rules.lesson_gain)
         || !(1..=1_000).contains(&world.rules.invocation_access_threshold)
         || world.invocation_learning.iter().any(|(id, value)| {
-            game_physiology::body(&state.components, *id).is_none() || *value > 1_000
+            game_physiology::body(state.components, *id).is_none() || *value > 1_000
         })
     {
         return Err(fail());
@@ -1119,18 +1135,29 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         {
             if ![actor, teacher, student]
                 .into_iter()
-                .all(|id| game_physiology::body(&state.components, id).is_some())
+                .all(|id| game_physiology::body(state.components, id).is_some())
                 || ![teacher, student].contains(&actor)
                 || teacher == student
                 || !world.guardians.contains_key(&teacher)
                 || world.current() != Some(student)
                 || *state.components.activity(teacher).unwrap()
                     != *state.components.activity(student).unwrap()
-                || state.people.iter().find(|p| p.id == teacher).and_then(|p| {
-                    game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
-                }) != state.people.iter().find(|p| p.id == student).and_then(|p| {
-                    game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
-                })
+                || state
+                    .state
+                    .people
+                    .iter()
+                    .find(|p| p.id == teacher)
+                    .and_then(|p| {
+                        game_spatial::location(state.components, game_ecs::StableId((p.id).0))
+                    })
+                    != state
+                        .state
+                        .people
+                        .iter()
+                        .find(|p| p.id == student)
+                        .and_then(|p| {
+                            game_spatial::location(state.components, game_ecs::StableId((p.id).0))
+                        })
             {
                 return Err(fail());
             }
@@ -1138,14 +1165,14 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 .0
                 .checked_sub(world.rules.lesson_duration.0)
                 .ok_or_else(fail)?;
-            let life = game_lifecycle::life(&state.components, student).ok_or_else(fail)?;
+            let life = game_lifecycle::life(state.components, student).ok_or_else(fail)?;
             let age = started
                 .checked_sub(life.born.0)
                 .and_then(|v| v.checked_add(life.initial_age.0))
                 .ok_or_else(fail)?;
             if started > state.time.0
                 || age < development.rules.infancy.0
-                || !state.due.get(&completes).is_some_and(|due| {
+                || !state.state.due.get(&completes).is_some_and(|due| {
                     [teacher, student].into_iter().all(|person| {
                         due.iter()
                             .any(|event| matches!(event, Due::Physical(id) if *id == person))
@@ -1160,8 +1187,8 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     let mut seen = BTreeSet::new();
     for (i, incarnation) in world.incarnations.iter().enumerate() {
-        let life = game_lifecycle::life(&state.components, incarnation.person).ok_or_else(fail)?;
-        let body = game_physiology::body(&state.components, incarnation.person).ok_or_else(fail)?;
+        let life = game_lifecycle::life(state.components, incarnation.person).ok_or_else(fail)?;
+        let body = game_physiology::body(state.components, incarnation.person).ok_or_else(fail)?;
         if !seen.insert(incarnation.person)
             || incarnation.bound_at > state.time
             || incarnation
@@ -1173,14 +1200,14 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
         if let Some(died) = incarnation.died_at && !state.events.iter().any(|event| {
-            event.time == died
-                && matches!(event.kind, EventKind::Died { actor } if actor == incarnation.person)
+            event.at == died
+                && matches!(event.event, EventKind::Died { actor } if actor == incarnation.person)
         }) {
             return Err(fail());
         }
         if i > 0 {
             let previous_death = world.incarnations[i - 1].died_at.ok_or_else(fail)?;
-            let first_eligible = game_lifecycle::all_lives(&state.components)
+            let first_eligible = game_lifecycle::all_lives(state.components)
                 .map(|(_, life)| life)
                 .filter(|candidate| {
                     candidate.born > previous_death
@@ -1200,7 +1227,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         }
     }
     let last = world.incarnations.last().unwrap();
-    if last.person != state.ruler {
+    if last.person != state.state.ruler {
         return Err(fail());
     }
     match (&world.waiting, last.died_at) {
@@ -1210,6 +1237,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         _ => return Err(fail()),
     }
     let expected_guardians: BTreeSet<_> = state
+        .state
         .people
         .iter()
         .filter(|p| p.role == Role::Guardian)
@@ -1235,7 +1263,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     .delivery
                     .requirement
                     .source
-                    .is_some_and(|source| !state.inventories.contains_key(&source))
+                    .is_some_and(|source| !state.state.inventories.contains_key(&source))
                 || plan.observed_at > state.time
         }) {
             return Err(fail());
@@ -1248,6 +1276,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 || delivery.last_receipt >= state.next_event
                 || delivery.requirement.source.is_none_or(|source| {
                     !state
+                        .state
                         .inventories
                         .get(&source)
                         .is_some_and(|stock| stock.good == delivery.requirement.good)
@@ -1257,7 +1286,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 })
                 || requested.cargo.iter().any(|(inventory, quantity)| {
                     *quantity == 0
-                        || !state.inventories.get(inventory).is_some_and(|stock| {
+                        || !state.state.inventories.get(inventory).is_some_and(|stock| {
                             stock.good == delivery.requirement.good
                                 && stock.location == InventoryLocation::Carried(*guardian_id)
                                 && *quantity <= stock.quantity.0
@@ -1292,21 +1321,21 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 || world.current().is_none()
                 || match assignment.request {
                     GuardianRequest::Move { destination } => {
-                        !state.areas.iter().any(|a| a.id == destination)
+                        !state.state.areas.iter().any(|a| a.id == destination)
                     }
                     GuardianRequest::Work { site } => {
-                        game_workshop::site(&state.components, site).is_none()
+                        game_workshop::site(state.components, site).is_none()
                     }
                     GuardianRequest::Rest => false,
                     GuardianRequest::Supply {
                         source, quantity, ..
-                    } => !state.inventories.contains_key(&source) || quantity.0 == 0,
+                    } => !state.state.inventories.contains_key(&source) || quantity.0 == 0,
                 })
         {
             return Err(fail());
         }
         if let Some(location) = &guardian.sensed_location {
-            let known_area = |id| state.areas.iter().any(|area| area.id == id);
+            let known_area = |id| state.state.areas.iter().any(|area| area.id == id);
             match location {
                 Location::AtArea(area) if !known_area(*area) => return Err(fail()),
                 Location::InTransit {

@@ -48,57 +48,99 @@ pub struct Snapshot<State, Event> {
     pub events: Vec<Published<Event>>,
 }
 
+/// An application storage wrapper retains the same single Store.
+pub trait StorageAccess {
+    fn store(&self) -> &Store;
+    fn store_mut(&mut self) -> &mut Store;
+}
+impl StorageAccess for Store {
+    fn store(&self) -> &Store {
+        self
+    }
+    fn store_mut(&mut self) -> &mut Store {
+        self
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
-pub struct GenericHost<State, Event> {
-    store: Store,
+pub struct GenericHost<State, Event, Storage = Store> {
+    pub storage: Storage,
     clock: Clock,
     seed: u64,
     next_id: u64,
     next_event: u64,
-    state: State,
+    pub state: State,
     events: Vec<Published<Event>>,
 }
 
-pub struct Parts<'a, State> {
+pub struct Parts<'a, State, Event> {
     pub state: &'a State,
     pub store: &'a Store,
     pub clock: Clock,
     pub seed: u64,
+    pub next_id: u64,
+    pub next_event: u64,
+    pub events: &'a [Published<Event>],
 }
-pub struct PartsMut<'a, State> {
+pub struct PartsMut<'a, State, Event> {
     pub state: &'a mut State,
     pub store: &'a mut Store,
     pub clock: Clock,
     pub seed: u64,
+    pub next_id: u64,
+    pub next_event: u64,
+    pub events: &'a [Published<Event>],
 }
 
 impl<State, Event> GenericHost<State, Event> {
     pub fn new(schema: Schema, seed: u64, state: State) -> Self {
+        Self::with_storage(Store::with_schema(schema), seed, state)
+    }
+}
+impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
+    pub fn with_storage(storage: Storage, seed: u64, state: State) -> Self {
         Self {
-            store: Store::with_schema(schema),
+            storage,
+            state,
             clock: Clock::default(),
             seed,
             next_id: 1,
             next_event: 1,
-            state,
             events: Vec::new(),
         }
     }
-
-    pub fn parts(&self) -> Parts<'_, State> {
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+    pub fn bump_revision(&mut self, count: u64) -> Result<(), Error> {
+        let next = self
+            .clock
+            .revision
+            .checked_add(count)
+            .ok_or(Error::Overflow)?;
+        self.clock.revision = next;
+        Ok(())
+    }
+    pub fn parts(&self) -> Parts<'_, State, Event> {
         Parts {
             state: &self.state,
-            store: &self.store,
+            store: self.storage.store(),
             clock: self.clock,
             seed: self.seed,
+            next_id: self.next_id,
+            next_event: self.next_event,
+            events: &self.events,
         }
     }
-    pub fn parts_mut(&mut self) -> PartsMut<'_, State> {
+    pub fn parts_mut(&mut self) -> PartsMut<'_, State, Event> {
         PartsMut {
             state: &mut self.state,
-            store: &mut self.store,
+            store: self.storage.store_mut(),
             clock: self.clock,
             seed: self.seed,
+            next_id: self.next_id,
+            next_event: self.next_event,
+            events: &self.events,
         }
     }
     pub fn events(&self) -> &[Published<Event>] {
@@ -128,17 +170,23 @@ impl<State, Event> GenericHost<State, Event> {
 
     /// Allocation does not attach components; feature admission owns that step.
     pub fn allocate_id(&mut self) -> Result<StableId, Error> {
-        self.preflight(1, 0)?;
-        let id = StableId(self.next_id);
-        self.next_id += 1;
-        Ok(id)
+        self.allocate_ids(1)
     }
 
-    /// Admit a typed publication group after checking every counter. No record
-    /// or publication counter changes when its complete budget is rejected.
-    pub fn publish_many(&mut self, events: Vec<Event>) -> Result<(), Error> {
+    /// Consume a preflighted contiguous ID interval for a prepared transition.
+    /// No component rows are attached by this operation.
+    pub fn allocate_ids(&mut self, count: u64) -> Result<StableId, Error> {
+        let next = self.next_id.checked_add(count).ok_or(Error::Overflow)?;
+        let first = StableId(self.next_id);
+        self.next_id = next;
+        Ok(first)
+    }
+
+    /// Append typed records without advancing the caller-visible revision.
+    /// The enclosing command or interval publishes its own checked revision.
+    pub fn append_many(&mut self, events: Vec<Event>) -> Result<(), Error> {
         let count = u64::try_from(events.len()).map_err(|_| Error::Overflow)?;
-        self.preflight(0, count)?;
+        self.next_event.checked_add(count).ok_or(Error::Overflow)?;
         for event in events {
             self.events.push(Published {
                 sequence: self.next_event,
@@ -147,10 +195,24 @@ impl<State, Event> GenericHost<State, Event> {
             });
             self.next_event += 1;
         }
+        Ok(())
+    }
+    pub fn publish_many(&mut self, events: Vec<Event>) -> Result<(), Error> {
+        let count = u64::try_from(events.len()).map_err(|_| Error::Overflow)?;
+        self.preflight(0, count)?;
+        self.append_many(events)?;
         self.clock.revision += count;
         Ok(())
     }
-
+    pub fn preflight_records(&self, ids: u64, events: u64, revisions: u64) -> Result<(), Error> {
+        self.next_id.checked_add(ids).ok_or(Error::Overflow)?;
+        self.next_event.checked_add(events).ok_or(Error::Overflow)?;
+        self.clock
+            .revision
+            .checked_add(revisions)
+            .ok_or(Error::Overflow)?;
+        Ok(())
+    }
     pub fn snapshot(&self) -> Result<Snapshot<State, Event>, Error>
     where
         State: Clone,
@@ -163,7 +225,7 @@ impl<State, Event> GenericHost<State, Event> {
             next_id: self.next_id,
             next_event: self.next_event,
             state: self.state.clone(),
-            components: self.store.snapshot()?,
+            components: self.storage.store().snapshot()?,
             events: self.events.clone(),
         })
     }
@@ -174,7 +236,10 @@ impl<State, Event> GenericHost<State, Event> {
         schema: Schema,
         snapshot: Snapshot<State, Event>,
         validate_context: impl FnOnce(&Self) -> Result<(), Error>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, Error>
+    where
+        Storage: From<Store>,
+    {
         let fail = || Error::InvalidSave("inconsistent generic host snapshot".into());
         if snapshot.version != 1
             || snapshot.next_id == 0
@@ -202,7 +267,7 @@ impl<State, Event> GenericHost<State, Event> {
             return Err(fail());
         }
         let host = Self {
-            store,
+            storage: Storage::from(store),
             clock: Clock {
                 time: snapshot.time,
                 revision: 0,
@@ -218,11 +283,30 @@ impl<State, Event> GenericHost<State, Event> {
     }
 }
 
-impl<State, Event> ClockWorld for GenericHost<State, Event> {
+impl<State, Event, Storage> ClockWorld for GenericHost<State, Event, Storage> {
     fn clock(&self) -> Clock {
         self.clock
     }
     fn publish_clock(&mut self, clock: Clock) {
         self.clock = clock;
+    }
+}
+
+#[cfg(test)]
+mod private_counter_tests {
+    use super::*;
+
+    #[test]
+    fn complete_event_group_is_rejected_before_any_private_cursor_change() {
+        let mut host = GenericHost::<(), u8>::new(Schema::new(), 1, ());
+        host.next_event = u64::MAX - 1;
+        let before = host.snapshot().unwrap();
+        assert_eq!(host.append_many(vec![3, 4]), Err(Error::Overflow));
+        assert_eq!(host.snapshot().unwrap(), before);
+        host.append_many(vec![3]).unwrap();
+        assert_eq!(host.next_event(), u64::MAX);
+        let before = host.snapshot().unwrap();
+        assert_eq!(host.append_many(vec![4]), Err(Error::Overflow));
+        assert_eq!(host.snapshot().unwrap(), before);
     }
 }

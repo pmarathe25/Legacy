@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 38;
+const SAVE_VERSION: u32 = 39;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -9,23 +9,16 @@ struct SaveHeader {
 #[serde(deny_unknown_fields)]
 struct Save {
     version: u32,
-    state: CanonicalState,
+    state: CanonicalSnapshot,
 }
-#[derive(Serialize)]
-struct SaveRef<'a> {
-    version: u32,
-    state: &'a CanonicalState,
-}
-
 impl Simulation {
     pub fn save(&self) -> Result<Vec<u8>, Error> {
-        serde_json::to_vec(&SaveRef {
+        serde_json::to_vec(&Save {
             version: SAVE_VERSION,
-            state: &self.state,
+            state: self.canonical_snapshot()?,
         })
         .map_err(|e| Error::InvalidSave(e.to_string()))
     }
-
     pub fn load(bytes: &[u8], execution: Execution) -> Result<Self, Error> {
         let header: SaveHeader =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
@@ -34,15 +27,17 @@ impl Simulation {
         }
         let save: Save =
             serde_json::from_slice(bytes).map_err(|e| Error::InvalidSave(e.to_string()))?;
-        validate(&save.state)?;
-        let sim = Self::from_state(save.state, execution, 0)?;
+        let host = GameHost::restore(components::schema()?, save.state, |host| {
+            validate(&CanonicalState::from_host(host))
+        })?;
+        let sim = Self::from_host(host, execution)?;
         sim.validate_ecology()?;
         sim.validate_enforcement()?;
         Ok(sim)
     }
-
     pub fn next_caller_sequence(&self) -> Result<u64, Error> {
-        self.state
+        self.host
+            .state
             .accepted
             .last_key_value()
             .map_or(Ok(1), |(seq, _)| seq.checked_add(1).ok_or(Error::Overflow))
@@ -56,24 +51,25 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if s.components.ids().any(|id| id.0 == 0 || id.0 >= s.next_id) {
         return Err(fail());
     }
-    let playable = scenarios::PLAYABLE.contains(&s.scenario.id.as_str());
+    let playable = scenarios::PLAYABLE.contains(&s.state.scenario.id.as_str());
     let enforcement_fixture = matches!(
-        s.scenario.id.as_str(),
+        s.state.scenario.id.as_str(),
         "enforcement-fixture" | "realm-fixture"
     );
     let expanded_fixture = matches!(
-        s.scenario.id.as_str(),
+        s.state.scenario.id.as_str(),
         "ecology-fixture" | "farm-enterprise-fixture"
     );
-    if (playable && (s.realm.is_none() || s.armies.is_none() || s.agriculture.is_none()))
-        || (s.scenario.id == "realm-fixture" && s.realm.is_none())
-        || (s.scenario.id == "transport-fixture" && s.transport.is_none())
-        || (s.scenario.id == "genetics-fixture" && s.genetics.is_none())
+    if (playable
+        && (s.state.realm.is_none() || s.state.armies.is_none() || s.state.agriculture.is_none()))
+        || (s.state.scenario.id == "realm-fixture" && s.state.realm.is_none())
+        || (s.state.scenario.id == "transport-fixture" && s.state.transport.is_none())
+        || (s.state.scenario.id == "genetics-fixture" && s.state.genetics.is_none())
         || (!playable
             && !expanded_fixture
             && !enforcement_fixture
             && (!matches!(
-                s.scenario.id.as_str(),
+                s.state.scenario.id.as_str(),
                 "kernel-fixture"
                     | "survival-fixture"
                     | "autonomy-fixture"
@@ -94,11 +90,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     | "force-fixture"
                     | "mission-fixture"
                     | "army-fixture"
-            ) || s.scenario.version != 1
-                || !s.scenario.debug_fixture
-                || (s.scenario.id != "kernel-fixture") != s.physical.is_some()
+            ) || s.state.scenario.version != 1
+                || !s.state.scenario.debug_fixture
+                || (s.state.scenario.id != "kernel-fixture") != s.state.physical.is_some()
                 || matches!(
-                    s.scenario.id.as_str(),
+                    s.state.scenario.id.as_str(),
                     "autonomy-fixture"
                         | "life-fixture"
                         | "combat-fixture"
@@ -117,9 +113,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "force-fixture"
                         | "mission-fixture"
                         | "army-fixture"
-                ) != s.decisions.is_some()
+                ) != s.state.decisions.is_some()
                 || matches!(
-                    s.scenario.id.as_str(),
+                    s.state.scenario.id.as_str(),
                     "life-fixture"
                         | "combat-fixture"
                         | "childhood-fixture"
@@ -133,9 +129,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "invocation-fixture"
                         | "force-fixture"
                         | "mission-fixture"
-                ) != s.development.is_some()
+                ) != s.state.development.is_some()
                 || matches!(
-                    s.scenario.id.as_str(),
+                    s.state.scenario.id.as_str(),
                     "combat-fixture"
                         | "lineage-fixture"
                         | "property-fixture"
@@ -147,20 +143,20 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "force-fixture"
                         | "mission-fixture"
                         | "army-fixture"
-                ) != s.combat.is_some()
-                || (s.scenario.id == "farming-fixture") != s.environment.is_some()
-                || (s.scenario.id == "farming-fixture") != s.agriculture.is_some()
+                ) != s.state.combat.is_some()
+                || (s.state.scenario.id == "farming-fixture") != s.state.environment.is_some()
+                || (s.state.scenario.id == "farming-fixture") != s.state.agriculture.is_some()
                 || matches!(
-                    s.scenario.id.as_str(),
+                    s.state.scenario.id.as_str(),
                     "agreement-fixture"
                         | "property-fixture"
                         | "institution-fixture"
                         | "project-fixture"
                         | "mission-fixture"
                         | "army-fixture"
-                ) != s.agreements.is_some()
+                ) != s.state.agreements.is_some()
                 || matches!(
-                    s.scenario.id.as_str(),
+                    s.state.scenario.id.as_str(),
                     "lineage-fixture"
                         | "skills-fixture"
                         | "health-fixture"
@@ -168,81 +164,84 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         | "transport-fixture"
                         | "invocation-fixture"
                         | "force-fixture"
-                ) != s.lineage.is_some()
-                || (s.scenario.id == "property-fixture") != s.property.is_some()
-                || (s.scenario.id == "institution-fixture") != s.institutions.is_some()
+                ) != s.state.lineage.is_some()
+                || (s.state.scenario.id == "property-fixture") != s.state.property.is_some()
+                || (s.state.scenario.id == "institution-fixture")
+                    != s.state.institutions.is_some()
                 || (matches!(
-                    s.scenario.id.as_str(),
+                    s.state.scenario.id.as_str(),
                     "skills-fixture" | "health-fixture" | "genetics-fixture" | "invocation-fixture"
-                ) && s.skills.is_none())
-                || (s.scenario.id == "project-fixture") != s.projects.is_some()
-                || (s.scenario.id == "invocation-fixture") != s.invocation.is_some()
-                || (s.scenario.id == "force-fixture" && s.force.is_none())
-                || (s.force.is_some() && s.combat.is_none())
-                || (s.scenario.id == "mission-fixture" && s.missions.is_none())
-                || (s.scenario.id == "army-fixture" && s.armies.is_none())
-                || (s.armies.is_some() && s.missions.is_none())
-                || (s.missions.is_some() && (s.combat.is_none() || s.agreements.is_none()))))
-        || ((playable || expanded_fixture || enforcement_fixture) && s.scenario.version != 1)
+                ) && s.state.skills.is_none())
+                || (s.state.scenario.id == "project-fixture") != s.state.projects.is_some()
+                || (s.state.scenario.id == "invocation-fixture") != s.state.invocation.is_some()
+                || (s.state.scenario.id == "force-fixture" && s.state.force.is_none())
+                || (s.state.force.is_some() && s.state.combat.is_none())
+                || (s.state.scenario.id == "mission-fixture" && s.state.missions.is_none())
+                || (s.state.scenario.id == "army-fixture" && s.state.armies.is_none())
+                || (s.state.armies.is_some() && s.state.missions.is_none())
+                || (s.state.missions.is_some()
+                    && (s.state.combat.is_none() || s.state.agreements.is_none()))))
+        || ((playable || expanded_fixture || enforcement_fixture) && s.state.scenario.version != 1)
         || (playable
-            && (s.scenario.debug_fixture
-                || s.physical.is_none()
-                || s.decisions.is_none()
-                || s.development.is_none()
-                || s.combat.is_none()
-                || s.environment.is_none()
-                || s.agreements.is_none()
-                || s.lineage.is_none()
-                || s.property.is_none()
-                || s.institutions.is_none()
-                || s.skills.is_none()
-                || s.projects.is_none()
-                || s.invocation.is_none()))
+            && (s.state.scenario.debug_fixture
+                || s.state.physical.is_none()
+                || s.state.decisions.is_none()
+                || s.state.development.is_none()
+                || s.state.combat.is_none()
+                || s.state.environment.is_none()
+                || s.state.agreements.is_none()
+                || s.state.lineage.is_none()
+                || s.state.property.is_none()
+                || s.state.institutions.is_none()
+                || s.state.skills.is_none()
+                || s.state.projects.is_none()
+                || s.state.invocation.is_none()))
         || (enforcement_fixture
-            && (!s.scenario.debug_fixture
-                || s.physical.is_none()
-                || s.decisions.is_none()
-                || s.development.is_none()
-                || s.combat.is_none()
-                || s.agreements.is_none()
-                || s.property.is_none()
-                || s.institutions.is_none()
-                || s.missions.is_none()
-                || s.enforcement.is_none()))
+            && (!s.state.scenario.debug_fixture
+                || s.state.physical.is_none()
+                || s.state.decisions.is_none()
+                || s.state.development.is_none()
+                || s.state.combat.is_none()
+                || s.state.agreements.is_none()
+                || s.state.property.is_none()
+                || s.state.institutions.is_none()
+                || s.state.missions.is_none()
+                || s.state.enforcement.is_none()))
         || (expanded_fixture
-            && (!s.scenario.debug_fixture
-                || s.physical.is_none()
-                || s.decisions.is_none()
-                || s.development.is_none()
-                || s.combat.is_none()
-                || s.environment.is_none()
-                || s.ecology.is_none()
-                || s.agriculture.is_none()))
-        || (s.scenario.id == "farm-enterprise-fixture"
-            && (s.projects.is_none() || s.agreements.is_none()))
+            && (!s.state.scenario.debug_fixture
+                || s.state.physical.is_none()
+                || s.state.decisions.is_none()
+                || s.state.development.is_none()
+                || s.state.combat.is_none()
+                || s.state.environment.is_none()
+                || s.state.ecology.is_none()
+                || s.state.agriculture.is_none()))
+        || (s.state.scenario.id == "farm-enterprise-fixture"
+            && (s.state.projects.is_none() || s.state.agreements.is_none()))
     {
         return Err(fail());
     }
     let mut ids = BTreeSet::new();
     for id in s
+        .state
         .areas
         .iter()
         .map(|a| a.id.0)
-        .chain(s.people.iter().map(|p| p.id.0))
-        .chain(s.inventories.keys().map(|i| i.0))
+        .chain(s.state.people.iter().map(|p| p.id.0))
+        .chain(s.state.inventories.keys().map(|i| i.0))
     {
         if id == 0 || id >= s.next_id || !ids.insert(id) {
             return Err(fail());
         }
     }
-    if s.health.is_some() {
-        for (id, _) in game_health::shelters(&s.components) {
+    if s.state.health.is_some() {
+        for (id, _) in game_health::shelters(s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
         }
     }
-    if let Some(world) = &s.enforcement {
+    if let Some(world) = &s.state.enforcement {
         for id in world.cases.keys().map(|id| id.0).chain(
             world
                 .cases
@@ -254,19 +253,19 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.ecology {
+    if let Some(world) = &s.state.ecology {
         for id in world
-            .resources(&s.components)
+            .resources(s.components)
             .map(|(id, _)| id)
             .map(|id| id.0)
-            .chain(world.plots(&s.components).map(|(id, _)| id).map(|id| id.0))
+            .chain(world.plots(s.components).map(|(id, _)| id).map(|id| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
     }
-    if let Some(world) = &s.missions {
+    if let Some(world) = &s.state.missions {
         for id in world
             .missions
             .keys()
@@ -278,14 +277,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if s.physical.is_some() {
-        for (id, _) in game_workshop::sites(&s.components) {
+    if s.state.physical.is_some() {
+        for (id, _) in game_workshop::sites(s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
         }
     }
-    if let Some(world) = &s.invocation {
+    if let Some(world) = &s.state.invocation {
         for id in world
             .control
             .warnings
@@ -298,7 +297,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.projects {
+    if let Some(world) = &s.state.projects {
         for id in world
             .projects
             .keys()
@@ -310,7 +309,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.institutions {
+    if let Some(world) = &s.state.institutions {
         for id in world
             .institutions
             .keys()
@@ -324,7 +323,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.property {
+    if let Some(world) = &s.state.property {
         for id in world
             .claims
             .keys()
@@ -336,7 +335,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.agreements {
+    if let Some(world) = &s.state.agreements {
         for id in world
             .agreements
             .keys()
@@ -349,28 +348,28 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.agriculture {
-        for id in world.fields(&s.components).map(|(id, _)| id) {
+    if let Some(world) = &s.state.agriculture {
+        for id in world.fields(s.components).map(|(id, _)| id) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
         }
     }
-    if let Some(world) = &s.decisions {
+    if let Some(world) = &s.state.decisions {
         for id in world.concepts.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
         }
     }
-    if s.development.is_some() {
-        for (id, _) in game_lifecycle::all_pregnancies(&s.components) {
+    if s.state.development.is_some() {
+        for (id, _) in game_lifecycle::all_pregnancies(s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
         }
     }
-    if let Some(world) = &s.armies {
+    if let Some(world) = &s.state.armies {
         for army in world.kernel.armies.values() {
             for id in std::iter::once(army.id.0)
                 .chain(army.orders.keys().map(|id| id.0))
@@ -382,14 +381,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.realm {
+    if let Some(world) = &s.state.realm {
         for id in world.kernel.commitments.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
         }
     }
-    if let Some(world) = &s.combat {
+    if let Some(world) = &s.state.combat {
         for id in world
             .maps
             .values()
@@ -402,13 +401,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if !s.people.windows(2).all(|p| p[0].id < p[1].id)
-        || !s.areas.windows(2).all(|a| a[0].id < a[1].id)
+    if !s.state.people.windows(2).all(|p| p[0].id < p[1].id)
+        || !s.state.areas.windows(2).all(|a| a[0].id < a[1].id)
     {
         return Err(fail());
     }
-    let people: BTreeMap<_, _> = s.people.iter().map(|p| (p.id, p)).collect();
-    if game_spatial::locations(&s.components)
+    let people: BTreeMap<_, _> = s.state.people.iter().map(|p| (p.id, p)).collect();
+    if game_spatial::locations(s.components)
         .map(|(id, location)| (game_core::PersonId(id.0), location))
         .map(|(id, _)| id)
         .collect::<BTreeSet<_>>()
@@ -417,18 +416,25 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         return Err(fail());
     }
     game_spatial::resolve_locations(
-        game_spatial::locations(&s.components)
+        game_spatial::locations(s.components)
             .map(|(id, location)| (game_core::PersonId(id.0), location))
             .map(|(id, location)| (game_ecs::StableId(id.0), location)),
     )?;
 
-    let areas: BTreeSet<_> = s.areas.iter().map(|a| a.id).collect();
-    if !people.get(&s.ruler).is_some_and(|p| p.role == Role::Ruler)
-        || s.people.iter().filter(|p| p.role == Role::Ruler).count() != 1
+    let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
+    if !people
+        .get(&s.state.ruler)
+        .is_some_and(|p| p.role == Role::Ruler)
+        || s.state
+            .people
+            .iter()
+            .filter(|p| p.role == Role::Ruler)
+            .count()
+            != 1
     {
         return Err(fail());
     }
-    for a in &s.areas {
+    for a in &s.state.areas {
         let mut destinations = BTreeSet::new();
         for l in &a.links {
             if l.duration.0 == 0
@@ -443,7 +449,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     let mut reviews = Vec::new();
     let mut physical_deadlines = BTreeSet::new();
     let mut spoil_deadlines = BTreeSet::new();
-    for (time, events) in &s.due {
+    for (time, events) in &s.state.due {
         if *time <= s.time || events.is_empty() {
             return Err(fail());
         }
@@ -452,11 +458,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 Due::Arrive(id) => {
                     let p = people.get(id).ok_or_else(fail)?;
                     let deadline = s
+                        .state
                         .transport
                         .as_ref()
                         .and_then(|world| world.approaches.get(id))
                         .map(|approach| approach.completes);
-                    if !matches!(*game_spatial::location(&s.components,game_ecs::StableId((p.id).0)).expect("location exists"), Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
+                    if !matches!(*game_spatial::location(s.components,game_ecs::StableId((p.id).0)).expect("location exists"), Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
                         || !scheduled_arrivals.insert(*id)
                     {
                         return Err(fail());
@@ -464,12 +471,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
                 Due::Review => reviews.push(*time),
                 Due::CombatRound(_) => {
-                    if s.combat.is_none() {
+                    if s.state.combat.is_none() {
                         return Err(fail());
                     }
                 }
                 Due::Age(_) | Due::Birth(_) => {
-                    if s.development.is_none() {
+                    if s.state.development.is_none() {
                         return Err(fail());
                     }
                 }
@@ -478,8 +485,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         if i.quantity.0 == 0
                             || i.source == i.destination
                             || !people.contains_key(&i.actor)
-                            || !s.inventories.contains_key(&i.source)
-                            || !s.inventories.contains_key(&i.destination)
+                            || !s.state.inventories.contains_key(&i.source)
+                            || !s.state.inventories.contains_key(&i.destination)
                         {
                             return Err(fail());
                         }
@@ -487,6 +494,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
                 Due::Physical(id) => {
                     let activity = s
+                        .state
                         .physical
                         .as_ref()
                         .and_then(|_| s.components.activity(*id))
@@ -499,6 +507,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
                 Due::Spoil(id) => {
                     if !s
+                        .state
                         .inventories
                         .get(id)
                         .is_some_and(|i| i.good == Good::Food && i.spoils_at == Some(*time))
@@ -513,17 +522,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     if reviews.len() != 1 || reviews[0].0 % 60_000 != 0 || reviews[0].0 - s.time.0 > 60_000 {
         return Err(fail());
     }
-    for p in &s.people {
+    for p in &s.state.people {
         if p.work_remainder >= 60_000
             || p.hunger_exempt != (p.role == Role::Guardian)
             || !s
+                .state
                 .inventories
                 .get(&p.inventory)
                 .is_some_and(|i| i.location == InventoryLocation::Carried(p.id))
         {
             return Err(fail());
         }
-        let mut origin = match *game_spatial::location(&s.components, game_ecs::StableId((p.id).0))
+        let mut origin = match *game_spatial::location(s.components, game_ecs::StableId((p.id).0))
             .expect("location exists")
         {
             Location::AtArea(a) => {
@@ -540,13 +550,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 road_start,
             } => {
                 let link = s
+                    .state
                     .areas
                     .iter()
                     .find(|a| a.id == from)
                     .and_then(|a| a.links.iter().find(|l| l.destination == to))
                     .ok_or_else(fail)?;
-                let dead = s.physical.as_ref().is_some_and(|_| {
-                    game_physiology::body(&s.components, p.id).is_some_and(|a| !a.vitals.alive)
+                let dead = s.state.physical.as_ref().is_some_and(|_| {
+                    game_physiology::body(s.components, p.id).is_some_and(|a| !a.vitals.alive)
                 });
                 if departed > s.time
                     || arrived_duration(departed, arrives)
@@ -554,6 +565,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                             None => link.duration.0,
                             Some(point) => {
                                 let original = s
+                                    .state
                                     .areas
                                     .iter()
                                     .find(|area| area.id == point.from)
@@ -587,6 +599,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 duration,
             } => {
                 let link = s
+                    .state
                     .areas
                     .iter()
                     .find(|area| area.id == from)
@@ -607,6 +620,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !p.route.is_empty()
                     || scheduled_arrivals.contains(&p.id)
                     || !s
+                        .state
                         .transport
                         .as_ref()
                         .and_then(|world| world.groups.get(&p.id))
@@ -615,11 +629,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     return Err(fail());
                 }
                 // No independent route remains on a body being physically borne.
-                s.areas.first().ok_or_else(fail)?.id
+                s.state.areas.first().ok_or_else(fail)?.id
             }
         };
         for destination in &p.route {
             if !s
+                .state
                 .areas
                 .iter()
                 .any(|a| a.id == origin && a.links.iter().any(|l| l.destination == *destination))
@@ -629,7 +644,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             origin = *destination;
         }
     }
-    for (id, inventory) in &s.inventories {
+    for (id, inventory) in &s.state.inventories {
         if *id != inventory.id
             || inventory.quantity > inventory.capacity
             || inventory.access.iter().any(|p| !people.contains_key(p))
@@ -647,13 +662,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     for (i, event) in s.events.iter().enumerate() {
-        if event.id.0 != i as u64 + 1
-            || event.time > s.time
-            || (i > 0 && event.time < s.events[i - 1].time)
+        if event.sequence != i as u64 + 1
+            || event.at > s.time
+            || (i > 0 && event.at < s.events[i - 1].at)
         {
             return Err(fail());
         }
-        match event.kind {
+        match event.event {
             EventKind::RealmProposed {
                 commitment,
                 actor,
@@ -661,6 +676,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .realm
                         .as_ref()
                         .and_then(|w| w.kernel.commitments.get(&commitment))
@@ -677,6 +693,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&sender)
                     || !people.contains_key(&recipient)
                     || !s
+                        .state
                         .realm
                         .as_ref()
                         .is_some_and(|w| w.kernel.commitments.contains_key(&commitment))
@@ -687,6 +704,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::RealmWorkRequested { key, actor } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .realm
                         .as_ref()
                         .and_then(|w| w.kernel.commitments.get(&key.commitment))
@@ -704,11 +722,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 ..
             } => {
                 if !s
+                    .state
                     .realm
                     .as_ref()
                     .and_then(|w| w.kernel.commitments.get(&commitment))
                     .is_some_and(|c| c.revision(revision).is_some())
-                    || !s.institutions.as_ref().is_some_and(|w| {
+                    || !s.state.institutions.as_ref().is_some_and(|w| {
                         w.proposals
                             .get(&proposal)
                             .is_some_and(|p| p.institution == institution)
@@ -739,6 +758,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::EnforcementPolicyChanged { institution, .. } => {
                 if !s
+                    .state
                     .institutions
                     .as_ref()
                     .is_some_and(|w| w.institutions.contains_key(&institution))
@@ -759,6 +779,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&recipient)
                     || !s
+                        .state
                         .enforcement
                         .as_ref()
                         .is_some_and(|w| w.cases.contains_key(&case))
@@ -773,10 +794,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .enforcement
                         .as_ref()
                         .is_some_and(|w| w.cases.contains_key(&case))
                     || !s
+                        .state
                         .institutions
                         .as_ref()
                         .is_some_and(|w| w.institutions.contains_key(&institution))
@@ -790,7 +813,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 proposer,
             } => {
                 if !people.contains_key(&proposer)
-                    || !s.enforcement.as_ref().is_some_and(|w| {
+                    || !s.state.enforcement.as_ref().is_some_and(|w| {
                         w.cases
                             .get(&case)
                             .is_some_and(|c| c.judgment.as_ref().is_some_and(|j| j.id == judgment))
@@ -802,6 +825,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::EnforcementResponded { case, actor, .. } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .enforcement
                         .as_ref()
                         .is_some_and(|w| w.cases.contains_key(&case))
@@ -816,10 +840,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .enforcement
                         .as_ref()
                         .is_some_and(|w| w.cases.contains_key(&case))
                     || !s
+                        .state
                         .missions
                         .as_ref()
                         .is_some_and(|w| w.missions.contains_key(&mission))
@@ -829,6 +855,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::EnforcementOutcome { case, .. } => {
                 if !s
+                    .state
                     .enforcement
                     .as_ref()
                     .is_some_and(|w| w.cases.contains_key(&case))
@@ -839,6 +866,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::Drank { actor, source, .. } | EventKind::WaterPurified { actor, source } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .inventories
                         .get(&source)
                         .is_some_and(|i| i.good == Good::Water)
@@ -854,9 +882,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | EventKind::ShelterLeft { shelter, actor } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .health
                         .as_ref()
-                        .is_some_and(|_| game_health::shelter(&s.components, shelter).is_some())
+                        .is_some_and(|_| game_health::shelter(s.components, shelter).is_some())
                 {
                     return Err(fail());
                 }
@@ -870,9 +899,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&person)
                     || !s
+                        .state
                         .health
                         .as_ref()
-                        .is_some_and(|_| game_health::shelter(&s.components, shelter).is_some())
+                        .is_some_and(|_| game_health::shelter(s.components, shelter).is_some())
                 {
                     return Err(fail());
                 }
@@ -895,6 +925,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .agreements
                         .as_ref()
                         .is_some_and(|w| w.obligations.contains_key(&obligation))
@@ -911,9 +942,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&recipient)
                     || !s
+                        .state
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
+                        .is_some_and(|w| w.resource(s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -931,9 +963,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&custodian)
                     || !s
+                        .state
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
+                        .is_some_and(|w| w.resource(s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -943,9 +976,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
+                        .is_some_and(|w| w.resource(s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -957,11 +991,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 ..
             } => {
                 if !people.contains_key(&actor)
-                    || !s.inventories.contains_key(&destination)
+                    || !s.state.inventories.contains_key(&destination)
                     || !s
+                        .state
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
+                        .is_some_and(|w| w.resource(s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -969,6 +1004,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::MissionProposed { mission, sponsor } => {
                 if !people.contains_key(&sponsor)
                     || !s
+                        .state
                         .missions
                         .as_ref()
                         .is_some_and(|w| w.missions.contains_key(&mission))
@@ -985,6 +1021,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&person)
                     || !s
+                        .state
                         .missions
                         .as_ref()
                         .is_some_and(|w| w.missions.contains_key(&mission))
@@ -1000,6 +1037,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&speaker)
                     || !people.contains_key(&recipient)
                     || !s
+                        .state
                         .missions
                         .as_ref()
                         .is_some_and(|w| w.missions.contains_key(&mission))
@@ -1009,6 +1047,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::MissionDeparted { mission } | EventKind::MissionFinished { mission, .. } => {
                 if !s
+                    .state
                     .missions
                     .as_ref()
                     .is_some_and(|w| w.missions.contains_key(&mission))
@@ -1024,6 +1063,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&sender)
                     || !people.contains_key(&recipient)
                     || !s
+                        .state
                         .agreements
                         .as_ref()
                         .is_some_and(|w| w.agreements.contains_key(&agreement))
@@ -1054,7 +1094,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&target)
-                    || !s.inventories.contains_key(&binding)
+                    || !s.state.inventories.contains_key(&binding)
                 {
                     return Err(fail());
                 }
@@ -1063,7 +1103,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 encounter, actor, ..
             } => {
                 if !people.contains_key(&actor)
-                    || !s.combat.as_ref().is_some_and(|w| {
+                    || !s.state.combat.as_ref().is_some_and(|w| {
                         w.encounters
                             .get(&encounter)
                             .is_some_and(|e| e.fighters.contains_key(&actor))
@@ -1074,6 +1114,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::EncounterStarted { encounter, area } => {
                 if !s
+                    .state
                     .combat
                     .as_ref()
                     .is_some_and(|w| w.encounters.contains_key(&encounter))
@@ -1087,6 +1128,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             | EventKind::Surrendered { encounter, actor } => {
                 if !s
+                    .state
                     .combat
                     .as_ref()
                     .is_some_and(|w| w.encounters.contains_key(&encounter))
@@ -1102,6 +1144,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 ..
             } => {
                 if !s
+                    .state
                     .combat
                     .as_ref()
                     .is_some_and(|w| w.encounters.contains_key(&encounter))
@@ -1118,12 +1161,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 binding,
             } => {
                 if !s
+                    .state
                     .combat
                     .as_ref()
                     .is_some_and(|w| w.encounters.contains_key(&encounter))
                     || !people.contains_key(&actor)
                     || !people.contains_key(&target)
-                    || !s.inventories.contains_key(&binding)
+                    || !s.state.inventories.contains_key(&binding)
                 {
                     return Err(fail());
                 }
@@ -1134,7 +1178,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
             }
             EventKind::ObstacleDamaged { map, obstacle, .. } => {
-                if !s.combat.as_ref().is_some_and(|w| {
+                if !s.state.combat.as_ref().is_some_and(|w| {
                     w.map(map)
                         .is_some_and(|m| m.obstacles.iter().any(|o| o.index == obstacle))
                 }) {
@@ -1143,6 +1187,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::RoundEnded { encounter, .. } | EventKind::EncounterEnded { encounter } => {
                 if !s
+                    .state
                     .combat
                     .as_ref()
                     .is_some_and(|w| w.encounters.contains_key(&encounter))
@@ -1160,7 +1205,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || !areas.contains(&from)
                     || !areas.contains(&to)
-                    || arrives <= event.time
+                    || arrives <= event.at
                 {
                     return Err(fail());
                 }
@@ -1177,15 +1222,15 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 quantity,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.inventories.contains_key(&source)
-                    || !s.inventories.contains_key(&destination)
+                    || !s.state.inventories.contains_key(&source)
+                    || !s.state.inventories.contains_key(&destination)
                     || quantity.0 == 0
                 {
                     return Err(fail());
                 }
             }
             EventKind::TransferFailed { actor, source } => {
-                if !people.contains_key(&actor) || !s.inventories.contains_key(&source) {
+                if !people.contains_key(&actor) || !s.state.inventories.contains_key(&source) {
                     return Err(fail());
                 }
             }
@@ -1200,14 +1245,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 quantity,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.inventories.contains_key(&source)
+                    || !s.state.inventories.contains_key(&source)
                     || quantity.0 == 0
                 {
                     return Err(fail());
                 }
             }
             EventKind::Spoiled { inventory, .. } => {
-                if !s.inventories.contains_key(&inventory) {
+                if !s.state.inventories.contains_key(&inventory) {
                     return Err(fail());
                 }
             }
@@ -1219,10 +1264,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .physical
                         .as_ref()
-                        .is_some_and(|_| game_workshop::site(&s.components, site).is_some())
-                    || !s.inventories.contains_key(&output)
+                        .is_some_and(|_| game_workshop::site(s.components, site).is_some())
+                    || !s.state.inventories.contains_key(&output)
                     || quantity.0 == 0
                 {
                     return Err(fail());
@@ -1242,7 +1288,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&sender)
                     || !people.contains_key(&recipient)
-                    || !s.inventories.contains_key(&inventory)
+                    || !s.state.inventories.contains_key(&inventory)
                 {
                     return Err(fail());
                 }
@@ -1254,9 +1300,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::Conceived { pregnancy, parents } => {
                 if !s
+                    .state
                     .development
                     .as_ref()
-                    .is_some_and(|_| game_lifecycle::pregnancy(&s.components, pregnancy).is_some())
+                    .is_some_and(|_| game_lifecycle::pregnancy(s.components, pregnancy).is_some())
                     || parents.iter().any(|p| !people.contains_key(p))
                 {
                     return Err(fail());
@@ -1264,9 +1311,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::PregnancyEnded { pregnancy } => {
                 if !s
+                    .state
                     .development
                     .as_ref()
-                    .is_some_and(|_| game_lifecycle::pregnancy(&s.components, pregnancy).is_some())
+                    .is_some_and(|_| game_lifecycle::pregnancy(s.components, pregnancy).is_some())
                 {
                     return Err(fail());
                 }
@@ -1277,9 +1325,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 parents,
             } => {
                 if !s
+                    .state
                     .development
                     .as_ref()
-                    .is_some_and(|_| game_lifecycle::pregnancy(&s.components, pregnancy).is_some())
+                    .is_some_and(|_| game_lifecycle::pregnancy(s.components, pregnancy).is_some())
                     || !people.contains_key(&child)
                     || parents.iter().any(|p| !people.contains_key(p))
                 {
@@ -1294,7 +1343,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&caregiver)
                     || !people.contains_key(&child)
-                    || !s.inventories.contains_key(&source)
+                    || !s.state.inventories.contains_key(&source)
                     || quantity.0 == 0
                 {
                     return Err(fail());
@@ -1303,6 +1352,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::InvocationStarted { actor, ref lives } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .invocation
                         .as_ref()
                         .is_some_and(|w| lives.iter().all(|id| w.history.contains_key(id)))
@@ -1321,6 +1371,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | EventKind::InvocationCostAccepted { warning, actor } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .invocation
                         .as_ref()
                         .is_some_and(|w| w.control.warnings.contains_key(&warning))
@@ -1334,8 +1385,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 inventory,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.inventories.contains_key(&inventory)
+                    || !s.state.inventories.contains_key(&inventory)
                     || !s
+                        .state
                         .invocation
                         .as_ref()
                         .is_some_and(|w| w.records.contains_key(&record))
@@ -1346,6 +1398,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::MemoryRead { record, actor } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .invocation
                         .as_ref()
                         .is_some_and(|w| w.records.contains_key(&record))
@@ -1361,6 +1414,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&recipient)
                     || !s
+                        .state
                         .invocation
                         .as_ref()
                         .is_some_and(|w| w.history.contains_key(&life))
@@ -1371,6 +1425,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::ProjectProposed { project, sponsor } => {
                 if !people.contains_key(&sponsor)
                     || !s
+                        .state
                         .projects
                         .as_ref()
                         .is_some_and(|w| w.projects.contains_key(&project))
@@ -1385,10 +1440,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .projects
                         .as_ref()
                         .is_some_and(|w| w.projects.contains_key(&project))
                     || !s
+                        .state
                         .agreements
                         .as_ref()
                         .is_some_and(|w| w.agreements.contains_key(&agreement))
@@ -1400,6 +1457,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | EventKind::ProjectCancelled { project, actor } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .projects
                         .as_ref()
                         .is_some_and(|w| w.projects.contains_key(&project))
@@ -1409,6 +1467,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::ProjectFailed { project } => {
                 if !s
+                    .state
                     .projects
                     .as_ref()
                     .is_some_and(|w| w.projects.contains_key(&project))
@@ -1421,7 +1480,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 enterprise,
                 site,
             } => {
-                let valid = s.projects.as_ref().is_some_and(|world| {
+                let valid = s.state.projects.as_ref().is_some_and(|world| {
                     let Some(plan) = world.projects.get(&project) else {
                         return false;
                     };
@@ -1429,14 +1488,17 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         record.project == project
                             && record.site == site
                             && match plan.kind {
-                                ProjectKind::Workshop => s.physical.as_ref().is_some_and(|_| {
-                                    game_workshop::site(&s.components, site).is_some()
-                                }),
+                                ProjectKind::Workshop => {
+                                    s.state.physical.as_ref().is_some_and(|_| {
+                                        game_workshop::site(s.components, site).is_some()
+                                    })
+                                }
                                 ProjectKind::Farm { plot, water } => {
                                     site == plot
-                                        && s.agriculture
+                                        && s.state
+                                            .agriculture
                                             .as_ref()
-                                            .and_then(|world| world.field(&s.components, site))
+                                            .and_then(|world| world.field(s.components, site))
                                             .is_some_and(|field| {
                                                 field.id == plot
                                                     && field.area == plan.area
@@ -1456,7 +1518,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::EnterpriseInputUsed {
                 enterprise, site, ..
             } => {
-                if !s.projects.as_ref().is_some_and(|w| {
+                if !s.state.projects.as_ref().is_some_and(|w| {
                     w.enterprises
                         .get(&enterprise)
                         .is_some_and(|e| e.site == site)
@@ -1470,6 +1532,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&proposer)
                     || !s
+                        .state
                         .institutions
                         .as_ref()
                         .is_some_and(|w| w.institutions.contains_key(&institution))
@@ -1482,6 +1545,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | EventKind::OfficeSupportChanged { institution, .. }
             | EventKind::InstitutionRuleApplied { institution, .. } => {
                 if !s
+                    .state
                     .institutions
                     .as_ref()
                     .is_some_and(|w| w.institutions.contains_key(&institution))
@@ -1493,7 +1557,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 institution,
                 proposal,
             } => {
-                if !s.institutions.as_ref().is_some_and(|w| {
+                if !s.state.institutions.as_ref().is_some_and(|w| {
                     w.institutions.contains_key(&institution)
                         && w.proposals
                             .get(&proposal)
@@ -1505,6 +1569,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::SocialCaseRecorded { case, actor } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .institutions
                         .as_ref()
                         .is_some_and(|w| w.cases.contains_key(&case))
@@ -1538,8 +1603,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 inventory,
             } => {
                 if !people.contains_key(&actor)
-                    || !s.inventories.contains_key(&inventory)
+                    || !s.state.inventories.contains_key(&inventory)
                     || !s
+                        .state
                         .property
                         .as_ref()
                         .is_some_and(|w| w.claims.contains_key(&claim))
@@ -1550,6 +1616,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::ClaimRecognized { claim, actor, .. } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .property
                         .as_ref()
                         .is_some_and(|w| w.claims.contains_key(&claim))
@@ -1575,7 +1642,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&recipient)
-                    || !s.inventories.contains_key(&inventory)
+                    || !s.state.inventories.contains_key(&inventory)
                 {
                     return Err(fail());
                 }
@@ -1596,9 +1663,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if quantity.0 == 0
                     || !people.contains_key(&actor)
-                    || !s.inventories.contains_key(&source)
-                    || !s.inventories.contains_key(&destination)
+                    || !s.state.inventories.contains_key(&source)
+                    || !s.state.inventories.contains_key(&destination)
                     || !s
+                        .state
                         .property
                         .as_ref()
                         .is_some_and(|w| w.incidents.contains_key(&incident))
@@ -1609,6 +1677,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::TakingInterrupted { incident, actor } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .property
                         .as_ref()
                         .is_some_and(|w| w.incidents.contains_key(&incident))
@@ -1624,6 +1693,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&sender)
                     || !people.contains_key(&recipient)
                     || !s
+                        .state
                         .property
                         .as_ref()
                         .is_some_and(|w| w.incidents.contains_key(&incident))
@@ -1637,6 +1707,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&proposer)
                     || !s
+                        .state
                         .agreements
                         .as_ref()
                         .is_some_and(|w| w.agreements.contains_key(&agreement))
@@ -1647,6 +1718,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::AgreementActivated { agreement }
             | EventKind::AgreementRejected { agreement, .. } => {
                 if !s
+                    .state
                     .agreements
                     .as_ref()
                     .is_some_and(|w| w.agreements.contains_key(&agreement))
@@ -1658,7 +1730,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 agreement,
                 amendment,
             } => {
-                if !s.agreements.as_ref().is_some_and(|w| {
+                if !s.state.agreements.as_ref().is_some_and(|w| {
                     w.agreements.contains_key(&agreement)
                         && w.amendments
                             .get(&amendment)
@@ -1675,6 +1747,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !people.contains_key(&actor)
                     || quantity.0 == 0
                     || !s
+                        .state
                         .agreements
                         .as_ref()
                         .is_some_and(|w| w.obligations.contains_key(&obligation))
@@ -1684,6 +1757,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::ObligationDefaulted { obligation } => {
                 if !s
+                    .state
                     .agreements
                     .as_ref()
                     .is_some_and(|w| w.obligations.contains_key(&obligation))
@@ -1695,18 +1769,20 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             | EventKind::CropHarvested { actor, field, .. } => {
                 if !people.contains_key(&actor)
                     || !s
+                        .state
                         .agriculture
                         .as_ref()
-                        .is_some_and(|w| w.field(&s.components, field).is_some())
+                        .is_some_and(|w| w.field(s.components, field).is_some())
                 {
                     return Err(fail());
                 }
             }
             EventKind::CropFailed { field } => {
                 if !s
+                    .state
                     .agriculture
                     .as_ref()
-                    .is_some_and(|w| w.field(&s.components, field).is_some())
+                    .is_some_and(|w| w.field(s.components, field).is_some())
                 {
                     return Err(fail());
                 }
@@ -1725,31 +1801,33 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if s.next_event != s.events.len() as u64 + 1 || s.next_command != s.accepted.len() as u64 + 1 {
+    if s.next_event != s.events.len() as u64 + 1
+        || s.state.next_command != s.state.accepted.len() as u64 + 1
+    {
         return Err(fail());
     }
     let mut sequences = BTreeSet::new();
-    for (caller, (_, receipt)) in &s.accepted {
+    for (caller, (_, receipt)) in &s.state.accepted {
         if *caller != receipt.caller_sequence
             || receipt.accepted_at > s.time
             || receipt.authoritative_sequence == 0
-            || receipt.authoritative_sequence >= s.next_command
+            || receipt.authoritative_sequence >= s.state.next_command
             || !sequences.insert(receipt.authoritative_sequence)
         {
             return Err(fail());
         }
     }
-    if let Some(world) = &s.physical {
+    if let Some(world) = &s.state.physical {
         validate_physical(s, world, &people, &areas, &physical_deadlines)?;
-    } else if game_physiology::bodies(&s.components).next().is_some()
+    } else if game_physiology::bodies(s.components).next().is_some()
         || s.components.activities().next().is_some()
-        || game_workshop::jobs(&s.components).next().is_some()
-        || game_workshop::sites(&s.components).next().is_some()
+        || game_workshop::jobs(s.components).next().is_some()
+        || game_workshop::sites(s.components).next().is_some()
     {
         return Err(fail());
     }
-    if let Some(world) = &s.decisions {
-        if game_characters::decisions::minds::<game_api::Command>(&s.components)
+    if let Some(world) = &s.state.decisions {
+        if game_characters::decisions::minds::<game_api::Command>(s.components)
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>()
             != people.keys().copied().collect::<BTreeSet<_>>()
@@ -1759,7 +1837,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         {
             return Err(fail());
         }
-        for (id, mind) in game_characters::decisions::minds::<game_api::Command>(&s.components) {
+        for (id, mind) in game_characters::decisions::minds::<game_api::Command>(s.components) {
             let id = &id;
             if !people.contains_key(id)
                 || mind.interests.values().any(|v| *v > 1_000)
@@ -1787,28 +1865,33 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 use game_characters::decisions::{CommitmentRef, IntentionKey, Motive, Subject};
                 let commitment_exists = |commitment: CommitmentRef| match commitment {
                     CommitmentRef::Obligation(id) => s
+                        .state
                         .agreements
                         .as_ref()
                         .is_some_and(|w| w.obligations.contains_key(&id)),
                     CommitmentRef::Project(id) => s
+                        .state
                         .projects
                         .as_ref()
                         .is_some_and(|w| w.projects.contains_key(&id)),
                 };
                 let subject_exists = |subject: Subject| match subject {
-                    Subject::Inventory(id) => s.inventories.contains_key(&id),
+                    Subject::Inventory(id) => s.state.inventories.contains_key(&id),
                     Subject::Site(id) => s
+                        .state
                         .physical
                         .as_ref()
-                        .is_some_and(|_| game_workshop::site(&s.components, id).is_some()),
+                        .is_some_and(|_| game_workshop::site(s.components, id).is_some()),
                     Subject::Project(id) => s
+                        .state
                         .projects
                         .as_ref()
                         .is_some_and(|w| w.projects.contains_key(&id)),
                     Subject::Resource(id) => s
+                        .state
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resource(&s.components, id).is_some()),
+                        .is_some_and(|w| w.resource(s.components, id).is_some()),
                 };
                 let key_valid = match plan.key {
                     IntentionKey::Relief { beneficiary, .. } => people.contains_key(&beneficiary),
@@ -1824,7 +1907,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     } => {
                         people.contains_key(&beneficiary)
                             && source.is_none_or(|id| {
-                                s.inventories
+                                s.state
+                                    .inventories
                                     .get(&id)
                                     .is_some_and(|stock| stock.good == good)
                             })
@@ -1843,7 +1927,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         people.contains_key(beneficiary)
                             && requirement.quantity.0 > 0
                             && requirement.source.is_none_or(|id| {
-                                s.inventories
+                                s.state
+                                    .inventories
                                     .get(&id)
                                     .is_some_and(|stock| stock.good == requirement.good)
                             })
@@ -1855,11 +1940,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || plan
                         .prospects
                         .source
-                        .is_some_and(|id| !s.inventories.contains_key(&id))
+                        .is_some_and(|id| !s.state.inventories.contains_key(&id))
                     || plan.prospects.site.is_some_and(|id| {
-                        !s.physical
+                        !s.state
+                            .physical
                             .as_ref()
-                            .is_some_and(|_| game_workshop::site(&s.components, id).is_some())
+                            .is_some_and(|_| game_workshop::site(s.components, id).is_some())
                     })
                     || plan
                         .prospects
@@ -1874,7 +1960,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             {
                 let target_exists = match delivery.destination {
                     game_logistics::Destination::Inventory(target) => {
-                        s.inventories.contains_key(&target)
+                        s.state.inventories.contains_key(&target)
                     }
                     game_logistics::Destination::Contact(target) => people.contains_key(&target),
                 };
@@ -1895,7 +1981,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !matches_motive
                     || delivery.last_receipt >= s.next_event
                     || delivery.requirement.source.is_some_and(|source| {
-                        !s.inventories
+                        !s.state
+                            .inventories
                             .get(&source)
                             .is_some_and(|stock| stock.good == delivery.requirement.good)
                     })
@@ -1913,13 +2000,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
             }
             if mind.last_failure.is_some_and(|(time, inventory)| {
-                time > s.time || !s.inventories.contains_key(&inventory)
+                time > s.time || !s.state.inventories.contains_key(&inventory)
             }) {
                 return Err(fail());
             }
             for (id, fact) in &mind.knowledge {
                 if *id != fact.inventory
-                    || !s.inventories.contains_key(id)
+                    || !s.state.inventories.contains_key(id)
                     || !areas.contains(&fact.area)
                     || fact.observed_at > s.time
                     || fact.learned_at > s.time
@@ -1978,10 +2065,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             for (id, site) in &mind.sites {
                 if *id != site.site
-                    || !game_workshop::site(&s.components, *id).is_some()
+                    || !game_workshop::site(s.components, *id).is_some()
                     || !areas.contains(&site.area)
-                    || !s.inventories.contains_key(&site.input)
-                    || !s.inventories.contains_key(&site.tool)
+                    || !s.state.inventories.contains_key(&site.input)
+                    || !s.state.inventories.contains_key(&site.tool)
                 {
                     return Err(fail());
                 }
@@ -2014,13 +2101,13 @@ fn validate_physical(
 ) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent physical state".into());
     let rules = &world.rules;
-    if game_physiology::bodies(&s.components).count() != people.len()
+    if game_physiology::bodies(s.components).count() != people.len()
         || s.components
             .activities()
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>()
             != people.keys().copied().collect()
-        || game_workshop::jobs(&s.components).any(|(id, _)| !people.contains_key(&id))
+        || game_workshop::jobs(s.components).any(|(id, _)| !people.contains_key(&id))
         || rules.hunger_harm == 0
         || rules.fatigue_limit == 0
         || rules.max_health == 0
@@ -2031,7 +2118,7 @@ fn validate_physical(
     {
         return Err(fail());
     }
-    for (id, site) in game_workshop::sites(&s.components) {
+    for (id, site) in game_workshop::sites(s.components) {
         let id = &id;
         if *id != site.id
             || !areas.contains(&site.area)
@@ -2044,6 +2131,7 @@ fn validate_physical(
         }
         for inventory in [site.input, site.tool, site.output] {
             if !s
+                .state
                 .inventories
                 .get(&inventory)
                 .is_some_and(|i| i.location == InventoryLocation::Area(site.area))
@@ -2051,22 +2139,22 @@ fn validate_physical(
                 return Err(fail());
             }
         }
-        if s.inventories[&site.tool].good != Good::Tool {
+        if s.state.inventories[&site.tool].good != Good::Tool {
             return Err(fail());
         }
     }
     let mut cargo = BTreeMap::<PersonId, u128>::new();
-    for i in s.inventories.values() {
+    for i in s.state.inventories.values() {
         if let InventoryLocation::Carried(p) = i.location {
             *cargo.entry(p).or_default() += u128::from(i.quantity.0);
         }
     }
     let locations = crate::transport::resolved_locations_for(s)?;
     let mut care_targets = BTreeSet::new();
-    for (id, actor) in game_physiology::bodies(&s.components) {
+    for (id, actor) in game_physiology::bodies(s.components) {
         let id = &id;
         let activity = s.components.activity(*id).ok_or_else(fail)?;
-        let job = game_workshop::job(&s.components, *id);
+        let job = game_workshop::job(s.components, *id);
         let p = people.get(id).ok_or_else(fail)?;
         let carried = cargo.get(id).copied().unwrap_or(0);
         if actor.health_remainder >= 1_000
@@ -2075,7 +2163,7 @@ fn validate_physical(
             || actor.vitals.fatigue > rules.fatigue_limit
             || (carried > u128::from(physical::rules_for(s, *id).carrying_capacity.0)
                 && matches!(
-                    *game_spatial::location(&s.components, game_ecs::StableId((p.id).0))
+                    *game_spatial::location(s.components, game_ecs::StableId((p.id).0))
                         .expect("location exists"),
                     Location::InTransit { .. }
                 ))
@@ -2089,7 +2177,8 @@ fn validate_physical(
         }
         if let Some(job) = job
             && (job.tool.is_some_and(|tool| {
-                !s.inventories
+                !s.state
+                    .inventories
                     .get(&tool)
                     .is_some_and(|i| i.good == Good::Tool)
             }) || !matches!(job.rate.denominator, 1_000 | 1_000_000)
@@ -2101,9 +2190,9 @@ fn validate_physical(
                         * 1_000;
                     let denominator =
                         u128::from(job.rate.denominator) * u128::from(job.body_rate.numerator);
-                    let maximum = s.skills.as_ref().map_or(1_000, |skills| {
+                    let maximum = s.state.skills.as_ref().map_or(1_000, |skills| {
                         1_000
-                            + u64::from(skills.level(&s.components, *id, Skill::Craft))
+                            + u64::from(skills.level(s.components, *id, Skill::Craft))
                                 * u64::from(skills.rules.work_bonus_per_level)
                     });
                     denominator == 0
@@ -2112,7 +2201,7 @@ fn validate_physical(
                         || numerator / denominator > u128::from(maximum)
                 }
                 || job.work_remainder >= job.rate.denominator
-                || !game_workshop::site(&s.components, job.site)
+                || !game_workshop::site(s.components, job.site)
                     .is_some_and(|site| job.remaining <= site.duration.0))
         {
             return Err(fail());
@@ -2183,8 +2272,8 @@ fn validate_physical(
                 field,
                 operation,
                 completes,
-            } if !s.agriculture.as_ref().is_some_and(|_| {
-                game_agriculture::cultivation(&s.components, *id).is_some_and(|job| {
+            } if !s.state.agriculture.as_ref().is_some_and(|_| {
+                game_agriculture::cultivation(s.components, *id).is_some_and(|job| {
                     job.field == field && job.operation == operation && job.completes == completes
                 })
             }) =>
@@ -2193,9 +2282,10 @@ fn validate_physical(
             }
             Activity::Express { completes, .. } | Activity::Play { completes, .. } => {
                 let life = s
+                    .state
                     .development
                     .as_ref()
-                    .and_then(|_| game_lifecycle::life(&s.components, *id))
+                    .and_then(|_| game_lifecycle::life(s.components, *id))
                     .ok_or_else(fail)?;
                 let duration = if matches!(*activity, Activity::Play { .. }) {
                     MINUTE.0
@@ -2207,7 +2297,7 @@ fn validate_physical(
                     .checked_sub(life.born.0)
                     .and_then(|v| v.checked_add(life.initial_age.0))
                     .ok_or_else(fail)?;
-                let rules = &s.development.as_ref().unwrap().rules;
+                let rules = &s.state.development.as_ref().unwrap().rules;
                 if started > s.time.0
                     || age >= rules.adulthood.0
                     || matches!(*activity, Activity::Play { .. }) && age < rules.infancy.0
@@ -2223,6 +2313,7 @@ fn validate_physical(
             }
             Activity::Eat { source, .. } => {
                 if !s
+                    .state
                     .inventories
                     .get(&source)
                     .is_some_and(|i| i.good == Good::Food)
@@ -2236,8 +2327,8 @@ fn validate_physical(
                 quantity,
                 completes,
             } => {
-                let source_stock = s.inventories.get(&source).ok_or_else(fail)?;
-                let destination_stock = s.inventories.get(&destination).ok_or_else(fail)?;
+                let source_stock = s.state.inventories.get(&source).ok_or_else(fail)?;
+                let destination_stock = s.state.inventories.get(&destination).ok_or_else(fail)?;
                 game_cargo::LoadJob {
                     actor: *id,
                     source,
@@ -2258,7 +2349,7 @@ fn validate_physical(
                 ref fact,
                 ..
             } if !people.contains_key(&recipient)
-                || !s.inventories.contains_key(&fact.inventory)
+                || !s.state.inventories.contains_key(&fact.inventory)
                 || fact.observed_at > s.time =>
             {
                 return Err(fail());
@@ -2266,8 +2357,8 @@ fn validate_physical(
             Activity::Comfort { child, .. } if !people.contains_key(&child) => return Err(fail()),
             Activity::Care { child, source, .. }
                 if !people.contains_key(&child)
-                    || !s.inventories.get(&source).is_some_and(|i| {
-                        i.good == Good::Food || i.good == Good::Water && s.health.is_some()
+                    || !s.state.inventories.get(&source).is_some_and(|i| {
+                        i.good == Good::Food || i.good == Good::Water && s.state.health.is_some()
                     }) =>
             {
                 return Err(fail());
@@ -2275,8 +2366,8 @@ fn validate_physical(
             Activity::Conceive {
                 pregnancy,
                 completes,
-            } if !s.development.as_ref().is_some_and(|_| {
-                game_lifecycle::pregnancy(&s.components, pregnancy).is_some_and(|p| {
+            } if !s.state.development.as_ref().is_some_and(|_| {
+                game_lifecycle::pregnancy(s.components, pregnancy).is_some_and(|p| {
                     [p.gestator, p.partner].contains(id)
                         && p.state == development::PregnancyState::Conceiving { completes }
                 })

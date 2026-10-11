@@ -19,10 +19,11 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
     )
     .unwrap();
     sim.advance(SimDuration(60_000)).unwrap();
-    let child = sim.canonical_state().ruler;
+    let child = sim.canonical_state().state.ruler;
     assert_eq!(sim.observe().life_stage, Some(game_api::LifeStage::Infant));
     let guardians: Vec<_> = sim
         .canonical_state()
+        .state
         .lineage
         .as_ref()
         .unwrap()
@@ -30,9 +31,9 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         .keys()
         .copied()
         .collect();
-    for person in sim.canonical_state().people.clone() {
+    for person in sim.canonical_state().state.people.clone() {
         if person.id != child
-            && game_physiology::body(&sim.canonical_state().components, person.id)
+            && game_physiology::body(sim.canonical_state().components, person.id)
                 .unwrap()
                 .vitals
                 .alive
@@ -46,12 +47,16 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
     }
     let mut snapshot: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let state = &mut snapshot["state"];
-    for stock in state["inventories"].as_object_mut().unwrap().values_mut() {
+    for stock in state["state"]["inventories"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         if stock["good"] == "Water" {
             stock["quantity"] = 0.into();
         }
     }
-    let water_ids: Vec<_> = state["inventories"]
+    let water_ids: Vec<_> = state["state"]["inventories"]
         .as_object()
         .unwrap()
         .iter()
@@ -59,7 +64,7 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         .map(|(id, _)| id.clone())
         .collect();
     for id in water_ids {
-        state["property"]["portions"][&id] = serde_json::json!({});
+        state["state"]["property"]["portions"][&id] = serde_json::json!({});
         let entity = id.parse::<u64>().expect("inventory identity");
         let value = serde_json::json!({
             "basis_quantity": 0, "basis_load": 0,
@@ -140,7 +145,7 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
     let events = &sim.canonical_state().events[initial_events..];
     let collector = events
         .iter()
-        .find_map(|e| match e.kind {
+        .find_map(|e| match e.event {
             EventKind::ResourceCollected {
                 actor,
                 good: Good::Water,
@@ -149,17 +154,17 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
             _ => None,
         })
         .expect("an actual guardian must collect remaining distant water");
-    assert!(events.iter().any(|e| matches!(e.kind,
+    assert!(events.iter().any(|e| matches!(e.event,
         EventKind::Cared { caregiver, child: target, .. }
             if caregiver == collector && target == child)));
     assert!(
-        game_physiology::body(&sim.canonical_state().components, child)
+        game_physiology::body(sim.canonical_state().components, child)
             .unwrap()
             .vitals
             .alive
     );
     assert!(
-        game_health::clinical(&sim.canonical_state().components, child)
+        game_health::clinical(sim.canonical_state().components, child)
             .expect("clinical state exists")
             .thirst
             < 2 * HOUR
@@ -181,12 +186,13 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
     sim.initialize_health(HealthRules::human()).unwrap();
     let actor = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| {
             p.role == Role::Citizen
                 && *game_spatial::location(
-                    &sim.canonical_state().components,
+                    sim.canonical_state().components,
                     game_ecs::StableId((p.id).0),
                 )
                 .expect("location exists")
@@ -194,15 +200,19 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
         })
         .unwrap()
         .id;
-    for person in sim.canonical_state().people.clone() {
+    for person in sim.canonical_state().state.people.clone() {
         sim.debug_actor_command(person.id, Command::Cancel).unwrap();
         sim.debug_set_personality(person.id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let mut snapshot: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let state = &mut snapshot["state"];
-    for stock in state["inventories"].as_object_mut().unwrap().values_mut() {
+    for stock in state["state"]["inventories"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
         if stock["good"] == "Water" {
             stock["quantity"] = 0.into();
         }
@@ -256,15 +266,16 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
     let (mut sim, actor) = dry_opening(false, true);
     let initial = sim
         .canonical_state()
+        .state
         .ecology
         .as_ref()
         .unwrap()
-        .resources(&sim.canonical_state().components)
+        .resources(sim.canonical_state().components)
         .filter(|(_, resource)| resource.kind.good() == Good::Water)
         .map(|(_, resource)| resource.remaining.0)
         .sum::<u64>();
     assert!(
-        game_ecology::knowledge(&sim.canonical_state().components, actor)
+        game_ecology::knowledge(sim.canonical_state().components, actor)
             .unwrap()
             .known_resources
             .values()
@@ -275,7 +286,7 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
     let collected = state
         .events
         .iter()
-        .find_map(|e| match e.kind {
+        .find_map(|e| match e.event {
             EventKind::ResourceCollected {
                 actor: a,
                 destination,
@@ -285,34 +296,36 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
             _ => None,
         })
         .expect("a thirsty ordinary person must physically collect water");
-    assert!(state.events.iter().any(|e| matches!(e.kind,
+    assert!(state.events.iter().any(|e| matches!(e.event,
         EventKind::Drank {actor:a,source,..} if a==actor && source==collected)));
     assert_eq!(
-        *game_spatial::location(&state.components, game_ecs::StableId((actor).0))
+        *game_spatial::location(state.components, game_ecs::StableId((actor).0))
             .expect("location exists"),
         Location::AtArea(AreaId(3))
     );
     assert!(
-        game_health::clinical(&state.components, actor)
+        game_health::clinical(state.components, actor)
             .expect("clinical state exists")
             .thirst
             < HOUR
     );
     assert!(
-        game_ecology::knowledge(&state.components, actor)
+        game_ecology::knowledge(state.components, actor)
             .unwrap()
             .observed_areas
             .contains_key(&AreaId(2))
     );
     let remaining = state
+        .state
         .ecology
         .as_ref()
         .unwrap()
-        .resources(&state.components)
+        .resources(state.components)
         .filter(|(_, resource)| resource.kind.good() == Good::Water)
         .map(|(_, resource)| resource.remaining.0)
         .sum::<u64>();
     let carried = state
+        .state
         .inventories
         .values()
         .filter(|s| s.good == Good::Water)
@@ -321,7 +334,7 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
     let consumed = state
         .events
         .iter()
-        .map(|e| match e.kind {
+        .map(|e| match e.event {
             EventKind::Drank { quantity, .. } => quantity.0,
             _ => 0,
         })
@@ -335,53 +348,57 @@ fn a_present_custodian_can_refuse_water_without_granting_access_or_forcing_a_the
     let (mut sim, actor) = dry_opening(true, false);
     let private = sim
         .canonical_state()
+        .state
         .ecology
         .as_ref()
         .unwrap()
-        .resources(&sim.canonical_state().components)
+        .resources(sim.canonical_state().components)
         .find(|(_, resource)| resource.kind.good() == Good::Water && resource.remaining.0 > 0)
         .unwrap()
         .0;
     let quantity = sim
         .canonical_state()
+        .state
         .ecology
         .as_ref()
         .unwrap()
-        .resource(&sim.canonical_state().components, private)
+        .resource(sim.canonical_state().components, private)
         .unwrap()
         .remaining;
     sim.advance(SimDuration(2 * HOUR + 10 * 60_000)).unwrap();
     let state = sim.canonical_state();
     assert!(
-        state.events.iter().any(|e| matches!(e.kind,
+        state.events.iter().any(|e| matches!(e.event,
         EventKind::ResourceAccessRequested {resource,actor:a,..} if resource==private && a==actor))
     );
-    assert!(state.events.iter().any(|e| matches!(e.kind,
+    assert!(state.events.iter().any(|e| matches!(e.event,
         EventKind::ResourceAccessRefused {resource,actor:a,..} if resource==private && a==actor)));
     assert!(
         !state
+            .state
             .ecology
             .as_ref()
             .unwrap()
-            .resource(&state.components, private)
+            .resource(state.components, private)
             .unwrap()
             .access
             .contains(&actor)
     );
     assert_eq!(
         state
+            .state
             .ecology
             .as_ref()
             .unwrap()
-            .resource(&state.components, private)
+            .resource(state.components, private)
             .unwrap()
             .remaining,
         quantity
     );
-    assert!(!state.events.iter().any(|e| matches!(e.kind,
+    assert!(!state.events.iter().any(|e| matches!(e.event,
         EventKind::ResourceCollected {actor:a,..} if a==actor)));
     assert!(
-        game_health::clinical(&state.components, actor)
+        game_health::clinical(state.components, actor)
             .expect("clinical state exists")
             .thirst
             >= 2 * HOUR
@@ -393,7 +410,7 @@ fn a_present_custodian_can_refuse_water_without_granting_access_or_forcing_a_the
 fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_slices() {
     let (mut unknown, actor) = dry_opening(false, false);
     assert!(
-        game_ecology::knowledge(&unknown.canonical_state().components, actor)
+        game_ecology::knowledge(unknown.canonical_state().components, actor)
             .unwrap()
             .known_resources
             .values()
@@ -408,15 +425,15 @@ fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_
     let arrivals = state
         .events
         .iter()
-        .filter_map(|event| match event.kind {
+        .filter_map(|event| match event.event {
             EventKind::Arrived {
                 actor: person,
                 area,
-            } if person == actor => Some((area, event.time)),
+            } if person == actor => Some((area, event.at)),
             _ => None,
         })
         .collect::<Vec<_>>();
-    for source in game_ecology::knowledge(&state.components, actor)
+    for source in game_ecology::knowledge(state.components, actor)
         .unwrap()
         .known_resources
         .values()
@@ -431,12 +448,12 @@ fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_
     let collected = state
         .events
         .iter()
-        .filter_map(|event| match event.kind {
+        .filter_map(|event| match event.event {
             EventKind::ResourceCollected {
                 actor: person,
                 resource,
                 ..
-            } if person == actor => Some((resource, event.time)),
+            } if person == actor => Some((resource, event.at)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -445,7 +462,7 @@ fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_
         "personally observed roads permit actual exploration"
     );
     for (resource, time) in collected {
-        let source = &game_ecology::knowledge(&state.components, actor)
+        let source = &game_ecology::knowledge(state.components, actor)
             .unwrap()
             .known_resources[&resource];
         assert!(
@@ -494,16 +511,16 @@ fn normal_population_uses_the_renewable_spring_after_consuming_its_authored_stoc
     sim.advance(SimDuration(12 * HOUR)).unwrap();
     let state = sim.canonical_state();
     assert!(state.events.iter().any(|e| matches!(
-        e.kind,
+        e.event,
         EventKind::ResourceCollected {
             good: Good::Water,
             ..
         }
     )));
-    assert!(state.events.iter().any(|e|matches!(e.kind,
-        EventKind::Drank {source,..} if state.inventories[&source].location != game_assembly::InventoryLocation::Area(state.areas[0].id))));
+    assert!(state.events.iter().any(|e|matches!(e.event,
+        EventKind::Drank {source,..} if state.state.inventories[&source].location != game_assembly::InventoryLocation::Area(state.state.areas[0].id))));
     assert!(
-        game_physiology::bodies(&state.components)
+        game_physiology::bodies(state.components)
             .filter(|(_, body)| body.vitals.alive)
             .count()
             > 90

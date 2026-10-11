@@ -15,11 +15,12 @@ fn fixture(workers: usize) -> Simulation {
     .unwrap()
 }
 fn actor(sim: &Simulation, index: usize) -> PersonId {
-    sim.canonical_state().people[index].id
+    sim.canonical_state().state.people[index].id
 }
 fn quiet(sim: &mut Simulation) {
     let people = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .map(|person| person.id)
@@ -33,6 +34,7 @@ fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
     let maker = actor(sim, 3);
     let custodians = &sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -43,6 +45,7 @@ fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
     };
     let materials = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .filter(owned)
@@ -51,6 +54,7 @@ fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
         .id;
     let tool = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .filter(owned)
@@ -59,6 +63,7 @@ fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
         .id;
     let output = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .filter(owned)
@@ -91,6 +96,7 @@ fn supply(sim: &mut Simulation, quantity: u64) {
     let (destination, _, _) = maker_assets(sim);
     let source = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| {
@@ -102,6 +108,7 @@ fn supply(sim: &mut Simulation, quantity: u64) {
         .id;
     let cargo = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| {
@@ -157,7 +164,7 @@ fn supply(sim: &mut Simulation, quantity: u64) {
 fn autonomous_citizen_negotiates_real_financing_builds_and_repays_from_actual_production() {
     let mut sim = fixture(2);
     sim.advance(SimDuration(1_500_000)).unwrap();
-    let world = sim.canonical_state().projects.as_ref().unwrap();
+    let world = sim.canonical_state().state.projects.as_ref().unwrap();
     let plan = world
         .projects
         .values()
@@ -171,6 +178,7 @@ fn autonomous_citizen_negotiates_real_financing_builds_and_repays_from_actual_pr
     assert_eq!(workshop.timber_consumed, 2 * workshop.tools_produced);
     let funding = &sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -178,6 +186,7 @@ fn autonomous_citizen_negotiates_real_financing_builds_and_repays_from_actual_pr
     assert_eq!(funding.status, AgreementStatus::Fulfilled);
     let obligations = &sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -197,7 +206,7 @@ fn autonomous_citizen_negotiates_real_financing_builds_and_repays_from_actual_pr
         }
     ) && obligations[id].performed == 3_000));
     assert!(sim.canonical_state().events.iter().any(|event| matches!(
-        event.kind,
+        event.event,
         EventKind::EnterpriseInputUsed {
             quantity: Quantity(2_000),
             ..
@@ -213,18 +222,29 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
     let plan = propose(&mut sim, SimTime(1_800_000), BTreeSet::from([maker]));
     supply(&mut sim, 5_000);
     let (materials, _, _) = maker_assets(&sim);
-    let sites = game_workshop::sites(&sim.canonical_state().components).count();
+    let sites = game_workshop::sites(sim.canonical_state().components).count();
     sim.debug_project_action(maker, ProjectAction::Work { project: plan })
         .unwrap();
-    assert_eq!(sim.canonical_state().inventories[&materials].quantity.0, 0);
+    assert_eq!(
+        sim.canonical_state().state.inventories[&materials]
+            .quantity
+            .0,
+        0
+    );
     sim.advance(SimDuration(120_000)).unwrap();
     sim.debug_actor_command(maker, Command::Cancel).unwrap();
     assert_eq!(
-        sim.canonical_state().projects.as_ref().unwrap().projects[&plan].progress_ms,
+        sim.canonical_state()
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects[&plan]
+            .progress_ms,
         120_000
     );
     assert_eq!(
-        game_workshop::sites(&sim.canonical_state().components).count(),
+        game_workshop::sites(sim.canonical_state().components).count(),
         sites
     );
     sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -232,14 +252,25 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
         .unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().projects.as_ref().unwrap().projects[&plan].status,
+        sim.canonical_state()
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects[&plan]
+            .status,
         ProjectStatus::Completed
     );
     assert_eq!(
-        game_workshop::sites(&sim.canonical_state().components).count(),
+        game_workshop::sites(sim.canonical_state().components).count(),
         sites + 1
     );
-    assert_eq!(sim.canonical_state().inventories[&materials].quantity.0, 0);
+    assert_eq!(
+        sim.canonical_state().state.inventories[&materials]
+            .quantity
+            .0,
+        0
+    );
 }
 #[test]
 fn shortages_leave_stocks_untouched_and_fail_at_exact_deadline() {
@@ -247,23 +278,35 @@ fn shortages_leave_stocks_untouched_and_fail_at_exact_deadline() {
     quiet(&mut sim);
     let maker = actor(&sim, 3);
     let plan = propose(&mut sim, SimTime(180_123), BTreeSet::from([maker]));
-    let before = sim.canonical_state().inventories.clone();
+    let before = sim.canonical_state().state.inventories.clone();
     assert_eq!(
         sim.debug_project_action(maker, ProjectAction::Work { project: plan }),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.canonical_state().inventories, before);
+    assert_eq!(sim.canonical_state().state.inventories, before);
     sim.advance(SimDuration(180_122)).unwrap();
     assert_ne!(
-        sim.canonical_state().projects.as_ref().unwrap().projects[&plan].status,
+        sim.canonical_state()
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects[&plan]
+            .status,
         ProjectStatus::Failed
     );
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(
-        sim.canonical_state().projects.as_ref().unwrap().projects[&plan].status,
+        sim.canonical_state()
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects[&plan]
+            .status,
         ProjectStatus::Failed
     );
-    assert_eq!(sim.canonical_state().inventories, before);
+    assert_eq!(sim.canonical_state().state.inventories, before);
 }
 #[test]
 fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_payment() {
@@ -284,6 +327,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     let (materials, tool, _) = maker_assets(&sim);
     let provisions = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| {
@@ -291,6 +335,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
                 && stock.location == InventoryLocation::Area(AreaId(1))
                 && sim
                     .canonical_state()
+                    .state
                     .agreements
                     .as_ref()
                     .unwrap()
@@ -300,7 +345,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
         })
         .unwrap()
         .id;
-    let destination = sim.canonical_state().people[6].inventory;
+    let destination = sim.canonical_state().state.people[6].inventory;
     let deadline = SimTime(1_200_000);
     let terms = vec![
         AgreementTerm::ConstructionLabor {
@@ -367,11 +412,19 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
         120_000
     );
     assert_eq!(
-        sim.canonical_state().projects.as_ref().unwrap().projects[&plan].contributions[&helper],
+        sim.canonical_state()
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects[&plan]
+            .contributions[&helper],
         120_000
     );
-    let before = sim.canonical_state().inventories[&destination].quantity.0;
-    let cargo = sim.canonical_state().people[3].inventory;
+    let before = sim.canonical_state().state.inventories[&destination]
+        .quantity
+        .0;
+    let cargo = sim.canonical_state().state.people[3].inventory;
     sim.debug_actor_command(
         maker,
         Command::Load {
@@ -393,7 +446,9 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity.0,
+        sim.canonical_state().state.inventories[&destination]
+            .quantity
+            .0,
         before + 3_000
     );
 }
@@ -438,13 +493,27 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
     sim.debug_project_action(maker, ProjectAction::Work { project })
         .unwrap();
     sim.advance(SimDuration(300_000)).unwrap();
-    let enterprise = sim.canonical_state().projects.as_ref().unwrap().projects[&project]
+    let enterprise = sim
+        .canonical_state()
+        .state
+        .projects
+        .as_ref()
+        .unwrap()
+        .projects[&project]
         .enterprise
         .unwrap();
-    let site = sim.canonical_state().projects.as_ref().unwrap().enterprises[&enterprise].site;
+    let site = sim
+        .canonical_state()
+        .state
+        .projects
+        .as_ref()
+        .unwrap()
+        .enterprises[&enterprise]
+        .site;
     let (materials, tool, _) = maker_assets(&sim);
     let provisions = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| {
@@ -452,6 +521,7 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
                 && stock.location == InventoryLocation::Area(AreaId(1))
                 && sim
                     .canonical_state()
+                    .state
                     .agreements
                     .as_ref()
                     .unwrap()
@@ -461,7 +531,7 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
         })
         .unwrap()
         .id;
-    let destination = sim.canonical_state().people[6].inventory;
+    let destination = sim.canonical_state().state.people[6].inventory;
     let deadline = SimTime(sim.canonical_state().time.0 + 300_000);
     sim.debug_agreement_action(
         maker,
@@ -515,11 +585,23 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
         .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().projects.as_ref().unwrap().enterprises[&enterprise].labor[&worker],
+        sim.canonical_state()
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .enterprises[&enterprise]
+            .labor[&worker],
         60_000
     );
     assert_eq!(
-        sim.canonical_state().projects.as_ref().unwrap().enterprises[&enterprise].tools_produced,
+        sim.canonical_state()
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .enterprises[&enterprise]
+            .tools_produced,
         1_000
     );
     // Changing the debtor's own willingness does not erase the wage obligation.
@@ -550,6 +632,7 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
     assert!(account.defaults >= 1);
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -567,10 +650,11 @@ fn cautious_financier_refuses_startup_risk_without_any_stock_transfer() {
     cautious.risk_tolerance = 0;
     sim.debug_set_personality(financier, cautious, Aspiration::Independence)
         .unwrap();
-    let before = sim.canonical_state().inventories.clone();
+    let before = sim.canonical_state().state.inventories.clone();
     sim.advance(SimDuration(200_000)).unwrap();
     assert!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -578,9 +662,10 @@ fn cautious_financier_refuses_startup_risk_without_any_stock_transfer() {
             .values()
             .any(|agreement| agreement.status == AgreementStatus::Rejected)
     );
-    assert_eq!(sim.canonical_state().inventories, before);
+    assert_eq!(sim.canonical_state().state.inventories, before);
     assert!(
         sim.canonical_state()
+            .state
             .projects
             .as_ref()
             .unwrap()
@@ -596,6 +681,7 @@ fn procurement_uses_personal_hints_then_real_loading_travel_and_unloading() {
     let maker = actor(&sim, 3);
     let forest = sim
         .canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| {
@@ -606,9 +692,10 @@ fn procurement_uses_personal_hints_then_real_loading_travel_and_unloading() {
         })
         .unwrap()
         .id;
-    assert!(sim.canonical_state().events.iter().any(|event|matches!(event.kind,EventKind::Transferred {actor,source,..} if actor==maker&&source==forest)));
+    assert!(sim.canonical_state().events.iter().any(|event|matches!(event.event,EventKind::Transferred {actor,source,..} if actor==maker&&source==forest)));
     let plan = sim
         .canonical_state()
+        .state
         .projects
         .as_ref()
         .unwrap()
@@ -616,11 +703,16 @@ fn procurement_uses_personal_hints_then_real_loading_travel_and_unloading() {
         .values()
         .find(|project| project.sponsor == maker)
         .unwrap();
-    let enterprise =
-        &sim.canonical_state().projects.as_ref().unwrap().enterprises[&plan.enterprise.unwrap()];
+    let enterprise = &sim
+        .canonical_state()
+        .state
+        .projects
+        .as_ref()
+        .unwrap()
+        .enterprises[&plan.enterprise.unwrap()];
     assert!(enterprise.tools_produced > 3_000);
     assert!(sim.canonical_state().events.iter().any(
-        |event| matches!(event.kind,EventKind::Departed {actor,to:AreaId(3),..} if actor==maker)
+        |event| matches!(event.event,EventKind::Departed {actor,to:AreaId(3),..} if actor==maker)
     ));
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
 }

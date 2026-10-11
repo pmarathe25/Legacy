@@ -9,9 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 fn quiet(sim: &mut Simulation) {
     let actors: Vec<_> = sim
         .canonical_state()
+        .state
         .people
         .iter()
-        .filter(|p| p.id != sim.canonical_state().ruler)
+        .filter(|p| p.id != sim.canonical_state().state.ruler)
         .map(|p| p.id)
         .collect();
     for actor in actors {
@@ -27,13 +28,17 @@ fn sim() -> Simulation {
     let mut sim = Simulation::agreement_fixture(1, Execution::default()).unwrap();
     quiet(&mut sim);
     let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    saved["state"]["physical"]["rules"]["hunger_harm"] = serde_json::json!(1_000_000_000_000_u64);
-    saved["state"]["physical"]["rules"]["meal_relief"] = serde_json::json!(1_000_000_000_000_u64);
-    saved["state"]["physical"]["rules"]["fatigue_limit"] = serde_json::json!(1_000_000_000_000_u64);
+    saved["state"]["state"]["physical"]["rules"]["hunger_harm"] =
+        serde_json::json!(1_000_000_000_000_u64);
+    saved["state"]["state"]["physical"]["rules"]["meal_relief"] =
+        serde_json::json!(1_000_000_000_000_u64);
+    saved["state"]["state"]["physical"]["rules"]["fatigue_limit"] =
+        serde_json::json!(1_000_000_000_000_u64);
     Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()).unwrap()
 }
 fn citizen(sim: &Simulation) -> PersonId {
     sim.canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.role == Role::Citizen)
@@ -42,6 +47,7 @@ fn citizen(sim: &Simulation) -> PersonId {
 }
 fn timber(sim: &Simulation, area: AreaId) -> InventoryId {
     sim.canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| stock.good == Good::Timber && stock.location == InventoryLocation::Area(area))
@@ -50,6 +56,7 @@ fn timber(sim: &Simulation, area: AreaId) -> InventoryId {
 }
 fn cargo(sim: &Simulation, actor: PersonId) -> InventoryId {
     sim.canonical_state()
+        .state
         .inventories
         .values()
         .find(|stock| {
@@ -70,7 +77,7 @@ fn propose(
     terms: Vec<AgreementTerm>,
     procedure: Option<AmendmentProcedure>,
 ) -> AgreementId {
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     sim.debug_agreement_action(
         ruler,
         AgreementAction::Propose {
@@ -82,6 +89,7 @@ fn propose(
     .unwrap();
     let id = *sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -125,7 +133,7 @@ fn load(sim: &mut Simulation, actor: PersonId, source: InventoryId, destination:
 #[test]
 fn a_remote_creditor_learns_a_delivery_only_through_an_actual_timed_report() {
     let mut sim = sim();
-    let creditor = sim.canonical_state().ruler;
+    let creditor = sim.canonical_state().state.ruler;
     let debtor = citizen(&sim);
     let source = timber(&sim, AreaId(1));
     let destination = sim
@@ -150,12 +158,12 @@ fn a_remote_creditor_learns_a_delivery_only_through_an_actual_timed_report() {
     load(&mut sim, debtor, carrying, destination);
     assert_eq!(known(&sim, debtor, id).obligations[0].performed, 1_000);
     assert_eq!(known(&sim, creditor, id).obligations[0].performed, 0);
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     for _ in 0..100 {
         sim.agreement_view(creditor);
         sim.observe();
     }
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     sim.debug_move_actor(creditor, AreaId(1)).unwrap();
     sim.advance(SimDuration(120_000)).unwrap();
     assert_eq!(known(&sim, creditor, id).obligations[0].performed, 0);
@@ -184,7 +192,7 @@ fn a_remote_creditor_learns_a_delivery_only_through_an_actual_timed_report() {
 #[test]
 fn witnessing_one_obligation_does_not_refresh_another_remote_obligation() {
     let mut sim = sim();
-    let creditor = sim.canonical_state().ruler;
+    let creditor = sim.canonical_state().state.ruler;
     let debtor = citizen(&sim);
     let local_source = timber(&sim, AreaId(1));
     let local_goal = sim
@@ -238,6 +246,7 @@ fn witnessing_one_obligation_does_not_refresh_another_remote_obligation() {
     assert_eq!(view.status, AgreementStatus::Active);
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -250,7 +259,7 @@ fn witnessing_one_obligation_does_not_refresh_another_remote_obligation() {
 #[test]
 fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_updates_debt() {
     let mut sim = sim();
-    let creditor = sim.canonical_state().ruler;
+    let creditor = sim.canonical_state().state.ruler;
     let debtor = citizen(&sim);
     let source = timber(&sim, AreaId(1));
     let destination = sim
@@ -273,7 +282,7 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     assert!(known(&sim, debtor, id).obligations[0].defaulted);
     assert!(!known(&sim, creditor, id).obligations[0].defaulted);
     let before = game_characters::decisions::mind::<game_api::Command>(
-        &sim.canonical_state().components,
+        sim.canonical_state().components,
         creditor,
     )
     .expect("mind exists")
@@ -293,7 +302,7 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     sim.advance(MINUTE).unwrap();
     assert!(known(&sim, creditor, id).obligations[0].defaulted);
     let after = game_characters::decisions::mind::<game_api::Command>(
-        &sim.canonical_state().components,
+        sim.canonical_state().components,
         creditor,
     )
     .expect("mind exists")
@@ -309,7 +318,7 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     assert_eq!(view.obligations[0].performed, 1_000);
     assert_eq!(
         game_characters::decisions::mind::<game_api::Command>(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             creditor
         )
         .expect("mind exists")
@@ -322,7 +331,7 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
 #[test]
 fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_inert() {
     let mut sim = sim();
-    let creditor = sim.canonical_state().ruler;
+    let creditor = sim.canonical_state().state.ruler;
     let debtor = citizen(&sim);
     let source = timber(&sim, AreaId(1));
     let destination = sim
@@ -342,7 +351,7 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
         quantity: Quantity(0),
         deadline: SimTime(180_000),
     };
-    let opening = sim.canonical_state().clone();
+    let opening = sim.canonical_snapshot().unwrap();
     assert!(
         sim.debug_agreement_action(
             creditor,
@@ -354,7 +363,7 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
         )
         .is_err()
     );
-    assert_eq!(sim.canonical_state(), &opening);
+    assert_eq!(sim.canonical_snapshot().unwrap(), opening);
     let procedure = AmendmentProcedure {
         eligible_proposers: BTreeSet::from([creditor]),
         approvers: BTreeSet::from([creditor]),
@@ -369,7 +378,7 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
     );
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(known(&sim, creditor, id).obligations[0].defaulted);
-    let stocks = sim.canonical_state().inventories.clone();
+    let stocks = sim.canonical_state().state.inventories.clone();
     sim.debug_agreement_action(
         creditor,
         AgreementAction::Amend {
@@ -380,6 +389,7 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
     .unwrap();
     let amendment = *sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -399,7 +409,7 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
     assert_eq!(view.status, AgreementStatus::Fulfilled);
     assert_eq!(view.obligations[0].term.amount(), 0);
     assert!(!view.obligations[0].defaulted);
-    assert_eq!(sim.canonical_state().inventories, stocks);
+    assert_eq!(sim.canonical_state().state.inventories, stocks);
     Simulation::load(
         &sim.save().unwrap(),
         Execution {
@@ -413,7 +423,7 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
 #[test]
 fn stale_report_and_its_saved_snapshot_cannot_undo_a_later_known_amendment() {
     let mut sim = sim();
-    let creditor = sim.canonical_state().ruler;
+    let creditor = sim.canonical_state().state.ruler;
     let debtor = citizen(&sim);
     let source = timber(&sim, AreaId(1));
     let destination = sim
@@ -463,6 +473,7 @@ fn stale_report_and_its_saved_snapshot_cannot_undo_a_later_known_amendment() {
     .unwrap();
     let amendment = *sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -508,8 +519,8 @@ fn stale_report_and_its_saved_snapshot_cannot_undo_a_later_known_amendment() {
 fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
     let mut sim = Simulation::property_fixture(1, Execution::default()).unwrap();
     quiet(&mut sim);
-    let ruler = sim.canonical_state().ruler;
-    let guardian = sim.canonical_state().people[1].id;
+    let ruler = sim.canonical_state().state.ruler;
+    let guardian = sim.canonical_state().state.people[1].id;
     sim.submit(Submission {
         caller_sequence: 1,
         command: Command::Engage { target: guardian },
@@ -538,7 +549,7 @@ fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
     })
     .unwrap();
     sim.advance(SimDuration(6_000)).unwrap();
-    let site = game_workshop::sites(&sim.canonical_state().components)
+    let site = game_workshop::sites(sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()
@@ -562,6 +573,7 @@ fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
     );
     assert!(
         sim.canonical_state()
+            .state
             .combat
             .as_ref()
             .unwrap()

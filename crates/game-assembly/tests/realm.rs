@@ -10,16 +10,16 @@ fn command(sim: &mut Simulation, c: Command) {
     .unwrap();
 }
 fn actor(sim: &Simulation, n: usize) -> PersonId {
-    sim.canonical_state().people[n].id
+    sim.canonical_state().state.people[n].id
 }
 fn travel(sim: &mut Simulation, p: PersonId, to: AreaId) {
-    if p == sim.canonical_state().ruler {
+    if p == sim.canonical_state().state.ruler {
         command(sim, Command::Move { destination: to });
     } else {
         sim.debug_move_actor(p, to).unwrap();
     }
     let Location::InTransit { arrives, .. } =
-        *game_spatial::location(&sim.canonical_state().components, game_ecs::StableId((p).0))
+        *game_spatial::location(sim.canonical_state().components, game_ecs::StableId((p).0))
             .expect("location exists")
     else {
         panic!("travel not started")
@@ -51,7 +51,7 @@ fn fixture(seed: u64) -> (Simulation, Context) {
         game_assembly::decisions::Aspiration::Comfort,
     )
     .unwrap();
-    let institutions = sim.canonical_state().institutions.as_ref().unwrap();
+    let institutions = sim.canonical_state().state.institutions.as_ref().unwrap();
     let a = institutions
         .institutions
         .values()
@@ -68,7 +68,7 @@ fn fixture(seed: u64) -> (Simulation, Context) {
         *institutions.institutions[&institution].charter.offices[0]
             .inventories
             .iter()
-            .find(|id| sim.canonical_state().inventories[id].good == good)
+            .find(|id| sim.canonical_state().state.inventories[id].good == good)
             .unwrap()
     };
     let ctx = Context {
@@ -82,13 +82,13 @@ fn fixture(seed: u64) -> (Simulation, Context) {
         timber_a: stock(a, Good::Timber),
         timber_b: stock(b, Good::Timber),
     };
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     travel(&mut sim, ruler, AreaId(3));
     travel(&mut sim, ruler, AreaId(1));
     (sim, ctx)
 }
 fn propose(sim: &mut Simulation, c: &Context) -> RealmCommitmentId {
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let deadline = SimTime(sim.time().0 + 3_600_000);
     let p = Proposal {
         proposer: ruler,
@@ -145,6 +145,7 @@ fn propose(sim: &mut Simulation, c: &Context) -> RealmCommitmentId {
         },
     );
     *sim.canonical_state()
+        .state
         .realm
         .as_ref()
         .unwrap()
@@ -159,14 +160,14 @@ fn report(sim: &mut Simulation, sender: PersonId, to: PersonId, id: RealmCommitm
         commitment: id,
         recipient: to,
     };
-    if sender == sim.canonical_state().ruler {
+    if sender == sim.canonical_state().state.ruler {
         command(sim, Command::Realm { action });
     } else {
         sim.debug_actor_command(sender, Command::Realm { action })
             .unwrap();
     }
     sim.advance(MINUTE).unwrap();
-    assert!(sim.canonical_state().events.iter().any(|e|matches!(e.kind,EventKind::RealmReported {commitment,sender:s,recipient} if commitment==id && s==sender && recipient==to)));
+    assert!(sim.canonical_state().events.iter().any(|e|matches!(e.event,EventKind::RealmReported {commitment,sender:s,recipient} if commitment==id && s==sender && recipient==to)));
 }
 fn ratify(
     sim: &mut Simulation,
@@ -187,6 +188,7 @@ fn ratify(
         .unwrap();
     let proposal = *sim
         .canonical_state()
+        .state
         .institutions
         .as_ref()
         .unwrap()
@@ -208,6 +210,7 @@ fn ratify(
     }
     assert_eq!(
         sim.canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -218,12 +221,13 @@ fn ratify(
 }
 fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     let (mut sim, c) = fixture(seed);
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let id = propose(&mut sim, &c);
     travel(&mut sim, c.mayor, AreaId(1));
     report(&mut sim, ruler, c.mayor, id);
     let terms = sim
         .canonical_state()
+        .state
         .realm
         .as_ref()
         .unwrap()
@@ -253,6 +257,7 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     );
     let agreement = *sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -272,6 +277,7 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     ratify(&mut sim, c.b, c.mayor, c.bv, id);
     assert_eq!(
         sim.canonical_state()
+            .state
             .realm
             .as_ref()
             .unwrap()
@@ -281,7 +287,7 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
             .status(),
         Status::Ratified
     );
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         sim.debug_actor_command(
             ruler,
@@ -297,7 +303,7 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     travel(&mut sim, c.bv, AreaId(1));
     report(&mut sim, c.bv, ruler, id);
     command(
@@ -331,21 +337,26 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
 #[test]
 fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered() {
     let (mut sim, c, id, agreement) = ready(41);
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let cargo = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.id == ruler)
         .unwrap()
         .inventory;
     assert_eq!(
-        sim.canonical_state().inventories[&c.food_b].quantity,
+        sim.canonical_state().state.inventories[&c.food_b].quantity,
         Quantity(0)
     );
-    let total = sim.canonical_state().inventories[&c.food_a].quantity.0
-        + sim.canonical_state().inventories[&c.food_b].quantity.0
-        + sim.canonical_state().inventories[&cargo].quantity.0;
+    let total = sim.canonical_state().state.inventories[&c.food_a]
+        .quantity
+        .0
+        + sim.canonical_state().state.inventories[&c.food_b]
+            .quantity
+            .0
+        + sim.canonical_state().state.inventories[&cargo].quantity.0;
     command(
         &mut sim,
         Command::Load {
@@ -357,7 +368,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     sim.advance(MINUTE).unwrap();
     travel(&mut sim, ruler, AreaId(3));
     assert_eq!(
-        sim.canonical_state().inventories[&c.food_b].quantity,
+        sim.canonical_state().state.inventories[&c.food_b].quantity,
         Quantity(0)
     );
     command(
@@ -370,13 +381,18 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     );
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&c.food_a].quantity.0
-            + sim.canonical_state().inventories[&c.food_b].quantity.0
-            + sim.canonical_state().inventories[&cargo].quantity.0,
+        sim.canonical_state().state.inventories[&c.food_a]
+            .quantity
+            .0
+            + sim.canonical_state().state.inventories[&c.food_b]
+                .quantity
+                .0
+            + sim.canonical_state().state.inventories[&cargo].quantity.0,
         total
     );
     let r = &sim
         .canonical_state()
+        .state
         .realm
         .as_ref()
         .unwrap()
@@ -389,6 +405,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     assert_ne!(r.status(), Status::Fulfilled);
     let debtor = sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -397,6 +414,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
         .iter()
         .find(|o| {
             sim.canonical_state()
+                .state
                 .agreements
                 .as_ref()
                 .unwrap()
@@ -410,6 +428,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     travel(&mut sim, ruler, AreaId(1));
     let due = sim
         .canonical_state()
+        .state
         .agreements
         .as_ref()
         .unwrap()
@@ -434,6 +453,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     assert_eq!(sim.canonical_state(), parallel.canonical_state());
     assert_eq!(
         sim.canonical_state()
+            .state
             .realm
             .as_ref()
             .unwrap()
@@ -446,6 +466,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     );
     assert!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -454,6 +475,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     );
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -496,7 +518,7 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
 #[test]
 fn a_completed_report_survives_minute_review_but_a_moving_listener_cancels_it() {
     let (mut sim, c) = fixture(42);
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let id = propose(&mut sim, &c);
     travel(&mut sim, c.mayor, AreaId(1));
     command(
@@ -508,7 +530,7 @@ fn a_completed_report_survives_minute_review_but_a_moving_listener_cancels_it() 
             },
         },
     );
-    let before = sim.canonical_state().clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         sim.debug_actor_command(
             c.av,
@@ -521,14 +543,14 @@ fn a_completed_report_survives_minute_review_but_a_moving_listener_cancels_it() 
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     sim.advance(MINUTE).unwrap();
-    assert!(sim.canonical_state().events.iter().any(|e|matches!(e.kind,EventKind::RealmReported {sender,recipient,..} if sender==ruler && recipient==c.mayor)));
+    assert!(sim.canonical_state().events.iter().any(|e|matches!(e.event,EventKind::RealmReported {sender,recipient,..} if sender==ruler && recipient==c.mayor)));
     let reports = sim
         .canonical_state()
         .events
         .iter()
-        .filter(|e| matches!(e.kind, EventKind::RealmReported { .. }))
+        .filter(|e| matches!(e.event, EventKind::RealmReported { .. }))
         .count();
     command(
         &mut sim,
@@ -544,12 +566,13 @@ fn a_completed_report_survives_minute_review_but_a_moving_listener_cancels_it() 
         sim.canonical_state()
             .events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::RealmReported { .. }))
+            .filter(|e| matches!(e.event, EventKind::RealmReported { .. }))
             .count(),
         reports
     );
     assert!(
         sim.canonical_state()
+            .state
             .realm
             .as_ref()
             .unwrap()
@@ -569,7 +592,7 @@ fn a_completed_report_survives_minute_review_but_a_moving_listener_cancels_it() 
 #[test]
 fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_remains() {
     let (mut sim, c) = fixture(43);
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let id = propose(&mut sim, &c);
     travel(&mut sim, c.mayor, AreaId(1));
     report(&mut sim, ruler, c.mayor, id);
@@ -592,7 +615,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
         },
     );
     sim.advance(SimDuration(1)).unwrap();
-    let agreement = match sim.canonical_state().realm.as_ref().unwrap().pending[&TermKey {
+    let agreement = match sim.canonical_state().state.realm.as_ref().unwrap().pending[&TermKey {
         commitment: id,
         revision: 0,
         index: 0,
@@ -604,6 +627,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
     };
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -613,6 +637,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
     );
     assert!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -622,6 +647,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
     );
     assert_eq!(
         sim.canonical_state()
+            .state
             .realm
             .as_ref()
             .unwrap()
@@ -632,7 +658,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
             .progress,
         Progress::AwaitingWork
     );
-    let stock = sim.canonical_state().inventories[&c.food_a].quantity;
+    let stock = sim.canonical_state().state.inventories[&c.food_a].quantity;
     sim.debug_actor_command(
         c.mayor,
         Command::Agreement {
@@ -643,6 +669,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(
         sim.canonical_state()
+            .state
             .realm
             .as_ref()
             .unwrap()
@@ -653,9 +680,12 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
             .progress,
         Progress::Refused
     );
-    assert_eq!(sim.canonical_state().inventories[&c.food_a].quantity, stock);
     assert_eq!(
-        sim.canonical_state().inventories[&c.food_b].quantity,
+        sim.canonical_state().state.inventories[&c.food_a].quantity,
+        stock
+    );
+    assert_eq!(
+        sim.canonical_state().state.inventories[&c.food_b].quantity,
         Quantity(0)
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -664,7 +694,7 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
 #[test]
 fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its_old_promise() {
     let (mut sim, c) = fixture(44);
-    let ruler = sim.canonical_state().ruler;
+    let ruler = sim.canonical_state().state.ruler;
     let until = SimTime(sim.time().0 + 3_600_000);
     let ratify_by = SimTime(sim.time().0 + 1_800_000);
     let patrol = MissionProposal {
@@ -715,6 +745,7 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
     );
     let id = *sim
         .canonical_state()
+        .state
         .realm
         .as_ref()
         .unwrap()
@@ -744,6 +775,7 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
     );
     let mission = *sim
         .canonical_state()
+        .state
         .missions
         .as_ref()
         .unwrap()
@@ -751,8 +783,14 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
         .keys()
         .last()
         .unwrap();
-    let recruitment = sim.canonical_state().missions.as_ref().unwrap().missions[&mission].members
-        [&c.av]
+    let recruitment = sim
+        .canonical_state()
+        .state
+        .missions
+        .as_ref()
+        .unwrap()
+        .missions[&mission]
+        .members[&c.av]
         .recruitment;
     sim.debug_actor_command(
         c.av,
@@ -764,6 +802,7 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(
         sim.canonical_state()
+            .state
             .realm
             .as_ref()
             .unwrap()
@@ -788,6 +827,7 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
     sim.advance(MINUTE).unwrap();
     assert_eq!(
         sim.canonical_state()
+            .state
             .realm
             .as_ref()
             .unwrap()
@@ -799,7 +839,12 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
         Progress::Defaulted
     );
     assert_eq!(
-        sim.canonical_state().missions.as_ref().unwrap().missions[&mission]
+        sim.canonical_state()
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .missions[&mission]
             .proposal
             .objective,
         MissionObjective::Visit {

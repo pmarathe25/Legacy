@@ -14,7 +14,13 @@ fn fixture(workers: usize) -> Simulation {
         },
     )
     .unwrap();
-    let people: Vec<_> = sim.canonical_state().people.iter().map(|p| p.id).collect();
+    let people: Vec<_> = sim
+        .canonical_state()
+        .state
+        .people
+        .iter()
+        .map(|p| p.id)
+        .collect();
     for actor in people {
         sim.debug_set_personality(actor, Personality::restful(), Aspiration::Comfort)
             .unwrap();
@@ -32,13 +38,14 @@ fn fixture(workers: usize) -> Simulation {
     sim
 }
 fn ruler(sim: &Simulation) -> PersonId {
-    sim.canonical_state().ruler
+    sim.canonical_state().state.ruler
 }
 fn owner(sim: &Simulation) -> PersonId {
-    sim.canonical_state().people[3].id
+    sim.canonical_state().state.people[3].id
 }
 fn food(sim: &Simulation) -> InventoryId {
     sim.canonical_state()
+        .state
         .inventories
         .values()
         .find(|i| i.location == InventoryLocation::Area(AreaId(1)) && i.good == Good::Food)
@@ -46,7 +53,7 @@ fn food(sim: &Simulation) -> InventoryId {
         .id
 }
 fn site(sim: &Simulation) -> SiteId {
-    game_workshop::sites(&sim.canonical_state().components)
+    game_workshop::sites(sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
@@ -139,6 +146,7 @@ fn people_construct_and_adopt_rules_from_exclusion_then_do_real_work() {
     let mut sim = fixture(4);
     assert!(
         sim.canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -146,7 +154,7 @@ fn people_construct_and_adopt_rules_from_exclusion_then_do_real_work() {
             .is_empty()
     );
     sim.advance(SimDuration(360_000)).unwrap();
-    let world = sim.canonical_state().institutions.as_ref().unwrap();
+    let world = sim.canonical_state().state.institutions.as_ref().unwrap();
     let institution = world
         .institutions
         .values()
@@ -182,6 +190,7 @@ fn people_construct_and_adopt_rules_from_exclusion_then_do_real_work() {
         .collect();
     assert!(duties.iter().any(|id| {
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -193,7 +202,7 @@ fn people_construct_and_adopt_rules_from_exclusion_then_do_real_work() {
         sim.canonical_state()
             .events
             .iter()
-            .any(|e| matches!(e.kind, EventKind::Produced { .. }))
+            .any(|e| matches!(e.event, EventKind::Produced { .. }))
     );
     assert!(
         world
@@ -216,11 +225,11 @@ fn ordered_rules_change_access_while_other_permissions_remain_independent() {
         };
         let charter = charter(&sim, rules);
         found(&mut sim, charter);
-        let before = sim.canonical_state().inventories[&food(&sim)].quantity;
+        let before = sim.canonical_state().state.inventories[&food(&sim)].quantity;
         sim.advance(MINUTE).unwrap();
         assert_eq!(can_eat(&sim), last_allowed);
         assert!(
-            sim.canonical_state().inventories[&food(&sim)]
+            sim.canonical_state().state.inventories[&food(&sim)]
                 .access
                 .contains(&owner(&sim))
         );
@@ -229,17 +238,17 @@ fn ordered_rules_change_access_while_other_permissions_remain_independent() {
             command(&mut sim, Command::Eat { source }).unwrap();
             sim.advance(MINUTE).unwrap();
             assert_eq!(
-                sim.canonical_state().inventories[&source].quantity.0,
+                sim.canonical_state().state.inventories[&source].quantity.0,
                 before.0 - 1_000
             );
         } else {
-            let before = sim.canonical_state().clone();
+            let before = sim.canonical_snapshot().unwrap();
             let source = food(&sim);
             assert_eq!(
                 command(&mut sim, Command::Eat { source }),
                 Err(Error::Unavailable)
             );
-            assert_eq!(sim.canonical_state(), &before);
+            assert_eq!(sim.canonical_snapshot().unwrap(), before);
         }
     }
 }
@@ -263,8 +272,8 @@ fn withdrawing_support_removes_office_power_without_removing_the_person() {
     .unwrap();
     assert!(!can_eat(&sim));
     assert!(!sim.institution_view(ruler(&sim))[0].offices[0].effective);
-    assert_eq!(sim.canonical_state().people[0].role, Role::Ruler);
-    assert_eq!(sim.canonical_state().ruler, ruler(&sim));
+    assert_eq!(sim.canonical_state().state.people[0].role, Role::Ruler);
+    assert_eq!(sim.canonical_state().state.ruler, ruler(&sim));
     command(&mut sim, Command::Rest).unwrap();
     sim.debug_institution_action(
         owner(&sim),
@@ -279,7 +288,7 @@ fn withdrawing_support_removes_office_power_without_removing_the_person() {
     action(&mut sim, InstitutionAction::Leave { institution: id }).unwrap();
     assert!(!can_eat(&sim));
     assert!(
-        sim.canonical_state().inventories[&food(&sim)]
+        sim.canonical_state().state.inventories[&food(&sim)]
             .access
             .contains(&owner(&sim))
     );
@@ -291,7 +300,7 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
     let source = food(&sim);
     let actor = ruler(&sim);
     let recipient = owner(&sim);
-    let cargo = sim.canonical_state().people[0].inventory;
+    let cargo = sim.canonical_state().state.people[0].inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -314,11 +323,12 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
     let id = found(&mut sim, charter);
     let agreement = sim.institution_view(actor)[0].funding[0];
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(0)
     );
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -349,11 +359,12 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state().inventories[&destination].quantity,
+        sim.canonical_state().state.inventories[&destination].quantity,
         Quantity(2_000)
     );
     assert_eq!(
         sim.canonical_state()
+            .state
             .agreements
             .as_ref()
             .unwrap()
@@ -367,7 +378,7 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
 #[test]
 fn actual_contribution_teaches_a_value_that_changes_a_later_vote() {
     let mut sim = fixture(1);
-    let worker = sim.canonical_state().people[4].id;
+    let worker = sim.canonical_state().state.people[4].id;
     let beneficiary = owner(&sim);
     let actor = ruler(&sim);
     let site = site(&sim);
@@ -405,6 +416,7 @@ fn actual_contribution_teaches_a_value_that_changes_a_later_vote() {
     sim.advance(SimDuration(120_000)).unwrap();
     assert!(
         sim.canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -438,9 +450,9 @@ fn actual_contribution_teaches_a_value_that_changes_a_later_vote() {
 fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
     let mut sim = fixture(1);
     let owner = owner(&sim);
-    let previous = sim.canonical_state().people[4].id;
-    let subject = sim.canonical_state().people[5].id;
-    let judge = sim.canonical_state().people[1].id;
+    let previous = sim.canonical_state().state.people[4].id;
+    let subject = sim.canonical_state().state.people[5].id;
+    let judge = sim.canonical_state().state.people[1].id;
     let source = food(&sim);
     sim.debug_set_personality(
         owner,
@@ -524,10 +536,18 @@ fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
         .unwrap();
     sim.advance(MINUTE).unwrap();
     informed.advance(MINUTE).unwrap();
-    assert!(!sim.canonical_state().institutions.as_ref().unwrap().heard[&current]);
+    assert!(
+        !sim.canonical_state()
+            .state
+            .institutions
+            .as_ref()
+            .unwrap()
+            .heard[&current]
+    );
     assert!(
         informed
             .canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -535,6 +555,7 @@ fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
     );
     assert!(
         !sim.canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -546,6 +567,7 @@ fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
     assert!(
         informed
             .canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()
@@ -587,13 +609,13 @@ fn local_observation_keeps_absent_members_information_stale_and_replay_exact() {
         },
     )
     .unwrap();
-    let snapshot = sim.canonical_state().clone();
+    let snapshot = sim.canonical_snapshot().unwrap();
     for _ in 0..20 {
         let _ = sim.observe();
         let _ = sim.institution_view(actor);
         let _ = sim.social_case_view(actor);
     }
-    assert_eq!(sim.canonical_state(), &snapshot);
+    assert_eq!(sim.canonical_snapshot().unwrap(), snapshot);
     sim.advance(SimDuration(180_000)).unwrap();
     for amount in [17_123, 71_999, 90_878] {
         other.advance(SimDuration(amount)).unwrap();
@@ -608,8 +630,8 @@ fn invalid_scope_is_inert_and_new_factions_require_their_own_consent() {
     let mut invalid = charter(&sim, vec![rule.clone()]);
     invalid.offices[0]
         .inventories
-        .insert(sim.canonical_state().people[4].inventory);
-    let before = sim.canonical_state().clone();
+        .insert(sim.canonical_state().state.people[4].inventory);
+    let before = sim.canonical_snapshot().unwrap();
     assert!(
         action(
             &mut sim,
@@ -620,7 +642,7 @@ fn invalid_scope_is_inert_and_new_factions_require_their_own_consent() {
         )
         .is_err()
     );
-    assert_eq!(sim.canonical_state(), &before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     let original = charter(&sim, vec![rule.clone()]);
     let id = found(&mut sim, original);
     let new = charter(&sim, vec![rule]);
@@ -637,6 +659,7 @@ fn invalid_scope_is_inert_and_new_factions_require_their_own_consent() {
     assert_eq!(newest.status, InstitutionStatus::Proposed);
     assert_eq!(
         sim.canonical_state()
+            .state
             .institutions
             .as_ref()
             .unwrap()

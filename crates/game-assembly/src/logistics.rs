@@ -90,20 +90,21 @@ impl Simulation {
         let Some(_) = self
             .person_index
             .get(&actor)
-            .map(|i| &self.state.people[*i])
+            .map(|i| &self.host.state.people[*i])
         else {
             return Step::Blocked(game_logistics::BlockReason::CannotTravel);
         };
         let Some(body) = self
+            .host
             .state
             .physical
             .as_ref()
-            .and_then(|_| game_physiology::body(&self.state.components, actor))
+            .and_then(|_| game_physiology::body(&self.host.storage, actor))
         else {
             return Step::Blocked(game_logistics::BlockReason::CannotTravel);
         };
-        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) else {
             return Step::Blocked(game_logistics::BlockReason::UnknownRoute);
         };
@@ -116,15 +117,11 @@ impl Simulation {
             && !self.care_index.contains_key(&actor);
         let free = usable
             && matches!(
-                *self
-                    .state
-                    .components
-                    .activity(actor)
-                    .expect("activity exists"),
+                *self.host.storage.activity(actor).expect("activity exists"),
                 Activity::Idle | Activity::Rest | Activity::Work { .. }
             )
             && !matches!(
-                *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
+                *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
                     .expect("location exists"),
                 Location::Carried { .. }
             )
@@ -132,13 +129,14 @@ impl Simulation {
             && !self.property_actor_talking(actor)
             && !self.army_actor_talking(actor)
             && !self.realm_actor_busy(actor)
-            && self.state.missions.as_ref().is_none_or(|world| {
+            && self.host.state.missions.as_ref().is_none_or(|world| {
                 !world
                     .talks
                     .values()
                     .any(|talk| talk.speaker == actor || talk.listener == actor)
             })
             && self
+                .host
                 .state
                 .social
                 .as_ref()
@@ -150,10 +148,11 @@ impl Simulation {
             game_logistics::Destination::Inventory(_) => BTreeSet::new(),
             game_logistics::Destination::Contact(recipient) => {
                 if self
+                    .host
                     .state
                     .physical
                     .as_ref()
-                    .and_then(|_| game_physiology::body(&self.state.components, recipient))
+                    .and_then(|_| game_physiology::body(&self.host.storage, recipient))
                     .is_some_and(|body| body.vitals.alive)
                     && self.transport_same_place(actor, recipient)
                 {
@@ -213,6 +212,7 @@ impl Simulation {
         let mut destination = destination.clone();
         destination.direct_transfer = match destination.destination {
             Destination::Inventory(id) => self
+                .host
                 .state
                 .inventories
                 .get(&id)
@@ -220,7 +220,7 @@ impl Simulation {
             Destination::Contact(_) => destination.direct_transfer,
         };
         delivery.plan(&Input {
-            now: self.state.time,
+            now: self.host.clock().time,
             place: &place,
             free,
             can_travel: usable
@@ -247,10 +247,10 @@ impl Simulation {
         inventory: InventoryId,
     ) -> Option<KnownDestination> {
         let fact =
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
                 .knowledge
                 .get(&inventory);
-        let stock = self.state.inventories.get(&inventory)?;
+        let stock = self.host.state.inventories.get(&inventory)?;
         let local = match stock.location {
             InventoryLocation::Area(area) => {
                 fact.is_some() && self.resolved_location(actor) == Location::AtArea(area)
@@ -267,14 +267,15 @@ impl Simulation {
             Some(KnownDestination {
                 destination: Destination::Inventory(inventory),
                 location,
-                observed_at: self.state.time,
+                observed_at: self.host.clock().time,
                 accessible: self.has_stock_access(actor, stock),
                 room: Some(Quantity(stock.capacity.0 - stock.quantity.0)),
                 direct_transfer: false,
             })
         } else {
             let fact = fact.filter(|fact| {
-                fact.observed_at <= self.state.time && fact.learned_at <= self.state.time
+                fact.observed_at <= self.host.clock().time
+                    && fact.learned_at <= self.host.clock().time
             })?;
             Some(KnownDestination {
                 destination: Destination::Inventory(inventory),
@@ -290,7 +291,7 @@ impl Simulation {
     /// Physical burden includes every carried Good and supported bodies. A new
     /// compartment can be allocated by Carry; its room cannot exceed this bound.
     pub(crate) fn delivery_carrying_room(&self, actor: PersonId) -> Quantity {
-        if !self.person_index.contains_key(&actor) || self.state.physical.is_none() {
+        if !self.person_index.contains_key(&actor) || self.host.state.physical.is_none() {
             return Quantity(0);
         }
         let held = self
@@ -298,7 +299,7 @@ impl Simulation {
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
             .flatten()
-            .map(|id| u128::from(self.state.inventories[id].quantity.0))
+            .map(|id| u128::from(self.host.state.inventories[id].quantity.0))
             .sum::<u128>();
         let mut upper = u128::from(self.body_rules(actor).carrying_capacity.0)
             .saturating_sub(held)
@@ -327,7 +328,7 @@ impl Simulation {
             return BTreeMap::new();
         };
         let mut attributed = BTreeMap::<InventoryId, Quantity>::new();
-        for obligation in self.state.agreements.as_ref().into_iter().flat_map(|world| world.obligations.values()).filter(|obligation| {
+        for obligation in self.host.state.agreements.as_ref().into_iter().flat_map(|world| world.obligations.values()).filter(|obligation| {
             matches!(obligation.term, AgreementTerm::Delivery { debtor, source: from, destination: to, .. }
                 if debtor == actor && from == source && matches!(delivery.destination, Destination::Inventory(target) if target == to))
                 && obligation.performed < obligation.amount()
@@ -351,7 +352,7 @@ impl Simulation {
             .into_iter()
             .flatten()
             .filter_map(|id| {
-                let stock = &self.state.inventories[id];
+                let stock = &self.host.state.inventories[id];
                 if !self.has_stock_access(actor, stock) {
                     return None;
                 }
@@ -385,30 +386,34 @@ impl Simulation {
         actor: PersonId,
         resources: Option<&equipment::RankingResources>,
     ) -> Vec<KnownStock> {
-        self.state
+        self.host
+            .state
             .decisions
             .as_ref()
             .and_then(|_| {
-                game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
             })
             .into_iter()
             .flat_map(|mind| mind.knowledge.values())
             .filter(|fact| {
-                fact.learned_at <= self.state.time && fact.observed_at <= self.state.time
+                fact.learned_at <= self.host.clock().time
+                    && fact.observed_at <= self.host.clock().time
             })
             .map(|fact| {
                 // A remembered foreign inventory is never refreshed from its
                 // current holder's whereabouts. Only an actually local stock
                 // can supply current physical position/admissibility.
-                let local =
-                    self.state.inventories.get(&fact.inventory).filter(|stock| {
-                        match stock.location {
-                            InventoryLocation::Area(area) => {
-                                self.resolved_location(actor) == Location::AtArea(area)
-                            }
-                            InventoryLocation::Carried(holder) => {
-                                self.transport_same_place(actor, holder)
-                            }
+                let local = self
+                    .host
+                    .state
+                    .inventories
+                    .get(&fact.inventory)
+                    .filter(|stock| match stock.location {
+                        InventoryLocation::Area(area) => {
+                            self.resolved_location(actor) == Location::AtArea(area)
+                        }
+                        InventoryLocation::Carried(holder) => {
+                            self.transport_same_place(actor, holder)
                         }
                     });
                 let location =
@@ -445,7 +450,7 @@ impl Simulation {
                     observed_at: if local.is_some()
                         || self.resolved_location(actor) == Location::AtArea(fact.area)
                     {
-                        self.state.time
+                        self.host.clock().time
                     } else {
                         fact.observed_at
                     },
@@ -472,8 +477,8 @@ impl Simulation {
         good: Good,
         quantity: Quantity,
     ) -> Vec<AcquisitionOffer<Command>> {
-        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) else {
             return Vec::new();
         };
@@ -521,8 +526,8 @@ impl Simulation {
         actor: PersonId,
         good: Good,
     ) -> Vec<AcquisitionOffer<Command>> {
-        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) else {
             return Vec::new();
         };
@@ -596,12 +601,12 @@ impl Simulation {
     }
     fn delivery_travel_command(&self, actor: PersonId, target: &Location) -> Option<Command> {
         let routes =
-            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?
+            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
                 .routes;
         match game_transport::route_intent(
             &self.resolved_location(actor),
             target,
-            self.state.time,
+            self.host.clock().time,
             routes,
         )
         .ok()?
@@ -635,7 +640,7 @@ mod tests {
     use game_logistics::{BlockReason, Requirement};
     fn fixture() -> Simulation {
         let mut sim = Simulation::autonomy_fixture(9, Execution::default()).unwrap();
-        for person in sim.state.people.clone() {
+        for person in sim.host.state.people.clone() {
             sim.debug_actor_command(person.id, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 person.id,
@@ -644,12 +649,10 @@ mod tests {
             )
             .unwrap();
         }
-        let actor = sim.state.ruler;
-        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap();
+        let actor = sim.host.state.ruler;
+        let mind =
+            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+                .unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         sim
@@ -661,8 +664,9 @@ mod tests {
         good: Good,
         accessible: bool,
     ) {
-        let actor = sim.state.ruler;
-        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.state.components, actor)
+        let actor = sim.host.state.ruler;
+        let observed_at = sim.time();
+        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
             .unwrap()
             .knowledge
             .insert(
@@ -673,17 +677,17 @@ mod tests {
                     good,
                     quantity: Quantity(5_000),
                     accessible,
-                    observed_at: sim.state.time,
-                    learned_at: sim.state.time,
+                    observed_at,
+                    learned_at: observed_at,
                     source: KnowledgeSource::Observed(actor),
                 },
             );
     }
     fn destination(sim: &Simulation) -> KnownDestination {
         KnownDestination {
-            destination: Destination::Contact(sim.state.ruler),
-            location: sim.resolved_location(sim.state.ruler),
-            observed_at: sim.state.time,
+            destination: Destination::Contact(sim.host.state.ruler),
+            location: sim.resolved_location(sim.host.state.ruler),
+            observed_at: sim.host.clock().time,
             accessible: true,
             room: None,
             direct_transfer: false,
@@ -699,21 +703,18 @@ mod tests {
             Good::Herb,
         ] {
             let mut sim = fixture();
-            let actor = sim.state.ruler;
-            let recipient = sim.state.people[1].id;
+            let actor = sim.host.state.ruler;
+            let recipient = sim.host.state.people[1].id;
             sim.debug_move_actor(recipient, AreaId(2)).unwrap();
             let Location::InTransit { arrives, .. } = sim.resolved_location(recipient) else {
                 panic!("recipient must physically travel");
             };
-            sim.advance(SimDuration(arrives.0 - sim.state.time.0))
+            sim.advance(SimDuration(arrives.0 - sim.host.clock().time.0))
                 .unwrap();
-            game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.state.components,
-                actor,
-            )
-            .unwrap()
-            .knowledge
-            .clear();
+            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+                .unwrap()
+                .knowledge
+                .clear();
             let source = sim
                 .debug_add_inventory(
                     good,
@@ -736,7 +737,7 @@ mod tests {
             let target = KnownDestination {
                 destination: Destination::Contact(recipient),
                 location: Location::AtArea(AreaId(2)),
-                observed_at: sim.state.time,
+                observed_at: sim.host.clock().time,
                 accessible: true,
                 room: None,
                 direct_transfer: false,
@@ -752,7 +753,10 @@ mod tests {
             let command = sim.delivery_command(actor, step).unwrap();
             sim.debug_actor_command(actor, command).unwrap();
             sim.advance(MINUTE).unwrap();
-            assert_eq!(sim.state.inventories[&source].quantity, Quantity(4_000));
+            assert_eq!(
+                sim.host.state.inventories[&source].quantity,
+                Quantity(4_000)
+            );
             let step = sim.plan_delivery(actor, &delivery, &target, Quantity(1_000));
             assert_eq!(step, Step::Travel(Location::AtArea(AreaId(2))));
             let command = sim.delivery_command(actor, step).unwrap();
@@ -764,7 +768,7 @@ mod tests {
             let Location::InTransit { arrives, .. } = sim.resolved_location(actor) else {
                 panic!("carried supply must physically travel");
             };
-            sim.advance(SimDuration(arrives.0 - sim.state.time.0))
+            sim.advance(SimDuration(arrives.0 - sim.host.clock().time.0))
                 .unwrap();
             let step = sim.plan_delivery(actor, &delivery, &target, Quantity(1_000));
             let Step::Arrived {
@@ -775,15 +779,15 @@ mod tests {
                 panic!("goods must actually be held: {step:?}");
             };
             assert_eq!(quantity, Quantity(1_000));
-            assert_eq!(sim.state.inventories[&cargo].good, good);
-            assert_eq!(sim.state.inventories[&cargo].quantity, quantity);
+            assert_eq!(sim.host.state.inventories[&cargo].good, good);
+            assert_eq!(sim.host.state.inventories[&cargo].quantity, quantity);
             assert_eq!(delivery.remaining, Quantity(1_000));
         }
     }
     #[test]
     fn unknown_and_denied_stocks_never_become_an_accessible_supply() {
         let mut sim = fixture();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         let source = sim
             .debug_add_inventory(
                 Good::Herb,
@@ -811,12 +815,12 @@ mod tests {
             sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
             Step::Blocked(BlockReason::NoSupply)
         );
-        assert!(!sim.state.inventories[&source].access.contains(&actor));
+        assert!(!sim.host.state.inventories[&source].access.contains(&actor));
     }
     #[test]
     fn a_dated_remote_stock_does_not_refresh_to_its_actual_different_location() {
         let mut sim = fixture();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         let source = sim
             .debug_add_inventory(
                 Good::Herb,
@@ -844,7 +848,7 @@ mod tests {
     #[test]
     fn source_qualified_work_uses_only_its_owners_real_attributed_cargo_fact() {
         let mut sim = fixture();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         let source = sim
             .debug_add_inventory(
                 Good::Herb,
@@ -889,13 +893,13 @@ mod tests {
                 quantity: Quantity(1_000)
             }
         );
-        assert_eq!(sim.state.inventories[&cargo].quantity, Quantity(2_000));
+        assert_eq!(sim.host.state.inventories[&cargo].quantity, Quantity(2_000));
     }
     #[test]
     fn a_known_natural_source_uses_real_collection_and_restores_through_partial_time() {
         let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
-        for person in sim.state.people.clone() {
+        let actor = sim.host.state.ruler;
+        for person in sim.host.state.people.clone() {
             sim.debug_actor_command(person.id, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 person.id,
@@ -904,14 +908,12 @@ mod tests {
             )
             .unwrap();
         }
-        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap();
+        let mind =
+            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+                .unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
-        let source = game_ecology::knowledge(&sim.state.components, actor)
+        let source = game_ecology::knowledge(&sim.host.storage, actor)
             .unwrap()
             .known_resources
             .values()
@@ -919,11 +921,12 @@ mod tests {
             .unwrap()
             .id;
         let before = sim
+            .host
             .state
             .ecology
             .as_ref()
             .unwrap()
-            .resource(&sim.state.components, source)
+            .resource(&sim.host.storage, source)
             .expect("component exists")
             .remaining;
         let delivery = Delivery::new(
@@ -948,10 +951,10 @@ mod tests {
         );
         let command = sim.delivery_command(actor, step).unwrap();
         sim.debug_actor_command(actor, command).unwrap();
-        let ends = game_ecology::gathering(&sim.state.components, actor)
+        let ends = game_ecology::gathering(&sim.host.storage, actor)
             .unwrap()
             .completes;
-        let duration = ends.0 - sim.state.time.0;
+        let duration = ends.0 - sim.host.clock().time.0;
         let mut restored = Simulation::load(
             &sim.save().unwrap(),
             Execution {
@@ -973,13 +976,14 @@ mod tests {
         restored
             .advance(SimDuration(duration - duration / 2))
             .unwrap();
-        assert_eq!(sim.state, restored.state);
+        assert_eq!(sim.host.state, restored.host.state);
         assert_eq!(
-            sim.state
+            sim.host
+                .state
                 .ecology
                 .as_ref()
                 .unwrap()
-                .resource(&sim.state.components, source)
+                .resource(&sim.host.storage, source)
                 .expect("component exists")
                 .remaining,
             Quantity(before.0 - 1_000)
@@ -995,7 +999,7 @@ mod tests {
     #[test]
     fn returning_from_a_road_uses_real_remaining_travel_before_other_delivery_legs() {
         let mut sim = fixture();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         sim.initialize_transport(game_transport::Rules::default())
             .unwrap();
         sim.debug_move_actor(actor, AreaId(3)).unwrap();
@@ -1026,16 +1030,16 @@ mod tests {
         let Location::InTransit { arrives, .. } = sim.resolved_location(actor) else {
             panic!("endpoint return must consume real travel time");
         };
-        assert!(arrives > sim.state.time);
-        sim.advance(SimDuration(arrives.0 - sim.state.time.0))
+        assert!(arrives > sim.host.clock().time);
+        sim.advance(SimDuration(arrives.0 - sim.host.clock().time.0))
             .unwrap();
         assert_eq!(sim.resolved_location(actor), Location::AtArea(AreaId(1)));
     }
     #[test]
     fn a_conditional_operator_composes_real_equipment_carry_before_actual_harvest() {
         let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
-        for person in sim.state.people.clone() {
+        let actor = sim.host.state.ruler;
+        for person in sim.host.state.people.clone() {
             sim.debug_actor_command(person.id, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 person.id,
@@ -1047,6 +1051,7 @@ mod tests {
         // This opening has a known local toolkit, but no stored timber. Its
         // physical deposit is the sole personally known timber opportunity.
         for stock in sim
+            .host
             .state
             .inventories
             .values_mut()
@@ -1068,7 +1073,7 @@ mod tests {
             .unwrap();
         sim.observe_ecology();
         sim.review_decisions().unwrap();
-        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.state.components, actor)
+        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
             .unwrap()
             .sites
             .clear();
@@ -1089,7 +1094,7 @@ mod tests {
         else {
             panic!("missing equipment must be acquired through Carry: {step:?}");
         };
-        assert_eq!(sim.state.inventories[&tool].good, Good::Tool);
+        assert_eq!(sim.host.state.inventories[&tool].good, Good::Tool);
         let command = sim.delivery_command(actor, step).unwrap();
         sim.debug_actor_command(actor, command).unwrap();
         sim.advance(MINUTE).unwrap();
@@ -1107,17 +1112,18 @@ mod tests {
         );
         let command = sim.delivery_command(actor, step).unwrap();
         sim.debug_actor_command(actor, command).unwrap();
-        let completes = game_ecology::gathering(&sim.state.components, actor)
+        let completes = game_ecology::gathering(&sim.host.storage, actor)
             .unwrap()
             .completes;
-        sim.advance(SimDuration(completes.0 - sim.state.time.0))
+        sim.advance(SimDuration(completes.0 - sim.host.clock().time.0))
             .unwrap();
         assert_eq!(
-            sim.state
+            sim.host
+                .state
                 .ecology
                 .as_ref()
                 .unwrap()
-                .resource(&sim.state.components, resource)
+                .resource(&sim.host.storage, resource)
                 .expect("component exists")
                 .remaining,
             Quantity(1_000)
@@ -1134,32 +1140,32 @@ mod tests {
     #[test]
     fn delivery_intent_never_grants_blanket_consent_to_unconsented_acquisition() {
         let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         let spring = sim
+            .host
             .state
             .ecology
             .as_ref()
             .unwrap()
-            .resources(&sim.state.components)
+            .resources(&sim.host.storage)
             .map(|(_, value)| value)
             .find(|r| r.kind == ResourceKind::Spring && r.area == AreaId(1))
             .unwrap()
             .id;
         let source = sim
+            .host
             .state
             .ecology
             .as_mut()
             .unwrap()
-            .resource_mut(&mut sim.state.components, spring)
+            .resource_mut(&mut sim.host.storage, spring)
             .unwrap();
         source.access.clear();
         source.custodian = None;
         sim.observe_ecology();
-        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap();
+        let mind =
+            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+                .unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         mind.personality.honesty = 900;
@@ -1197,11 +1203,9 @@ mod tests {
             })
         ));
         // A different personal judgment can choose that same factual attempt.
-        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap();
+        let mind =
+            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+                .unwrap();
         mind.personality.honesty = 0;
         assert_eq!(
             sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
@@ -1214,11 +1218,12 @@ mod tests {
             })
         );
         assert_eq!(
-            sim.state
+            sim.host
+                .state
                 .ecology
                 .as_ref()
                 .unwrap()
-                .resource(&sim.state.components, spring)
+                .resource(&sim.host.storage, spring)
                 .expect("component exists")
                 .remaining,
             Quantity(50_000)
@@ -1229,14 +1234,14 @@ mod tests {
     #[test]
     fn production_prerequisites_identify_the_executor_actual_tool_slot() {
         let mut sim = fixture();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         sim.review_decisions().unwrap();
-        let site = game_workshop::sites(&sim.state.components)
+        let site = game_workshop::sites(&sim.host.storage)
             .map(|(_, site)| site)
             .next()
             .unwrap()
             .clone();
-        let good = sim.state.inventories[&site.output].good;
+        let good = sim.host.state.inventories[&site.output].good;
         let offers = sim.production_acquisition_offers(actor, good);
         let offer = offers
             .iter()
@@ -1253,10 +1258,11 @@ mod tests {
     #[test]
     fn split_equipment_is_physically_consolidated_before_a_collection_operator() {
         let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
+        let actor = sim.host.state.ruler;
         // Collection is the only timber source; later observations must not
         // discover an easier stored supply that bypasses the tool requirement.
         for stock in sim
+            .host
             .state
             .inventories
             .values_mut()
@@ -1264,7 +1270,7 @@ mod tests {
         {
             stock.quantity = Quantity(0);
         }
-        for person in sim.state.people.clone() {
+        for person in sim.host.state.people.clone() {
             sim.debug_actor_command(person.id, Command::Cancel).unwrap();
             sim.debug_set_personality(
                 person.id,
@@ -1313,11 +1319,9 @@ mod tests {
             )
             .unwrap();
         sim.observe_ecology();
-        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap();
+        let mind =
+            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+                .unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         let delivery = Delivery::new(
@@ -1341,8 +1345,8 @@ mod tests {
         sim.debug_actor_command(actor, sim.delivery_command(actor, step).unwrap())
             .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.state.inventories[&first].quantity, Quantity(0));
-        assert_eq!(sim.state.inventories[&empty].quantity, Quantity(600));
+        assert_eq!(sim.host.state.inventories[&first].quantity, Quantity(0));
+        assert_eq!(sim.host.state.inventories[&empty].quantity, Quantity(600));
         let step = sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000));
         assert_eq!(
             step,
@@ -1353,13 +1357,13 @@ mod tests {
             },
             "cargo after first consolidation: {:?}; source: {:?}",
             sim.delivery_cargo(actor, &delivery, &BTreeMap::new(), None),
-            sim.state.inventories[&second]
+            sim.host.state.inventories[&second]
         );
         sim.debug_actor_command(actor, sim.delivery_command(actor, step).unwrap())
             .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert_eq!(sim.state.inventories[&empty].quantity, Quantity(1_000));
-        assert_eq!(sim.state.inventories[&second].quantity, Quantity(0));
+        assert_eq!(sim.host.state.inventories[&empty].quantity, Quantity(1_000));
+        assert_eq!(sim.host.state.inventories[&second].quantity, Quantity(0));
         assert_eq!(
             sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
             Step::Acquire(Command::Ecology {
@@ -1375,8 +1379,8 @@ mod tests {
     #[test]
     fn acquisition_uses_known_partial_stock_without_public_action_list_truncation() {
         let mut sim = Simulation::property_fixture(9, Execution::default()).unwrap();
-        let actor = sim.state.ruler;
-        let custodian = sim.state.people[3].id;
+        let actor = sim.host.state.ruler;
+        let custodian = sim.host.state.people[3].id;
         let mut source = InventoryId(0);
         for _ in 0..25 {
             source = sim
@@ -1388,32 +1392,28 @@ mod tests {
                     BTreeSet::from([custodian]),
                 )
                 .unwrap();
-            sim.state
+            sim.host
+                .state
                 .agreements
                 .as_mut()
                 .unwrap()
                 .custodians
                 .insert(source, custodian);
         }
-        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap();
+        let mind =
+            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+                .unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         mind.personality.honesty = 0;
         mind.personality.risk_tolerance = 900;
         remember(&mut sim, source, AreaId(1), Good::Food, false);
-        game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut sim.state.components,
-            actor,
-        )
-        .unwrap()
-        .knowledge
-        .get_mut(&source)
-        .unwrap()
-        .quantity = Quantity(600);
+        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+            .unwrap()
+            .knowledge
+            .get_mut(&source)
+            .unwrap()
+            .quantity = Quantity(600);
         assert!(!sim.available_property_commands(actor).iter().any(|command| matches!(command,
             Command::Property { action: PropertyAction::RequestAccess { inventory } } if *inventory == source)));
         let delivery = Delivery::new(
@@ -1425,7 +1425,7 @@ mod tests {
             Destination::Contact(actor),
         )
         .unwrap();
-        let before = sim.state.clone();
+        let before = sim.canonical_snapshot().unwrap();
         assert!(
             sim.property_acquisition_offers(actor, Good::Food, Quantity(1_000))
                 .iter()
@@ -1439,7 +1439,7 @@ mod tests {
                 action: PropertyAction::RequestAccess { inventory: source }
             })
         );
-        assert_eq!(sim.state, before);
+        assert_eq!(sim.canonical_snapshot().unwrap(), before);
         assert_eq!(delivery.remaining, Quantity(1_000));
     }
 }

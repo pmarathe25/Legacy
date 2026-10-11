@@ -17,7 +17,7 @@ pub fn execute(
         ["lineage"] => Ok(serde_json::to_string(&sim.observe().lineage)?),
         ["combat"] => Ok(serde_json::to_string(&sim.observe().combat)?),
         ["pause"] => Ok(serde_json::to_string(&sim.observe())?),
-        ["debug"] => Ok(format!("DEBUG OMNISCIENT {}", serde_json::to_string(sim.canonical_state())?)),
+        ["debug"] => Ok(format!("DEBUG OMNISCIENT {}", serde_json::to_string(&sim.canonical_state())?)),
         ["run", duration] => Ok(serde_json::to_string(&sim.advance(parse_duration(duration)?)?)?),
         ["save", path] => {
             let path = std::path::Path::new(path);

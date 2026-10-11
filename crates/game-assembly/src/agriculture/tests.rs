@@ -2,7 +2,7 @@ use super::*;
 use game_environment::{Calendar, Climate};
 
 fn crop_rules(sim: &mut Simulation) -> &mut CropRules {
-    let world = sim.state.agriculture.as_mut().unwrap();
+    let world = sim.host.state.agriculture.as_mut().unwrap();
     world.content = None;
     world
         .catalog
@@ -20,11 +20,20 @@ fn compact(workers: usize) -> (Simulation, SiteId) {
         },
     )
     .unwrap();
-    let ruler = sim.state.ruler;
-    for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
+    let ruler = sim.host.state.ruler;
+    for actor in sim
+        .host
+        .state
+        .people
+        .iter()
+        .map(|p| p.id)
+        .collect::<Vec<_>>()
+    {
         sim.interrupt_actor_activity(actor);
     }
-    let world = sim.state.environment.as_mut().unwrap();
+    let epoch = sim.time();
+    let seed = sim.host.seed();
+    let world = sim.host.state.environment.as_mut().unwrap();
     world.calendar = Calendar {
         day: SimDuration(600_000),
         season_days: [10; 4],
@@ -38,7 +47,7 @@ fn compact(workers: usize) -> (Simulation, SiteId) {
         rainfall_variation: 0,
     };
     world
-        .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+        .reset_epoch(&mut sim.host.storage, epoch, seed)
         .unwrap();
     let rules = crop_rules(&mut sim);
     rules.planting_last_day = 9;
@@ -50,11 +59,9 @@ fn compact(workers: usize) -> (Simulation, SiteId) {
     rules.harvest_labor = SimDuration(20_000);
     rules.base_temperature = 0;
     rules.ripe_degree_days = 20;
-    let world = sim.state.agriculture.as_mut().unwrap();
-    let first_id = world.fields(&sim.state.components).next().unwrap().0;
-    let field = world
-        .field_mut(&mut sim.state.components, first_id)
-        .unwrap();
+    let world = sim.host.state.agriculture.as_mut().unwrap();
+    let first_id = world.fields(&sim.host.storage).next().unwrap().0;
+    let field = world.field_mut(&mut sim.host.storage, first_id).unwrap();
     field.access = BTreeSet::from([ruler]);
     let id = field.id;
     let area = field.area;
@@ -64,14 +71,14 @@ fn compact(workers: usize) -> (Simulation, SiteId) {
 }
 fn perform(sim: &mut Simulation, field: SiteId, operation: FarmOperation) {
     sim.submit(Submission {
-        caller_sequence: sim.state.next_command + 100,
+        caller_sequence: sim.host.state.next_command + 100,
         command: Command::Cultivate { field, operation },
     })
     .unwrap();
-    let completes = game_agriculture::cultivation(&sim.state.components, sim.state.ruler)
+    let completes = game_agriculture::cultivation(&sim.host.storage, sim.host.state.ruler)
         .unwrap()
         .completes;
-    sim.advance(SimDuration(completes.0 - sim.state.time.0))
+    sim.advance(SimDuration(completes.0 - sim.host.clock().time.0))
         .unwrap();
 }
 fn plant(sim: &mut Simulation, field: SiteId) {
@@ -83,16 +90,17 @@ fn local_crop_fixture(workers: usize) -> (Simulation, SiteId, SiteId) {
     let (mut sim, warm) = compact(workers);
     crop_rules(&mut sim).failure_stress_days = 2;
     plant(&mut sim, warm);
-    let cold_area = sim.state.areas[0].id;
+    let cold_area = sim.host.state.areas[0].id;
     let mut field = sim
+        .host
         .state
         .agriculture
         .as_ref()
         .unwrap()
-        .field(&sim.state.components, warm)
+        .field(&sim.host.storage, warm)
         .unwrap()
         .clone();
-    let cold = SiteId(allocate(&mut sim.state).unwrap());
+    let cold = SiteId(sim.host.allocate_id().unwrap().0);
     field.id = cold;
     field.area = cold_area;
     for stock in [
@@ -101,37 +109,35 @@ fn local_crop_fixture(workers: usize) -> (Simulation, SiteId, SiteId) {
         &mut field.water,
         &mut field.food,
     ] {
-        let mut inventory = sim.state.inventories[&*stock].clone();
-        inventory.id = InventoryId(allocate(&mut sim.state).unwrap());
+        let mut inventory = sim.host.state.inventories[&*stock].clone();
+        inventory.id = InventoryId(sim.host.allocate_id().unwrap().0);
         inventory.location = InventoryLocation::Area(cold_area);
         *stock = inventory.id;
         sim.inventory_index
             .entry(inventory.location.clone())
             .or_default()
             .push(inventory.id);
-        sim.state.inventories.insert(inventory.id, inventory);
+        sim.host.state.inventories.insert(inventory.id, inventory);
     }
-    let world = sim.state.agriculture.as_mut().unwrap();
-    let copied_crop = world.crop(&sim.state.components, warm).unwrap().clone();
+    let world = sim.host.state.agriculture.as_mut().unwrap();
+    let copied_crop = world.crop(&sim.host.storage, warm).unwrap().clone();
     let copied_soil = game_agriculture::Soil {
         water: 0,
-        ..world.soil(&sim.state.components, warm).unwrap().clone()
+        ..world.soil(&sim.host.storage, warm).unwrap().clone()
     };
+    world.insert_field(&mut sim.host.storage, field).unwrap();
     world
-        .insert_field(&mut sim.state.components, field)
-        .unwrap();
-    world
-        .insert_crop(&mut sim.state.components, cold, copied_crop)
+        .insert_crop(&mut sim.host.storage, cold, copied_crop)
         .unwrap();
     world
-        .insert_soil(&mut sim.state.components, cold, copied_soil)
+        .insert_soil(&mut sim.host.storage, cold, copied_soil)
         .unwrap();
-    sim.agriculture_queries
-        .refresh(&sim.state.components)
-        .unwrap();
-    let environment = sim.state.environment.as_mut().unwrap();
-    *sim.state
-        .components
+    sim.agriculture_queries.refresh(&sim.host.storage).unwrap();
+    let epoch = sim.time();
+    let seed = sim.host.seed();
+    let environment = sim.host.state.environment.as_mut().unwrap();
+    *sim.host
+        .storage
         .get_mut::<game_environment::LocalClimate>(game_ecs::StableId(cold_area.0))
         .unwrap() = game_environment::LocalClimate {
         temperature_offset: -20,
@@ -139,7 +145,7 @@ fn local_crop_fixture(workers: usize) -> (Simulation, SiteId, SiteId) {
         evaporation_multiplier_milli: 1_000,
     };
     environment
-        .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+        .reset_epoch(&mut sim.host.storage, epoch, seed)
         .unwrap();
     sim.validate_environment().unwrap();
     sim.validate_agriculture().unwrap();
@@ -149,82 +155,76 @@ fn local_crop_fixture(workers: usize) -> (Simulation, SiteId, SiteId) {
 #[test]
 fn connected_crops_match_local_weather_and_soil_without_changing_field_metadata() {
     let (mut sim, warm, cold) = local_crop_fixture(1);
-    let world = sim.state.agriculture.as_ref().unwrap();
+    let world = sim.host.state.agriculture.as_ref().unwrap();
     let fields: BTreeMap<_, _> = world
-        .fields(&sim.state.components)
+        .fields(&sim.host.storage)
         .map(|(id, field)| (id, field.clone()))
         .collect();
-    let warm_area = world.field(&sim.state.components, warm).unwrap().area;
-    let cold_area = world.field(&sim.state.components, cold).unwrap().area;
+    let warm_area = world.field(&sim.host.storage, warm).unwrap().area;
+    let cold_area = world.field(&sim.host.storage, cold).unwrap().area;
     let stocks: BTreeMap<_, _> = fields
         .values()
         .flat_map(|field| {
             [field.seed, field.tool, field.water, field.food]
                 .into_iter()
-                .map(|id| (id, sim.state.inventories[&id].clone()))
+                .map(|id| (id, sim.host.state.inventories[&id].clone()))
         })
         .collect();
-    let environment = sim.state.environment.as_ref().unwrap();
+    let environment = sim.host.state.environment.as_ref().unwrap();
     assert_eq!(
         environment
-            .local_weather(&sim.state.components, warm_area)
+            .local_weather(&sim.host.storage, warm_area)
             .unwrap()
             .temperature,
         10
     );
     assert_eq!(
         environment
-            .local_weather(&sim.state.components, warm_area)
+            .local_weather(&sim.host.storage, warm_area)
             .unwrap()
             .rain,
         10
     );
     assert_eq!(
         environment
-            .local_weather(&sim.state.components, cold_area)
+            .local_weather(&sim.host.storage, cold_area)
             .unwrap()
             .temperature,
         -10
     );
     assert_eq!(
         environment
-            .local_weather(&sim.state.components, cold_area)
+            .local_weather(&sim.host.storage, cold_area)
             .unwrap()
             .rain,
         0
     );
-    sim.advance(SimDuration(1_200_000 - sim.state.time.0))
+    sim.advance(SimDuration(1_200_000 - sim.host.clock().time.0))
         .unwrap();
-    let world = sim.state.agriculture.as_ref().unwrap();
+    let world = sim.host.state.agriculture.as_ref().unwrap();
     assert_eq!(
-        world.crop(&sim.state.components, warm).unwrap().phase,
+        world.crop(&sim.host.storage, warm).unwrap().phase,
         CropPhase::Ripe
     );
     assert_eq!(
-        world.crop(&sim.state.components, cold).unwrap().phase,
+        world.crop(&sim.host.storage, cold).unwrap().phase,
         CropPhase::Failed
     );
-    assert!(world.soil(&sim.state.components, warm).unwrap().water > 0);
-    assert_eq!(world.soil(&sim.state.components, cold).unwrap().water, 0);
+    assert!(world.soil(&sim.host.storage, warm).unwrap().water > 0);
+    assert_eq!(world.soil(&sim.host.storage, cold).unwrap().water, 0);
     assert_eq!(
         world
-            .fields(&sim.state.components)
+            .fields(&sim.host.storage)
             .map(|(id, field)| (id, field.clone()))
             .collect::<BTreeMap<_, _>>(),
         fields
     );
     for (id, stock) in stocks {
-        assert_eq!(sim.state.inventories[&id], stock);
+        assert_eq!(sim.host.state.inventories[&id], stock);
     }
     assert_eq!(
-        world
-            .crop(&sim.state.components, cold)
-            .unwrap()
-            .contributions,
-        world
-            .crop(&sim.state.components, warm)
-            .unwrap()
-            .contributions
+        world.crop(&sim.host.storage, cold).unwrap().contributions,
+        world.crop(&sim.host.storage, warm).unwrap().contributions
     );
     sim.validate_environment().unwrap();
     sim.validate_agriculture().unwrap();
@@ -236,7 +236,7 @@ fn local_crop_components_survive_restore_and_worker_and_chunk_order_changes() {
     let (mut chunked, other_warm, other_cold) = local_crop_fixture(4);
     assert_eq!((warm, cold), (other_warm, other_cold));
     direct
-        .advance(SimDuration(1_200_000 - direct.state.time.0))
+        .advance(SimDuration(1_200_000 - direct.host.clock().time.0))
         .unwrap();
     chunked.advance(SimDuration(333_331)).unwrap();
     let bytes = chunked.save().unwrap();
@@ -248,17 +248,19 @@ fn local_crop_components_survive_restore_and_worker_and_chunk_order_changes() {
         },
     )
     .unwrap();
-    while chunked.state.time.0 < 1_200_000 {
-        let before = chunked.state.clone();
+    while chunked.host.clock().time.0 < 1_200_000 {
+        let before = chunked.canonical_snapshot().unwrap();
         for _ in 0..3 {
             chunked.observe();
         }
-        assert_eq!(chunked.state, before);
+        assert_eq!(chunked.canonical_snapshot().unwrap(), before);
         chunked
-            .advance(SimDuration((1_200_000 - chunked.state.time.0).min(53_333)))
+            .advance(SimDuration(
+                (1_200_000 - chunked.host.clock().time.0).min(53_333),
+            ))
             .unwrap();
     }
-    assert_eq!(direct.state, chunked.state);
+    assert_eq!(direct.host.state, chunked.host.state);
 }
 
 #[test]
@@ -268,42 +270,46 @@ fn deliberate_fallow_loses_planted_seed_and_warm_wet_soil_recovers_without_harve
     crop_rules(&mut sim).soil_recovery = 5;
     plant(&mut sim, field);
     let land = sim
+        .host
         .state
         .agriculture
         .as_ref()
         .unwrap()
-        .field(&sim.state.components, field)
+        .field(&sim.host.storage, field)
         .unwrap()
         .clone();
-    let consumed = sim.state.inventories[&land.seed].quantity;
-    let food = sim.state.inventories[&land.food].quantity;
-    sim.state
+    let consumed = sim.host.state.inventories[&land.seed].quantity;
+    let food = sim.host.state.inventories[&land.food].quantity;
+    sim.host
+        .state
         .agriculture
         .as_mut()
         .unwrap()
-        .soil_mut(&mut sim.state.components, field)
+        .soil_mut(&mut sim.host.storage, field)
         .unwrap()
         .fertility = 500;
     perform(&mut sim, field, FarmOperation::Fallow);
-    assert_eq!(sim.state.inventories[&land.seed].quantity, consumed);
-    assert_eq!(sim.state.inventories[&land.food].quantity, food);
+    assert_eq!(sim.host.state.inventories[&land.seed].quantity, consumed);
+    assert_eq!(sim.host.state.inventories[&land.food].quantity, food);
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .phase,
         CropPhase::Fallow
     );
     sim.advance(SimDuration(600_000)).unwrap();
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .soil(&sim.state.components, field)
+            .soil(&sim.host.storage, field)
             .unwrap()
             .fertility,
         505
@@ -314,62 +320,61 @@ fn deliberate_fallow_loses_planted_seed_and_warm_wet_soil_recovers_without_harve
 fn full_cycle_consumes_seed_and_credits_only_real_labor_and_harvest() {
     let (mut sim, field) = compact(1);
     let land = sim
+        .host
         .state
         .agriculture
         .as_ref()
         .unwrap()
-        .field(&sim.state.components, field)
+        .field(&sim.host.storage, field)
         .unwrap()
         .clone();
-    let opening_food = sim.state.inventories[&land.food].quantity.0;
-    let opening_seed = sim.state.inventories[&land.seed].quantity.0;
+    let opening_food = sim.host.state.inventories[&land.food].quantity.0;
+    let opening_seed = sim.host.state.inventories[&land.seed].quantity.0;
     plant(&mut sim, field);
     assert_eq!(
-        sim.state.inventories[&land.seed].quantity.0,
+        sim.host.state.inventories[&land.seed].quantity.0,
         opening_seed - 1_000
     );
-    assert_eq!(sim.state.inventories[&land.food].quantity.0, opening_food);
+    assert_eq!(
+        sim.host.state.inventories[&land.food].quantity.0,
+        opening_food
+    );
     for _ in 0..4 {
         perform(&mut sim, field, FarmOperation::Tend);
     }
-    sim.advance(SimDuration(1_200_000 - sim.state.time.0))
+    sim.advance(SimDuration(1_200_000 - sim.host.clock().time.0))
         .unwrap();
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .phase,
         CropPhase::Ripe
     );
     perform(&mut sim, field, FarmOperation::Harvest);
     assert_eq!(
-        sim.state.inventories[&land.food].quantity.0,
+        sim.host.state.inventories[&land.food].quantity.0,
         opening_food + 27_000
     );
     assert_eq!(
-        sim.state.inventories[&land.seed].quantity.0,
+        sim.host.state.inventories[&land.seed].quantity.0,
         opening_seed - 1_000 + 1_800
     );
-    let world = sim.state.agriculture.as_ref().unwrap();
+    let world = sim.host.state.agriculture.as_ref().unwrap();
     assert_eq!(
-        world.crop(&sim.state.components, field).unwrap().phase,
+        world.crop(&sim.host.storage, field).unwrap().phase,
         CropPhase::Fallow
     );
+    assert_eq!(world.soil(&sim.host.storage, field).unwrap().fertility, 880);
     assert_eq!(
-        world.soil(&sim.state.components, field).unwrap().fertility,
-        880
-    );
-    assert_eq!(
-        world
-            .crop(&sim.state.components, field)
-            .unwrap()
-            .contributions[&sim.state.ruler],
+        world.crop(&sim.host.storage, field).unwrap().contributions[&sim.host.state.ruler],
         70_000
     );
-    assert!(sim.state.events.iter().any(|event| matches!(event.kind, EventKind::CropHarvested { field: id, food: Quantity(27_000), seed: Quantity(1_800), .. } if id == field)));
+    assert!(sim.host.events().iter().any(|event| matches!(event.event, EventKind::CropHarvested { field: id, food: Quantity(27_000), seed: Quantity(1_800), .. } if id == field)));
 }
 
 #[test]
@@ -377,15 +382,16 @@ fn interrupted_planting_preserves_labor_and_consumed_seed() {
     let (mut sim, field) = compact(1);
     perform(&mut sim, field, FarmOperation::Prepare);
     let seed = sim
+        .host
         .state
         .agriculture
         .as_ref()
         .unwrap()
-        .field(&sim.state.components, field)
+        .field(&sim.host.storage, field)
         .unwrap()
         .seed;
-    let opening = sim.state.inventories[&seed].quantity;
-    let ruler = sim.state.ruler;
+    let opening = sim.host.state.inventories[&seed].quantity;
+    let ruler = sim.host.state.ruler;
     sim.debug_actor_command(
         ruler,
         Command::Cultivate {
@@ -397,34 +403,43 @@ fn interrupted_planting_preserves_labor_and_consumed_seed() {
     sim.advance(SimDuration(4_999)).unwrap();
     sim.debug_actor_command(ruler, Command::Cancel).unwrap();
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .planting_ms,
         4_999
     );
-    assert_eq!(sim.state.inventories[&seed].quantity.0, opening.0 - 1_000);
-    perform(&mut sim, field, FarmOperation::Plant);
-    assert_eq!(sim.state.inventories[&seed].quantity.0, opening.0 - 1_000);
     assert_eq!(
-        sim.state
+        sim.host.state.inventories[&seed].quantity.0,
+        opening.0 - 1_000
+    );
+    perform(&mut sim, field, FarmOperation::Plant);
+    assert_eq!(
+        sim.host.state.inventories[&seed].quantity.0,
+        opening.0 - 1_000
+    );
+    assert_eq!(
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .phase,
         CropPhase::Growing
     );
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .contributions[&ruler],
         30_000
@@ -435,69 +450,75 @@ fn interrupted_planting_preserves_labor_and_consumed_seed() {
 fn drought_can_kill_a_crop_and_irrigation_uses_actual_water() {
     let (mut sim, field) = compact(1);
     plant(&mut sim, field);
-    let world = sim.state.environment.as_mut().unwrap();
+    let epoch = sim.time();
+    let seed = sim.host.seed();
+    let world = sim.host.state.environment.as_mut().unwrap();
     world.climate.seasonal_rain = [0; 4];
     world.climate.seasonal_evaporation = [0; 4];
     world
-        .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+        .reset_epoch(&mut sim.host.storage, epoch, seed)
         .unwrap();
     crop_rules(&mut sim).failure_stress_days = 2;
-    let world = sim.state.agriculture.as_mut().unwrap();
-    world
-        .soil_mut(&mut sim.state.components, field)
-        .unwrap()
-        .water = 0;
-    let water = world.field(&sim.state.components, field).unwrap().water;
-    let opening = sim.state.inventories[&water].quantity.0;
+    let world = sim.host.state.agriculture.as_mut().unwrap();
+    world.soil_mut(&mut sim.host.storage, field).unwrap().water = 0;
+    let water = world.field(&sim.host.storage, field).unwrap().water;
+    let opening = sim.host.state.inventories[&water].quantity.0;
     perform(&mut sim, field, FarmOperation::Irrigate);
-    assert_eq!(sim.state.inventories[&water].quantity.0, opening - 1_000);
     assert_eq!(
-        sim.state
+        sim.host.state.inventories[&water].quantity.0,
+        opening - 1_000
+    );
+    assert_eq!(
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .soil(&sim.state.components, field)
+            .soil(&sim.host.storage, field)
             .unwrap()
             .water,
         30
     );
-    sim.state
+    sim.host
+        .state
         .agriculture
         .as_mut()
         .unwrap()
-        .soil_mut(&mut sim.state.components, field)
+        .soil_mut(&mut sim.host.storage, field)
         .unwrap()
         .water = 0;
-    sim.advance(SimDuration(1_200_000 - sim.state.time.0))
+    sim.advance(SimDuration(1_200_000 - sim.host.clock().time.0))
         .unwrap();
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .phase,
         CropPhase::Failed
     );
-    let before = sim.state.time;
+    let before = sim.host.clock().time;
     perform(&mut sim, field, FarmOperation::Prepare);
-    assert_eq!(sim.state.time.0 - before.0, 20_000);
+    assert_eq!(sim.host.clock().time.0 - before.0, 20_000);
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .phase,
         CropPhase::Prepared
     );
     assert_eq!(
-        sim.state
-            .events
+        sim.host
+            .events()
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::CropFailed { field: id } if id == field))
+            .filter(|e| matches!(e.event, EventKind::CropFailed { field: id } if id == field))
             .count(),
         1
     );
@@ -506,8 +527,8 @@ fn drought_can_kill_a_crop_and_irrigation_uses_actual_water() {
 #[test]
 fn inaccessible_or_remote_land_and_out_of_season_planting_are_inert() {
     let (mut sim, field) = compact(1);
-    let actor = sim.state.people[3].id;
-    let before = sim.state.clone();
+    let actor = sim.host.state.people[3].id;
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         sim.debug_actor_command(
             actor,
@@ -518,13 +539,13 @@ fn inaccessible_or_remote_land_and_out_of_season_planting_are_inert() {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.state, before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     perform(&mut sim, field, FarmOperation::Prepare);
     crop_rules(&mut sim).planting_first_day = 1;
-    let before = sim.state.clone();
+    let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         sim.debug_actor_command(
-            sim.state.ruler,
+            sim.host.state.ruler,
             Command::Cultivate {
                 field,
                 operation: FarmOperation::Plant
@@ -532,7 +553,7 @@ fn inaccessible_or_remote_land_and_out_of_season_planting_are_inert() {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.state, before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
 }
 
 #[test]
@@ -542,7 +563,8 @@ fn farming_is_equivalent_across_partial_advances_workers_and_restore() {
     assert_eq!(field, other_field);
     plant(&mut a, field);
     plant(&mut b, field);
-    a.advance(SimDuration(1_200_000 - a.state.time.0)).unwrap();
+    a.advance(SimDuration(1_200_000 - a.host.clock().time.0))
+        .unwrap();
     b.advance(SimDuration(191_333)).unwrap();
     for _ in 0..20 {
         b.observe();
@@ -556,14 +578,14 @@ fn farming_is_equivalent_across_partial_advances_workers_and_restore() {
         },
     )
     .unwrap();
-    while b.state.time.0 < 1_200_000 {
-        b.advance(SimDuration((1_200_000 - b.state.time.0).min(17_333)))
+    while b.host.clock().time.0 < 1_200_000 {
+        b.advance(SimDuration((1_200_000 - b.host.clock().time.0).min(17_333)))
             .unwrap();
     }
-    assert_eq!(a.state, b.state);
+    assert_eq!(a.host.state, b.host.state);
     perform(&mut a, field, FarmOperation::Harvest);
     perform(&mut b, field, FarmOperation::Harvest);
-    assert_eq!(a.state, b.state);
+    assert_eq!(a.host.state, b.host.state);
 }
 
 #[test]
@@ -583,8 +605,8 @@ fn calendar_and_weather_are_configurable_and_validation_rejects_corruption() {
     let configured =
         Simulation::farming_with_config(4, Execution::default(), config.clone()).unwrap();
     let Location::AtArea(ruler_area) = *game_spatial::location(
-        &configured.state.components,
-        game_ecs::StableId((configured.state.ruler).0),
+        &configured.host.storage,
+        game_ecs::StableId((configured.host.state.ruler).0),
     )
     .expect("location exists") else {
         panic!("fixture ruler starts in a local area");
@@ -592,16 +614,18 @@ fn calendar_and_weather_are_configurable_and_validation_rejects_corruption() {
     assert_eq!(
         configured.observe().environment.unwrap().temperature_c,
         configured
+            .host
             .state
             .environment
             .as_ref()
             .unwrap()
-            .local_weather(&configured.state.components, ruler_area)
+            .local_weather(&configured.host.storage, ruler_area)
             .unwrap()
             .temperature
     );
     assert_eq!(
         configured
+            .host
             .state
             .environment
             .as_ref()
@@ -617,19 +641,25 @@ fn calendar_and_weather_are_configurable_and_validation_rejects_corruption() {
     ));
     let (mut sim, _) = compact(1);
     sim.validate_environment().unwrap();
-    sim.state.environment.as_mut().unwrap().calendar.day = SimDuration(0);
+    sim.host.state.environment.as_mut().unwrap().calendar.day = SimDuration(0);
     assert!(sim.validate_environment().is_err());
 }
 #[test]
 fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs() {
     let (mut sim, field) = compact(1);
     perform(&mut sim, field, FarmOperation::Prepare);
-    let ruler = sim.state.ruler;
-    game_physiology::body_mut(&mut sim.state.components, ruler)
+    let ruler = sim.host.state.ruler;
+    game_physiology::body_mut(&mut sim.host.storage, ruler)
         .unwrap()
         .vitals
         .fatigue = 0;
-    sim.state.physical.as_mut().unwrap().rules.fatigue_limit = 7_000;
+    sim.host
+        .state
+        .physical
+        .as_mut()
+        .unwrap()
+        .rules
+        .fatigue_limit = 7_000;
     sim.debug_actor_command(
         ruler,
         Command::Cultivate {
@@ -643,23 +673,21 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
     let mut restored = Simulation::load(&bytes, Execution::default()).unwrap();
     sim.advance(SimDuration(6_000)).unwrap();
     restored.advance(SimDuration(6_000)).unwrap();
-    assert_eq!(sim.state, restored.state);
+    assert_eq!(sim.host.state, restored.host.state);
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .planting_ms,
         7_000
     );
-    assert_eq!(
-        *sim.state.components.activity(ruler).unwrap(),
-        Activity::Idle
-    );
+    assert_eq!(*sim.host.storage.activity(ruler).unwrap(), Activity::Idle);
     assert!(
-        game_agriculture::cultivations(&sim.state.components)
+        game_agriculture::cultivations(&sim.host.storage)
             .next()
             .is_none()
     );
@@ -667,11 +695,12 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
     sim.advance(SimDuration(3_500)).unwrap();
     perform(&mut sim, field, FarmOperation::Plant);
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .planting_ms,
         10_000
@@ -682,26 +711,28 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
 fn harvest_waits_for_real_output_capacity_and_local_queries_are_passive() {
     let (mut sim, field) = compact(1);
     plant(&mut sim, field);
-    sim.advance(SimDuration(1_200_000 - sim.state.time.0))
+    sim.advance(SimDuration(1_200_000 - sim.host.clock().time.0))
         .unwrap();
     let food = sim
+        .host
         .state
         .agriculture
         .as_ref()
         .unwrap()
-        .field(&sim.state.components, field)
+        .field(&sim.host.storage, field)
         .unwrap()
         .food;
-    sim.state.inventories.get_mut(&food).unwrap().capacity = sim.state.inventories[&food].quantity;
-    let before = sim.state.clone();
+    sim.host.state.inventories.get_mut(&food).unwrap().capacity =
+        sim.host.state.inventories[&food].quantity;
+    let before = sim.canonical_snapshot().unwrap();
     for _ in 0..40 {
         let view = sim.observe();
         assert_eq!(view.agriculture.as_ref().unwrap().fields[0].phase, "Ripe");
     }
-    assert_eq!(sim.state, before);
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
     assert_eq!(
         sim.debug_actor_command(
-            sim.state.ruler,
+            sim.host.state.ruler,
             Command::Cultivate {
                 field,
                 operation: FarmOperation::Harvest
@@ -709,21 +740,28 @@ fn harvest_waits_for_real_output_capacity_and_local_queries_are_passive() {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(sim.state, before);
-    sim.state.inventories.get_mut(&food).unwrap().capacity.0 += 30_000;
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
+    sim.host
+        .state
+        .inventories
+        .get_mut(&food)
+        .unwrap()
+        .capacity
+        .0 += 30_000;
     perform(&mut sim, field, FarmOperation::Harvest);
     assert_eq!(
-        sim.state
+        sim.host
+            .state
             .agriculture
             .as_ref()
             .unwrap()
-            .crop(&sim.state.components, field)
+            .crop(&sim.host.storage, field)
             .unwrap()
             .phase,
         CropPhase::Fallow
     );
-    let village = sim.state.areas[0].id;
-    sim.start_movement(sim.state.ruler, village).unwrap();
+    let village = sim.host.state.areas[0].id;
+    sim.start_movement(sim.host.state.ruler, village).unwrap();
     assert!(sim.observe().agriculture.is_none());
     sim.advance(SimDuration(120_000)).unwrap();
     assert!(sim.observe().agriculture.unwrap().fields.is_empty());

@@ -31,7 +31,7 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
             .iter()
             .all(|c| matches!(c, Command::Signal { .. } | Command::Cancel))
     );
-    let opening = sim.canonical_state().clone();
+    let opening = sim.canonical_snapshot().unwrap();
     for command in [
         Command::Move {
             destination: AreaId(2),
@@ -48,7 +48,7 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
             })
             .is_err()
         );
-        assert_eq!(sim.canonical_state(), &opening);
+        assert_eq!(sim.canonical_snapshot().unwrap(), opening);
     }
     submit(
         &mut sim,
@@ -58,28 +58,28 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
     );
     sim.advance(SimDuration(5_999)).unwrap();
     assert!(
-        game_lifecycle::life(&sim.canonical_state().components, ruler)
+        game_lifecycle::life(sim.canonical_state().components, ruler)
             .expect("life exists")
             .preference
             .is_none()
     );
     sim.advance(SimDuration(1)).unwrap();
     assert!(
-        game_lifecycle::life(&sim.canonical_state().components, ruler)
+        game_lifecycle::life(sim.canonical_state().components, ruler)
             .expect("life exists")
             .preference
             .is_some()
     );
     sim.advance(SimDuration(174_000)).unwrap();
-    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { child, quantity: Quantity(1_000), .. } if child == ruler)));
+    assert!(sim.canonical_state().events.iter().any(|e| matches!(e.event, EventKind::Cared { child, quantity: Quantity(1_000), .. } if child == ruler)));
     assert!(
-        !game_lifecycle::life(&sim.canonical_state().components, ruler)
+        !game_lifecycle::life(sim.canonical_state().components, ruler)
             .expect("life exists")
             .caregivers
             .is_empty()
     );
     assert!(
-        game_lifecycle::life(&sim.canonical_state().components, ruler)
+        game_lifecycle::life(sim.canonical_state().components, ruler)
             .expect("life exists")
             .preference
             .is_none()
@@ -95,11 +95,11 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
         sim.canonical_state()
             .events
             .iter()
-            .any(|e| matches!(e.kind, EventKind::Comforted { child, .. } if child == ruler))
+            .any(|e| matches!(e.event, EventKind::Comforted { child, .. } if child == ruler))
     );
     assert!(
         !game_characters::decisions::mind::<game_api::Command>(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             ruler
         )
         .expect("mind exists")
@@ -120,7 +120,7 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
     sim.advance(SimDuration(300_000)).unwrap();
     let ruler = sim.observe().ruler;
     assert_eq!(
-        game_lifecycle::life(&sim.canonical_state().components, ruler)
+        game_lifecycle::life(sim.canonical_state().components, ruler)
             .expect("life exists")
             .stage,
         LifeStage::Child
@@ -137,9 +137,10 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
             interest: ChildhoodInterest::Craft,
         },
     );
-    let opening_stocks = sim.canonical_state().inventories.clone();
+    let opening_stocks = sim.canonical_state().state.inventories.clone();
     let work = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .find(|p| p.id == ruler)
@@ -155,6 +156,7 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
     assert_eq!(
         work,
         sim.canonical_state()
+            .state
             .people
             .iter()
             .find(|p| p.id == ruler)
@@ -167,7 +169,7 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
     {
         assert_eq!(
             i.quantity,
-            sim.canonical_state().inventories[&i.id].quantity
+            sim.canonical_state().state.inventories[&i.id].quantity
         );
     }
     submit(
@@ -205,11 +207,11 @@ fn pending_play_and_care_survive_saves_queries_workers_and_time_slices() {
         },
     )
     .unwrap();
-    let before = a.canonical_state().clone();
+    let before = a.canonical_snapshot().unwrap();
     for _ in 0..100 {
         a.observe();
     }
-    assert_eq!(a.canonical_state(), &before);
+    assert_eq!(a.canonical_snapshot().unwrap(), before);
     a.advance(SimDuration(90_000)).unwrap();
     for dt in [1, 29_999, 20_000, 40_000] {
         b.advance(SimDuration(dt)).unwrap();
@@ -249,8 +251,8 @@ fn play_interrupts_at_fatigue_limit_and_pending_child_actions_can_cross_maturity
         sim.canonical_state()
             .events
             .iter()
-            .any(|e| e.time == SimTime(600_001)
-                && matches!(e.kind, EventKind::Interrupted { actor } if actor == ruler))
+            .any(|e| e.at == SimTime(600_001)
+                && matches!(e.event, EventKind::Interrupted { actor } if actor == ruler))
     );
     submit(&mut sim, Command::Rest);
     sim.advance(SimDuration(239_999)).unwrap();
@@ -275,6 +277,7 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
     assert!(sim.observe().known_areas.iter().all(|a| a.id != unknown));
     let citizens: Vec<_> = sim
         .canonical_state()
+        .state
         .people
         .iter()
         .filter(|p| p.id != sim.observe().ruler)
@@ -282,7 +285,7 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
         .collect();
     for id in citizens {
         let mut personality = game_characters::decisions::mind::<game_api::Command>(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             id,
         )
         .expect("mind exists")
@@ -290,7 +293,7 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
         .clone();
         personality.empathy = 0;
         let dream = game_characters::decisions::mind::<game_api::Command>(
-            &sim.canonical_state().components,
+            sim.canonical_state().components,
             id,
         )
         .expect("mind exists")
@@ -319,7 +322,7 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
         !sim.canonical_state()
             .events
             .iter()
-            .any(|e| matches!(e.kind, EventKind::Cared { child, .. } if child == ruler))
+            .any(|e| matches!(e.event, EventKind::Cared { child, .. } if child == ruler))
     );
     assert!(sim.observe().preference.is_some());
 }
