@@ -63,11 +63,9 @@ fn same(a: &Simulation, b: &Simulation) {
 }
 fn first_child(sim: &Simulation) -> PersonId {
     sim.canonical_state()
-        .development
-        .as_ref()
-        .unwrap()
-        .lives
-        .values()
+        .components
+        .lives()
+        .map(|(_, row)| row)
         .find(|l| !l.parents.is_empty())
         .unwrap()
         .id
@@ -88,11 +86,9 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
     sim.advance(MINUTE).unwrap();
     let p = sim
         .canonical_state()
-        .development
-        .as_ref()
-        .unwrap()
-        .pregnancies
-        .values()
+        .components
+        .pregnancies()
+        .map(|(_, row)| row)
         .next()
         .unwrap();
     assert_eq!(
@@ -105,11 +101,9 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
     sim.advance(MINUTE).unwrap();
     assert!(matches!(
         sim.canonical_state()
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .next()
             .unwrap()
             .state,
@@ -122,7 +116,11 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(sim.canonical_state().people.len(), initial + 1);
     let child = first_child(&sim);
-    let life = &sim.canonical_state().development.as_ref().unwrap().lives[&child];
+    let life = &sim
+        .canonical_state()
+        .components
+        .life(child)
+        .expect("life exists");
     assert_eq!(life.born, SimTime(300_000));
     assert_eq!(life.stage, LifeStage::Infant);
     assert_eq!(life.parents.len(), 2);
@@ -160,11 +158,10 @@ fn a_player_request_cannot_supply_the_other_adults_consent() {
     .unwrap();
     assert!(
         sim.canonical_state()
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .is_empty()
+            .components
+            .pregnancies()
+            .next()
+            .is_none()
     );
     assert_eq!(sim.canonical_state().next_id, allocator);
     assert!(sim.canonical_state().events.iter().any(|e| e.kind
@@ -181,11 +178,10 @@ fn a_player_request_cannot_supply_the_other_adults_consent() {
     assert_eq!(sim.canonical_state().people.len(), 15);
     assert!(
         sim.canonical_state()
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .is_empty()
+            .components
+            .pregnancies()
+            .next()
+            .is_none()
     );
 }
 
@@ -195,11 +191,9 @@ fn interrupting_conception_cancels_both_primary_actions_and_creates_no_child() {
     sim.advance(MINUTE).unwrap();
     let p = sim
         .canonical_state()
-        .development
-        .as_ref()
-        .unwrap()
-        .pregnancies
-        .values()
+        .components
+        .pregnancies()
+        .map(|(_, row)| row)
         .next()
         .unwrap()
         .clone();
@@ -214,10 +208,9 @@ fn interrupting_conception_cancels_both_primary_actions_and_creates_no_child() {
     );
     assert_eq!(
         sim.canonical_state()
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies[&p.id]
+            .components
+            .pregnancy(p.id)
+            .expect("pregnancy exists")
             .state,
         PregnancyState::Ended
     );
@@ -236,11 +229,9 @@ fn a_broken_relationship_does_not_undo_gestation_but_gestator_death_does() {
     sim.advance(SimDuration(120_000)).unwrap();
     let p = sim
         .canonical_state()
-        .development
-        .as_ref()
-        .unwrap()
-        .pregnancies
-        .values()
+        .components
+        .pregnancies()
+        .map(|(_, row)| row)
         .next()
         .unwrap()
         .clone();
@@ -271,10 +262,9 @@ fn a_broken_relationship_does_not_undo_gestation_but_gestator_death_does() {
     assert_eq!(
         after_death
             .canonical_state()
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies[&p.id]
+            .components
+            .pregnancy(p.id)
+            .expect("pregnancy exists")
             .state,
         PregnancyState::Ended
     );
@@ -298,7 +288,11 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
     );
     sim.advance(MINUTE).unwrap();
     assert!(sim.canonical_state().inventories[&source].quantity.0 <= before - 1_000);
-    let life = &sim.canonical_state().development.as_ref().unwrap().lives[&child];
+    let life = &sim
+        .canonical_state()
+        .components
+        .life(child)
+        .expect("life exists");
     assert!(life.caregivers.contains(&caregiver));
     assert!(!life.parents.contains(&caregiver));
     assert_eq!(
@@ -499,7 +493,10 @@ fn a_motivated_nonparent_responds_to_observed_distress_without_player_orders() {
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { caregiver: id, child: baby, .. } if id == caregiver && baby == child)));
     assert!(
-        sim.canonical_state().development.as_ref().unwrap().lives[&child]
+        sim.canonical_state()
+            .components
+            .life(child)
+            .expect("life exists")
             .caregivers
             .contains(&caregiver)
     );
@@ -536,11 +533,9 @@ fn saving_mid_conception_and_gestation_preserves_continuation_and_new_ids() {
         .chain(
             original
                 .canonical_state()
-                .development
-                .as_ref()
-                .unwrap()
-                .pregnancies
-                .keys()
+                .components
+                .pregnancies()
+                .map(|(id, _)| id)
                 .map(|id| id.0),
         )
     {

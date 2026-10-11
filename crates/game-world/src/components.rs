@@ -11,6 +11,7 @@ fn schema() -> Result<Schema, Error> {
     game_workshop::register_components(&mut schema)?;
     game_skills::register_components(&mut schema)?;
     game_health::register_components(&mut schema)?;
+    game_lifecycle::register_components(&mut schema)?;
     game_genetics::register_components(&mut schema)?;
     game_physiology::traits::register_components(&mut schema)?;
     game_characters::temperament::register_components(&mut schema)?;
@@ -117,6 +118,41 @@ impl Components {
         ),
     > {
         game_characters::temperament::all_person_temperaments(&self.0)
+    }
+    pub fn life(&self, id: game_api::PersonId) -> Option<&game_lifecycle::Life> {
+        game_lifecycle::life(&self.0, id)
+    }
+    pub fn life_mut(&mut self, id: game_api::PersonId) -> Option<&mut game_lifecycle::Life> {
+        game_lifecycle::life_mut(&mut self.0, id)
+    }
+    pub fn lives(&self) -> impl Iterator<Item = (game_api::PersonId, &game_lifecycle::Life)> {
+        game_lifecycle::all_lives(&self.0)
+    }
+    pub fn insert_life(&mut self, row: game_lifecycle::Life) -> Result<(), Error> {
+        game_lifecycle::insert_life(&mut self.0, row)
+    }
+    pub fn pregnancy(&self, id: game_api::PregnancyId) -> Option<&game_lifecycle::Pregnancy> {
+        game_lifecycle::pregnancy(&self.0, id)
+    }
+    pub fn pregnancy_mut(
+        &mut self,
+        id: game_api::PregnancyId,
+    ) -> Option<&mut game_lifecycle::Pregnancy> {
+        game_lifecycle::pregnancy_mut(&mut self.0, id)
+    }
+    pub fn pregnancies(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PregnancyId, &game_lifecycle::Pregnancy)> {
+        game_lifecycle::all_pregnancies(&self.0)
+    }
+    pub fn insert_pregnancy(&mut self, row: game_lifecycle::Pregnancy) -> Result<(), Error> {
+        game_lifecycle::insert_pregnancy(&mut self.0, row)
+    }
+    pub fn remove_pregnancy(
+        &mut self,
+        id: game_api::PregnancyId,
+    ) -> Result<Option<game_lifecycle::Pregnancy>, Error> {
+        game_lifecycle::remove_pregnancy(&mut self.0, id)
     }
     pub fn water_lot(&self, id: game_api::InventoryId) -> Option<&game_health::WaterLot> {
         game_health::water_lot(&self.0, id)
@@ -695,6 +731,89 @@ mod tests {
                 |event| matches!(event.kind,game_api::EventKind::Died {actor} if actor == ruler)
             )
         );
+    }
+
+    #[test]
+    fn lifecycle_rows_are_authoritative_and_missing_or_orphan_lives_fail_restore() {
+        let sim = Simulation::life_fixture(90, Execution::default()).unwrap();
+        let saved = sim.save().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(json["state"]["development"].get("lives").is_none());
+        assert!(json["state"]["development"].get("pregnancies").is_none());
+        assert_eq!(
+            json["state"]["components"]["columns"]["lifecycle/life"]
+                .as_array()
+                .unwrap()
+                .len(),
+            sim.state.people.len()
+        );
+        assert_eq!(
+            sim.canonical_state(),
+            Simulation::load(&saved, Execution::default())
+                .unwrap()
+                .canonical_state()
+        );
+        let mut missing = json.clone();
+        missing["state"]["components"]["columns"]["lifecycle/life"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        assert!(
+            Simulation::load(&serde_json::to_vec(&missing).unwrap(), Execution::default()).is_err()
+        );
+        let mut orphan = Simulation::survival_fixture(92, Execution::default()).unwrap();
+        let mut life = sim.state.components.life(sim.state.ruler).unwrap().clone();
+        life.id = orphan.state.ruler;
+        orphan.state.components.insert_life(life).unwrap();
+        assert!(
+            matches!(Simulation::load(&orphan.save().unwrap(), Execution::default()), Err(game_api::Error::InvalidSave(message)) if message == "lifecycle components require lifecycle runtime")
+        );
+    }
+
+    #[test]
+    fn stale_lifecycle_actions_leave_rows_clock_and_events_unchanged() {
+        let mut sim = Simulation::life_fixture(91, Execution::default()).unwrap();
+        let actor = sim.state.people[3].id;
+        let partner = sim.state.people[4].id;
+        sim.debug_actor_command(actor, game_api::Command::Conceive { partner })
+            .unwrap();
+        let pregnancy = sim.state.components.pregnancies().next().unwrap().0;
+        let age = sim
+            .state
+            .development
+            .as_ref()
+            .unwrap()
+            .prepare_age(&sim.state.components, actor, sim.state.time, true, 0, true)
+            .unwrap();
+        sim.state.components.life_mut(actor).unwrap().preference =
+            Some((game_api::ChildhoodInterest::Company, SimTime(1)));
+        let before = sim.canonical_state().clone();
+        assert!(
+            age.commit(
+                sim.state.development.as_ref().unwrap(),
+                &mut sim.state.components
+            )
+            .is_err()
+        );
+        assert_eq!(&before, sim.canonical_state());
+        let interruption = sim
+            .state
+            .development
+            .as_ref()
+            .unwrap()
+            .prepare_interruption(&sim.state.components, actor, false, [pregnancy]);
+        sim.state.components.pregnancy_mut(pregnancy).unwrap().state =
+            game_lifecycle::PregnancyState::Ended;
+        let before = sim.canonical_state().clone();
+        assert!(
+            interruption
+                .commit(
+                    sim.state.development.as_ref().unwrap(),
+                    &mut sim.state.components
+                )
+                .is_err()
+        );
+        assert_eq!(&before, sim.canonical_state());
     }
 
     #[test]

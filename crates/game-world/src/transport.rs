@@ -133,7 +133,7 @@ impl Simulation {
                 let mass = if let Some(w) = &self.state.development {
                     game_transport::body_mass(
                         rules,
-                        SimDuration(w.lives[&person.id].age_at(now)?),
+                        SimDuration(self.state.components.life(person.id).unwrap().age_at(now)?),
                         w.rules.adulthood,
                     )
                 } else {
@@ -1710,9 +1710,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             game_transport::body_mass(
                 &w.rules,
                 SimDuration(
-                    lives
-                        .lives
-                        .get(&p.id)
+                    state
+                        .components
+                        .life(p.id)
                         .ok_or_else(fail)?
                         .age_at(state.time)?,
                 ),
@@ -1908,11 +1908,9 @@ mod connected_tests {
         sim.advance(SimDuration(120_000)).unwrap();
         let gestator = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .find(|p| matches!(p.state, development::PregnancyState::Gestating { .. }))
             .unwrap()
             .gestator;
@@ -2349,11 +2347,9 @@ mod connected_tests {
         sim.advance(SimDuration(120_000)).unwrap();
         let mother = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .find(|p| matches!(p.state, development::PregnancyState::Gestating { .. }))
             .unwrap()
             .gestator;
@@ -2373,11 +2369,9 @@ mod connected_tests {
         sim.advance(SimDuration(60_000)).unwrap();
         let child = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .find_map(|p| {
                 if let development::PregnancyState::Born(child) = p.state {
                     Some(child)
@@ -2403,10 +2397,7 @@ mod connected_tests {
                 .bearers
                 .contains(&mother)
         );
-        assert_eq!(
-            sim.state.development.as_ref().unwrap().lives[&child].parents[0],
-            mother
-        );
+        assert_eq!(sim.state.components.life(child).unwrap().parents[0], mother);
     }
     #[test]
     fn unknown_public_transport_and_yield_targets_are_inert() {

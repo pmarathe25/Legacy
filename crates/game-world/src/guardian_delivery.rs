@@ -551,7 +551,7 @@ mod tests {
         let requester = sim.state.ruler;
         assert_ne!(requester, predecessor);
         assert_eq!(
-            sim.state.development.as_ref().unwrap().lives[&requester].stage,
+            sim.state.components.life(requester).unwrap().stage,
             LifeStage::Adult
         );
         sim.debug_actor_command(guardian, Command::Cancel).unwrap();

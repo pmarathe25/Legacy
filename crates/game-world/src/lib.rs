@@ -142,7 +142,7 @@ pub struct CanonicalState {
     pub physical: Option<physical::World>,
     pub decisions: Option<decisions::World>,
     #[serde(default)]
-    pub development: Option<development::World>,
+    pub development: Option<development::Runtime>,
     #[serde(default)]
     pub combat: Option<combat::World>,
     #[serde(default)]
@@ -576,9 +576,11 @@ impl Simulation {
                 .or_default()
                 .push(i.id);
         }
-        let pregnancy_index = state.development.as_ref().map_or_else(BTreeMap::new, |w| {
-            w.pregnancies
-                .values()
+        let pregnancy_index = state.development.as_ref().map_or_else(BTreeMap::new, |_| {
+            state
+                .components
+                .pregnancies()
+                .map(|(_, row)| row)
                 .filter(|p| {
                     matches!(
                         p.state,
@@ -601,12 +603,12 @@ impl Simulation {
             })
             .collect();
         let mut dependent_index = BTreeMap::<AreaId, BTreeSet<PersonId>>::new();
-        if let Some(world) = &state.development {
+        if state.development.is_some() {
             for p in &state.people {
                 if let Location::AtArea(area) =
                     *state.components.location(p.id).expect("location exists")
                     && matches!(
-                        world.lives[&p.id].stage,
+                        state.components.life(p.id).unwrap().stage,
                         LifeStage::Infant | LifeStage::Child
                     )
                     && state
@@ -733,11 +735,11 @@ impl Simulation {
                                 .map(|s| Command::Eat { source: s.id }),
                         );
                     }
-                    if let Some(development) = &self.state.development {
-                        let children = development.lives.iter().filter_map(|(id, life)| {
-                            (self.dependent_signal_visible(ruler.id, *id)
+                    if self.state.development.is_some() {
+                        let children = self.state.components.lives().filter_map(|(id, life)| {
+                            (self.dependent_signal_visible(ruler.id, id)
                                 && matches!(life.stage, LifeStage::Infant | LifeStage::Child))
-                            .then_some(*id)
+                            .then_some(id)
                         });
                         for child in children {
                             if child != ruler.id {
@@ -758,8 +760,8 @@ impl Simulation {
                 }
             }
         }
-        if let Some(world) = &self.state.development {
-            let stage = world.lives[&ruler.id].stage;
+        if self.state.development.is_some() {
+            let stage = self.state.components.life(ruler.id).unwrap().stage;
             if stage == LifeStage::Infant {
                 available_commands.clear();
                 if self
@@ -962,9 +964,12 @@ impl Simulation {
                 .state
                 .development
                 .as_ref()
-                .map(|w| w.lives[&ruler.id].stage),
-            preference: self.state.development.as_ref().and_then(|w| {
-                w.lives[&ruler.id]
+                .map(|_| self.state.components.life(ruler.id).unwrap().stage),
+            preference: self.state.development.as_ref().and_then(|_| {
+                self.state
+                    .components
+                    .life(ruler.id)
+                    .unwrap()
                     .preference
                     .filter(|(_, until)| *until >= self.state.time)
                     .map(|(p, _)| p)
@@ -977,10 +982,10 @@ impl Simulation {
                     .collect()
             }),
             nearby_people: self.nearby_people(0, 64),
-            nearby_life_stages: self.state.development.as_ref().map_or_else(Vec::new, |w| {
+            nearby_life_stages: self.state.development.as_ref().map_or_else(Vec::new, |_| {
                 self.nearby_people(0, 64)
                     .into_iter()
-                    .map(|(id, _)| (id, w.lives[&id].stage))
+                    .map(|(id, _)| (id, self.state.components.life(id).unwrap().stage))
                     .collect()
             }),
         }
@@ -1611,9 +1616,9 @@ impl Simulation {
             && world.next_expression <= next
         {
             world.prepare_refresh_time(next)?;
-            if let Some(lives) = &self.state.development {
+            if self.state.development.is_some() {
                 for (actor, _) in self.state.components.trait_developments() {
-                    lives.lives[&actor].age_at(next)?;
+                    self.state.components.life(actor).unwrap().age_at(next)?;
                 }
             }
         }

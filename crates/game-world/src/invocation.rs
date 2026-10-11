@@ -745,7 +745,7 @@ impl Simulation {
         let Some(development) = &self.state.development else {
             return;
         };
-        let life = &development.lives[&actor];
+        let life = self.state.components.life(actor).expect("life exists");
         let lifespan = development
             .rules
             .lifespan
@@ -2200,7 +2200,13 @@ mod tests {
         )
         .unwrap();
         let actor = sim.state.ruler;
-        let child = sim.state.development.as_ref().unwrap().lives[&actor].born.0
+        let child = sim
+            .state
+            .components
+            .life(actor)
+            .expect("life exists")
+            .born
+            .0
             + sim.state.development.as_ref().unwrap().rules.infancy.0;
         sim.advance(SimDuration(child - sim.state.time.0)).unwrap();
         let teacher = *sim
@@ -2244,7 +2250,13 @@ mod tests {
             );
         }
         assert!(sim.invocation_ready(actor));
-        let adult = sim.state.development.as_ref().unwrap().lives[&actor].born.0
+        let adult = sim
+            .state
+            .components
+            .life(actor)
+            .expect("life exists")
+            .born
+            .0
             + sim.state.development.as_ref().unwrap().rules.adulthood.0;
         if sim.state.time.0 < adult {
             sim.advance(SimDuration(adult - sim.state.time.0)).unwrap();

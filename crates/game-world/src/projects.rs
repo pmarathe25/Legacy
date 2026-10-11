@@ -318,9 +318,9 @@ impl Simulation {
             && self.independent(actor)
             && !self.combat_restricts(actor)
             && !self.care_index.contains_key(&actor)
-            && self.state.development.as_ref().is_none_or(|world| {
+            && self.state.development.as_ref().is_none_or(|_| {
                 matches!(
-                    world.lives[&actor].stage,
+                    self.state.components.life(actor).unwrap().stage,
                     LifeStage::Adult | LifeStage::Elder
                 )
             })

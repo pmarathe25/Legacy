@@ -3,7 +3,7 @@
 use crate::*;
 
 use game_lifecycle::{Attempt, BodyFacts, Consent, Effect as LifecycleEffect, ParentChoiceInput};
-pub use game_lifecycle::{Life, Pregnancy, PregnancyState, Reproduction, Rules, World};
+pub use game_lifecycle::{Life, Pregnancy, PregnancyState, Reproduction, Rules, Runtime};
 
 impl Simulation {
     pub(crate) fn initialize_life_people(
@@ -18,11 +18,25 @@ impl Simulation {
         {
             return Err(Error::InvalidConfiguration("invalid initial lives".into()));
         }
-        self.state.development = Some(World {
-            rules,
-            lives,
-            pregnancies: BTreeMap::new(),
-        });
+        if self.state.components.lives().next().is_some()
+            || self.state.components.pregnancies().next().is_some()
+        {
+            return Err(Error::InvalidConfiguration(
+                "initial lifecycle rows already exist".into(),
+            ));
+        }
+        let mut batch = game_ecs::Batch::new();
+        for (id, life) in lives {
+            if id != life.id {
+                return Err(Error::InvalidConfiguration(
+                    "initial life identity mismatch".into(),
+                ));
+            }
+            life.age_at(self.state.time)?;
+            batch.insert(game_ecs::StableId(id.0), life);
+        }
+        self.state.components.apply_batch(batch)?;
+        self.state.development = Some(Runtime { rules });
         for actor in self.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
             self.schedule_age(actor);
         }
@@ -103,11 +117,9 @@ impl Simulation {
         sim.advance(SimDuration(300_000))?;
         let child = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .lives
-            .values()
+            .components
+            .lives()
+            .map(|(_, life)| life)
             .find(|l| l.born == SimTime(300_000) && !l.parents.is_empty())
             .ok_or_else(|| Error::InvalidFixture("fixture did not produce its child".into()))?
             .id;
@@ -121,9 +133,10 @@ impl Simulation {
     }
 
     pub(crate) fn independent(&self, id: PersonId) -> bool {
-        self.state.development.as_ref().is_none_or(|w| {
-            w.lives
-                .get(&id)
+        self.state.development.as_ref().is_none_or(|_| {
+            self.state
+                .components
+                .life(id)
                 .is_some_and(|l| !matches!(l.stage, LifeStage::Infant))
         })
     }
@@ -140,7 +153,7 @@ impl Simulation {
             .state
             .development
             .as_ref()
-            .and_then(|world| world.lives.get(&id))
+            .and_then(|_| self.state.components.life(id))
         else {
             return false;
         };
@@ -216,6 +229,7 @@ impl Simulation {
         let world = self.state.development.as_ref().ok_or(Error::Unavailable)?;
         let id = PregnancyId(self.state.next_id);
         let prepared = world.prepare_start_conception(
+            &self.state.components,
             self.state.time,
             id,
             [&first, &second],
@@ -233,12 +247,18 @@ impl Simulation {
             self.revision += 1;
             return Ok(());
         }
-        prepared.validate(self.state.development.as_ref().unwrap())?;
+        prepared.validate(
+            self.state.development.as_ref().unwrap(),
+            &self.state.components,
+        )?;
         let allocated = PregnancyId(allocate(&mut self.state)?);
         assert_eq!(allocated, id);
         self.interrupt_actor_activity(actor);
         self.interrupt_actor_activity(partner);
-        let effects = prepared.commit(self.state.development.as_mut().unwrap())?;
+        let effects = prepared.commit(
+            self.state.development.as_ref().unwrap(),
+            &mut self.state.components,
+        )?;
         for effect in effects {
             if let LifecycleEffect::AttemptStarted {
                 pregnancy,
@@ -265,12 +285,17 @@ impl Simulation {
     }
 
     pub(crate) fn review_conception(&mut self) -> Result<(), Error> {
-        let Some(world) = &self.state.development else {
+        let Some(_) = &self.state.development else {
             return Ok(());
         };
         let mut pairs = BTreeSet::new();
-        for id in world.lives.keys().filter(|id| **id != self.state.ruler) {
-            let mind = &self.state.decisions.as_ref().unwrap().minds[id];
+        for (id, _) in self
+            .state
+            .components
+            .lives()
+            .filter(|(id, _)| *id != self.state.ruler)
+        {
+            let mind = &self.state.decisions.as_ref().unwrap().minds[&id];
             if mind.dream != decisions::Aspiration::Parenthood {
                 continue;
             }
@@ -279,8 +304,8 @@ impl Simulation {
                 .keys()
                 .filter(|p| **p != self.state.ruler)
             {
-                if self.willing_parent(*id, *partner) && self.willing_parent(*partner, *id) {
-                    pairs.insert(((*id).min(*partner), (*id).max(*partner)));
+                if self.willing_parent(id, *partner) && self.willing_parent(*partner, id) {
+                    pairs.insert((id.min(*partner), id.max(*partner)));
                 }
             }
         }
@@ -296,7 +321,7 @@ impl Simulation {
     }
 
     pub(crate) fn complete_conception(&mut self, id: PregnancyId) {
-        let pregnancy = &self.state.development.as_ref().unwrap().pregnancies[&id];
+        let pregnancy = &self.state.components.pregnancy(id).unwrap();
         let pair = [pregnancy.gestator, pregnancy.partner];
         let bodies = [
             self.lifecycle_body(pair[0]).unwrap(),
@@ -307,10 +332,18 @@ impl Simulation {
             .development
             .as_ref()
             .unwrap()
-            .prepare_complete_conception(id, self.state.time, [&bodies[0], &bodies[1]])
+            .prepare_complete_conception(
+                &self.state.components,
+                id,
+                self.state.time,
+                [&bodies[0], &bodies[1]],
+            )
             .expect("preflighted coupled conception transition");
         let effects = prepared
-            .commit(self.state.development.as_mut().unwrap())
+            .commit(
+                self.state.development.as_ref().unwrap(),
+                &mut self.state.components,
+            )
             .expect("immediately prepared lifecycle transition");
         for person in pair {
             self.interrupt_actor_activity(person);
@@ -359,7 +392,7 @@ impl Simulation {
             Due::Age(id) => Some(game_lifecycle::Deadline::Age(*id)),
             _ => None,
         });
-        world.preflight_deadlines(next, deadlines)?;
+        world.preflight_deadlines(&self.state.components, next, deadlines)?;
         let births = due.iter().filter(|d| matches!(d, Due::Birth(_))).count() as u64;
         self.state
             .next_id
@@ -390,6 +423,7 @@ impl Simulation {
                     .as_ref()
                     .unwrap()
                     .prepare_age(
+                        &self.state.components,
                         id,
                         self.state.time,
                         alive,
@@ -398,7 +432,10 @@ impl Simulation {
                     )
                     .expect("preflighted age transition");
                 let effects = prepared
-                    .commit(self.state.development.as_mut().unwrap())
+                    .commit(
+                        self.state.development.as_ref().unwrap(),
+                        &mut self.state.components,
+                    )
                     .expect("immediately prepared lifecycle transition");
                 for effect in effects {
                     match effect {
@@ -431,7 +468,7 @@ impl Simulation {
     }
 
     fn birth(&mut self, id: PregnancyId) {
-        let pregnancy = self.state.development.as_ref().unwrap().pregnancies[&id].clone();
+        let pregnancy = self.state.components.pregnancy(id).unwrap().clone();
         let body = self
             .lifecycle_body(pregnancy.gestator)
             .expect("existing biological gestator body");
@@ -441,7 +478,14 @@ impl Simulation {
             .development
             .as_ref()
             .unwrap()
-            .prepare_birth(id, self.state.time, child, &body, self.state.seed)
+            .prepare_birth(
+                &self.state.components,
+                id,
+                self.state.time,
+                child,
+                &body,
+                self.state.seed,
+            )
             .expect("preflighted actual birth transition");
         if prepared.effects().is_empty() {
             return;
@@ -450,7 +494,10 @@ impl Simulation {
         if let [LifecycleEffect::PregnancyEnded(effect)] = prepared.effects() {
             let pregnancy = effect.pregnancy;
             prepared
-                .commit(self.state.development.as_mut().unwrap())
+                .commit(
+                    self.state.development.as_ref().unwrap(),
+                    &mut self.state.components,
+                )
                 .expect("immediately prepared lifecycle transition");
             self.emit(EventKind::PregnancyEnded { pregnancy });
             return;
@@ -475,7 +522,10 @@ impl Simulation {
         );
         let inventory = InventoryId(allocate(&mut self.state).expect("preflight inventory ID"));
         prepared
-            .commit(self.state.development.as_mut().unwrap())
+            .commit(
+                self.state.development.as_ref().unwrap(),
+                &mut self.state.components,
+            )
             .expect("immediately prepared lifecycle transition");
         let index = self.state.people.len();
         self.state.people.push(Person {
@@ -627,12 +677,12 @@ impl Simulation {
     }
 
     pub(crate) fn index_dependent(&mut self, id: PersonId, area: AreaId) {
-        if self
-            .state
-            .development
-            .as_ref()
-            .is_some_and(|w| matches!(w.lives[&id].stage, LifeStage::Infant | LifeStage::Child))
-        {
+        if self.state.development.as_ref().is_some_and(|_| {
+            matches!(
+                self.state.components.life(id).unwrap().stage,
+                LifeStage::Infant | LifeStage::Child
+            )
+        }) {
             self.dependent_index.entry(area).or_default().insert(id);
         }
     }
@@ -650,7 +700,11 @@ impl Simulation {
             return;
         }
         let world = self.state.development.as_ref().unwrap();
-        if let Some(at) = world.lives[&id]
+        if let Some(at) = self
+            .state
+            .components
+            .life(id)
+            .unwrap()
             .next_age_deadline(
                 &world.rules,
                 self.state.time,
@@ -710,9 +764,12 @@ impl Simulation {
             .development
             .as_ref()
             .unwrap()
-            .prepare_interruption(actor, died, ids);
+            .prepare_interruption(&self.state.components, actor, died, ids);
         let ended = prepared
-            .commit(self.state.development.as_mut().unwrap())
+            .commit(
+                self.state.development.as_ref().unwrap(),
+                &mut self.state.components,
+            )
             .expect("immediately prepared lifecycle transition");
         for effect in ended {
             let LifecycleEffect::PregnancyEnded(effect) = effect else {
@@ -763,6 +820,13 @@ impl Simulation {
 
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let Some(world) = &state.development else {
+        if state.components.lives().next().is_some()
+            || state.components.pregnancies().next().is_some()
+        {
+            return Err(Error::InvalidSave(
+                "lifecycle components require lifecycle runtime".into(),
+            ));
+        }
         return Ok(());
     };
     let fail = || Error::InvalidSave("inconsistent development bindings".into());
@@ -819,5 +883,5 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             })
         })
         .collect();
-    world.validate_with_facts(state.time, &bodies, &deadlines)
+    world.validate_with_facts(&state.components, state.time, &bodies, &deadlines)
 }

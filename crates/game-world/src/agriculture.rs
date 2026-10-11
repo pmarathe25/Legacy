@@ -114,14 +114,7 @@ impl Simulation {
                 )
             })
             .collect();
-        sim.state.development = Some(development::World {
-            rules: development_rules,
-            lives,
-            pregnancies: BTreeMap::new(),
-        });
-        for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
-            sim.schedule_age(actor);
-        }
+        sim.initialize_life_people(development_rules, lives)?;
         let farm = sim.state.areas[1].id;
         // This resident starts physically at the farm; later workers must travel.
         let farmer = sim.state.people[3].id;
@@ -354,10 +347,12 @@ impl Simulation {
             Location::AtArea(area) => area,
             _ => return Err(Error::Unavailable),
         };
-        let mature =
-            self.state.development.as_ref().is_none_or(|w| {
-                matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)
-            });
+        let mature = self.state.development.as_ref().is_none_or(|_| {
+            matches!(
+                self.state.components.life(actor).unwrap().stage,
+                LifeStage::Adult | LifeStage::Elder
+            )
+        });
         let available = |id: InventoryId, good: Good| {
             self.state
                 .inventories

@@ -93,8 +93,11 @@ impl Simulation {
         }
         if let Some(world) = &mut sim.state.development {
             world.rules = development::Rules::human();
-            for life in world.lives.values_mut() {
-                life.initial_age = world.rules.adulthood;
+            let adulthood = world.rules.adulthood;
+            let actors: Vec<_> = sim.state.components.lives().map(|(id, _)| id).collect();
+            for actor in actors {
+                let life = sim.state.components.life_mut(actor).unwrap();
+                life.initial_age = adulthood;
                 life.stage = LifeStage::Adult;
             }
             for due in sim.state.due.values_mut() {

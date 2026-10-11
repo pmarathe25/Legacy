@@ -2195,8 +2195,8 @@ impl Simulation {
                 let mother = parents
                     .iter()
                     .find(|parent| {
-                        self.state.development.as_ref().is_some_and(|w| {
-                            w.lives.get(parent).is_some_and(|life| {
+                        self.state.development.as_ref().is_some_and(|_| {
+                            self.state.components.life(**parent).is_some_and(|life| {
                                 life.reproduction == development::Reproduction::Gestates
                             })
                         })

@@ -97,7 +97,7 @@ impl Simulation {
             .state
             .development
             .as_ref()
-            .and_then(|world| world.lives.get(&child))
+            .and_then(|_| self.state.components.life(child))
         else {
             return;
         };
@@ -223,7 +223,12 @@ impl Simulation {
                 EventKind::LessonCompleted { gain, .. } => Conduct::Lesson { gain: *gain },
                 _ => continue,
             };
-            let stage = self.state.development.as_ref().unwrap().lives[&current].stage;
+            let stage = self
+                .state
+                .components
+                .life(current)
+                .expect("life exists")
+                .stage;
             let personality = self.state.decisions.as_ref().unwrap().minds[&guardian]
                 .personality
                 .clone();
@@ -784,7 +789,12 @@ impl Simulation {
                     let personality = self.state.decisions.as_ref().unwrap().minds[&id]
                         .personality
                         .clone();
-                    let stage = self.state.development.as_ref().unwrap().lives[&person].stage;
+                    let stage = self
+                        .state
+                        .components
+                        .life(person)
+                        .expect("life exists")
+                        .stage;
                     let assessment = self
                         .state
                         .lineage
@@ -955,10 +965,10 @@ impl Simulation {
         };
         let together = self.transport_same_place(guardian, target);
         let applicable = self.dependent_signal_visible(guardian, target).then(|| {
-            self.state.development.as_ref().is_some_and(|world| {
-                world
-                    .lives
-                    .get(&target)
+            self.state.development.as_ref().is_some_and(|_| {
+                self.state
+                    .components
+                    .life(target)
                     .is_some_and(|life| matches!(life.stage, LifeStage::Infant | LifeStage::Child))
             })
         });
@@ -1114,7 +1124,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 .0
                 .checked_sub(world.rules.lesson_duration.0)
                 .ok_or_else(fail)?;
-            let life = &development.lives[&student];
+            let life = state.components.life(student).ok_or_else(fail)?;
             let age = started
                 .checked_sub(life.born.0)
                 .and_then(|v| v.checked_add(life.initial_age.0))
@@ -1136,10 +1146,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     let mut seen = BTreeSet::new();
     for (i, incarnation) in world.incarnations.iter().enumerate() {
-        let life = development
-            .lives
-            .get(&incarnation.person)
-            .ok_or_else(fail)?;
+        let life = state.components.life(incarnation.person).ok_or_else(fail)?;
         let body = state.components.body(incarnation.person).ok_or_else(fail)?;
         if !seen.insert(incarnation.person)
             || incarnation.bound_at > state.time
@@ -1159,9 +1166,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         }
         if i > 0 {
             let previous_death = world.incarnations[i - 1].died_at.ok_or_else(fail)?;
-            let first_eligible = development
-                .lives
-                .values()
+            let first_eligible = state
+                .components
+                .lives()
+                .map(|(_, life)| life)
                 .filter(|candidate| {
                     candidate.born > previous_death
                         && candidate.initial_age == SimDuration(0)

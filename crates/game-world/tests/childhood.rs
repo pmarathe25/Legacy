@@ -58,25 +58,37 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
     );
     sim.advance(SimDuration(5_999)).unwrap();
     assert!(
-        sim.canonical_state().development.as_ref().unwrap().lives[&ruler]
+        sim.canonical_state()
+            .components
+            .life(ruler)
+            .expect("life exists")
             .preference
             .is_none()
     );
     sim.advance(SimDuration(1)).unwrap();
     assert!(
-        sim.canonical_state().development.as_ref().unwrap().lives[&ruler]
+        sim.canonical_state()
+            .components
+            .life(ruler)
+            .expect("life exists")
             .preference
             .is_some()
     );
     sim.advance(SimDuration(174_000)).unwrap();
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { child, quantity: Quantity(1_000), .. } if child == ruler)));
     assert!(
-        !sim.canonical_state().development.as_ref().unwrap().lives[&ruler]
+        !sim.canonical_state()
+            .components
+            .life(ruler)
+            .expect("life exists")
             .caregivers
             .is_empty()
     );
     assert!(
-        sim.canonical_state().development.as_ref().unwrap().lives[&ruler]
+        sim.canonical_state()
+            .components
+            .life(ruler)
+            .expect("life exists")
             .preference
             .is_none()
     );
@@ -112,7 +124,11 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
     sim.advance(SimDuration(300_000)).unwrap();
     let ruler = sim.observe().ruler;
     assert_eq!(
-        sim.canonical_state().development.as_ref().unwrap().lives[&ruler].stage,
+        sim.canonical_state()
+            .components
+            .life(ruler)
+            .expect("life exists")
+            .stage,
         LifeStage::Child
     );
     assert!(

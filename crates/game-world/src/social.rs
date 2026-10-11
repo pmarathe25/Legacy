@@ -61,7 +61,7 @@ impl Simulation {
         self.state
             .development
             .as_ref()
-            .and_then(|w| w.lives.get(&actor))
+            .and_then(|_| self.state.components.life(actor))
             .is_some_and(|life| matches!(life.stage, LifeStage::Adult | LifeStage::Elder))
     }
     fn social_speech(&self, actor: PersonId) -> bool {
@@ -1501,11 +1501,9 @@ mod tests {
         }
         let active = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .any(|pregnancy| {
                 pregnancy.gestator == first
                     && matches!(
@@ -1519,11 +1517,9 @@ mod tests {
         }
         let birth_at = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 if pregnancy.gestator != first {
                     return None;
@@ -1552,11 +1548,9 @@ mod tests {
                 .dream = decisions::Aspiration::SupportOthers;
         }
         sim.state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .filter_map(|p| match p.state {
                 development::PregnancyState::Born(child)
                     if pair(p.gestator, p.partner) == pair(first, second) =>
@@ -1565,7 +1559,7 @@ mod tests {
                 }
                 _ => None,
             })
-            .next_back()
+            .last()
             .unwrap()
     }
     #[test]
@@ -1800,7 +1794,7 @@ mod tests {
         sim.advance(SimDuration(660_000)).unwrap();
         assert!(sim.state.social.as_ref().unwrap().development[&child].experiences > 0);
         assert_eq!(
-            sim.state.development.as_ref().unwrap().lives[&child].stage,
+            sim.state.components.life(child).unwrap().stage,
             LifeStage::Adult
         );
         assert_ne!(
@@ -1808,7 +1802,10 @@ mod tests {
             decisions::Aspiration::Comfort
         );
         assert!(
-            sim.state.development.as_ref().unwrap().lives[&child]
+            sim.state
+                .components
+                .life(child)
+                .unwrap()
                 .caregivers
                 .iter()
                 .any(|id| sim.state.people[sim.person_index[id]].role == Role::Citizen)
@@ -1924,20 +1921,18 @@ mod generations {
                 .insert(actor, record);
         }
         for (gestator, partner) in parents {
-            let already_chosen = sim
-                .state
-                .development
-                .as_ref()
-                .unwrap()
-                .pregnancies
-                .values()
-                .any(|pregnancy| {
-                    pregnancy.gestator == gestator
-                        && matches!(
-                            pregnancy.state,
-                            development::PregnancyState::Gestating { .. }
-                        )
-                });
+            let already_chosen =
+                sim.state
+                    .components
+                    .pregnancies()
+                    .map(|(_, row)| row)
+                    .any(|pregnancy| {
+                        pregnancy.gestator == gestator
+                            && matches!(
+                                pregnancy.state,
+                                development::PregnancyState::Gestating { .. }
+                            )
+                    });
             for (actor, other) in [(gestator, partner), (partner, gestator)] {
                 sim.debug_actor_command(actor, Command::Cancel).unwrap();
                 let mind = sim
@@ -1971,32 +1966,28 @@ mod generations {
                         .unwrap();
                     sim.advance(MINUTE).unwrap();
                 }
-                let active = sim
-                    .state
-                    .development
-                    .as_ref()
-                    .unwrap()
-                    .pregnancies
-                    .values()
-                    .any(|pregnancy| {
-                        pregnancy.gestator == gestator
-                            && matches!(
-                                pregnancy.state,
-                                development::PregnancyState::Conceiving { .. }
-                                    | development::PregnancyState::Gestating { .. }
-                            )
-                    });
+                let active =
+                    sim.state
+                        .components
+                        .pregnancies()
+                        .map(|(_, row)| row)
+                        .any(|pregnancy| {
+                            pregnancy.gestator == gestator
+                                && matches!(
+                                    pregnancy.state,
+                                    development::PregnancyState::Conceiving { .. }
+                                        | development::PregnancyState::Gestating { .. }
+                                )
+                        });
                 if !active {
                     sim.start_conception(gestator, partner).unwrap();
                 }
             }
             let birth_at = sim
                 .state
-                .development
-                .as_ref()
-                .unwrap()
-                .pregnancies
-                .values()
+                .components
+                .pregnancies()
+                .map(|(_, row)| row)
                 .find_map(|pregnancy| {
                     if pregnancy.gestator != gestator {
                         return None;
@@ -2014,11 +2005,9 @@ mod generations {
                 .unwrap();
             let child = sim
                 .state
-                .development
-                .as_ref()
-                .unwrap()
-                .pregnancies
-                .values()
+                .components
+                .pregnancies()
+                .map(|(_, row)| row)
                 .find_map(|pregnancy| match pregnancy.state {
                     development::PregnancyState::Born(child) if pregnancy.gestator == gestator => {
                         Some(child)
@@ -2068,7 +2057,7 @@ mod generations {
         }
         let adult_at = children
             .iter()
-            .map(|child| sim.state.development.as_ref().unwrap().lives[child].born.0 + 600_000)
+            .map(|child| sim.state.components.life(*child).unwrap().born.0 + 600_000)
             .max()
             .unwrap();
         if sim.state.time.0 < adult_at {
@@ -2077,7 +2066,7 @@ mod generations {
         }
         for child in &children {
             assert_eq!(
-                sim.state.development.as_ref().unwrap().lives[child].stage,
+                sim.state.components.life(*child).unwrap().stage,
                 LifeStage::Adult
             );
             assert_eq!(
@@ -2093,15 +2082,13 @@ mod generations {
             assert!(!sim.state.inventories[&food].access.contains(child));
         }
         assert_ne!(
-            sim.state.development.as_ref().unwrap().lives[&children[0]].reproduction,
-            sim.state.development.as_ref().unwrap().lives[&children[1]].reproduction,
+            sim.state.components.life(children[0]).unwrap().reproduction,
+            sim.state.components.life(children[1]).unwrap().reproduction,
             "this seeded pair must have compatible biological roles; pregnancies {:?}",
             sim.state
-                .development
-                .as_ref()
-                .unwrap()
-                .pregnancies
-                .values()
+                .components
+                .pregnancies()
+                .map(|(_, row)| row)
                 .map(|pregnancy| (pregnancy.id, &pregnancy.state))
                 .collect::<Vec<_>>()
         );
@@ -2132,7 +2119,7 @@ mod generations {
                 .unwrap()
                 .agreements
                 .keys()
-                .next_back()
+                .last()
                 .unwrap();
             sim.debug_agreement_action(*child, AgreementAction::Accept { agreement })
                 .unwrap();
@@ -2173,11 +2160,9 @@ mod generations {
         sim.advance(SimDuration(240_000)).unwrap();
         let grandchild = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .find_map(|pregnancy| match pregnancy.state {
                 development::PregnancyState::Born(child)
                     if pair(pregnancy.gestator, pregnancy.partner) == pair(first, second) =>
@@ -2188,9 +2173,7 @@ mod generations {
             })
             .unwrap();
         assert_eq!(
-            sim.state.development.as_ref().unwrap().lives[&grandchild]
-                .parents
-                .len(),
+            sim.state.components.life(grandchild).unwrap().parents.len(),
             2
         );
         assert!(

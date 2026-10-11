@@ -567,7 +567,10 @@ fn main() {
                     clinical.thirst,
                     clinical.cold,
                     clinical.illnesses.len(),
-                    state.development.as_ref().unwrap().lives[actor]
+                    state
+                        .components
+                        .life(*actor)
+                        .unwrap()
                         .age_at(state.time)
                         .unwrap(),
                     state.components.activity(*actor).expect("activity exists"),

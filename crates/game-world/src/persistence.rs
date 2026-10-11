@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 35;
+const SAVE_VERSION: u32 = 36;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -363,8 +363,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.development {
-        for id in world.pregnancies.keys() {
+    if s.development.is_some() {
+        for (id, _) in s.components.pregnancies() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -1255,7 +1255,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .development
                     .as_ref()
-                    .is_some_and(|w| w.pregnancies.contains_key(&pregnancy))
+                    .is_some_and(|_| s.components.pregnancy(pregnancy).is_some())
                     || parents.iter().any(|p| !people.contains_key(p))
                 {
                     return Err(fail());
@@ -1265,7 +1265,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .development
                     .as_ref()
-                    .is_some_and(|w| w.pregnancies.contains_key(&pregnancy))
+                    .is_some_and(|_| s.components.pregnancy(pregnancy).is_some())
                 {
                     return Err(fail());
                 }
@@ -1278,7 +1278,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .development
                     .as_ref()
-                    .is_some_and(|w| w.pregnancies.contains_key(&pregnancy))
+                    .is_some_and(|_| s.components.pregnancy(pregnancy).is_some())
                     || !people.contains_key(&child)
                     || parents.iter().any(|p| !people.contains_key(p))
                 {
@@ -2192,7 +2192,7 @@ fn validate_physical(
                 let life = s
                     .development
                     .as_ref()
-                    .and_then(|w| w.lives.get(id))
+                    .and_then(|_| s.components.life(*id))
                     .ok_or_else(fail)?;
                 let duration = if matches!(*activity, Activity::Play { .. }) {
                     MINUTE.0
@@ -2272,8 +2272,8 @@ fn validate_physical(
             Activity::Conceive {
                 pregnancy,
                 completes,
-            } if !s.development.as_ref().is_some_and(|w| {
-                w.pregnancies.get(&pregnancy).is_some_and(|p| {
+            } if !s.development.as_ref().is_some_and(|_| {
+                s.components.pregnancy(pregnancy).is_some_and(|p| {
                     [p.gestator, p.partner].contains(id)
                         && p.state == development::PregnancyState::Conceiving { completes }
                 })

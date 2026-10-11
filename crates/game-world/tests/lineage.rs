@@ -558,11 +558,9 @@ fn simultaneous_births_use_persistent_order_without_rebinding_to_the_second_chil
     assert_eq!(result.reached, SimTime(240_000));
     let newborns: Vec<_> = sim
         .canonical_state()
-        .development
-        .as_ref()
-        .unwrap()
-        .lives
-        .values()
+        .components
+        .lives()
+        .map(|(_, row)| row)
         .filter(|life| life.born == SimTime(240_000))
         .map(|life| life.id)
         .collect();
@@ -584,10 +582,10 @@ fn a_birth_at_the_death_timestamp_waits_for_a_strictly_later_birth() {
     let original = fixture(1);
     let ruler = original.canonical_state().ruler;
     let mut save: serde_json::Value = serde_json::from_slice(&original.save().unwrap()).unwrap();
-    let state = save["state"].as_object_mut().unwrap();
-    let life = &mut state.get_mut("development").unwrap()["lives"][ruler.0.to_string()];
+    let life = support::component(&mut save, "lifecycle/life", ruler);
     life["initial_age"] = serde_json::json!(1_200_000);
     life["stage"] = serde_json::json!("Elder");
+    let state = save["state"].as_object_mut().unwrap();
     let due = state.get_mut("due").unwrap().as_object_mut().unwrap();
     let age = serde_json::json!({"Age": ruler.0});
     for events in due.values_mut() {
@@ -608,11 +606,9 @@ fn a_birth_at_the_death_timestamp_waits_for_a_strictly_later_birth() {
     assert_eq!(world.waiting.as_ref().unwrap().died_at, SimTime(300_000));
     assert!(
         sim.canonical_state()
-            .development
-            .as_ref()
-            .unwrap()
-            .lives
-            .values()
+            .components
+            .lives()
+            .map(|(_, row)| row)
             .any(|life| life.born == SimTime(300_000) && !life.parents.is_empty())
     );
     let later = sim.advance(SimDuration(600_000)).unwrap();
@@ -758,11 +754,9 @@ fn births_before_death_are_ineligible_and_an_unbounded_gap_manufactures_nothing(
     sim.advance(SimDuration(300_000)).unwrap();
     let previous_child = sim
         .canonical_state()
-        .development
-        .as_ref()
-        .unwrap()
-        .lives
-        .values()
+        .components
+        .lives()
+        .map(|(_, row)| row)
         .find(|l| !l.parents.is_empty())
         .unwrap()
         .id;
@@ -869,7 +863,10 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
         .unwrap();
     assert_eq!(care.time, SimTime(540_000));
     assert!(
-        sim.canonical_state().development.as_ref().unwrap().lives[&child]
+        sim.canonical_state()
+            .components
+            .life(child)
+            .expect("life exists")
             .caregivers
             .iter()
             .any(|id| guardians.contains(id))

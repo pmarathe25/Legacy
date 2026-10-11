@@ -2,6 +2,7 @@
 //! current physical/choice facts and IDs, never a world reference or a verdict.
 use super::*;
 use game_core::Location;
+use game_ecs::{Batch, StableId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Attempt {
@@ -57,32 +58,71 @@ enum Edit {
         before: Option<Pregnancy>,
         after: Pregnancy,
     },
-    Stage {
-        actor: PersonId,
-        before: LifeStage,
-        after: LifeStage,
+    Life {
+        before: Option<Life>,
+        after: Life,
     },
-    NewLife(Life),
 }
 #[derive(Clone, Debug)]
-pub struct Prepared {
+enum ReadGuard {
+    Life {
+        actor: PersonId,
+        before: Option<Life>,
+    },
+    Pregnancy {
+        id: PregnancyId,
+        before: Option<Pregnancy>,
+    },
+    ActivePregnancies {
+        gestator: PersonId,
+        before: Vec<Pregnancy>,
+    },
+}
+fn active_pregnancies(store: &Store, gestator: PersonId) -> Vec<Pregnancy> {
+    let mut rows: Vec<_> = all_pregnancies(store)
+        .filter(|(_, pregnancy)| {
+            pregnancy.gestator == gestator
+                && matches!(
+                    pregnancy.state,
+                    PregnancyState::Conceiving { .. } | PregnancyState::Gestating { .. }
+                )
+        })
+        .map(|(_, row)| row.clone())
+        .collect();
+    rows.sort_by_key(|row| row.id);
+    rows
+}
+#[derive(Clone, Debug)]
+pub struct PreparedLifecycle {
+    rules: Rules,
+    guards: Vec<ReadGuard>,
     edits: Vec<Edit>,
     effects: Vec<Effect>,
 }
-impl Prepared {
+impl PreparedLifecycle {
     pub fn effects(&self) -> &[Effect] {
         &self.effects
     }
-    pub fn validate(&self, world: &World) -> Result<(), Error> {
+    pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
+        if runtime.rules != self.rules {
+            return Err(Error::Unavailable);
+        }
+        for guard in &self.guards {
+            let valid = match guard {
+                ReadGuard::Life { actor, before } => life(store, *actor) == before.as_ref(),
+                ReadGuard::Pregnancy { id, before } => pregnancy(store, *id) == before.as_ref(),
+                ReadGuard::ActivePregnancies { gestator, before } => {
+                    active_pregnancies(store, *gestator) == *before
+                }
+            };
+            if !valid {
+                return Err(Error::Unavailable);
+            }
+        }
         for edit in &self.edits {
             let valid = match edit {
-                Edit::Pregnancy { before, after } => {
-                    world.pregnancies.get(&after.id) == before.as_ref()
-                }
-                Edit::Stage { actor, before, .. } => {
-                    world.lives.get(actor).map(|life| life.stage) == Some(*before)
-                }
-                Edit::NewLife(life) => !world.lives.contains_key(&life.id),
+                Edit::Pregnancy { before, after } => pregnancy(store, after.id) == before.as_ref(),
+                Edit::Life { before, after } => life(store, after.id) == before.as_ref(),
             };
             if !valid {
                 return Err(Error::Unavailable);
@@ -90,25 +130,26 @@ impl Prepared {
         }
         Ok(())
     }
-    pub fn commit(self, world: &mut World) -> Result<Vec<Effect>, Error> {
-        self.validate(world)?;
+    pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<Vec<Effect>, Error> {
+        self.validate(runtime, store)?;
+        let mut batch = Batch::new();
         for edit in self.edits {
             match edit {
                 Edit::Pregnancy { after, .. } => {
-                    world.pregnancies.insert(after.id, after);
+                    batch.insert(StableId(after.id.0), after);
                 }
-                Edit::Stage { actor, after, .. } => {
-                    world.lives.get_mut(&actor).unwrap().stage = after
-                }
-                Edit::NewLife(life) => {
-                    world.lives.insert(life.id, life);
+                Edit::Life { after, .. } => {
+                    batch.insert(StableId(after.id.0), after);
                 }
             }
         }
+        store.apply_batch(batch)?;
         Ok(self.effects)
     }
-    fn noop() -> Self {
+    fn noop(rules: &Rules) -> Self {
         Self {
+            rules: rules.clone(),
+            guards: Vec::new(),
             edits: Vec::new(),
             effects: Vec::new(),
         }
@@ -122,9 +163,10 @@ pub enum Deadline {
     Age(PersonId),
     Birth(PregnancyId),
 }
-impl World {
+impl Runtime {
     pub fn preflight_deadlines(
         &self,
+        store: &Store,
         at: SimTime,
         deadlines: impl IntoIterator<Item = Deadline>,
     ) -> Result<(), Error> {
@@ -139,7 +181,7 @@ impl World {
         for deadline in deadlines {
             match deadline {
                 Deadline::Conception(id) => {
-                    if self.pregnancies.get(&id).is_none_or(|pregnancy| {
+                    if pregnancy(store, id).is_none_or(|pregnancy| {
                         pregnancy.state != (PregnancyState::Conceiving { completes: at })
                     }) {
                         return Err(Error::Unavailable);
@@ -148,7 +190,7 @@ impl World {
                         .ok_or(Error::Overflow)?;
                 }
                 Deadline::Birth(id) => {
-                    if self.pregnancies.get(&id).is_none_or(|pregnancy| {
+                    if pregnancy(store, id).is_none_or(|pregnancy| {
                         pregnancy.state != (PregnancyState::Gestating { due: at })
                     }) {
                         return Err(Error::Unavailable);
@@ -157,7 +199,7 @@ impl World {
                         .ok_or(Error::Overflow)?;
                 }
                 Deadline::Age(id) => {
-                    self.lives.get(&id).ok_or(Error::Unavailable)?.age_at(at)?;
+                    life(store, id).ok_or(Error::Unavailable)?.age_at(at)?;
                 }
             }
         }
@@ -165,14 +207,15 @@ impl World {
     }
     pub fn prepare_start_conception(
         &self,
+        store: &Store,
         now: SimTime,
         id: PregnancyId,
         bodies: [&BodyFacts; 2],
         consent: Consent,
-    ) -> Result<Prepared, Error> {
+    ) -> Result<PreparedLifecycle, Error> {
         let [first, second] = bodies;
-        let a = self.lives.get(&first.actor).ok_or(Error::Unavailable)?;
-        let b = self.lives.get(&second.actor).ok_or(Error::Unavailable)?;
+        let a = life(store, first.actor).ok_or(Error::Unavailable)?;
+        let b = life(store, second.actor).ok_or(Error::Unavailable)?;
         if first.actor == second.actor
             || !self.rules.valid()
             || !matches!(
@@ -199,17 +242,28 @@ impl World {
             (second.actor, b.reproduction),
         )
         .ok_or(Error::Unavailable)?;
-        if self.pregnancies.values().any(|pregnancy| {
-            pregnancy.gestator == gestator
-                && matches!(
-                    pregnancy.state,
-                    PregnancyState::Conceiving { .. } | PregnancyState::Gestating { .. }
-                )
-        }) {
+        let active = active_pregnancies(store, gestator);
+        if !active.is_empty() {
             return Err(Error::Unavailable);
         }
+        let guards = vec![
+            ReadGuard::Life {
+                actor: first.actor,
+                before: Some(a.clone()),
+            },
+            ReadGuard::Life {
+                actor: second.actor,
+                before: Some(b.clone()),
+            },
+            ReadGuard::ActivePregnancies {
+                gestator,
+                before: active,
+            },
+        ];
         if !consent.initiator || !consent.partner {
-            return Ok(Prepared {
+            return Ok(PreparedLifecycle {
+                rules: self.rules.clone(),
+                guards,
                 edits: Vec::new(),
                 effects: vec![Effect::Refused {
                     initiator: first.actor,
@@ -217,7 +271,7 @@ impl World {
                 }],
             });
         }
-        if id.0 == 0 || self.pregnancies.contains_key(&id) {
+        if id.0 == 0 || id.0 == gestator.0 || id.0 == partner.0 || pregnancy(store, id).is_some() {
             return Err(Error::Unavailable);
         }
         let completes = SimTime(
@@ -235,7 +289,9 @@ impl World {
             partner,
             state: PregnancyState::Conceiving { completes },
         };
-        Ok(Prepared {
+        Ok(PreparedLifecycle {
+            rules: self.rules.clone(),
+            guards,
             edits: vec![Edit::Pregnancy {
                 before: None,
                 after,
@@ -249,11 +305,12 @@ impl World {
     }
     pub fn prepare_complete_conception(
         &self,
+        store: &Store,
         id: PregnancyId,
         now: SimTime,
         bodies: [&BodyFacts; 2],
-    ) -> Result<Prepared, Error> {
-        let before = self.pregnancies.get(&id).ok_or(Error::Unavailable)?;
+    ) -> Result<PreparedLifecycle, Error> {
+        let before = pregnancy(store, id).ok_or(Error::Unavailable)?;
         if before.state != (PregnancyState::Conceiving { completes: now }) {
             return Err(Error::Unavailable);
         }
@@ -291,7 +348,15 @@ impl World {
                 was_conceiving: true,
             })
         };
-        Ok(Prepared {
+        Ok(PreparedLifecycle {
+            rules: self.rules.clone(),
+            guards: pair
+                .into_iter()
+                .map(|actor| ReadGuard::Life {
+                    actor,
+                    before: life(store, actor).cloned(),
+                })
+                .collect(),
             edits: vec![Edit::Pregnancy {
                 before: Some(before.clone()),
                 after,
@@ -301,13 +366,18 @@ impl World {
     }
     pub fn prepare_interruption(
         &self,
+        store: &Store,
         actor: PersonId,
         died: bool,
         affected: impl IntoIterator<Item = PregnancyId>,
-    ) -> Prepared {
-        let mut prepared = Prepared::noop();
+    ) -> PreparedLifecycle {
+        let mut prepared = PreparedLifecycle::noop(&self.rules);
         for id in affected.into_iter().collect::<BTreeSet<_>>() {
-            let Some(before) = self.pregnancies.get(&id) else {
+            prepared.guards.push(ReadGuard::Pregnancy {
+                id,
+                before: pregnancy(store, id).cloned(),
+            });
+            let Some(before) = pregnancy(store, id) else {
                 continue;
             };
             let was_conceiving = matches!(before.state, PregnancyState::Conceiving { .. });
@@ -335,46 +405,65 @@ impl World {
     }
     pub fn prepare_age(
         &self,
+        store: &Store,
         actor: PersonId,
         now: SimTime,
         body_alive: bool,
         lifespan_loss: u64,
         aging_enabled: bool,
-    ) -> Result<Prepared, Error> {
-        let life = self.lives.get(&actor).ok_or(Error::Unavailable)?;
+    ) -> Result<PreparedLifecycle, Error> {
+        let life = life(store, actor).ok_or(Error::Unavailable)?;
+        let guards = vec![ReadGuard::Life {
+            actor,
+            before: Some(life.clone()),
+        }];
         if !body_alive || !aging_enabled {
-            return Ok(Prepared::noop());
+            let mut prepared = PreparedLifecycle::noop(&self.rules);
+            prepared.guards = guards;
+            return Ok(prepared);
         }
-        let effect = self.evaluate_age(actor, now, lifespan_loss, true)?;
+        let effect = self.evaluate_age(store, actor, now, lifespan_loss, true)?;
         if effect.died {
-            return Ok(Prepared {
+            return Ok(PreparedLifecycle {
+                rules: self.rules.clone(),
+                guards,
                 edits: Vec::new(),
                 effects: vec![Effect::Death { actor }],
             });
         }
-        Ok(Prepared {
-            edits: vec![Edit::Stage {
-                actor,
-                before: life.stage,
-                after: effect.stage,
+        let mut after = life.clone();
+        after.stage = effect.stage;
+        Ok(PreparedLifecycle {
+            rules: self.rules.clone(),
+            guards,
+            edits: vec![Edit::Life {
+                before: Some(life.clone()),
+                after,
             }],
             effects: vec![Effect::Developed(effect)],
         })
     }
     pub fn prepare_birth(
         &self,
+        store: &Store,
         id: PregnancyId,
         now: SimTime,
         child: PersonId,
         gestator: &BodyFacts,
         seed: u64,
-    ) -> Result<Prepared, Error> {
-        let before = self.pregnancies.get(&id).ok_or(Error::Unavailable)?;
+    ) -> Result<PreparedLifecycle, Error> {
+        let before = pregnancy(store, id).ok_or(Error::Unavailable)?;
+        let mut guards = vec![ReadGuard::Pregnancy {
+            id,
+            before: Some(before.clone()),
+        }];
         if matches!(
             before.state,
             PregnancyState::Ended | PregnancyState::Born(_)
         ) {
-            return Ok(Prepared::noop());
+            let mut prepared = PreparedLifecycle::noop(&self.rules);
+            prepared.guards = guards;
+            return Ok(prepared);
         }
         if before.state != (PregnancyState::Gestating { due: now })
             || gestator.actor != before.gestator
@@ -382,10 +471,16 @@ impl World {
             return Err(Error::Unavailable);
         }
         let parents = [before.gestator, before.partner];
+        guards.extend(parents.into_iter().map(|actor| ReadGuard::Life {
+            actor,
+            before: life(store, actor).cloned(),
+        }));
         let mut after = before.clone();
         if !gestator.alive {
             after.state = PregnancyState::Ended;
-            return Ok(Prepared {
+            return Ok(PreparedLifecycle {
+                rules: self.rules.clone(),
+                guards,
                 edits: vec![Edit::Pregnancy {
                     before: Some(before.clone()),
                     after,
@@ -397,7 +492,11 @@ impl World {
                 })],
             });
         }
-        if child.0 == 0 || parents.contains(&child) || self.lives.contains_key(&child) {
+        if child.0 == 0
+            || child.0 == id.0
+            || parents.contains(&child)
+            || life(store, child).is_some()
+        {
             return Err(Error::Unavailable);
         }
         let next_age = SimTime(
@@ -416,13 +515,18 @@ impl World {
             preference: None,
         };
         after.state = PregnancyState::Born(child);
-        Ok(Prepared {
+        Ok(PreparedLifecycle {
+            rules: self.rules.clone(),
+            guards,
             edits: vec![
                 Edit::Pregnancy {
                     before: Some(before.clone()),
                     after,
                 },
-                Edit::NewLife(life),
+                Edit::Life {
+                    before: None,
+                    after: life,
+                },
             ],
             effects: vec![Effect::Born {
                 pregnancy: id,
@@ -451,18 +555,24 @@ pub struct ValidationBody {
     pub aging_enabled: bool,
     pub lifespan_loss: u64,
 }
-impl World {
+impl Runtime {
     /// Validate this FSM against explicit external body and scheduler facts.
     /// Physical activity storage and political identities remain outside it.
     pub fn validate_with_facts(
         &self,
+        store: &Store,
         now: SimTime,
         bodies: &BTreeMap<PersonId, ValidationBody>,
         deadlines: &[(SimTime, Deadline)],
     ) -> Result<(), Error> {
-        validate_local(self, now)?;
+        validate_runtime(self, store, now)?;
         let fail = || Error::InvalidSave("inconsistent lifecycle body or deadline facts".into());
-        if self.lives.keys().ne(bodies.keys()) {
+        if all_lives(store)
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>()
+            .iter()
+            .ne(bodies.keys())
+        {
             return Err(fail());
         }
         let mut ages = BTreeSet::new();
@@ -473,7 +583,7 @@ impl World {
             }
             match *deadline {
                 Deadline::Age(actor) => {
-                    let life = self.lives.get(&actor).ok_or_else(fail)?;
+                    let life = life(store, actor).ok_or_else(fail)?;
                     let facts = bodies.get(&actor).ok_or_else(fail)?;
                     let age = life.age_at(*at).map_err(|_| fail())?;
                     if ![
@@ -489,7 +599,7 @@ impl World {
                     }
                 }
                 Deadline::Birth(id) => {
-                    if self.pregnancies.get(&id).is_none_or(|pregnancy| {
+                    if pregnancy(store, id).is_none_or(|pregnancy| {
                         pregnancy.state != (PregnancyState::Gestating { due: *at })
                     }) || !births.insert(id)
                     {
@@ -497,7 +607,7 @@ impl World {
                     }
                 }
                 Deadline::Conception(id) => {
-                    if self.pregnancies.get(&id).is_none_or(|pregnancy| {
+                    if pregnancy(store, id).is_none_or(|pregnancy| {
                         pregnancy.state != (PregnancyState::Conceiving { completes: *at })
                     }) {
                         return Err(fail());
@@ -505,10 +615,10 @@ impl World {
                 }
             }
         }
-        for (actor, life) in &self.lives {
-            let facts = &bodies[actor];
-            if facts.body.actor != *actor
-                || (facts.body.alive && facts.aging_enabled) != ages.contains(actor)
+        for (actor, life) in all_lives(store) {
+            let facts = &bodies[&actor];
+            if facts.body.actor != actor
+                || (facts.body.alive && facts.aging_enabled) != ages.contains(&actor)
             {
                 return Err(fail());
             }
@@ -521,13 +631,13 @@ impl World {
                 }
             }
         }
-        for (id, pregnancy) in &self.pregnancies {
+        for (id, pregnancy) in all_pregnancies(store) {
             match pregnancy.state {
                 PregnancyState::Conceiving { completes } => {
                     for actor in [pregnancy.gestator, pregnancy.partner] {
                         if bodies[&actor].body.attempt
                             != Some(Attempt {
-                                pregnancy: *id,
+                                pregnancy: id,
                                 completes,
                             })
                         {
@@ -536,7 +646,7 @@ impl World {
                     }
                 }
                 PregnancyState::Gestating { .. }
-                    if !births.contains(id) || !bodies[&pregnancy.gestator].body.alive =>
+                    if !births.contains(&id) || !bodies[&pregnancy.gestator].body.alive =>
                 {
                     return Err(fail());
                 }

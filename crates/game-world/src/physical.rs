@@ -68,7 +68,7 @@ impl Simulation {
             .state
             .development
             .as_ref()
-            .and_then(|world| world.lives.get(&child))
+            .and_then(|_| self.state.components.life(child))
             .ok_or(Error::Unavailable)?;
         let receiver = self
             .state
@@ -395,7 +395,7 @@ impl Simulation {
                     .state
                     .development
                     .as_ref()
-                    .and_then(|w| w.lives.get(&actor))
+                    .and_then(|_| self.state.components.life(actor))
                     .ok_or(Error::Unavailable)?;
                 if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
                     || !matches!(
@@ -427,7 +427,7 @@ impl Simulation {
                     .state
                     .development
                     .as_ref()
-                    .and_then(|w| w.lives.get(&actor))
+                    .and_then(|_| self.state.components.life(actor))
                     .ok_or(Error::Unavailable)?;
                 if life.stage != LifeStage::Child || a.vitals.fatigue >= rules.fatigue_limit {
                     return Err(Error::Unavailable);
@@ -469,7 +469,7 @@ impl Simulation {
                     .state
                     .development
                     .as_ref()
-                    .and_then(|w| w.lives.get(&child))
+                    .and_then(|_| self.state.components.life(child))
                     .ok_or(Error::Unavailable)?;
                 if !matches!(life.stage, LifeStage::Infant | LifeStage::Child)
                     || child == actor
@@ -620,8 +620,8 @@ impl Simulation {
                         actor,
                         area,
                         capable: a.vitals.alive && a.vitals.health > 0,
-                        adult: self.state.development.as_ref().is_none_or(|world| {
-                            matches!(world.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)
+                        adult: self.state.development.as_ref().is_none_or(|_| {
+                            matches!(self.state.components.life(actor).unwrap().stage, LifeStage::Adult | LifeStage::Elder)
                         }),
                         fatigue_allows: a.vitals.fatigue < rules.fatigue_limit,
                         site_access: site_record.access.contains(&actor),
@@ -1352,14 +1352,7 @@ impl Simulation {
                     .alive
                     && self.transport_same_place(child, actor)
                 {
-                    let life = self
-                        .state
-                        .development
-                        .as_mut()
-                        .unwrap()
-                        .lives
-                        .get_mut(&child)
-                        .unwrap();
+                    let life = self.state.components.life_mut(child).unwrap();
                     if life
                         .preference
                         .is_some_and(|(p, _)| p == ChildhoodInterest::Company)
@@ -1389,14 +1382,8 @@ impl Simulation {
                 }
             }
             Activity::Express { preference, .. } => {
-                self.state
-                    .development
-                    .as_mut()
-                    .unwrap()
-                    .lives
-                    .get_mut(&actor)
-                    .unwrap()
-                    .preference = Some((preference, SimTime(self.state.time.0 + 300_000)));
+                self.state.components.life_mut(actor).unwrap().preference =
+                    Some((preference, SimTime(self.state.time.0 + 300_000)));
                 self.emit(EventKind::Expressed { actor, preference });
                 success = true;
             }
@@ -1537,11 +1524,8 @@ impl Simulation {
                     food.quantity.0 -= quantity.0;
                     food.last_granted = Some(actor);
                     self.state
-                        .development
-                        .as_mut()
-                        .unwrap()
-                        .lives
-                        .get_mut(&child)
+                        .components
+                        .life_mut(child)
                         .unwrap()
                         .caregivers
                         .insert(actor);
@@ -1561,14 +1545,7 @@ impl Simulation {
                         });
                     relationship.trust = (relationship.trust + 50).min(1_000);
                     relationship.affection = (relationship.affection + 50).min(1_000);
-                    let life = self
-                        .state
-                        .development
-                        .as_mut()
-                        .unwrap()
-                        .lives
-                        .get_mut(&child)
-                        .unwrap();
+                    let life = self.state.components.life_mut(child).unwrap();
                     if life
                         .preference
                         .is_some_and(|(p, _)| p == ChildhoodInterest::Food)

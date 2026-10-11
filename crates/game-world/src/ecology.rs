@@ -361,9 +361,9 @@ impl Simulation {
             .unwrap()
             .resource(&self.state.components, resource)
             .ok_or(Error::Unavailable)?;
-        let adult = self.state.development.as_ref().is_none_or(|world| {
+        let adult = self.state.development.as_ref().is_none_or(|_| {
             matches!(
-                world.lives[&actor].stage,
+                self.state.components.life(actor).unwrap().stage,
                 LifeStage::Adult | LifeStage::Elder
             )
         });
@@ -774,8 +774,11 @@ impl Simulation {
                 .vitals
                 .fatigue
                 < physical.rules.fatigue_limit,
-            adult: self.state.development.as_ref().is_none_or(|w| {
-                matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)
+            adult: self.state.development.as_ref().is_none_or(|_| {
+                matches!(
+                    self.state.components.life(actor).unwrap().stage,
+                    LifeStage::Adult | LifeStage::Elder
+                )
             }),
             carrying_room: Quantity(
                 u128::from(physical.rules.carrying_capacity.0).saturating_sub(held) as u64,
@@ -862,7 +865,7 @@ impl Simulation {
             let q = Quantity(quantity.0.min(room.0).min(known.available.0));
             let facts = game_ecology::GatherFacts { now: self.state.time, area,
                 capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|_| self.state.components.body(actor).expect("body exists").vitals.fatigue < self.body_rules(actor).fatigue_limit),
-                adult: self.state.development.as_ref().is_none_or(|w| matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)),
+                adult: self.state.development.as_ref().is_none_or(|_| matches!(self.state.components.life(actor).unwrap().stage, LifeStage::Adult | LifeStage::Elder)),
                 carrying_room: room, tool: self.ecology_tool_for_planning(actor, resources) };
             game_ecology::LocalAcquisition { resource: known.id,
                 can_prepare: world.gathering_conditions(&self.state.components, actor, known.id, q, !known.accessible, facts).is_ok(),

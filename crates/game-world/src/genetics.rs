@@ -59,9 +59,10 @@ impl Simulation {
         actor: PersonId,
     ) -> Result<game_physiology::traits::Development, Error> {
         let world = self.state.development.as_ref().ok_or(Error::Unavailable)?;
-        let maturity = world
-            .lives
-            .get(&actor)
+        let maturity = self
+            .state
+            .components
+            .life(actor)
             .ok_or(Error::Unavailable)?
             .maturity_milli(&world.rules, self.state.time)?;
         let training = self.state.physical_traits.as_ref().map_or(0, |traits| {
@@ -128,7 +129,7 @@ impl Simulation {
         // Stage plain new rows; no founder is visible until the whole batch is valid.
         let mut batch = game_ecs::Batch::new();
         for person in &self.state.people {
-            let life = &self.state.development.as_ref().unwrap().lives[&person.id];
+            let life = &self.state.components.life(person.id).expect("life exists");
             let founder = genes.prepare_founder(
                 self.state.seed,
                 person.id,
@@ -185,12 +186,19 @@ impl Simulation {
         let Some(world) = &mut self.state.genetics else {
             return Ok(());
         };
-        let conceived = &self.state.development.as_ref().unwrap().pregnancies[&pregnancy];
+        let parents = {
+            let conceived = self
+                .state
+                .components
+                .pregnancy(pregnancy)
+                .expect("pregnancy exists");
+            [conceived.gestator, conceived.partner]
+        };
         world.conceive(
             &mut self.state.components,
             self.state.seed,
             pregnancy,
-            [conceived.gestator, conceived.partner],
+            parents,
             self.state.time,
         )
     }
@@ -214,14 +222,7 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .interpret_genes(child, &genes.allele_source(&self.state.components))?;
-        self.state
-            .development
-            .as_mut()
-            .unwrap()
-            .lives
-            .get_mut(&child)
-            .unwrap()
-            .reproduction = role;
+        self.state.components.life_mut(child).unwrap().reproduction = role;
         self.state.physical_traits.as_mut().unwrap().register(
             &mut self.state.components,
             child,
@@ -497,7 +498,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     check(state, "physiology", &traits.definitions)?;
     check(state, "temperament", &temperament.definitions)?;
     check(state, "heredity", heredity)?;
-    let development = state.development.as_ref().ok_or_else(fail)?;
+    state.development.as_ref().ok_or_else(fail)?;
     let people: BTreeSet<_> = state.people.iter().map(|person| person.id).collect();
     if state
         .components
@@ -530,9 +531,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     {
         return Err(fail());
     }
-    for (actor, life) in &development.lives {
+    for (actor, life) in state.components.lives() {
         let role = heredity
-            .interpret_genes(*actor, &genes.allele_source(&state.components))
+            .interpret_genes(actor, &genes.allele_source(&state.components))
             .map_err(|_| fail())?;
         if life.reproduction != development::Reproduction::Neither && life.reproduction != role {
             return Err(fail());
@@ -540,20 +541,20 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         traits
             .phenotype_from_genes(
                 &state.components,
-                *actor,
+                actor,
                 &genes.allele_source(&state.components),
             )
             .map_err(|_| fail())?;
         temperament
             .express_from_genes(
                 &state.components,
-                *actor,
+                actor,
                 &genes.allele_source(&state.components),
             )
             .map_err(|_| fail())?;
     }
     for (id, inheritance) in state.components.inheritances() {
-        let pregnancy = development.pregnancies.get(&id).ok_or_else(fail)?;
+        let pregnancy = state.components.pregnancy(id).ok_or_else(fail)?;
         if inheritance.parents != [pregnancy.gestator, pregnancy.partner] {
             return Err(fail());
         }
@@ -567,11 +568,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             _ => return Err(fail()),
         }
     }
-    for (id, pregnancy) in &development.pregnancies {
+    for (id, pregnancy) in state.components.pregnancies() {
         if !matches!(
             pregnancy.state,
             development::PregnancyState::Conceiving { .. } | development::PregnancyState::Ended
-        ) && state.components.inheritance(*id).is_none()
+        ) && state.components.inheritance(id).is_none()
         {
             return Err(fail());
         }
@@ -760,14 +761,12 @@ mod tests {
         .unwrap();
         sim.debug_actor_command(player, Command::Conceive { partner: mother })
             .unwrap();
-        let pregnancy = *sim
+        let pregnancy = sim
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .keys()
-            .next_back()
+            .components
+            .pregnancies()
+            .map(|(id, _)| id)
+            .last()
             .unwrap();
         (mother, pregnancy)
     }
@@ -842,7 +841,11 @@ mod tests {
             frozen
         );
         assert_eq!(
-            sim.state.development.as_ref().unwrap().lives[&child].parents,
+            sim.state
+                .components
+                .life(child)
+                .expect("life exists")
+                .parents,
             [mother, player]
         );
         assert!(
@@ -856,7 +859,7 @@ mod tests {
                 .values()
                 .all(|fact| fact.source == KnowledgeSource::Observed(child)
                     && fact.observed_at
-                        >= sim.state.development.as_ref().unwrap().lives[&child].born)
+                        >= sim.state.components.life(child).expect("life exists").born)
         );
         assert_eq!(
             sim.state.inventories[&sim.state.people[sim.person_index[&child]].inventory]

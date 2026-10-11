@@ -173,7 +173,14 @@ impl Simulation {
                 .expect("location exists") = Location::AtArea(village);
             person.route.clear();
         }
-        for life in self.state.development.as_mut().unwrap().lives.values_mut() {
+        for person in self
+            .state
+            .components
+            .lives()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+        {
+            let life = self.state.components.life_mut(person).expect("life exists");
             life.initial_age = initial_age;
             life.stage = LifeStage::Adult;
         }
@@ -1057,11 +1064,9 @@ impl Simulation {
         let father = self.state.people[4].id;
         if !self
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .any(|pregnancy| {
                 pregnancy.gestator == mother
                     && matches!(
@@ -1073,13 +1078,11 @@ impl Simulation {
         {
             self.debug_actor_command(mother, Command::Conceive { partner: father })?;
         }
-        if let Some(completes) = self
+        let pending_conception = self
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 (pregnancy.gestator == mother)
                     .then_some(&pregnancy.state)
@@ -1087,17 +1090,15 @@ impl Simulation {
                         development::PregnancyState::Conceiving { completes } => Some(*completes),
                         _ => None,
                     })
-            })
-        {
+            });
+        if let Some(completes) = pending_conception {
             self.advance(SimDuration(completes.0 - self.state.time.0))?;
         }
         let birth = self
             .state
-            .development
-            .as_ref()
-            .unwrap()
-            .pregnancies
-            .values()
+            .components
+            .pregnancies()
+            .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 (pregnancy.gestator == mother)
                     .then_some(&pregnancy.state)
@@ -1160,7 +1161,14 @@ impl Simulation {
             }
         }
 
-        for life in self.state.development.as_mut().unwrap().lives.values_mut() {
+        for person in self
+            .state
+            .components
+            .lives()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+        {
+            let life = self.state.components.life_mut(person).expect("life exists");
             let age = life
                 .initial_age
                 .0
@@ -1303,7 +1311,13 @@ impl Simulation {
             .map(|stock| stock.id)
             .collect();
         for observer in access.iter().copied() {
-            if self.state.development.as_ref().unwrap().lives[&observer].stage == LifeStage::Infant
+            if self
+                .state
+                .components
+                .life(observer)
+                .expect("life exists")
+                .stage
+                == LifeStage::Infant
             {
                 continue;
             }
@@ -1600,7 +1614,12 @@ mod tests {
         assert_eq!(lineage.incarnations.len(), 2);
         let previous = &lineage.incarnations[0];
         let current = &lineage.incarnations[1];
-        let born = sim.state.development.as_ref().unwrap().lives[&current.person].born;
+        let born = sim
+            .state
+            .components
+            .life(current.person)
+            .expect("life exists")
+            .born;
         assert!(previous.died_at.unwrap() < born);
         assert_eq!(born, sim.state.time);
         assert_eq!(sim.observe().life_stage, Some(LifeStage::Infant));

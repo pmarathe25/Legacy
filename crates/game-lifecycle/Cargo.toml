@@ -11,8 +11,8 @@ genetics = ["dep:game-genetics"]
 [dependencies]
 game-genetics = { workspace = true, optional = true }
 game-core.workspace = true
+game-ecs.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-game-ecs.workspace = true
 serde_json.workspace = true

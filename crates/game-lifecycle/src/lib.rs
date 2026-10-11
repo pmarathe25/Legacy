@@ -1,6 +1,9 @@
 //! Biological lifecycle state and deterministic transitions. Care and family
 //! institutions remain separate from physical birth and age.
+mod storage;
 mod transitions;
+use game_ecs::Store;
+pub use storage::*;
 pub use transitions::*;
 
 pub mod heredity;
@@ -12,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rules {
     pub conception_time: SimDuration,
     pub gestation: SimDuration,
@@ -42,6 +46,7 @@ pub enum Reproduction {
     Neither,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Life {
     pub id: PersonId,
     pub born: SimTime,
@@ -60,6 +65,7 @@ pub enum PregnancyState {
     Ended,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Pregnancy {
     pub id: PregnancyId,
     pub gestator: PersonId,
@@ -67,10 +73,9 @@ pub struct Pregnancy {
     pub state: PregnancyState,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
     pub rules: Rules,
-    pub lives: BTreeMap<PersonId, Life>,
-    pub pregnancies: BTreeMap<PregnancyId, Pregnancy>,
 }
 
 impl Rules {
@@ -150,17 +155,18 @@ pub struct AgeEffect {
     pub died: bool,
     pub next_deadline: Option<SimTime>,
 }
-impl World {
+impl Runtime {
     /// Pure evaluation; the host publishes body death or stage changes atomically
     /// with the returned deadline. Lifespan adjustment is an explicit input.
     pub fn evaluate_age(
         &self,
+        store: &Store,
         actor: PersonId,
         now: SimTime,
         lifespan_loss: u64,
         aging_enabled: bool,
     ) -> Result<AgeEffect, Error> {
-        let life = self.lives.get(&actor).ok_or(Error::Unavailable)?;
+        let life = life(store, actor).ok_or(Error::Unavailable)?;
         if !aging_enabled {
             return Ok(AgeEffect {
                 actor,
@@ -231,44 +237,42 @@ pub fn reproductive_pair(
     }
 }
 
-pub fn validate_local(world: &World, now: SimTime) -> Result<(), Error> {
+pub fn validate_runtime(world: &Runtime, store: &Store, now: SimTime) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent development state".into());
     if !world.rules.valid() {
         return Err(fail());
     }
-    for (actor, life) in &world.lives {
-        if *actor != life.id
+    for (actor, life) in all_lives(store) {
+        if life.validate().is_err()
+            || actor != life.id
             || life.born > now
             || life.age_at(now).is_err()
             || life
                 .parents
                 .iter()
-                .any(|parent| parent == actor || !world.lives.contains_key(parent))
+                .any(|parent| *parent == actor || crate::life(store, *parent).is_none())
             || life
                 .caregivers
                 .iter()
-                .any(|carer| !world.lives.contains_key(carer))
+                .any(|carer| crate::life(store, *carer).is_none())
         {
             return Err(fail());
         }
     }
     let mut pregnant = BTreeSet::new();
-    for (id, pregnancy) in &world.pregnancies {
-        if *id != pregnancy.id
+    for (id, pregnancy) in all_pregnancies(store) {
+        if pregnancy.validate().is_err()
+            || id != pregnancy.id
             || reproductive_pair(
                 (
                     pregnancy.gestator,
-                    world
-                        .lives
-                        .get(&pregnancy.gestator)
+                    life(store, pregnancy.gestator)
                         .ok_or_else(fail)?
                         .reproduction,
                 ),
                 (
                     pregnancy.partner,
-                    world
-                        .lives
-                        .get(&pregnancy.partner)
+                    life(store, pregnancy.partner)
                         .ok_or_else(fail)?
                         .reproduction,
                 ),
@@ -284,7 +288,7 @@ pub fn validate_local(world: &World, now: SimTime) -> Result<(), Error> {
                 }
             }
             PregnancyState::Born(child) => {
-                if !world.lives.get(&child).is_some_and(|life| {
+                if !life(store, child).is_some_and(|life| {
                     life.initial_age.0 == 0
                         && life.parents == [pregnancy.gestator, pregnancy.partner]
                 }) {
@@ -310,7 +314,7 @@ mod tests {
             lifespan: SimDuration(1_500_000),
         }
     }
-    fn life(id: u64, reproduction: Reproduction) -> Life {
+    fn life_row(id: u64, reproduction: Reproduction) -> Life {
         Life {
             id: PersonId(id),
             born: SimTime(1_000),
@@ -322,15 +326,17 @@ mod tests {
             preference: None,
         }
     }
-    fn fixture_world() -> World {
-        World {
-            rules: rules(),
-            lives: BTreeMap::from([
-                (PersonId(1), life(1, Reproduction::Gestates)),
-                (PersonId(2), life(2, Reproduction::SuppliesSeed)),
-            ]),
-            pregnancies: BTreeMap::new(),
+    fn fixture_world() -> (Runtime, Store) {
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).unwrap();
+        let mut store = Store::with_schema(schema);
+        for row in [
+            life_row(1, Reproduction::Gestates),
+            life_row(2, Reproduction::SuppliesSeed),
+        ] {
+            insert_life(&mut store, row).unwrap();
         }
+        (Runtime { rules: rules() }, store)
     }
     #[test]
     fn conception_willingness_uses_current_personal_choice_not_a_permanent_family_promise() {
@@ -370,7 +376,7 @@ mod tests {
     }
     #[test]
     fn actual_age_boundaries_and_next_deadlines_need_only_life_and_rules() {
-        let world = fixture_world();
+        let (world, store) = fixture_world();
         for (now, stage, deadline) in [
             (300_999, LifeStage::Infant, 301_000),
             (301_000, LifeStage::Child, 601_000),
@@ -378,49 +384,63 @@ mod tests {
             (1_201_000, LifeStage::Elder, 1_501_000),
         ] {
             let result = world
-                .evaluate_age(PersonId(1), SimTime(now), 0, true)
+                .evaluate_age(&store, PersonId(1), SimTime(now), 0, true)
                 .unwrap();
             assert_eq!(result.stage, stage);
             assert_eq!(result.next_deadline, Some(SimTime(deadline)));
             assert!(!result.died);
         }
         let result = world
-            .evaluate_age(PersonId(1), SimTime(1_501_000), 0, true)
+            .evaluate_age(&store, PersonId(1), SimTime(1_501_000), 0, true)
             .unwrap();
         assert!(result.died);
         assert_eq!(result.next_deadline, None);
     }
     #[test]
     fn initial_age_explicit_lifespan_adjustment_and_nonaging_are_distinct_inputs() {
-        let mut world = fixture_world();
-        world.lives.get_mut(&PersonId(1)).unwrap().initial_age = world.rules.adulthood;
+        let (world, mut store) = fixture_world();
+        life_mut(&mut store, PersonId(1)).unwrap().initial_age = world.rules.adulthood;
         assert_eq!(
-            world.lives[&PersonId(1)]
+            life(&store, PersonId(1))
+                .unwrap()
                 .next_age_deadline(&world.rules, SimTime(1_000), 0, true)
                 .unwrap(),
             Some(SimTime(601_000))
         );
         let result = world
-            .evaluate_age(PersonId(1), SimTime(801_000), 100_000, true)
+            .evaluate_age(&store, PersonId(1), SimTime(801_000), 100_000, true)
             .unwrap();
         assert!(result.died);
         assert_eq!(
             world
-                .evaluate_age(PersonId(1), SimTime(801_000), 100_000, false)
+                .evaluate_age(&store, PersonId(1), SimTime(801_000), 100_000, false)
                 .unwrap()
                 .next_deadline,
             None
         );
-        assert!(world.lives[&PersonId(1)].age_at(SimTime(999)).is_err());
+        assert!(
+            life(&store, PersonId(1))
+                .unwrap()
+                .age_at(SimTime(999))
+                .is_err()
+        );
     }
     #[test]
     fn life_state_serialization_and_local_validation_do_not_require_a_simulation() {
-        let world = fixture_world();
-        validate_local(&world, SimTime(1_000)).unwrap();
+        let (world, store) = fixture_world();
+        validate_runtime(&world, &store, SimTime(1_000)).unwrap();
         let encoded = serde_json::to_vec(&world).unwrap();
-        assert_eq!(world, serde_json::from_slice::<World>(&encoded).unwrap());
+        assert_eq!(world, serde_json::from_slice::<Runtime>(&encoded).unwrap());
+        let restored = Store::restore(
+            store.schema().clone(),
+            serde_json::from_slice(&serde_json::to_vec(&store.snapshot().unwrap()).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(restored, store);
+        validate_runtime(&world, &restored, SimTime(1_000)).unwrap();
         let mut invalid = world;
         invalid.rules.adulthood = invalid.rules.infancy;
-        assert!(validate_local(&invalid, SimTime(1_000)).is_err());
+        assert!(validate_runtime(&invalid, &store, SimTime(1_000)).is_err());
     }
 }

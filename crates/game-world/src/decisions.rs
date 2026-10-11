@@ -126,9 +126,9 @@ impl Simulation {
             transport::resolved_locations_for(&self.state).expect("valid physical observations");
         let mut cohorts: BTreeMap<game_transport::PositionKey, Vec<PersonId>> = BTreeMap::new();
         for person in &self.state.people {
-            if self.state.development.as_ref().is_some_and(|w| {
+            if self.state.development.as_ref().is_some_and(|_| {
                 matches!(
-                    w.lives[&person.id].stage,
+                    self.state.components.life(person.id).unwrap().stage,
                     LifeStage::Infant | LifeStage::Child
                 )
             }) && self
@@ -293,7 +293,11 @@ impl Simulation {
                 } else {
                     0
                 };
-                if self.state.development.as_ref().unwrap().lives[child]
+                if self
+                    .state
+                    .components
+                    .life(*child)
+                    .unwrap()
                     .preference
                     .is_some_and(|(p, until)| {
                         p == ChildhoodInterest::Food && until >= self.state.time
@@ -304,7 +308,11 @@ impl Simulation {
                 mind.child_signals.insert(
                     *child,
                     ChildSignal {
-                        preference: self.state.development.as_ref().unwrap().lives[child]
+                        preference: self
+                            .state
+                            .components
+                            .life(*child)
+                            .unwrap()
                             .preference
                             .filter(|(_, until)| *until >= self.state.time)
                             .map(|(p, _)| p),
@@ -516,74 +524,73 @@ impl Simulation {
             })
             .map(|(child, _)| *child)
             .collect();
-        let facts = PersonalFacts {
-            actor: id,
-            now: self.state.time,
-            vitals: actor.vitals.clone(),
-            limits: NeedLimits {
-                meal_relief: rules.meal_relief,
-                hunger_harm: rules.hunger_harm,
-                meal_size: rules.meal_size,
-                eating_time: rules.eating_time,
-                fatigue_limit: rules.fatigue_limit,
-                max_health: rules.max_health,
-                drink_quantity: self
+        let facts =
+            PersonalFacts {
+                actor: id,
+                now: self.state.time,
+                vitals: actor.vitals.clone(),
+                limits: NeedLimits {
+                    meal_relief: rules.meal_relief,
+                    hunger_harm: rules.hunger_harm,
+                    meal_size: rules.meal_size,
+                    eating_time: rules.eating_time,
+                    fatigue_limit: rules.fatigue_limit,
+                    max_health: rules.max_health,
+                    drink_quantity: self
+                        .state
+                        .health
+                        .as_ref()
+                        .map_or(Quantity(u64::MAX), |world| world.rules.drink_quantity),
+                },
+                activity: match *self.state.components.activity(id).expect("activity exists") {
+                    Activity::Idle => PersonalActivity::Idle,
+                    Activity::Rest => PersonalActivity::Rest,
+                    Activity::Work { .. } => PersonalActivity::Working,
+                    _ => PersonalActivity::Committed,
+                },
+                place,
+                control: if id == self.state.ruler {
+                    Control::Manual
+                } else if self.in_combat(id)
+                    || self.lineage_handles(id)
+                    || self.mission_actor_busy(id)
+                    || self.health_actor_busy(id)
+                    || self
+                        .state
+                        .transport
+                        .as_ref()
+                        .is_some_and(|world| world.busy(id))
+                {
+                    Control::Delegated
+                } else {
+                    Control::Autonomous
+                },
+                in_dialogue: self.army_actor_talking(id)
+                    || self.realm_actor_busy(id)
+                    || self.property_actor_talking(id),
+                independent: self.independent(id),
+                child: self.state.development.as_ref().is_some_and(|_| {
+                    self.state.components.life(id).unwrap().stage == LifeStage::Child
+                }),
+                hunger_exempt: p.hunger_exempt,
+                work_units: p.work_units,
+                own_cargo: self
+                    .inventory_index
+                    .get(&InventoryLocation::Carried(id))
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                observed_contacts,
+                can_resume: place == Place::Stopped && self.transport_can_depart(id),
+                hydration_urgency: self.observed_hydration_urgency(id),
+                exposure_urgency: self.observed_exposure_urgency(id),
+                freedom_restricted: self
                     .state
-                    .health
+                    .combat
                     .as_ref()
-                    .map_or(Quantity(u64::MAX), |world| world.rules.drink_quantity),
-            },
-            activity: match *self.state.components.activity(id).expect("activity exists") {
-                Activity::Idle => PersonalActivity::Idle,
-                Activity::Rest => PersonalActivity::Rest,
-                Activity::Work { .. } => PersonalActivity::Working,
-                _ => PersonalActivity::Committed,
-            },
-            place,
-            control: if id == self.state.ruler {
-                Control::Manual
-            } else if self.in_combat(id)
-                || self.lineage_handles(id)
-                || self.mission_actor_busy(id)
-                || self.health_actor_busy(id)
-                || self
-                    .state
-                    .transport
-                    .as_ref()
-                    .is_some_and(|world| world.busy(id))
-            {
-                Control::Delegated
-            } else {
-                Control::Autonomous
-            },
-            in_dialogue: self.army_actor_talking(id)
-                || self.realm_actor_busy(id)
-                || self.property_actor_talking(id),
-            independent: self.independent(id),
-            child: self
-                .state
-                .development
-                .as_ref()
-                .is_some_and(|world| world.lives[&id].stage == LifeStage::Child),
-            hunger_exempt: p.hunger_exempt,
-            work_units: p.work_units,
-            own_cargo: self
-                .inventory_index
-                .get(&InventoryLocation::Carried(id))
-                .into_iter()
-                .flatten()
-                .copied()
-                .collect(),
-            observed_contacts,
-            can_resume: place == Place::Stopped && self.transport_can_depart(id),
-            hydration_urgency: self.observed_hydration_urgency(id),
-            exposure_urgency: self.observed_exposure_urgency(id),
-            freedom_restricted: self
-                .state
-                .combat
-                .as_ref()
-                .is_some_and(|world| world.captivity.contains_key(&id)),
-        };
+                    .is_some_and(|world| world.captivity.contains_key(&id)),
+            };
         if !mind.needs_candidates(&facts) {
             return Intention {
                 actor: id,

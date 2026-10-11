@@ -983,16 +983,14 @@ mod tests {
         assert_eq!(sim.state.people.len(), 45);
         assert_eq!(sim.state.areas.len(), 9);
         assert_eq!(sim.state.components.bodies().count(), 45);
-        assert_eq!(sim.state.development.as_ref().unwrap().lives.len(), 45);
+        assert_eq!(sim.state.components.lives().count(), 45);
         assert_eq!(sim.state.decisions.as_ref().unwrap().minds.len(), 45);
         assert!(sim.state.armies.is_some() && sim.state.realm.is_some());
         assert!(
             sim.state
-                .development
-                .as_ref()
-                .unwrap()
-                .pregnancies
-                .values()
+                .components
+                .pregnancies()
+                .map(|(_, row)| row)
                 .all(|p| matches!(p.state, development::PregnancyState::Conceiving { .. }))
         );
         for mind in sim.state.decisions.as_ref().unwrap().minds.values() {
@@ -1114,7 +1112,11 @@ mod tests {
                         .contains_key(child)
                 );
                 assert_eq!(
-                    one.state.development.as_ref().unwrap().lives[child].parents,
+                    one.state
+                        .components
+                        .life(*child)
+                        .expect("life exists")
+                        .parents,
                     *parents
                 );
             }
@@ -1157,11 +1159,9 @@ mod tests {
         .unwrap();
         assert!(
             sim.state
-                .development
-                .as_ref()
-                .unwrap()
-                .lives
-                .values()
+                .components
+                .lives()
+                .map(|(_, row)| row)
                 .all(|life| matches!(life.stage, LifeStage::Child | LifeStage::Adult))
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
