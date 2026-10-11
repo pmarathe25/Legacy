@@ -890,3 +890,6 @@ fn travel_cost(routes: &KnownRoutes, from: &Location, to: &Location) -> Option<u
 }
 #[cfg(test)]
 mod tests;
+
+mod planning;
+pub use planning::*;

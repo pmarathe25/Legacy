@@ -689,7 +689,11 @@ name = "game-missions"
 version = "0.1.0"
 dependencies = [
  "game-agreements",
+ "game-cargo",
+ "game-characters",
  "game-core",
+ "game-logistics",
+ "game-transport",
  "serde",
  "serde_json",
 ]

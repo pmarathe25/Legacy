@@ -751,345 +751,136 @@ impl Simulation {
     }
 
     fn mission_control_member(&mut self, id: MissionId, actor: PersonId) {
-        if actor == self.host.state.ruler || self.in_combat(actor) {
-            return;
-        }
-        let mut m = self.host.state.missions.as_ref().unwrap().missions[&id].clone();
-        if let Some(view) = self
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .known
-            .get(&actor)
-            .and_then(|known| known.get(&id))
-        {
-            m.status = view.status;
-        }
-        let member = &m.members[&actor];
-        if member.status != CompanionStatus::Accepted {
-            return;
-        }
-        let Ok(area) = self.mission_area(actor) else {
+        let Some(world) = &self.host.state.missions else {
             return;
         };
-        if self.guardian_mission_duty(actor, id) {
-            if let Some(action) = self
-                .host
-                .state
-                .missions
-                .as_ref()
-                .unwrap()
-                .service_withdrawal(actor, id, &self.mission_service_motives(actor, id))
-            {
-                let _ = self.mission_command(actor, &action);
-            }
-            self.mission_explain(
-                id,
-                actor,
-                "Withdrew to search for and care for the new or unready incarnation",
-            );
+        let Some(body) = game_physiology::body(&self.host.storage, actor) else {
             return;
-        }
-        let body = &game_physiology::body(&self.host.storage, actor).expect("body exists");
-        let rules = &self.host.state.physical.as_ref().unwrap().rules;
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap();
-        if self.army_actor_talking(actor) || self.realm_actor_busy(actor) {
+        };
+        let Some(mind) = game_characters::decisions::mind::<Command>(&self.host.storage, actor)
+        else {
             return;
-        }
-        if matches!(
-            *self.host.storage.activity(actor).unwrap(),
-            Activity::MissionTalk { .. }
-                | Activity::ArmyTalk { .. }
-                | Activity::ArmyApproach { .. }
-                | Activity::Eat { .. }
-                | Activity::Load { .. }
-                | Activity::Tell { .. }
-                | Activity::Care { .. }
-                | Activity::Lesson { .. }
-                | Activity::WritingMemory { .. }
-                | Activity::ReadingMemory { .. }
-                | Activity::TeachingMemory { .. }
-                | Activity::MovingRecord { .. }
-                | Activity::Escape { .. }
-                | Activity::Restrain { .. }
-                | Activity::Unbind { .. }
-        ) {
+        };
+        let Some(rules) = self.host.state.physical.as_ref().map(|w| &w.rules) else {
             return;
-        }
-        if mind
-            .child_signals
-            .values()
-            .any(|signal| signal.urgency >= 20_000)
-        {
-            return;
-        }
-        if body.vitals.hunger >= rules.meal_relief {
-            if let Some(food)=mind.knowledge.values().filter(|k|k.good==Good::Food&&k.accessible&&k.quantity>=rules.meal_size&&k.area==area).min_by_key(|k|(!matches!(game_cargo::inventory(&self.host.storage, k.inventory).expect("inventory exists").location,InventoryLocation::Carried(carrier)if carrier==actor),k.inventory)){let source=food.inventory;let _=self.debug_actor_command(actor,Command::Eat {source});return;}
-            return;
-        }
-        if body.vitals.fatigue >= rules.fatigue_limit / 2
-            || body.vitals.health < rules.max_health / 2
-        {
-            let _ = self.debug_actor_command(actor, Command::Rest);
-            return;
-        }
+        };
         let motives = self.mission_service_motives(actor, id);
-        if let Some(action) = self
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .service_withdrawal(actor, id, &motives)
-        {
-            let _ = self.mission_command(actor, &action);
-            return;
+        let input = game_missions::MemberInput {
+            actor,
+            now: self.host.clock().time,
+            player: actor == self.host.state.ruler,
+            in_combat: self.in_combat(actor),
+            area: self.mission_area(actor).ok(),
+            communication_busy: self.army_actor_talking(actor) || self.realm_actor_busy(actor),
+            activity: member_activity(self.host.storage.activity(actor).expect("activity exists")),
+            care_urgency: mind
+                .child_signals
+                .values()
+                .map(|signal| signal.urgency)
+                .max()
+                .unwrap_or(0),
+            hunger: body.vitals.hunger,
+            meal_relief: rules.meal_relief,
+            meal_size: rules.meal_size,
+            fatigue: body.vitals.fatigue,
+            fatigue_limit: rules.fatigue_limit,
+            health: body.vitals.health,
+            max_health: rules.max_health,
+            motives: &motives,
+        };
+        let decision = world.member_decision(
+            id,
+            input,
+            &MissionControlFacts {
+                simulation: self,
+                actor,
+            },
+        );
+        for attempt in decision.attempts {
+            let success = self.execute_mission_member_action(id, actor, &attempt.action);
+            if let Some(followup) = attempt.after_result(success) {
+                match followup {
+                    game_missions::Failure::Action(action) => {
+                        self.execute_mission_member_action(id, actor, &action);
+                    }
+                    game_missions::Failure::Explain(explanation) => {
+                        self.mission_explain(id, actor, explanation.text())
+                    }
+                }
+            }
         }
-        if matches!(
-            m.status,
-            MissionStatus::Preparing | MissionStatus::Traveling
-        ) {
-            for supply in m.proposal.supplies.iter().filter(|s| s.carrier == actor) {
-                let Some(known) = mind.knowledge.get(&supply.source) else {
-                    self.mission_explain(
-                        id,
-                        actor,
-                        "Waiting for personally known supply permission",
-                    );
-                    return;
-                };
-                let delivery = game_logistics::Delivery {
-                    requirement: game_logistics::Requirement {
-                        good: known.good,
-                        quantity: supply.quantity,
-                        source: Some(supply.source),
-                    },
-                    destination: game_logistics::Destination::Contact(actor),
-                    remaining: supply.quantity,
-                    last_receipt: 0,
-                };
-                let goal = game_logistics::KnownDestination {
-                    destination: delivery.destination,
-                    location: self.delivery_observed_location(actor),
-                    observed_at: self.host.clock().time,
-                    accessible: true,
-                    room: None,
-                    direct_transfer: false,
-                };
-                let tags = member
-                    .supply_cargo
-                    .get(&supply.source)
-                    .into_iter()
-                    .flat_map(|tags| tags.iter())
-                    .map(|(id, q)| (*id, Quantity(*q)))
-                    .collect();
-                let step = self.plan_delivery_with_source_cargo(
+        if let Some(explanation) = decision.explanation {
+            self.mission_explain(id, actor, explanation.text());
+        }
+    }
+    fn execute_mission_member_action(
+        &mut self,
+        id: MissionId,
+        actor: PersonId,
+        action: &game_missions::MemberAction<Command>,
+    ) -> bool {
+        use game_missions::MemberAction;
+        match action {
+            MemberAction::Opaque(command) => {
+                self.debug_actor_command(actor, command.clone()).is_ok()
+            }
+            MemberAction::Mission(action) => self.mission_command(actor, action).is_ok(),
+            MemberAction::Eat(source) => self
+                .debug_actor_command(actor, Command::Eat { source: *source })
+                .is_ok(),
+            MemberAction::Rest => self.debug_actor_command(actor, Command::Rest).is_ok(),
+            MemberAction::Carry { source, quantity } => self
+                .debug_actor_command(
                     actor,
-                    &delivery,
-                    &goal,
-                    supply.quantity,
-                    &tags,
-                );
-                if matches!(step, game_logistics::Step::Arrived { .. }) {
-                    continue;
-                }
-                if let Some(command) = self.delivery_command(actor, step) {
-                    let _ = self.debug_actor_command(actor, command);
-                } else {
-                    self.mission_explain(
-                        id,
-                        actor,
-                        "Waiting for personally known qualified provisions and a usable route",
-                    );
-                }
-                return;
-            }
-            if m.status == MissionStatus::Preparing {
-                let _ = self.debug_actor_command(actor, Command::Rest);
-                return;
-            }
-        }
-        if m.status != MissionStatus::Returning
-            && let MissionObjective::Deliver {
+                    Command::Carry {
+                        source: *source,
+                        quantity: *quantity,
+                    },
+                )
+                .is_ok(),
+            MemberAction::Transfer {
                 source,
                 destination,
                 quantity,
-            } = member.directive
-        {
-            let Some(known) = mind.knowledge.get(&source) else {
-                self.mission_explain(id, actor, "The delivery source is not personally known");
-                return;
-            };
-            let Some(goal) = self.delivery_known_inventory_destination(actor, destination) else {
-                self.mission_explain(
-                    id,
+            } => self
+                .debug_actor_command(
                     actor,
-                    "The delivery destination is not personally known",
-                );
-                return;
-            };
-            let delivery = game_logistics::Delivery {
-                requirement: game_logistics::Requirement {
-                    good: known.good,
-                    quantity,
-                    source: Some(source),
-                },
-                destination: game_logistics::Destination::Inventory(destination),
-                remaining: Quantity(quantity.0.saturating_sub(member.delivered)),
-                last_receipt: 0,
-            };
-            let tags = member
-                .cargo
-                .iter()
-                .map(|(id, q)| (*id, Quantity(*q)))
-                .collect();
-            let step =
-                self.plan_delivery_with_source_cargo(actor, &delivery, &goal, Quantity(1), &tags);
-            if let Some(command) = self.delivery_command(actor, step) {
-                let _ = self.debug_actor_command(actor, command);
-            } else {
-                self.mission_explain(id, actor, "Waiting for personally known qualified cargo, receiving room or a usable route");
-            }
-            return;
-        }
-        let destination = if m.status == MissionStatus::Returning {
-            Some(m.proposal.home)
-        } else {
-            self.mission_destination(actor, member, &member.directive)
-        };
-        if let Some(destination) = destination {
-            if destination != area {
-                if let MissionObjective::Rescue { person, return_to } = member.directive
-                    && destination == return_to
-                    && *game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId(
-                            (self.host.state.people[self.person_index[&person]].id).0,
-                        ),
-                    )
-                    .expect("location exists")
-                        == Location::AtArea(area)
-                    && self.mission_area(person).is_ok()
-                    && person != self.host.state.ruler
-                {
-                    let released = &game_characters::decisions::mind::<game_api::Command>(
-                        &self.host.storage,
-                        person,
-                    )
-                    .unwrap();
-                    let v = &game_physiology::body(&self.host.storage, person)
-                        .expect("body exists")
-                        .vitals;
-                    let trusts = released.relationships.get(&actor).map_or(0, |r| r.trust) >= 0;
-                    if trusts
-                        && released.personality.empathy >= 300
-                        && v.hunger < self.host.state.physical.as_ref().unwrap().rules.meal_relief
-                    {
-                        let _ = self.start_movement(person, return_to);
-                    }
-                }
-                if self.start_movement(actor, destination).is_err() {
-                    self.mission_explain(
-                        id,
+                    Command::Load {
+                        source: *source,
+                        destination: *destination,
+                        quantity: *quantity,
+                    },
+                )
+                .is_ok(),
+            MemberAction::Travel(intent) => match intent {
+                game_transport::RouteIntent::MoveArea { destination } => self
+                    .debug_actor_command(
                         actor,
-                        "No personally known usable route to the objective",
-                    );
-                }
-                return;
+                        Command::Move {
+                            destination: *destination,
+                        },
+                    )
+                    .is_ok(),
+                game_transport::RouteIntent::Transport(action) => self
+                    .debug_actor_command(
+                        actor,
+                        Command::Transport {
+                            action: action.clone(),
+                        },
+                    )
+                    .is_ok(),
+            },
+            MemberAction::Move { actor, destination } => {
+                self.start_movement(*actor, *destination).is_ok()
             }
-            match member.directive {
-                MissionObjective::Defeat { person } => {
-                    if *game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId(
-                            (self.host.state.people[self.person_index[&person]].id).0,
-                        ),
-                    )
-                    .expect("location exists")
-                        == Location::AtArea(area)
-                        && game_physiology::body(&self.host.storage, person)
-                            .expect("body exists")
-                            .vitals
-                            .alive
-                        && self.can_fight(person)
-                    {
-                        self.start_mission_encounter(id, actor, person);
-                    }
-                }
-                MissionObjective::Confine { person, until } => {
-                    if *game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId(
-                            (self.host.state.people[self.person_index[&person]].id).0,
-                        ),
-                    )
-                    .expect("location exists")
-                        != Location::AtArea(area)
-                    {
-                        return;
-                    }
-                    let captive = self
-                        .host
-                        .state
-                        .combat
-                        .as_ref()
-                        .and_then(|world| world.captivity.get(&person));
-                    if let Some(captive) = captive {
-                        if m.members.contains_key(&captive.captor) {
-                            if self.host.clock().time >= until {
-                                let _ = self.debug_actor_command(
-                                    actor,
-                                    Command::FreeCaptive { target: person },
-                                );
-                            } else {
-                                let _ = self.debug_actor_command(actor, Command::Rest);
-                            }
-                        }
-                    } else if self.host.clock().time < until
-                        && game_physiology::body(&self.host.storage, person)
-                            .expect("body exists")
-                            .vitals
-                            .alive
-                        && self.start_restraint(actor, person).is_err()
-                        && self.can_fight(person)
-                    {
-                        self.start_mission_encounter(id, actor, person);
-                    }
-                }
-                MissionObjective::Rescue { person, .. } => {
-                    if *game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId(
-                            (self.host.state.people[self.person_index[&person]].id).0,
-                        ),
-                    )
-                    .expect("location exists")
-                        == Location::AtArea(area)
-                        && self
-                            .host
-                            .state
-                            .combat
-                            .as_ref()
-                            .is_some_and(|w| w.captivity.contains_key(&person))
-                    {
-                        let _ = self
-                            .debug_actor_command(actor, Command::FreeCaptive { target: person });
-                    }
-                }
-                _ => {
-                    let _ = self.debug_actor_command(actor, Command::Rest);
-                }
+            MemberAction::Free(person) => self
+                .debug_actor_command(actor, Command::FreeCaptive { target: *person })
+                .is_ok(),
+            MemberAction::Restrain(person) => self.start_restraint(actor, *person).is_ok(),
+            MemberAction::Engage(person) => {
+                self.start_mission_encounter(id, actor, *person);
+                true
             }
-        } else {
-            self.mission_explain(
-                id,
-                actor,
-                "The party lacks a credible observed location for its objective",
-            );
         }
     }
     pub(crate) fn mission_react_to_encounter_end(&mut self, encounter: EncounterId) {
@@ -1207,78 +998,28 @@ impl Simulation {
             .and_then(|p| self.mission_target_observation(actor, p));
         game_missions::ObjectiveKnowledge { stocks, target }
     }
-    fn mission_destination(
-        &self,
-        actor: PersonId,
-        member: &Companion,
-        objective: &MissionObjective,
-    ) -> Option<AreaId> {
-        game_missions::objective_destination(
-            member,
-            objective,
-            &self.mission_objective_knowledge(actor, objective),
-            self.mission_area(actor).ok(),
-        )
-    }
     fn start_mission_encounter(&mut self, id: MissionId, actor: PersonId, target: PersonId) {
-        let area = match *game_spatial::location(
-            &self.host.storage,
-            game_ecs::StableId((self.host.state.people[self.person_index[&actor]].id).0),
-        )
-        .expect("location exists")
-        {
-            Location::AtArea(area) => area,
-            _ => return,
+        let area = match game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)) {
+            Some(Location::AtArea(area)) => Some(*area),
+            _ => None,
         };
-        if let Some(encounter) = self
-            .host
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .encounters
-            .values()
-            .find(|e| e.active && e.fighters.contains_key(&target))
-            .map(|e| e.id)
-        {
-            let _ = self.start_army_approach(actor, id, encounter);
-            return;
-        }
         let linked = self.army_allied_missions(id);
-        let allies: BTreeSet<_> = linked
-            .iter()
-            .flat_map(|mission| {
-                self.host.state.missions.as_ref().unwrap().missions[mission]
-                    .members
-                    .values()
-                    .map(|member| (*mission, member))
-            })
-            .filter(|(mission, member)| {
-                member.person != self.host.state.ruler
-                    && member.status == CompanionStatus::Accepted
-                    && *game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId(
-                            (self.host.state.people[self.person_index[&member.person]].id).0,
-                        ),
-                    )
-                    .expect("location exists")
-                        == Location::AtArea(area)
-                    && self.can_fight(member.person)
-                    && !self.in_combat(member.person)
-                    && member.directive.requires_force()
-                    && member.directive.target_person() == Some(target)
-                    && (*mission == id
-                        || self.mission_force_willing(member.person, *mission, target))
-            })
-            .map(|(_, member)| member.person)
-            .collect();
-        let participants = allies
-            .into_iter()
-            .map(|p| (p, 0))
-            .chain([(target, 1)])
-            .collect();
-        let _ = self.debug_start_encounter(participants);
+        let plan = self.host.state.missions.as_ref().unwrap().engagement_plan(
+            id,
+            target,
+            area,
+            &linked,
+            &MissionEngagementFacts { simulation: self },
+        );
+        match plan {
+            game_missions::EngagementPlan::Keep => {}
+            game_missions::EngagementPlan::Approach(encounter) => {
+                let _ = self.start_army_approach(actor, id, encounter);
+            }
+            game_missions::EngagementPlan::Start(participants) => {
+                let _ = self.debug_start_encounter(participants);
+            }
+        }
     }
     pub(crate) fn mission_force_willing(
         &self,
@@ -1286,29 +1027,22 @@ impl Simulation {
         id: MissionId,
         target: PersonId,
     ) -> bool {
-        let Some(m) = self
-            .host
-            .state
-            .missions
-            .as_ref()
-            .and_then(|w| w.missions.get(&id))
-        else {
+        let Some(world) = &self.host.state.missions else {
             return false;
         };
-        let Some(member) = m.members.get(&actor) else {
+        let Some(mission) = world.missions.get(&id) else {
             return false;
         };
-        if member.status != CompanionStatus::Accepted
-            || !member.directive.requires_force()
-            || member.directive.target_person() != Some(target)
-            || self.guardian_mission_duty(actor, id)
-        {
+        if !mission.members.contains_key(&actor) {
             return false;
         }
-        let mut proposed = m.clone();
-        proposed.proposal.objective = member.directive.clone();
-        let offer = &self.host.state.missions.as_ref().unwrap().recruitments[&member.recruitment];
-        actor == self.host.state.ruler || self.recruitment_score(actor, &proposed, offer) >= 0
+        world.force_willing(
+            actor,
+            id,
+            target,
+            self.recruitment_input(actor, mission),
+            actor == self.host.state.ruler,
+        )
     }
     pub(crate) fn mission_combat_order(
         &mut self,
@@ -2666,6 +2400,181 @@ impl Simulation {
                 .get(&actor)
                 .and_then(|g| g.assessments.get(&m.sponsor))
                 .is_some_and(|a| a.ready)
+    }
+}
+
+struct MissionEngagementFacts<'a> {
+    simulation: &'a Simulation,
+}
+impl game_missions::EngagementFacts for MissionEngagementFacts<'_> {
+    fn encounters(&self, target: PersonId) -> impl Iterator<Item = game_missions::EncounterFacts> {
+        self.simulation
+            .host
+            .state
+            .combat
+            .as_ref()
+            .into_iter()
+            .flat_map(|world| world.encounters.values())
+            .map(move |e| game_missions::EncounterFacts {
+                id: e.id,
+                active: e.active,
+                target_present: e.fighters.contains_key(&target),
+            })
+    }
+    fn fighter(&self, mission: MissionId, person: PersonId) -> game_missions::FighterFacts {
+        let sim = self.simulation;
+        let m = &sim.host.state.missions.as_ref().unwrap().missions[&mission];
+        game_missions::FighterFacts {
+            player: person == sim.host.state.ruler,
+            at_area: match game_spatial::location(&sim.host.storage, game_ecs::StableId(person.0)) {
+                Some(Location::AtArea(area)) => Some(*area),
+                _ => None,
+            },
+            can_fight: sim.can_fight(person),
+            in_combat: sim.in_combat(person),
+            recruitment: sim.recruitment_input(person, m),
+        }
+    }
+}
+
+fn member_activity(activity: &Activity) -> game_missions::MemberActivity {
+    use game_missions::MemberActivity as M;
+    match activity {
+        Activity::MissionTalk { .. } => M::MissionTalk,
+        Activity::ArmyTalk { .. } => M::ArmyTalk,
+        Activity::ArmyApproach { .. } => M::ArmyApproach,
+        Activity::Eat { .. } => M::Eat,
+        Activity::Load { .. } => M::Load,
+        Activity::Tell { .. } => M::Tell,
+        Activity::Care { .. } => M::Care,
+        Activity::Lesson { .. } => M::Lesson,
+        Activity::WritingMemory { .. } => M::WritingMemory,
+        Activity::ReadingMemory { .. } => M::ReadingMemory,
+        Activity::TeachingMemory { .. } => M::TeachingMemory,
+        Activity::MovingRecord { .. } => M::MovingRecord,
+        Activity::Escape { .. } => M::Escape,
+        Activity::Restrain { .. } => M::Restrain,
+        Activity::Unbind { .. } => M::Unbind,
+        _ => M::Other,
+    }
+}
+struct MissionControlFacts<'a> {
+    simulation: &'a Simulation,
+    actor: PersonId,
+}
+impl game_logistics::AcquisitionSource<Command> for MissionControlFacts<'_> {
+    fn offers(
+        &self,
+        good: Good,
+        quantity: Quantity,
+        room: Quantity,
+    ) -> Vec<game_logistics::Candidate<Command>> {
+        let personality = self
+            .simulation
+            .invocation_personality(self.actor)
+            .unwrap_or_else(|| {
+                game_characters::decisions::mind::<Command>(
+                    &self.simulation.host.storage,
+                    self.actor,
+                )
+                .unwrap()
+                .personality
+                .clone()
+            });
+        game_logistics::AcquisitionSource::offers(
+            &crate::logistics::AcquisitionFacts {
+                simulation: self.simulation,
+                actor: self.actor,
+                resources: None,
+                personality,
+            },
+            good,
+            quantity,
+            room,
+        )
+    }
+}
+impl game_missions::MemberFacts<Command> for MissionControlFacts<'_> {
+    fn food(&self) -> impl Iterator<Item = game_missions::FoodObservation> {
+        game_characters::decisions::mind::<Command>(&self.simulation.host.storage,self.actor).into_iter().flat_map(|mind|mind.knowledge.values()).map(|k|game_missions::FoodObservation{
+            inventory:k.inventory,good:k.good,accessible:k.accessible,quantity:k.quantity,area:k.area,
+            carried_by_actor:matches!(game_cargo::inventory(&self.simulation.host.storage,k.inventory).expect("inventory exists").location,InventoryLocation::Carried(carrier)if carrier==self.actor),
+        })
+    }
+    fn source_good(&self, inventory: InventoryId) -> Option<Good> {
+        game_characters::decisions::mind::<Command>(&self.simulation.host.storage, self.actor)?
+            .knowledge
+            .get(&inventory)
+            .map(|k| k.good)
+    }
+    fn inventory_destination(
+        &self,
+        inventory: InventoryId,
+    ) -> Option<game_logistics::KnownDestination> {
+        self.simulation
+            .delivery_known_inventory_destination(self.actor, inventory)
+    }
+    fn actor_location(&self) -> Location {
+        self.simulation.delivery_observed_location(self.actor)
+    }
+    fn objective_knowledge(
+        &self,
+        objective: &MissionObjective,
+    ) -> game_missions::ObjectiveKnowledge {
+        self.simulation
+            .mission_objective_knowledge(self.actor, objective)
+    }
+    fn target(&self, person: PersonId) -> game_missions::TargetFacts {
+        let sim = self.simulation;
+        let location = game_spatial::location(&sim.host.storage, game_ecs::StableId(person.0))
+            .expect("location exists");
+        let released =
+            game_characters::decisions::mind::<Command>(&sim.host.storage, person).unwrap();
+        let body = game_physiology::body(&sim.host.storage, person).expect("body exists");
+        game_missions::TargetFacts {
+            at_area: match location {
+                Location::AtArea(area) => Some(*area),
+                _ => None,
+            },
+            available_area: sim.mission_area(person).is_ok(),
+            player: person == sim.host.state.ruler,
+            alive: body.vitals.alive,
+            can_fight: sim.can_fight(person),
+            captor: sim
+                .host
+                .state
+                .combat
+                .as_ref()
+                .and_then(|w| w.captivity.get(&person))
+                .map(|c| c.captor),
+            trust: released
+                .relationships
+                .get(&self.actor)
+                .map_or(0, |r| r.trust),
+            empathy: released.personality.empathy,
+            hunger: body.vitals.hunger,
+        }
+    }
+    fn delivery_facts(
+        &self,
+        request: &game_missions::MemberDelivery<'_>,
+    ) -> game_logistics::DeliveryFacts<'_, Command> {
+        let tags = request
+            .origin_cargo
+            .into_iter()
+            .flat_map(|tags| tags.iter())
+            .map(|(id, q)| (*id, Quantity(*q)))
+            .collect();
+        self.simulation.delivery_facts_with_source_cargo(
+            self.actor,
+            &request.delivery,
+            &request.destination,
+            crate::logistics::DeliveryProviders {
+                source_cargo: &tags,
+                offers: &[],
+                resources: None,
+            },
+        )
     }
 }
 
