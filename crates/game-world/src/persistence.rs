@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 37;
+const SAVE_VERSION: u32 = 38;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -2185,8 +2185,8 @@ fn validate_physical(
                 field,
                 operation,
                 completes,
-            } if !s.agriculture.as_ref().is_some_and(|w| {
-                w.jobs.get(id).is_some_and(|job| {
+            } if !s.agriculture.as_ref().is_some_and(|_| {
+                s.components.cultivation(*id).is_some_and(|job| {
                     job.field == field && job.operation == operation && job.completes == completes
                 })
             }) =>

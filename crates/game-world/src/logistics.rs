@@ -909,7 +909,12 @@ mod tests {
         let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
-        let source = sim.state.ecology.as_ref().unwrap().known[&actor]
+        let source = sim
+            .state
+            .components
+            .ecology_knowledge(actor)
+            .unwrap()
+            .known_resources
             .values()
             .find(|source| source.kind == ResourceKind::Spring && source.area == AreaId(1))
             .unwrap()
@@ -944,7 +949,7 @@ mod tests {
         );
         let command = sim.delivery_command(actor, step).unwrap();
         sim.debug_actor_command(actor, command).unwrap();
-        let ends = sim.state.ecology.as_ref().unwrap().jobs[&actor].completes;
+        let ends = sim.state.components.gathering(actor).unwrap().completes;
         let duration = ends.0 - sim.state.time.0;
         let mut restored = Simulation::load(
             &sim.save().unwrap(),
@@ -1098,7 +1103,7 @@ mod tests {
         );
         let command = sim.delivery_command(actor, step).unwrap();
         sim.debug_actor_command(actor, command).unwrap();
-        let completes = sim.state.ecology.as_ref().unwrap().jobs[&actor].completes;
+        let completes = sim.state.components.gathering(actor).unwrap().completes;
         sim.advance(SimDuration(completes.0 - sim.state.time.0))
             .unwrap();
         assert_eq!(

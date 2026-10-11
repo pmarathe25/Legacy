@@ -31,7 +31,57 @@ fn validate_crop(crop: &Crop) -> Result<(), Error> {
 pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
     schema.register::<Field>("agriculture/field", validate_field)?;
     schema.register::<Crop>("agriculture/crop", validate_crop)?;
+    schema.register::<Cultivation>("agriculture/cultivation", Cultivation::validate)?;
     Ok(())
+}
+impl Cultivation {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.field.0 == 0 || self.completes.0 == 0 {
+            return Err(Error::InvalidConfiguration(
+                "invalid cultivation component".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+impl Runtime {
+    pub fn cultivation<'a>(&self, store: &'a Store, actor: PersonId) -> Option<&'a Cultivation> {
+        store.get(StableId(actor.0))
+    }
+    pub fn cultivation_mut<'a>(
+        &self,
+        store: &'a mut Store,
+        actor: PersonId,
+    ) -> Option<&'a mut Cultivation> {
+        store.get_mut(StableId(actor.0))
+    }
+    pub fn cultivations<'a>(
+        &self,
+        store: &'a Store,
+    ) -> impl Iterator<Item = (PersonId, &'a Cultivation)> {
+        store
+            .iter::<Cultivation>()
+            .map(|(id, row)| (PersonId(id.0), row))
+    }
+    pub fn insert_cultivation(
+        &self,
+        store: &mut Store,
+        actor: PersonId,
+        job: Cultivation,
+    ) -> Result<(), Error> {
+        job.validate()?;
+        store.insert_or_spawn(StableId(actor.0), job)
+    }
+    pub fn remove_cultivation(
+        &self,
+        store: &mut Store,
+        actor: PersonId,
+    ) -> Result<Option<Cultivation>, Error> {
+        if !store.contains(StableId(actor.0)) {
+            return Ok(None);
+        }
+        store.remove(StableId(actor.0))
+    }
 }
 /// Cached metadata for the host's store; neither serialized nor authoritative.
 pub struct Queries {

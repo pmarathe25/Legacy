@@ -120,6 +120,152 @@ impl Components {
     > {
         game_characters::temperament::all_person_temperaments(&self.0)
     }
+    pub fn cultivation(&self, actor: game_api::PersonId) -> Option<&game_agriculture::Cultivation> {
+        self.0.get(game_ecs::StableId(actor.0))
+    }
+    pub fn cultivation_mut(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Option<&mut game_agriculture::Cultivation> {
+        self.0.get_mut(game_ecs::StableId(actor.0))
+    }
+    pub fn cultivations(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_agriculture::Cultivation)> {
+        self.0
+            .iter::<game_agriculture::Cultivation>()
+            .map(|(id, row)| (game_api::PersonId(id.0), row))
+    }
+    pub fn insert_cultivation(
+        &mut self,
+        actor: game_api::PersonId,
+        row: game_agriculture::Cultivation,
+    ) -> Result<(), Error> {
+        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
+    }
+    pub fn remove_cultivation(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Result<Option<game_agriculture::Cultivation>, Error> {
+        if !self.0.contains(game_ecs::StableId(actor.0)) {
+            return Ok(None);
+        }
+        self.0.remove(game_ecs::StableId(actor.0))
+    }
+    pub fn gathering(&self, actor: game_api::PersonId) -> Option<&game_ecology::Gathering> {
+        self.0.get(game_ecs::StableId(actor.0))
+    }
+    pub fn gathering_mut(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Option<&mut game_ecology::Gathering> {
+        self.0.get_mut(game_ecs::StableId(actor.0))
+    }
+    pub fn gatherings(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_ecology::Gathering)> {
+        self.0
+            .iter::<game_ecology::Gathering>()
+            .map(|(id, row)| (game_api::PersonId(id.0), row))
+    }
+    pub fn insert_gathering(
+        &mut self,
+        actor: game_api::PersonId,
+        row: game_ecology::Gathering,
+    ) -> Result<(), Error> {
+        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
+    }
+    pub fn remove_gathering(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Result<Option<game_ecology::Gathering>, Error> {
+        if !self.0.contains(game_ecs::StableId(actor.0)) {
+            return Ok(None);
+        }
+        self.0.remove(game_ecs::StableId(actor.0))
+    }
+    pub fn ecology_knowledge(&self, actor: game_api::PersonId) -> Option<&game_ecology::Knowledge> {
+        self.0.get(game_ecs::StableId(actor.0))
+    }
+    pub fn ecology_knowledge_mut(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Option<&mut game_ecology::Knowledge> {
+        self.0.get_mut(game_ecs::StableId(actor.0))
+    }
+    pub fn ecology_knowledges(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_ecology::Knowledge)> {
+        self.0
+            .iter::<game_ecology::Knowledge>()
+            .map(|(id, row)| (game_api::PersonId(id.0), row))
+    }
+    pub fn insert_ecology_knowledge(
+        &mut self,
+        actor: game_api::PersonId,
+        row: game_ecology::Knowledge,
+    ) -> Result<(), Error> {
+        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
+    }
+    pub fn remove_ecology_knowledge(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Result<Option<game_ecology::Knowledge>, Error> {
+        if !self.0.contains(game_ecs::StableId(actor.0)) {
+            return Ok(None);
+        }
+        self.0.remove(game_ecs::StableId(actor.0))
+    }
+    pub fn ecology_requests(&self, actor: game_api::PersonId) -> Option<&game_ecology::Requests> {
+        self.0.get(game_ecs::StableId(actor.0))
+    }
+    pub fn ecology_requests_mut(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Option<&mut game_ecology::Requests> {
+        self.0.get_mut(game_ecs::StableId(actor.0))
+    }
+    pub fn ecology_request_rows(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_ecology::Requests)> {
+        self.0
+            .iter::<game_ecology::Requests>()
+            .map(|(id, row)| (game_api::PersonId(id.0), row))
+    }
+    pub fn insert_ecology_requests(
+        &mut self,
+        actor: game_api::PersonId,
+        row: game_ecology::Requests,
+    ) -> Result<(), Error> {
+        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
+    }
+    pub fn remove_ecology_requests(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Result<Option<game_ecology::Requests>, Error> {
+        if !self.0.contains(game_ecs::StableId(actor.0)) {
+            return Ok(None);
+        }
+        self.0.remove(game_ecs::StableId(actor.0))
+    }
+    pub fn ensure_ecology_knowledge(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Result<&mut game_ecology::Knowledge, Error> {
+        if self.ecology_knowledge(actor).is_none() {
+            self.insert_ecology_knowledge(actor, game_ecology::Knowledge::default())?;
+        }
+        self.ecology_knowledge_mut(actor).ok_or(Error::Unavailable)
+    }
+    pub fn ensure_ecology_requests(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Result<&mut game_ecology::Requests, Error> {
+        if self.ecology_requests(actor).is_none() {
+            self.insert_ecology_requests(actor, game_ecology::Requests::default())?;
+        }
+        self.ecology_requests_mut(actor).ok_or(Error::Unavailable)
+    }
     pub fn mind(&self, id: game_api::PersonId) -> Option<&crate::decisions::Mind> {
         game_characters::decisions::mind::<game_api::Command>(&self.0, id)
     }
@@ -744,6 +890,75 @@ mod tests {
             sim.state.events.iter().any(
                 |event| matches!(event.kind,game_api::EventKind::Died {actor} if actor == ruler)
             )
+        );
+    }
+
+    #[test]
+    fn work_and_foraging_rows_are_saved_outside_runtime_headers() {
+        let mut farm = Simulation::farming_fixture(95, Execution::default()).unwrap();
+        let (field, area) = farm
+            .state
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .fields(&farm.state.components)
+            .map(|(id, row)| (id, row.area))
+            .last()
+            .unwrap();
+        let ruler = farm.state.ruler;
+        farm.debug_move_actor(ruler, area).unwrap();
+        if let game_api::Location::InTransit { arrives, .. } =
+            *farm.state.components.location(ruler).unwrap()
+        {
+            farm.advance(game_api::SimDuration(arrives.0 - farm.state.time.0))
+                .unwrap();
+        }
+        farm.debug_actor_command(
+            ruler,
+            game_api::Command::Cultivate {
+                field,
+                operation: game_api::FarmOperation::Prepare,
+            },
+        )
+        .unwrap();
+        let saved = farm.save().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(json["state"]["agriculture"].get("jobs").is_none());
+        assert!(
+            !json["state"]["components"]["columns"]["agriculture/cultivation"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            farm.canonical_state(),
+            Simulation::load(&saved, Execution::default())
+                .unwrap()
+                .canonical_state()
+        );
+        let eco = Simulation::ecology_fixture(96, Execution::default()).unwrap();
+        let saved = eco.save().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        for old in [
+            "jobs",
+            "known",
+            "known_plots",
+            "observed_areas",
+            "next_request",
+        ] {
+            assert!(json["state"]["ecology"].get(old).is_none());
+        }
+        assert!(
+            !json["state"]["components"]["columns"]["ecology/knowledge"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            eco.canonical_state(),
+            Simulation::load(&saved, Execution::default())
+                .unwrap()
+                .canonical_state()
         );
     }
 

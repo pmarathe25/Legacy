@@ -49,12 +49,7 @@ impl Simulation {
         });
         sim.state.ecology = Some(Runtime {
             rules: EcologyRules::default(),
-            jobs: BTreeMap::new(),
-            known: BTreeMap::new(),
-            known_plots: BTreeMap::new(),
-            observed_areas: BTreeMap::new(),
             day: sim.state.environment.as_ref().unwrap().weather_day,
-            next_request: BTreeMap::new(),
         });
         let people = sim
             .state
@@ -194,7 +189,7 @@ impl Simulation {
             && !self.care_index.contains_key(&actor)
     }
     pub(crate) fn ecology_job_tool(&self, actor: PersonId) -> Option<InventoryId> {
-        self.state.ecology.as_ref()?.jobs.get(&actor)?.tool
+        self.state.components.gathering(actor)?.tool
     }
     fn ecology_tool(&self, actor: PersonId) -> Option<InventoryId> {
         self.ecology_tool_for_planning(actor, None)
@@ -268,12 +263,9 @@ impl Simulation {
             EcologyAction::RequestAccess { resource } => {
                 if self
                     .state
-                    .ecology
-                    .as_ref()
-                    .unwrap()
-                    .next_request
-                    .get(&actor)
-                    .and_then(|k| k.get(&resource))
+                    .components
+                    .ecology_requests(actor)
+                    .and_then(|row| row.next_request.get(&resource))
                     .is_some_and(|t| *t > self.state.time)
                 {
                     return Err(Error::Unavailable);
@@ -301,12 +293,10 @@ impl Simulation {
                 }
                 self.ensure_event_capacity(2)?;
                 self.state
-                    .ecology
-                    .as_mut()
-                    .unwrap()
+                    .components
+                    .ensure_ecology_requests(actor)
+                    .expect("known requester")
                     .next_request
-                    .entry(actor)
-                    .or_default()
                     .insert(resource, next_request);
                 self.emit(EventKind::ResourceAccessRequested {
                     resource,
@@ -434,11 +424,9 @@ impl Simulation {
         };
         self.interrupt_actor_activity(actor);
         self.state
-            .ecology
-            .as_mut()
-            .unwrap()
-            .jobs
-            .insert(actor, plan.job(destination));
+            .components
+            .insert_gathering(actor, plan.job(destination))
+            .expect("validated gathering");
         *self.state.components.activity_mut(actor).unwrap() = Activity::Gather {
             resource,
             destination,
@@ -475,16 +463,17 @@ impl Simulation {
     }
     pub(crate) fn interrupt_ecology(&mut self, actor: PersonId) {
         if let Some(world) = &mut self.state.ecology {
-            world.jobs.remove(&actor);
+            world
+                .remove_gathering(&mut self.state.components, actor)
+                .expect("registered gathering");
         }
     }
     pub(crate) fn complete_gathering(&mut self, actor: PersonId) {
-        let Some(job) = self
-            .state
-            .ecology
-            .as_mut()
-            .and_then(|world| world.jobs.remove(&actor))
-        else {
+        let Some(job) = self.state.ecology.as_mut().and_then(|world| {
+            world
+                .remove_gathering(&mut self.state.components, actor)
+                .expect("registered gathering")
+        }) else {
             return;
         };
         let source = self
@@ -595,41 +584,20 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn observe_ecology(&mut self) {
-        let Some(world) = &self.state.ecology else {
+        if self.state.ecology.is_none() {
             return;
-        };
-        let resources = world
-            .resources(&self.state.components)
-            .map(|(_, value)| value)
-            .collect::<Vec<_>>();
-        let plots = world
-            .plots(&self.state.components)
-            .map(|(_, value)| value)
-            .collect::<Vec<_>>();
-        for actor in self
-            .state
-            .people
-            .iter()
-            .map(|person| person.id)
-            .collect::<Vec<_>>()
-        {
+        }
+        let actors: Vec<_> = self.state.people.iter().map(|person| person.id).collect();
+        for actor in actors {
             let Some(area) = self.ecology_area(actor) else {
                 continue;
             };
-            self.state
-                .ecology
-                .as_mut()
-                .unwrap()
-                .observe_area(actor, area, self.state.time);
-            for source in resources.iter().filter(|source| source.area == area) {
-                self.state
-                    .ecology
-                    .as_mut()
-                    .unwrap()
-                    .known
-                    .entry(actor)
-                    .or_default()
-                    .insert(
+            let world = self.state.ecology.as_ref().unwrap();
+            let resources: Vec<_> = world
+                .resources(&self.state.components)
+                .filter(|(_, source)| source.area == area)
+                .map(|(_, source)| {
+                    (
                         source.id,
                         ResourceView {
                             id: source.id,
@@ -641,19 +609,16 @@ impl Simulation {
                             contamination: source.contamination,
                             observed_at: self.state.time,
                         },
-                    );
-            }
-            for plot in plots.iter().filter(|plot| plot.area == area) {
-                let soil =
-                    game_land::soil(&self.state.components, plot.id).expect("validated plot soil");
-                self.state
-                    .ecology
-                    .as_mut()
-                    .unwrap()
-                    .known_plots
-                    .entry(actor)
-                    .or_default()
-                    .insert(
+                    )
+                })
+                .collect();
+            let plots: Vec<_> = world
+                .plots(&self.state.components)
+                .filter(|(_, plot)| plot.area == area)
+                .map(|(_, plot)| {
+                    let soil = game_land::soil(&self.state.components, plot.id)
+                        .expect("validated plot soil");
+                    (
                         plot.id,
                         PlotView {
                             id: plot.id,
@@ -664,25 +629,43 @@ impl Simulation {
                             custodian: plot.custodian,
                             observed_at: self.state.time,
                         },
-                    );
-            }
+                    )
+                })
+                .collect();
+            world
+                .observe_area(&mut self.state.components, actor, area, self.state.time)
+                .expect("valid local observation");
+            let knowledge = self
+                .state
+                .components
+                .ecology_knowledge_mut(actor)
+                .expect("observed knowledge row");
+            knowledge.known_resources.extend(resources);
+            knowledge.known_plots.extend(plots);
         }
     }
     pub(crate) fn ecology_view(&self, actor: PersonId) -> EcologyView {
-        let Some(world) = &self.state.ecology else {
+        if self.state.ecology.is_none() {
+            return EcologyView::default();
+        }
+        let Some(knowledge) = self.state.components.ecology_knowledge(actor) else {
             return EcologyView::default();
         };
         EcologyView {
-            resources: world
-                .known
-                .get(&actor)
-                .map(|known| known.values().rev().take(32).cloned().collect())
-                .unwrap_or_default(),
-            plots: world
+            resources: knowledge
+                .known_resources
+                .values()
+                .rev()
+                .take(32)
+                .cloned()
+                .collect(),
+            plots: knowledge
                 .known_plots
-                .get(&actor)
-                .map(|known| known.values().rev().take(16).cloned().collect())
-                .unwrap_or_default(),
+                .values()
+                .rev()
+                .take(16)
+                .cloned()
+                .collect(),
         }
     }
     #[cfg(test)]
@@ -861,7 +844,7 @@ impl Simulation {
             return Vec::new();
         };
         let available = self.available_ecology_commands_for_planning(actor, resources);
-        let local = world.known.get(&actor).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
+        let local = self.state.components.ecology_knowledge(actor).map(|row|&row.known_resources).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
             let q = Quantity(quantity.0.min(room.0).min(known.available.0));
             let facts = game_ecology::GatherFacts { now: self.state.time, area,
                 capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|_| self.state.components.body(actor).expect("body exists").vitals.fatigue < self.body_rules(actor).fatigue_limit),
@@ -872,6 +855,7 @@ impl Simulation {
                 can_request: available.iter().any(|command| matches!(command, Command::Ecology {action: EcologyAction::RequestAccess {resource}} if *resource == known.id)) }
         }).collect::<Vec<_>>();
         let prospects = world.acquisition_prospects(
+            &self.state.components,
             game_ecology::AcquisitionNeed {
                 actor,
                 area,
@@ -920,7 +904,7 @@ impl Simulation {
             .collect::<Vec<_>>();
         offers.extend(
             world
-                .exploration_areas(actor, area, self.state.time, &areas)
+                .exploration_areas(&self.state.components, actor, area, self.state.time, &areas)
                 .into_iter()
                 .map(|(target, inspected)| AcquisitionOffer {
                     key: target.0,
@@ -944,10 +928,10 @@ impl Simulation {
         actor: PersonId,
         resources: Option<&equipment::RankingResources>,
     ) -> Vec<Command> {
-        let Some(world) = &self.state.ecology else {
+        let Some(_) = &self.state.ecology else {
             return Vec::new();
         };
-        if !self.ecology_able(actor) || world.jobs.contains_key(&actor) {
+        if !self.ecology_able(actor) || self.state.components.gathering(actor).is_some() {
             return Vec::new();
         }
         let Some(mind) = self
@@ -961,7 +945,12 @@ impl Simulation {
         let Some(area) = self.ecology_area(actor) else {
             return Vec::new();
         };
-        let Some(known) = world.known.get(&actor) else {
+        let Some(known) = self
+            .state
+            .components
+            .ecology_knowledge(actor)
+            .map(|row| &row.known_resources)
+        else {
             return Vec::new();
         };
         let mut commands = self
@@ -996,6 +985,14 @@ impl Simulation {
         let Some(world) = &self.state.ecology else {
             if self.state.components.iter::<Resource>().next().is_some()
                 || self.state.components.iter::<Plot>().next().is_some()
+                || self.state.components.gatherings().next().is_some()
+                || self.state.components.ecology_knowledges().next().is_some()
+                || self
+                    .state
+                    .components
+                    .ecology_request_rows()
+                    .next()
+                    .is_some()
             {
                 return Err(Error::InvalidSave(
                     "ecological components have no runtime".into(),
@@ -1045,7 +1042,8 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        for (actor, job) in &world.jobs {
+        for (actor, job) in self.state.components.gatherings() {
+            let actor = &actor;
             let source = world
                 .resource(&self.state.components, job.resource)
                 .ok_or_else(bad)?;
@@ -1078,24 +1076,40 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        if world.next_request.iter().any(|(actor, known)| {
-            !people.contains(actor)
-                || known
-                    .keys()
-                    .any(|resource| !world.resource(&self.state.components, *resource).is_some())
-        }) {
+        if self
+            .state
+            .components
+            .ecology_request_rows()
+            .any(|(actor, row)| {
+                let actor = &actor;
+                let known = &row.next_request;
+                !people.contains(actor)
+                    || known.keys().any(|resource| {
+                        !world.resource(&self.state.components, *resource).is_some()
+                    })
+            })
+        {
             return Err(bad());
         }
-        if world.observed_areas.iter().any(|(actor, observed)| {
-            !people.contains(actor)
-                || observed.len() > 16
-                || observed
-                    .iter()
-                    .any(|(area, at)| !area_exists(*area) || *at > self.state.time)
-        }) {
+        if self
+            .state
+            .components
+            .ecology_knowledges()
+            .any(|(actor, row)| {
+                let actor = &actor;
+                let observed = &row.observed_areas;
+                !people.contains(actor)
+                    || observed.len() > 16
+                    || observed
+                        .iter()
+                        .any(|(area, at)| !area_exists(*area) || *at > self.state.time)
+            })
+        {
             return Err(bad());
         }
-        for (actor, known) in &world.known {
+        for (actor, row) in self.state.components.ecology_knowledges() {
+            let actor = &actor;
+            let known = &row.known_resources;
             if !people.contains(actor)
                 || known.iter().any(|(id, k)| {
                     *id != k.id
@@ -1114,7 +1128,9 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        for (actor, known) in &world.known_plots {
+        for (actor, row) in self.state.components.ecology_knowledges() {
+            let actor = &actor;
+            let known = &row.known_plots;
             if !people.contains(actor)
                 || known.iter().any(|(id, k)| {
                     *id != k.id
@@ -1193,7 +1209,7 @@ mod tests {
             },
         )
         .unwrap();
-        let destination = sim.state.ecology.as_ref().unwrap().jobs[&actor].destination;
+        let destination = sim.state.components.gathering(actor).unwrap().destination;
         assert_eq!(sim.state.inventories[&destination].quantity, Quantity(0));
         sim.advance(SimDuration(59_999)).unwrap();
         assert_eq!(
@@ -1282,7 +1298,7 @@ mod tests {
             },
         )
         .unwrap();
-        let destination = sim.state.ecology.as_ref().unwrap().jobs[&actor].destination;
+        let destination = sim.state.components.gathering(actor).unwrap().destination;
         sim.advance(SimDuration(30_000)).unwrap();
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
@@ -1401,14 +1417,7 @@ mod tests {
         )
         .unwrap();
         assert!(sim.in_combat(actor));
-        assert!(
-            !sim.state
-                .ecology
-                .as_ref()
-                .unwrap()
-                .jobs
-                .contains_key(&actor)
-        );
+        assert!(!sim.state.components.gathering(actor).is_some());
         assert_eq!(
             sim.state
                 .ecology

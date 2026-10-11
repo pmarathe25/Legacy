@@ -726,17 +726,17 @@ impl Simulation {
                             | EcologyAction::RequestAccess { resource },
                     } => self
                         .state
-                        .ecology
-                        .as_ref()
-                        .and_then(|world| world.known.get(&id))
+                        .components
+                        .ecology_knowledge(id)
+                        .map(|row| &row.known_resources)
                         .and_then(|known| known.get(resource))
                         .map(|source| BTreeSet::from([source.kind.good()]))
                         .unwrap_or_default(),
                     Command::Move { destination } => self
                         .state
-                        .ecology
-                        .as_ref()
-                        .and_then(|world| world.known.get(&id))
+                        .components
+                        .ecology_knowledge(id)
+                        .map(|row| &row.known_resources)
                         .into_iter()
                         .flat_map(|known| known.values())
                         .filter(|source| source.area == *destination && source.available.0 > 0)

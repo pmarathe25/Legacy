@@ -204,7 +204,7 @@ fn public_split_tool_consolidation_enables_a_native_small_gather() {
         },
         Quantity(250),
     );
-    let job = &sim.canonical_state().ecology.as_ref().unwrap().jobs[&actor];
+    let job = sim.canonical_state().components.gathering(actor).unwrap();
     assert_eq!(job.quantity, Quantity(250));
     assert_eq!(job.tool, Some(destination));
 }
@@ -233,7 +233,12 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
         },
         Quantity(500),
     );
-    let completes = sim.canonical_state().ecology.as_ref().unwrap().jobs[&actor].completes;
+    let completes = sim
+        .canonical_state()
+        .components
+        .gathering(actor)
+        .unwrap()
+        .completes;
     sim.advance(SimDuration(completes.0 - sim.canonical_state().time.0))
         .unwrap();
     let water = sim

@@ -357,16 +357,18 @@ impl Runtime {
         prepared: PreparedAdvance,
     ) -> Result<(), Error> {
         self.validate_advance(store, &prepared)?;
+        let mut batch = game_ecs::Batch::new();
         for (id, row) in prepared.resources {
             if let Some(after) = row.after {
-                *self.resource_mut(store, id).expect("admitted resource") = after;
+                batch.insert(game_ecs::StableId(id.0), after);
             }
         }
         for (id, row) in prepared.plots {
             if let Some(after) = row.soil.after {
-                *self.soil_mut(store, id).expect("admitted plot soil") = after;
+                batch.insert(game_ecs::StableId(id.0), after);
             }
         }
+        store.apply_batch(batch)?;
         self.day = prepared.next_day;
         Ok(())
     }

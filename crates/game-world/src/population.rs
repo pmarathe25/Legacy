@@ -80,12 +80,7 @@ impl Simulation {
         sim.initialize_realm(realm::Rules::default())?;
         sim.initialize_armies(armies::Rules::default())?;
         sim.state.ecology = Some(ecology::Runtime {
-            observed_areas: BTreeMap::new(),
             rules: config.ecology.clone(),
-            jobs: BTreeMap::new(),
-            known: BTreeMap::new(),
-            known_plots: BTreeMap::new(),
-            next_request: BTreeMap::new(),
             day: sim.state.time.0 / config.environment.calendar.day.0,
         });
         sim.initialize_health(config.health.clone())?;

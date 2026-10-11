@@ -84,9 +84,9 @@ fn merge_site_rows<T>(left: Vec<(SiteId, T)>, right: Vec<(SiteId, T)>) -> Vec<(S
     merged
 }
 impl Runtime {
-    pub fn next_boundary(&self, now: SimTime, limit: SimTime) -> SimTime {
-        self.jobs
-            .values()
+    pub fn next_boundary(&self, store: &game_ecs::Store, now: SimTime, limit: SimTime) -> SimTime {
+        self.cultivations(store)
+            .map(|(_, job)| job)
             .filter_map(|job| (job.completes > now).then_some(job.completes))
             .min()
             .map_or(limit, |time| time.min(limit))
@@ -118,7 +118,10 @@ impl Runtime {
         // Only active cultivation needs keyed preview lookup. Daily growth
         // stages dense rows directly into ordered buffers.
         let mut labor_preview: BTreeMap<SiteId, (Change<Crop>, (SiteId, AreaId))> = BTreeMap::new();
-        for (actor, job) in &self.jobs {
+        let mut jobs: Vec<_> = self.cultivations(store).collect();
+        jobs.sort_unstable_by_key(|(actor, _)| *actor);
+        for (actor, job) in jobs.iter().copied() {
+            job.validate()?;
             if !occupied.insert(job.field) || next > job.completes {
                 return Err(bad());
             }
@@ -135,7 +138,7 @@ impl Runtime {
                 .labor_ms
                 .checked_add(elapsed)
                 .ok_or(Error::Overflow)?;
-            let contribution = next_crop.contributions.entry(*actor).or_default();
+            let contribution = next_crop.contributions.entry(actor).or_default();
             *contribution = contribution.checked_add(elapsed).ok_or(Error::Overflow)?;
             let progress = match job.operation {
                 FarmOperation::Prepare => Some(&mut next_crop.preparation_ms),
@@ -159,7 +162,7 @@ impl Runtime {
                 ),
             );
             prepared.jobs.push((
-                *actor,
+                actor,
                 Change {
                     before: job.clone(),
                     after: next_job,
@@ -261,17 +264,17 @@ impl Runtime {
         prepared.crops = merge_site_rows(prepared.crops, labor_crops);
         prepared.fields = merge_site_rows(prepared.fields, labor_fields);
         // A zero-duration growth boundary still reads an existing job's claim.
-        for (actor, job) in &self.jobs {
+        for (actor, job) in jobs.iter().copied() {
             if prepared
                 .crops
                 .binary_search_by_key(&job.field, |(key, _)| *key)
                 .is_ok()
-                && let Err(index) = prepared.jobs.binary_search_by_key(actor, |(key, _)| *key)
+                && let Err(index) = prepared.jobs.binary_search_by_key(&actor, |(key, _)| *key)
             {
                 prepared.jobs.insert(
                     index,
                     (
-                        *actor,
+                        actor,
                         Change {
                             before: job.clone(),
                             after: job.clone(),
@@ -317,7 +320,7 @@ impl Runtime {
             || prepared
                 .jobs
                 .iter()
-                .any(|(id, change)| self.jobs.get(id) != Some(&change.before))
+                .any(|(id, change)| self.cultivation(store, *id) != Some(&change.before))
             || prepared.fields.iter().any(|(id, expected)| {
                 self.field(store, *id).map(|field| (field.id, field.area)) != Some(*expected)
             })
@@ -325,14 +328,14 @@ impl Runtime {
                 .rules
                 .iter()
                 .any(|(id, rules)| self.catalog.crops.get(id) != Some(rules))
-            || self.jobs.iter().any(|(actor, job)| {
+            || self.cultivations(store).any(|(actor, job)| {
                 prepared
                     .crops
                     .binary_search_by_key(&job.field, |(key, _)| *key)
                     .is_ok()
                     && prepared
                         .jobs
-                        .binary_search_by_key(actor, |(key, _)| *key)
+                        .binary_search_by_key(&actor, |(key, _)| *key)
                         .is_err()
             })
         {
@@ -350,15 +353,17 @@ impl Runtime {
         prepared: PreparedAdvance,
     ) -> Result<(), Error> {
         self.validate_advance(store, &prepared)?;
+        let mut batch = game_ecs::Batch::new();
         for (id, change) in prepared.crops {
-            *self.crop_mut(store, id).expect("preflighted crop exists") = change.after;
+            batch.insert(game_ecs::StableId(id.0), change.after);
         }
         for (id, change) in prepared.soils {
-            *self.soil_mut(store, id).expect("preflighted soil exists") = change.after;
+            batch.insert(game_ecs::StableId(id.0), change.after);
         }
-        for (id, change) in prepared.jobs {
-            self.jobs.insert(id, change.after);
+        for (actor, change) in prepared.jobs {
+            batch.insert(game_ecs::StableId(actor.0), change.after);
         }
+        store.apply_batch(batch)?;
         self.day = prepared.next_day;
         Ok(())
     }

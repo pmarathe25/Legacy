@@ -40,11 +40,11 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 
 | Consumer | Providers | Shared interface |
 | --- | --- | --- |
-| `game-agriculture` | `game-ecs`, `game-land`; `game-content` (optional) | Typed component stores and joins; crop-definition loading |
+| `game-agriculture` | `game-ecs`, `game-land`; `game-content` (optional) | Field, crop, soil and cultivation joins; crop-definition loading |
 | `game-armies` | `game-missions` | Objectives for autonomous leaders |
 | `game-characters` | `game-ecs`, `game-logistics`; `game-genetics` (optional) | Personal mind and temperament components; material goals; opaque inheritable temperament loci |
 | `game-conflict` | `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
-| `game-ecology` | `game-ecs`, `game-land` | Natural resource and plot components; shared soil; sparse daily renewal effects |
+| `game-ecology` | `game-ecs`, `game-land` | Natural resources, plots, gathering, personal knowledge and request components; shared soil; sparse daily renewal effects |
 | `game-environment` | `game-ecs`; `game-content` (optional) | Local climate and weather components; typed calendar and climate loading |
 | `game-genetics` | `game-ecs` | Genomes and frozen inheritance components; opaque allele readers |
 | `game-health` | `game-ecs` | Clinical state, work, water quality, shelters, occupancy, consent offers, and remembered health components; guarded action and interval effects |

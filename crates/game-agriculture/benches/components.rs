@@ -224,7 +224,7 @@ fn check_idle(world: &Fixture) -> Result<(), Error> {
     println!(
         "mode=subday_idle fields={} jobs={} steps={IDLE_STEPS} growth_rows=0 callback_calls={callback_calls} elapsed_ms={milliseconds:.3}",
         world.runtime.fields(&world.store).count(),
-        world.runtime.jobs.len()
+        world.runtime.cultivations(&world.store).count()
     );
     Ok(())
 }
@@ -301,7 +301,7 @@ fn main() -> Result<(), Error> {
         println!(
             "mode={} fields={fields} jobs={} days={} samples={samples} growth_rows={rows} median_ms={median:.3} min_ms={:.3} max_ms={:.3} rows_per_second={:.0} growing={growing} ripe={ripe} failed={failed} save_bytes={} process_peak_rss_kib={:?}",
             mode.name(),
-            final_world.runtime.jobs.len(),
+            final_world.runtime.cultivations(&final_world.store).count(),
             days.len(),
             timings[0],
             timings[timings.len() - 1],

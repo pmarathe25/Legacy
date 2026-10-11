@@ -728,12 +728,7 @@ impl Simulation {
         let residents: BTreeSet<_> = self.state.people.iter().map(|person| person.id).collect();
         let day = self.state.environment.as_ref().unwrap().calendar.day.0;
         self.state.ecology = Some(ecology::Runtime {
-            observed_areas: BTreeMap::new(),
             rules: game_ecology::EcologyRules::default(),
-            jobs: BTreeMap::new(),
-            known: BTreeMap::new(),
-            known_plots: BTreeMap::new(),
-            next_request: BTreeMap::new(),
             day: self.state.time.0 / day,
         });
         let woodkeeper = self.state.people[5].id;
@@ -1119,9 +1114,25 @@ impl Simulation {
         }
         let lifespan = self.state.development.as_ref().unwrap().rules.lifespan.0;
         let elderhood = self.state.development.as_ref().unwrap().rules.elderhood.0;
-        self.state.agriculture.as_mut().unwrap().jobs.clear();
+        let cultivators: Vec<_> = self
+            .state
+            .components
+            .cultivations()
+            .map(|(actor, _)| actor)
+            .collect();
+        for actor in cultivators {
+            self.state.components.remove_cultivation(actor)?;
+        }
         self.state.projects.as_mut().unwrap().jobs.clear();
-        self.state.ecology.as_mut().unwrap().jobs.clear();
+        let gatherers: Vec<_> = self
+            .state
+            .components
+            .gatherings()
+            .map(|(actor, _)| actor)
+            .collect();
+        for actor in gatherers {
+            self.state.components.remove_gathering(actor)?;
+        }
         // This authored interval ends all previously active social tasks. Its
         // scheduler epoch begins at this snapshot, as do the rebuilt physical
         // deadlines; it does not replay unobserved prenatal interactions.

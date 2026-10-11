@@ -2304,7 +2304,12 @@ impl Simulation {
                         .state
                         .ecology
                         .as_ref()
-                        .and_then(|w| w.known_plots.get(&actor))
+                        .and_then(|_| {
+                            self.state
+                                .components
+                                .ecology_knowledge(actor)
+                                .map(|row| &row.known_plots)
+                        })
                         .and_then(|k| k.get(&site))
                         .map(|p| p.soil_fertility);
                     let remembered_plan = self

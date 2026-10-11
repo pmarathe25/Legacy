@@ -174,6 +174,7 @@ impl Crop {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cultivation {
     pub field: SiteId,
     pub operation: FarmOperation,
@@ -253,7 +254,6 @@ pub struct Runtime {
     #[cfg(feature = "content")]
     pub content: Option<game_content::Stamp>,
     pub catalog: Catalog,
-    pub jobs: BTreeMap<PersonId, Cultivation>,
     /// Last consumed environmental day, not an independently advanced clock.
     pub day: u64,
 }
@@ -264,7 +264,6 @@ impl Runtime {
             #[cfg(feature = "content")]
             content: None,
             catalog,
-            jobs: BTreeMap::new(),
             day,
         })
     }
@@ -354,7 +353,8 @@ impl Runtime {
         {
             return Err(bad());
         }
-        for job in self.jobs.values() {
+        for (_, job) in self.cultivations(store) {
+            job.validate()?;
             self.field(store, job.field).ok_or_else(bad)?;
             let crop = self.crop(store, job.field).ok_or_else(bad)?;
             let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;

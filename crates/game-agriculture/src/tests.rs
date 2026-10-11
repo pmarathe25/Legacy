@@ -19,6 +19,34 @@ impl std::ops::DerefMut for Fixture {
     }
 }
 impl Fixture {
+    fn job(&self, actor: PersonId) -> Option<&Cultivation> {
+        self.runtime.cultivation(&self.store, actor)
+    }
+    fn job_mut(&mut self, actor: PersonId) -> Option<&mut Cultivation> {
+        self.runtime.cultivation_mut(&mut self.store, actor)
+    }
+    fn insert_job(&mut self, actor: PersonId, job: Cultivation) {
+        self.runtime
+            .insert_cultivation(&mut self.store, actor, job)
+            .unwrap();
+        self.queries.refresh(&self.store).unwrap();
+    }
+    fn clear_jobs(&mut self) {
+        let actors: Vec<_> = self
+            .runtime
+            .cultivations(&self.store)
+            .map(|(actor, _)| actor)
+            .collect();
+        for actor in actors {
+            self.runtime
+                .remove_cultivation(&mut self.store, actor)
+                .unwrap();
+        }
+        self.queries.refresh(&self.store).unwrap();
+    }
+    fn next_boundary(&self, now: SimTime, limit: SimTime) -> SimTime {
+        self.runtime.next_boundary(&self.store, now, limit)
+    }
     fn with_runtime(runtime: Runtime) -> Result<Self, Error> {
         let mut schema = game_ecs::Schema::new();
         register_components(&mut schema)?;
@@ -429,7 +457,7 @@ fn planting_consumes_seed_once_and_resuming_requires_remaining_work() {
     );
     assert_eq!(effect.crop.phase, CropPhase::Planting);
     world.insert_crop(SiteId(1), effect.crop).unwrap();
-    world.jobs.insert(PersonId(3), effect.job);
+    world.insert_job(PersonId(3), effect.job);
     let half = world.advance(SimTime(0), SimTime(3_600_000), None).unwrap();
     let resumed = start(
         &half,
@@ -454,7 +482,7 @@ fn labor_and_restore_are_identical_across_slices() {
     world.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Planting;
     world.crop_mut(SiteId(1)).unwrap().planting_ms = 0;
     world.catalog.crops.values_mut().next().unwrap().plant_labor = SimDuration(120_000);
-    world.jobs.insert(
+    world.insert_job(
         PersonId(3),
         Cultivation {
             field: SiteId(1),
@@ -528,12 +556,12 @@ fn duplicate_labor_days_and_overflow_cannot_partially_change_components() {
         labor_ms: 0,
         completes: SimTime(60_000),
     };
-    world.jobs.insert(PersonId(3), job.clone());
-    world.jobs.insert(PersonId(8), job);
+    world.insert_job(PersonId(3), job.clone());
+    world.insert_job(PersonId(8), job);
     let before = world.clone();
     assert!(world.advance(SimTime(0), SimTime(1), None).is_err());
     assert_eq!(world, before);
-    world.jobs.clear();
+    world.clear_jobs();
     let first = world
         .advance(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
         .unwrap();
@@ -575,7 +603,7 @@ fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
     let mut valid = world();
     valid.crop_mut(SiteId(1)).unwrap().tending = 0;
     let completes = SimTime(valid.rules_for(SiteId(1)).unwrap().tend_labor.0);
-    valid.jobs.insert(
+    valid.insert_job(
         PersonId(3),
         Cultivation {
             field: SiteId(1),
@@ -589,11 +617,11 @@ fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
     bad.crop_mut(SiteId(1)).unwrap().phase = CropPhase::Prepared;
     assert!(bad.validate(SimTime(0), Some(365)).is_err());
     let mut bad = valid.clone();
-    bad.jobs.get_mut(&PersonId(3)).unwrap().completes.0 += 1;
+    bad.job_mut(PersonId(3)).unwrap().completes.0 += 1;
     assert!(bad.validate(SimTime(0), Some(365)).is_err());
     let mut bad = valid.clone();
-    let duplicate = bad.jobs[&PersonId(3)].clone();
-    bad.jobs.insert(PersonId(8), duplicate);
+    let duplicate = bad.job(PersonId(3)).unwrap().clone();
+    bad.insert_job(PersonId(8), duplicate);
     assert!(bad.validate(SimTime(0), None).is_err());
     let mut bad = valid.clone();
     bad.crop_mut(SiteId(1))
@@ -606,6 +634,126 @@ fn owner_validation_rejects_missing_components_and_corrupt_jobs() {
         bad.remove_soil(id).unwrap();
     }
     assert!(bad.validate(SimTime(0), None).is_err());
+}
+
+#[test]
+fn optional_cultivation_ports_validate_rows_and_preserve_other_columns() {
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct Foreign(u64);
+    let mut world = world();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_land::register_components(&mut schema).unwrap();
+    schema
+        .register::<Foreign>("other/value", |_| Ok(()))
+        .unwrap();
+    let mut saved = world.store.snapshot().unwrap();
+    saved.columns.insert("other/value".into(), vec![]);
+    world.store = game_ecs::Store::restore(schema.clone(), saved).unwrap();
+    world
+        .store
+        .insert_or_spawn(game_ecs::StableId(3), Foreign(73))
+        .unwrap();
+    assert!(
+        world
+            .runtime
+            .cultivation(&world.store, PersonId(3))
+            .is_none()
+    );
+    let before = world.clone();
+    assert!(
+        world
+            .runtime
+            .insert_cultivation(
+                &mut world.store,
+                PersonId(3),
+                Cultivation {
+                    field: SiteId(0),
+                    operation: FarmOperation::Tend,
+                    labor_ms: 0,
+                    completes: SimTime(10)
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(world, before);
+    let job = Cultivation {
+        field: SiteId(1),
+        operation: FarmOperation::Tend,
+        labor_ms: 0,
+        completes: SimTime(world.rules_for(SiteId(1)).unwrap().tend_labor.0),
+    };
+    world
+        .runtime
+        .insert_cultivation(&mut world.store, PersonId(3), job.clone())
+        .unwrap();
+    assert_eq!(
+        world.runtime.cultivation(&world.store, PersonId(3)),
+        Some(&job)
+    );
+    let restored = game_ecs::Store::restore(schema, world.store.snapshot().unwrap()).unwrap();
+    assert_eq!(restored, world.store);
+    assert!(
+        world
+            .runtime
+            .remove_cultivation(&mut world.store, PersonId(3))
+            .unwrap()
+            .is_some()
+    );
+    assert!(world.store.contains(game_ecs::StableId(3)));
+    assert_eq!(
+        world.store.get::<Foreign>(game_ecs::StableId(3)),
+        Some(&Foreign(73))
+    );
+    assert!(
+        world
+            .runtime
+            .remove_cultivation(&mut world.store, PersonId(99))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn rejection_of_prepared_cultivation_never_partially_publishes_crop_soil_or_day() {
+    let mut world = world();
+    let completes = SimTime(world.rules_for(SiteId(1)).unwrap().tend_labor.0);
+    world.insert_job(
+        PersonId(3),
+        Cultivation {
+            field: SiteId(1),
+            operation: FarmOperation::Tend,
+            labor_ms: 0,
+            completes,
+        },
+    );
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<Field>("agriculture/field", |_| Ok(()))
+        .unwrap();
+    schema
+        .register::<Crop>("agriculture/crop", |_| Ok(()))
+        .unwrap();
+    schema
+        .register::<Cultivation>("agriculture/cultivation", |job| {
+            job.validate()?;
+            if job.labor_ms > 0 {
+                Err(Error::Unavailable)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+    game_land::register_components(&mut schema).unwrap();
+    world.store = game_ecs::Store::restore(schema, world.store.snapshot().unwrap()).unwrap();
+    world.queries = Runtime::bind(&mut world.store);
+    let batch = world
+        .prepare_advance_serial(SimTime(0), SimTime(60_000), Some(&day(1, 10)))
+        .unwrap();
+    assert_eq!(batch.changed_job_rows(), 1);
+    let before = world.clone();
+    assert_eq!(world.commit_advance(batch), Err(Error::Unavailable));
+    assert_eq!(world, before);
 }
 
 #[test]
@@ -659,7 +807,7 @@ fn unmatched_growth_entities_are_skipped_and_missing_weather_preserves_labor() {
     let mut spare = world.crop(SiteId(1)).unwrap().clone();
     spare.tending = 0;
     world.insert_crop(SiteId(8), spare).unwrap();
-    world.jobs.insert(
+    world.insert_job(
         PersonId(3),
         Cultivation {
             field: SiteId(1),
@@ -837,7 +985,7 @@ fn stale_read_rows_reject_the_entire_sparse_commit_before_publication() {
             }
             4 => changed.day += 1,
             5 => {
-                changed.jobs.insert(
+                changed.insert_job(
                     PersonId(99),
                     Cultivation {
                         field: SiteId(1),
@@ -900,7 +1048,7 @@ fn pure_growth_batches_are_identical_under_threaded_evaluation_and_zero_duration
             .insert_soil(SiteId(id), world.soil(SiteId(1)).unwrap().clone())
             .unwrap();
     }
-    world.jobs.insert(
+    world.insert_job(
         PersonId(3),
         Cultivation {
             field: SiteId(1),
@@ -1062,7 +1210,7 @@ fn dense_growth_and_sparse_labor_merge_once_in_stable_order() {
             .insert_soil(id, world.soil(SiteId(1)).unwrap().clone())
             .unwrap();
     }
-    world.jobs.insert(
+    world.insert_job(
         PersonId(3),
         Cultivation {
             field: SiteId(1),
@@ -1071,7 +1219,7 @@ fn dense_growth_and_sparse_labor_merge_once_in_stable_order() {
             completes: SimTime(3_600_000),
         },
     );
-    world.jobs.insert(
+    world.insert_job(
         PersonId(99),
         Cultivation {
             field: SiteId(8),

@@ -271,7 +271,11 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
         .map(|(_, resource)| resource.remaining.0)
         .sum::<u64>();
     assert!(
-        sim.canonical_state().ecology.as_ref().unwrap().known[&actor]
+        sim.canonical_state()
+            .components
+            .ecology_knowledge(actor)
+            .unwrap()
+            .known_resources
             .values()
             .all(|s| s.area != AreaId(3))
     );
@@ -304,7 +308,14 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
             .thirst
             < HOUR
     );
-    assert!(state.ecology.as_ref().unwrap().observed_areas[&actor].contains_key(&AreaId(2)));
+    assert!(
+        state
+            .components
+            .ecology_knowledge(actor)
+            .unwrap()
+            .observed_areas
+            .contains_key(&AreaId(2))
+    );
     let remaining = state
         .ecology
         .as_ref()
@@ -396,7 +407,12 @@ fn a_present_custodian_can_refuse_water_without_granting_access_or_forcing_a_the
 fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_slices() {
     let (mut unknown, actor) = dry_opening(false, false);
     assert!(
-        unknown.canonical_state().ecology.as_ref().unwrap().known[&actor]
+        unknown
+            .canonical_state()
+            .components
+            .ecology_knowledge(actor)
+            .unwrap()
+            .known_resources
             .values()
             .all(|source| source.area == AreaId(1))
     );
@@ -417,7 +433,11 @@ fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_
             _ => None,
         })
         .collect::<Vec<_>>();
-    for source in state.ecology.as_ref().unwrap().known[&actor]
+    for source in state
+        .components
+        .ecology_knowledge(actor)
+        .unwrap()
+        .known_resources
         .values()
         .filter(|source| source.area != AreaId(1))
     {
@@ -444,7 +464,11 @@ fn unknown_remote_water_is_not_a_lead_and_procurement_survives_save_workers_and_
         "personally observed roads permit actual exploration"
     );
     for (resource, time) in collected {
-        let source = &state.ecology.as_ref().unwrap().known[&actor][&resource];
+        let source = &state
+            .components
+            .ecology_knowledge(actor)
+            .unwrap()
+            .known_resources[&resource];
         assert!(
             arrivals
                 .iter()

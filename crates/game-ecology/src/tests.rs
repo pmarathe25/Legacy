@@ -24,6 +24,94 @@ fn schema() -> game_ecs::Schema {
     schema
 }
 impl Fixture {
+    fn job(&self, actor: PersonId) -> Option<&Gathering> {
+        self.runtime.gathering(&self.store, actor)
+    }
+    fn insert_job(&mut self, actor: PersonId, job: Gathering) {
+        self.runtime
+            .insert_gathering(&mut self.store, actor, job)
+            .unwrap();
+        self.queries.refresh(&self.store).unwrap();
+    }
+    fn job_rows(&self) -> Vec<(PersonId, Gathering)> {
+        let mut rows: Vec<_> = self
+            .runtime
+            .gatherings(&self.store)
+            .map(|(actor, row)| (actor, row.clone()))
+            .collect();
+        rows.sort_by_key(|(actor, _)| *actor);
+        rows
+    }
+    fn knowledge_rows(&self) -> Vec<(PersonId, Knowledge)> {
+        let mut rows: Vec<_> = self
+            .runtime
+            .all_knowledge(&self.store)
+            .map(|(actor, row)| (actor, row.clone()))
+            .collect();
+        rows.sort_by_key(|(actor, _)| *actor);
+        rows
+    }
+    fn known_mut(&mut self, actor: PersonId) -> &mut BTreeMap<ResourceId, ResourceView> {
+        if self.runtime.knowledge(&self.store, actor).is_none() {
+            self.runtime
+                .insert_knowledge(&mut self.store, actor, Knowledge::default())
+                .unwrap();
+            self.queries.refresh(&self.store).unwrap();
+        }
+        &mut self
+            .runtime
+            .knowledge_mut(&mut self.store, actor)
+            .unwrap()
+            .known_resources
+    }
+    fn insert_known(&mut self, actor: PersonId, known: BTreeMap<ResourceId, ResourceView>) {
+        let mut row = self
+            .runtime
+            .knowledge(&self.store, actor)
+            .cloned()
+            .unwrap_or_default();
+        row.known_resources = known;
+        self.runtime
+            .insert_knowledge(&mut self.store, actor, row)
+            .unwrap();
+        self.queries.refresh(&self.store).unwrap();
+    }
+    fn requests_mut(&mut self, actor: PersonId) -> &mut BTreeMap<ResourceId, SimTime> {
+        if self.runtime.requests(&self.store, actor).is_none() {
+            self.runtime
+                .insert_requests(&mut self.store, actor, Requests::default())
+                .unwrap();
+            self.queries.refresh(&self.store).unwrap();
+        }
+        &mut self
+            .runtime
+            .requests_mut(&mut self.store, actor)
+            .unwrap()
+            .next_request
+    }
+    fn observe_area(&mut self, actor: PersonId, area: AreaId, now: SimTime) {
+        self.runtime
+            .observe_area(&mut self.store, actor, area, now)
+            .unwrap();
+        self.queries.refresh(&self.store).unwrap();
+    }
+    fn acquisition_prospects(
+        &self,
+        need: AcquisitionNeed,
+        local: &[LocalAcquisition],
+    ) -> Vec<AcquisitionProspect> {
+        self.runtime.acquisition_prospects(&self.store, need, local)
+    }
+    fn exploration_areas(
+        &self,
+        actor: PersonId,
+        area: AreaId,
+        now: SimTime,
+        known_areas: &[AreaId],
+    ) -> Vec<(AreaId, SimTime)> {
+        self.runtime
+            .exploration_areas(&self.store, actor, area, now, known_areas)
+    }
     fn new(rules: EcologyRules, day: u64) -> Result<Self, Error> {
         let runtime = Runtime::new(rules, day)?;
         let mut store = game_ecs::Store::with_schema(schema());
@@ -270,7 +358,7 @@ fn renewal_is_finite_and_changes_no_custody_permissions_or_personal_knowledge() 
         next.resource(ResourceId(1)).unwrap().access,
         world.resource(ResourceId(1)).unwrap().access
     );
-    assert!(next.known.is_empty());
+    assert!(next.knowledge_rows().is_empty());
     assert_eq!(world, before);
     let cold = world.advance(Some(&day(1, -5))).unwrap();
     assert_eq!(cold.resource(ResourceId(1)).unwrap().remaining, Quantity(0));
@@ -352,7 +440,7 @@ fn missing_weather_preserves_land_and_finite_gathering_still_completes() {
     let plan = world
         .prepare_gather(PersonId(3), ResourceId(1), Quantity(500), false, facts())
         .unwrap();
-    world.jobs.insert(PersonId(3), plan.job(InventoryId(7)));
+    world.insert_job(PersonId(3), plan.job(InventoryId(7)));
     assert_eq!(world.advance(None).unwrap(), world);
     let no_cells = LocalWeatherDay {
         cells: BTreeMap::new(),
@@ -368,14 +456,14 @@ fn missing_weather_preserves_land_and_finite_gathering_still_completes() {
         next.plots().collect::<Vec<_>>(),
         world.plots().collect::<Vec<_>>()
     );
-    assert_eq!(next.jobs, world.jobs);
+    assert_eq!(next.job_rows(), world.job_rows());
     for (id, _) in world.plots() {
         assert_eq!(next.soil(id), world.soil(id));
     }
     let effect = prepare_collection(
         next.resource(ResourceId(1)).unwrap(),
         PersonId(3),
-        &next.jobs[&PersonId(3)],
+        next.job(PersonId(3)).unwrap(),
         closing(plan.completes),
     )
     .unwrap();
@@ -481,7 +569,7 @@ fn actual_reservations_worker_slots_and_cargo_limits_bound_collection_plans() {
     assert_eq!(first.good, Good::Water);
     assert!(first.tool.is_none());
     assert_eq!(first.completes, SimTime(60_010));
-    world.jobs.insert(PersonId(3), first.job(InventoryId(7)));
+    world.insert_job(PersonId(3), first.job(InventoryId(7)));
     let second = world
         .prepare_gather(PersonId(4), ResourceId(1), Quantity(1_000), false, facts())
         .unwrap();
@@ -489,7 +577,7 @@ fn actual_reservations_worker_slots_and_cargo_limits_bound_collection_plans() {
         world.prepare_gather(PersonId(4), ResourceId(1), Quantity(2_000), false, facts()),
         Err(Error::Unavailable)
     );
-    world.jobs.insert(PersonId(4), second.job(InventoryId(8)));
+    world.insert_job(PersonId(4), second.job(InventoryId(8)));
     let before = world.clone();
     assert_eq!(
         world.prepare_gather(PersonId(5), ResourceId(1), Quantity(1_000), false, facts()),
@@ -643,7 +731,7 @@ fn current_restore_pending_jobs_and_fractional_renewal_continue_without_rerollin
     let plan = world
         .prepare_gather(PersonId(3), ResourceId(1), Quantity(1_000), false, facts())
         .unwrap();
-    world.jobs.insert(PersonId(3), plan.job(InventoryId(7)));
+    world.insert_job(PersonId(3), plan.job(InventoryId(7)));
     let first = world
         .advance(Some(&LocalWeatherDay {
             cells: BTreeMap::from([(
@@ -667,14 +755,14 @@ fn current_restore_pending_jobs_and_fractional_renewal_continue_without_rerollin
         prepare_collection(
             first.resource(ResourceId(1)).unwrap(),
             PersonId(3),
-            &first.jobs[&PersonId(3)],
+            first.job(PersonId(3)).unwrap(),
             closing(plan.completes)
         )
         .unwrap(),
         prepare_collection(
             loaded.resource(ResourceId(1)).unwrap(),
             PersonId(3),
-            &loaded.jobs[&PersonId(3)],
+            loaded.job(PersonId(3)).unwrap(),
             closing(plan.completes)
         )
         .unwrap()
@@ -706,7 +794,7 @@ fn malformed_or_overflowing_inputs_fail_without_partial_renewal_or_reservation()
         ),
         Err(Error::Overflow)
     );
-    assert!(world.jobs.is_empty());
+    assert!(world.job_rows().is_empty());
 }
 
 #[test]
@@ -719,7 +807,7 @@ fn exploration_requires_actual_inspection_and_retries_a_stale_negative_observati
             .is_empty()
     );
     // A dated received resource view does not constitute physical inspection.
-    world.known.insert(
+    world.insert_known(
         PersonId(3),
         BTreeMap::from([(
             ResourceId(1),
@@ -763,7 +851,15 @@ fn exploration_requires_actual_inspection_and_retries_a_stale_negative_observati
     for id in 4..25 {
         world.observe_area(PersonId(3), AreaId(id), SimTime(id));
     }
-    assert_eq!(world.observed_areas[&PersonId(3)].len(), 16);
+    assert_eq!(
+        world
+            .runtime
+            .knowledge(&world.store, PersonId(3))
+            .unwrap()
+            .observed_areas
+            .len(),
+        16
+    );
 }
 #[test]
 fn acquisition_prospects_use_only_personal_views_and_local_admission_for_every_resource_good() {
@@ -783,7 +879,7 @@ fn acquisition_prospects_use_only_personal_views_and_local_admission_for_every_r
             room: Quantity(1_000),
         };
         assert!(world.acquisition_prospects(need, &[]).is_empty());
-        world.known.insert(
+        world.insert_known(
             PersonId(3),
             BTreeMap::from([(
                 ResourceId(1),
@@ -810,9 +906,7 @@ fn acquisition_prospects_use_only_personal_views_and_local_admission_for_every_r
         assert_eq!(offers[0].quantity, Quantity(500));
         assert_eq!(offers[0].needs_tool, kind == ResourceKind::Coppice);
         world
-            .known
-            .get_mut(&PersonId(3))
-            .unwrap()
+            .known_mut(PersonId(3))
             .get_mut(&ResourceId(1))
             .unwrap()
             .area = AreaId(3);
@@ -899,7 +993,7 @@ fn conditional_operator_retains_missing_carried_equipment_but_actual_gather_reva
 #[test]
 fn requesting_known_resource_access_needs_no_material_carrying_room() {
     let mut world = world(ResourceKind::Spring, 1_000);
-    world.known.insert(
+    world.insert_known(
         PersonId(3),
         BTreeMap::from([(
             ResourceId(1),
@@ -940,9 +1034,7 @@ fn requesting_known_resource_access_needs_no_material_carrying_room() {
         }
     );
     world
-        .known
-        .get_mut(&PersonId(3))
-        .unwrap()
+        .known_mut(PersonId(3))
         .get_mut(&ResourceId(1))
         .unwrap()
         .accessible = true;
@@ -963,7 +1055,7 @@ fn requesting_known_resource_access_needs_no_material_carrying_room() {
 #[test]
 fn source_offers_preserve_permission_and_unauthorized_alternatives_for_personal_judgment() {
     let mut world = world(ResourceKind::Spring, 1_000);
-    world.known.insert(
+    world.insert_known(
         PersonId(3),
         BTreeMap::from([(
             ResourceId(1),
@@ -1018,7 +1110,7 @@ fn gathering_ceiling_uses_actual_other_reservations_body_room_and_child_limit() 
         .prepare_gather(PersonId(3), ResourceId(1), Quantity(250), false, facts())
         .unwrap()
         .job(InventoryId(10));
-    world.jobs.insert(PersonId(3), job);
+    world.insert_job(PersonId(3), job);
     assert_eq!(
         world
             .gather_upper_bound(PersonId(4), ResourceId(1), facts())
@@ -1096,9 +1188,7 @@ fn no_day_prepares_no_rows_and_preserves_concurrent_runtime_metadata() {
     assert_eq!(batch.changed_soil_rows(), 0);
     world.observe_area(PersonId(3), AreaId(2), SimTime(19));
     world
-        .next_request
-        .entry(PersonId(3))
-        .or_default()
+        .requests_mut(PersonId(3))
         .insert(ResourceId(1), SimTime(99));
     let before = world.clone();
     world.commit_advance(batch).unwrap();
@@ -1127,9 +1217,9 @@ fn sparse_daily_commit_keeps_gathering_knowledge_and_foreign_components() {
         .prepare_gather(PersonId(3), ResourceId(1), Quantity(500), false, facts())
         .unwrap()
         .job(InventoryId(7));
-    world.jobs.insert(PersonId(3), job.clone());
+    world.insert_job(PersonId(3), job.clone());
     world.observe_area(PersonId(3), AreaId(2), SimTime(19));
-    world.known.entry(PersonId(3)).or_default().insert(
+    world.known_mut(PersonId(3)).insert(
         ResourceId(1),
         ResourceView {
             id: ResourceId(1),
@@ -1147,12 +1237,10 @@ fn sparse_daily_commit_keeps_gathering_knowledge_and_foreign_components() {
         .get_mut::<ForeignTag>(game_ecs::StableId(1))
         .unwrap()
         .0 = 9;
-    let known = world.known.clone();
-    let observed = world.observed_areas.clone();
+    let known = world.knowledge_rows();
     world.commit_advance(batch).unwrap();
-    assert_eq!(world.jobs[&PersonId(3)], job);
-    assert_eq!(world.known, known);
-    assert_eq!(world.observed_areas, observed);
+    assert_eq!(world.job(PersonId(3)), Some(&job));
+    assert_eq!(world.knowledge_rows(), known);
     assert_eq!(
         world.resource(ResourceId(1)).unwrap().remaining,
         Quantity(2_250)
@@ -1161,6 +1249,206 @@ fn sparse_daily_commit_keeps_gathering_knowledge_and_foreign_components() {
         world.store.get::<ForeignTag>(game_ecs::StableId(1)),
         Some(&ForeignTag(9))
     );
+}
+
+#[test]
+fn personal_views_requests_and_gathering_are_independent_sparse_components() {
+    let mut world = world(ResourceKind::Spring, 1_000);
+    let known = ResourceView {
+        id: ResourceId(1),
+        area: AreaId(3),
+        kind: ResourceKind::Spring,
+        available: Quantity(1_000),
+        accessible: false,
+        custodian: Some(PersonId(4)),
+        contamination: 0,
+        observed_at: SimTime(0),
+    };
+    for actor in [PersonId(3), PersonId(4)] {
+        world.insert_known(actor, BTreeMap::from([(known.id, known.clone())]));
+    }
+    world
+        .runtime
+        .insert_requests(
+            &mut world.store,
+            PersonId(3),
+            Requests {
+                next_request: BTreeMap::from([(ResourceId(1), SimTime(99))]),
+            },
+        )
+        .unwrap();
+    world.resource_mut(ResourceId(1)).unwrap().remaining = Quantity(0);
+    let need = AcquisitionNeed {
+        actor: PersonId(3),
+        area: AreaId(2),
+        now: SimTime(0),
+        good: Good::Water,
+        quantity: Quantity(500),
+        room: Quantity(1_000),
+    };
+    let offers = world.acquisition_prospects(need, &[]);
+    assert_eq!(offers.len(), 1);
+    assert!(matches!(offers[0].action, EcologyAction::Gather { .. }));
+    assert_eq!(
+        offers[0].quantity,
+        Quantity(500),
+        "dated remote knowledge is not replaced by current resource state"
+    );
+    assert!(
+        world
+            .acquisition_prospects(
+                AcquisitionNeed {
+                    actor: PersonId(4),
+                    ..need
+                },
+                &[]
+            )
+            .iter()
+            .any(|offer| matches!(offer.action, EcologyAction::RequestAccess { .. }))
+    );
+    assert!(world.runtime.gathering(&world.store, PersonId(3)).is_none());
+    let restored = game_ecs::Store::restore(schema(), world.store.snapshot().unwrap()).unwrap();
+    assert_eq!(restored, world.store);
+    let before = world.clone();
+    assert!(
+        world
+            .runtime
+            .insert_gathering(
+                &mut world.store,
+                PersonId(99),
+                Gathering {
+                    resource: ResourceId(1),
+                    destination: InventoryId(7),
+                    quantity: Quantity(0),
+                    tool: None,
+                    completes: SimTime(20),
+                    unauthorized: false
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        world
+            .runtime
+            .insert_requests(
+                &mut world.store,
+                PersonId(99),
+                Requests {
+                    next_request: BTreeMap::from([(ResourceId(0), SimTime(99))])
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(world, before);
+}
+
+#[test]
+fn observation_schema_rejection_preserves_existing_personal_views_and_entity_membership() {
+    let mut world = world(ResourceKind::Spring, 1_000);
+    world.insert_known(PersonId(3), BTreeMap::new());
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<Resource>("ecology/resource", Resource::validate)
+        .unwrap();
+    schema
+        .register::<Plot>("ecology/plot", Plot::validate)
+        .unwrap();
+    schema
+        .register::<Gathering>("ecology/gathering", Gathering::validate)
+        .unwrap();
+    schema
+        .register::<Requests>("ecology/requests", Requests::validate)
+        .unwrap();
+    schema
+        .register::<Knowledge>("ecology/knowledge", |known| {
+            known.validate()?;
+            if !known.observed_areas.is_empty() {
+                Err(Error::Unavailable)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+    game_land::register_components(&mut schema).unwrap();
+    world.store = game_ecs::Store::restore(schema, world.store.snapshot().unwrap()).unwrap();
+    let before = world.clone();
+    for actor in [PersonId(3), PersonId(99)] {
+        assert_eq!(
+            world
+                .runtime
+                .observe_area(&mut world.store, actor, AreaId(2), SimTime(10)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(world, before);
+    }
+}
+
+#[test]
+fn rejection_of_daily_resource_or_land_rows_never_partially_publishes_the_other_rows_or_day() {
+    for reject_resource in [false, true] {
+        let mut world = world(ResourceKind::Spring, 2_000);
+        world
+            .insert_plot(
+                Plot {
+                    id: SiteId(9),
+                    area: AreaId(2),
+                    access: BTreeSet::new(),
+                    custodian: None,
+                },
+                Soil {
+                    fertility: 0,
+                    water: 1_000,
+                    capacity: 2_000,
+                },
+            )
+            .unwrap();
+        let mut schema = game_ecs::Schema::new();
+        if reject_resource {
+            schema
+                .register::<Resource>("ecology/resource", |source| {
+                    source.validate()?;
+                    if source.remaining.0 > 2_000 {
+                        Err(Error::Unavailable)
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap();
+            game_land::register_components(&mut schema).unwrap();
+        } else {
+            schema
+                .register::<Resource>("ecology/resource", Resource::validate)
+                .unwrap();
+            schema
+                .register::<Soil>("land/soil", |soil| {
+                    soil.validate()?;
+                    if soil.fertility > 0 {
+                        Err(Error::Unavailable)
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap();
+        }
+        schema
+            .register::<Plot>("ecology/plot", Plot::validate)
+            .unwrap();
+        schema
+            .register::<Gathering>("ecology/gathering", Gathering::validate)
+            .unwrap();
+        schema
+            .register::<Knowledge>("ecology/knowledge", Knowledge::validate)
+            .unwrap();
+        schema
+            .register::<Requests>("ecology/requests", Requests::validate)
+            .unwrap();
+        world.store = game_ecs::Store::restore(schema, world.store.snapshot().unwrap()).unwrap();
+        world.queries = Runtime::bind(&mut world.store);
+        let batch = world.prepare_advance_serial(Some(&day(1, 20))).unwrap();
+        let before = world.clone();
+        assert_eq!(world.commit_advance(batch), Err(Error::Unavailable));
+        assert_eq!(world, before);
+    }
 }
 
 #[test]

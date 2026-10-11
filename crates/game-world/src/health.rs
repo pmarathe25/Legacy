@@ -3691,7 +3691,12 @@ mod supply_composition_tests {
         let relief = sim.state.health.as_ref().unwrap().rules.drink_relief;
         sim.state.components.clinical_mut(actor).unwrap().thirst = relief;
         sim.review_decisions().unwrap();
-        let source = sim.state.ecology.as_ref().unwrap().known[&actor]
+        let source = sim
+            .state
+            .components
+            .ecology_knowledge(actor)
+            .unwrap()
+            .known_resources
             .values()
             .find(|source| source.kind == ResourceKind::Spring && source.area == AreaId(1))
             .unwrap()
@@ -3714,7 +3719,7 @@ mod supply_composition_tests {
         }
         assert_eq!(sim.state, before);
         sim.debug_actor_command(actor, command).unwrap();
-        let complete = sim.state.ecology.as_ref().unwrap().jobs[&actor].completes;
+        let complete = sim.state.components.gathering(actor).unwrap().completes;
         let duration = complete.0 - sim.state.time.0;
         let mut restored = Simulation::load(
             &sim.save().unwrap(),

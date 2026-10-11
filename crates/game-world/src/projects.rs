@@ -1110,7 +1110,7 @@ impl Simulation {
         let enterprise_facts=world.enterprises.values().map(|asset| {
             let (active,crop_failed,output_room,required_input,required_output)=match asset.kind {
                 ProjectKind::Farm {..}=>{
-                    (self.state.agriculture.as_ref().unwrap().jobs.values().any(|j|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crop(&self.state.components, asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
+                    (self.state.components.cultivations().any(|(_,j)|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crop(&self.state.components, asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
                 }
                 ProjectKind::Workshop=>{
                     let site=&self.state.components.site(asset.site).expect("site exists");
@@ -1675,7 +1675,12 @@ impl Simulation {
             .state
             .ecology
             .as_ref()
-            .and_then(|w| w.known_plots.get(&actor))
+            .and_then(|_| {
+                self.state
+                    .components
+                    .ecology_knowledge(actor)
+                    .map(|row| &row.known_plots)
+            })
             .and_then(|k| k.values().find(|p| p.area == area && p.accessible))
         {
             let stock = |good| {

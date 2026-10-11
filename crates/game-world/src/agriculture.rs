@@ -266,7 +266,7 @@ impl Simulation {
         let Some(world) = &self.state.agriculture else {
             return Ok(None);
         };
-        if day.is_none() && world.jobs.is_empty() {
+        if day.is_none() && self.state.components.cultivations().next().is_none() {
             return Ok(None);
         }
         let day = day.map(|day| game_agriculture::LocalWeatherDay {
@@ -387,10 +387,11 @@ impl Simulation {
                 && mature,
             tool_available: available(land.tool, Good::Tool).is_some_and(|q| q.0 >= 1_000)
                 && self.tool_available_for_planning(actor, land.tool, resources),
-            field_available: !world
-                .jobs
-                .iter()
-                .any(|(person, job)| *person != actor && job.field == field),
+            field_available: !self
+                .state
+                .components
+                .cultivations()
+                .any(|(person, job)| person != actor && job.field == field),
             seed_available: available(land.seed, Good::Seed).unwrap_or(Quantity(0)),
             water_available: available(land.water, Good::Water).unwrap_or(Quantity(0)),
             outputs_accessible: available(land.food, Good::Food).is_some()
@@ -457,7 +458,9 @@ impl Simulation {
         world
             .insert_crop(&mut self.state.components, field, plan.crop)
             .expect("validated component insertion");
-        world.jobs.insert(actor, plan.job);
+        world
+            .insert_cultivation(&mut self.state.components, actor, plan.job)
+            .expect("validated cultivation");
         *self.state.components.activity_mut(actor).unwrap() = Activity::Cultivate {
             field,
             operation,
@@ -474,7 +477,9 @@ impl Simulation {
 
     pub(crate) fn interrupt_cultivation(&mut self, actor: PersonId) {
         if let Some(world) = &mut self.state.agriculture {
-            world.jobs.remove(&actor);
+            world
+                .remove_cultivation(&mut self.state.components, actor)
+                .expect("registered cultivation");
         }
     }
 
@@ -484,12 +489,10 @@ impl Simulation {
             self.emit(EventKind::Interrupted { actor });
             return;
         }
-        let Some(job) = self
-            .state
-            .agriculture
-            .as_mut()
-            .and_then(|w| w.jobs.remove(&actor))
-        else {
+        let Some(job) = self.state.agriculture.as_mut().and_then(|w| {
+            w.remove_cultivation(&mut self.state.components, actor)
+                .expect("registered cultivation")
+        }) else {
             return;
         };
         let valid = self
@@ -671,6 +674,7 @@ impl Simulation {
         let Some(world) = &self.state.agriculture else {
             if self.state.components.iter::<Field>().next().is_some()
                 || self.state.components.iter::<Crop>().next().is_some()
+                || self.state.components.cultivations().next().is_some()
             {
                 return Err(Error::InvalidSave(
                     "agricultural components have no runtime".into(),
@@ -733,7 +737,8 @@ impl Simulation {
                 }
             }
         }
-        for (actor, job) in &world.jobs {
+        for (actor, job) in self.state.components.cultivations() {
+            let actor = &actor;
             let Some(field) = world.field(&self.state.components, job.field) else {
                 return Err(invalid());
             };

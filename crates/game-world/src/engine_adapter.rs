@@ -97,7 +97,7 @@ fn agriculture(world: &Simulation, interval: Interval) -> Result<SimTime, Error>
         .agriculture
         .as_ref()
         .map_or(interval.to, |crop| {
-            crop.next_boundary(interval.from, interval.to)
+            crop.next_boundary(&world.state.components, interval.from, interval.to)
         }))
 }
 fn genetics(world: &Simulation, interval: Interval) -> Result<SimTime, Error> {

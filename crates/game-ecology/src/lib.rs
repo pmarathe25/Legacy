@@ -165,6 +165,7 @@ impl Plot {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Gathering {
     pub resource: ResourceId,
     pub destination: InventoryId,
@@ -173,16 +174,23 @@ pub struct Gathering {
     pub completes: SimTime,
     pub unauthorized: bool,
 }
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Knowledge {
+    pub known_resources: BTreeMap<ResourceId, ResourceView>,
+    pub known_plots: BTreeMap<SiteId, PlotView>,
+    pub observed_areas: BTreeMap<AreaId, SimTime>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Requests {
+    pub next_request: BTreeMap<ResourceId, SimTime>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Runtime {
     pub rules: EcologyRules,
-    pub jobs: BTreeMap<PersonId, Gathering>,
-    pub known: BTreeMap<PersonId, BTreeMap<ResourceId, ResourceView>>,
-    pub known_plots: BTreeMap<PersonId, BTreeMap<SiteId, PlotView>>,
-    pub observed_areas: BTreeMap<PersonId, BTreeMap<AreaId, SimTime>>,
     pub day: u64,
-    #[serde(default)]
-    pub next_request: BTreeMap<PersonId, BTreeMap<ResourceId, SimTime>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EcologyRules {
@@ -242,15 +250,15 @@ impl Runtime {
     /// preparation facts come from the physical collection owner at this point.
     pub fn acquisition_prospects(
         &self,
+        store: &game_ecs::Store,
         need: AcquisitionNeed,
         local: &[LocalAcquisition],
     ) -> Vec<AcquisitionProspect> {
         let mut prospects = Vec::new();
         for known in self
-            .known
-            .get(&need.actor)
+            .knowledge(store, need.actor)
             .into_iter()
-            .flat_map(|known| known.values())
+            .flat_map(|known| known.known_resources.values())
         {
             if known.kind.good() != need.good
                 || known.observed_at > need.now
@@ -264,9 +272,8 @@ impl Runtime {
                 && known.custodian.is_some()
                 && (!local_here || local.is_some_and(|facts| facts.can_request))
                 && !self
-                    .next_request
-                    .get(&need.actor)
-                    .and_then(|requests| requests.get(&known.id))
+                    .requests(store, need.actor)
+                    .and_then(|requests| requests.next_request.get(&known.id))
                     .is_some_and(|at| *at > need.now)
             {
                 prospects.push(AcquisitionProspect {
@@ -298,10 +305,17 @@ impl Runtime {
     }
     /// Supplied only after physically inspecting this place. Receiving a report
     /// updates source knowledge separately and cannot fabricate this observation.
-    pub fn observe_area(&mut self, actor: PersonId, area: AreaId, now: SimTime) {
-        let observed = self.observed_areas.entry(actor).or_default();
+    pub fn observe_area(
+        &self,
+        store: &mut game_ecs::Store,
+        actor: PersonId,
+        area: AreaId,
+        now: SimTime,
+    ) -> Result<(), Error> {
+        let mut knowledge = self.knowledge(store, actor).cloned().unwrap_or_default();
+        let observed = &mut knowledge.observed_areas;
         if observed.get(&area).is_some_and(|at| *at > now) {
-            return;
+            return Ok(());
         }
         if observed.len() == 16
             && !observed.contains_key(&area)
@@ -313,17 +327,20 @@ impl Runtime {
             observed.remove(&oldest);
         }
         observed.insert(area, now);
+        self.insert_knowledge(store, actor, knowledge)
     }
     pub fn exploration_areas(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         area: AreaId,
         now: SimTime,
         known_areas: &[AreaId],
     ) -> Vec<(AreaId, SimTime)> {
-        let Some(observed) = self.observed_areas.get(&actor) else {
+        let Some(knowledge) = self.knowledge(store, actor) else {
             return Vec::new();
         };
+        let observed = &knowledge.observed_areas;
         let Some(inspected) = observed.get(&area).copied().filter(|at| *at <= now) else {
             return Vec::new();
         };
@@ -351,7 +368,7 @@ impl Runtime {
     ) -> Result<Quantity, Error> {
         let source = self.resource(store, resource).ok_or(Error::Unavailable)?;
         source.validate()?;
-        let (reserved, _) = self.gathering_reservations(actor, resource)?;
+        let (reserved, _) = self.gathering_reservations(store, actor, resource)?;
         let available = u128::from(source.remaining.0).saturating_sub(reserved) as u64;
         Ok(Quantity(
             available
@@ -362,13 +379,14 @@ impl Runtime {
 
     fn gathering_reservations(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         resource: ResourceId,
     ) -> Result<(u128, usize), Error> {
         let mut reserved = 0u128;
         let mut working = 0usize;
-        for (person, job) in &self.jobs {
-            if *person != actor && job.resource == resource {
+        for (person, job) in self.gatherings(store) {
+            if person != actor && job.resource == resource {
                 reserved = reserved
                     .checked_add(u128::from(job.quantity.0))
                     .ok_or(Error::Overflow)?;
@@ -389,7 +407,7 @@ impl Runtime {
     ) -> Result<GatheringConditions, Error> {
         let source = self.resource(store, resource).ok_or(Error::Unavailable)?;
         source.validate()?;
-        let (reserved, working) = self.gathering_reservations(actor, resource)?;
+        let (reserved, working) = self.gathering_reservations(store, actor, resource)?;
         if quantity.0 == 0
             || !facts.capable
             || source.area != facts.area

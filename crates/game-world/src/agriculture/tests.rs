@@ -68,7 +68,12 @@ fn perform(sim: &mut Simulation, field: SiteId, operation: FarmOperation) {
         command: Command::Cultivate { field, operation },
     })
     .unwrap();
-    let completes = sim.state.agriculture.as_ref().unwrap().jobs[&sim.state.ruler].completes;
+    let completes = sim
+        .state
+        .components
+        .cultivation(sim.state.ruler)
+        .unwrap()
+        .completes;
     sim.advance(SimDuration(completes.0 - sim.state.time.0))
         .unwrap();
 }
@@ -654,7 +659,7 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
         *sim.state.components.activity(ruler).unwrap(),
         Activity::Idle
     );
-    assert!(sim.state.agriculture.as_ref().unwrap().jobs.is_empty());
+    assert!(sim.state.components.cultivations().next().is_none());
     sim.debug_actor_command(ruler, Command::Rest).unwrap();
     sim.advance(SimDuration(3_500)).unwrap();
     perform(&mut sim, field, FarmOperation::Plant);
