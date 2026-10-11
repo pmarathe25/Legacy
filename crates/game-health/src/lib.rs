@@ -3,6 +3,8 @@ mod api;
 mod clinical;
 mod interval;
 pub use interval::*;
+mod locality;
+pub use locality::*;
 mod planner;
 mod state;
 mod storage;
