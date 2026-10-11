@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod routes;
 pub use routes::{KnownRoutes, RouteIntent, route_intent};
+mod choices;
+pub use choices::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rules {
