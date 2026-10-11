@@ -34,7 +34,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" => {
                 println!(
-                    "game-cli [--scenario settlement-founder|established-ruler|child-successor|random] [--seed N] [--workers N] [--script PATH] [--config SCENARIO.json] [--environment ENVIRONMENT.toml] [--content DIRECTORY]\nDefault: settlement-founder. Debug fixtures remain selectable by their fixture IDs. Type help for commands."
+                    "game-cli [--scenario OPENING_ID|random] [--seed N] [--workers N] [--script PATH] [--config SCENARIO.json] [--environment ENVIRONMENT.toml] [--content DIRECTORY]\nDefault: settlement-founder. Debug fixtures remain selectable by their fixture IDs. Type help for commands."
                 );
                 return Ok(());
             }
@@ -42,15 +42,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let mut environment_document = None;
-    let mut sim = if game_assembly::scenarios::PLAYABLE.contains(&scenario.as_str())
-        || scenario == "random"
-    {
-        let explicit_config = scenario_config.is_some();
-        let mut config: game_assembly::scenarios::Config = if let Some(path) = scenario_config {
-            serde_json::from_slice(&std::fs::read(path)?)?
-        } else {
-            game_assembly::scenarios::Config::default()
+    let explicit_config = scenario_config.is_some();
+    let mut config: game_assembly::scenarios::Config = if let Some(path) = scenario_config {
+        serde_json::from_slice(&std::fs::read(path)?)?
+    } else {
+        game_assembly::scenarios::Config::default()
+    };
+    if !explicit_config {
+        config.openings = game_content::DefinitionSource::File {
+            path: content_root.join("openings/temperate.toml"),
         };
+        config.workshops = game_content::DefinitionSource::File {
+            path: content_root.join("workshop/temperate.toml"),
+        };
+    }
+    let catalog = config.openings.resolve()?;
+    let playable = catalog.data.openings.contains_key(&scenario) || scenario == "random";
+    config.openings = game_content::DefinitionSource::Inline { document: catalog };
+    let mut sim = if playable {
         if !explicit_config {
             config.agriculture = game_assembly::agriculture::catalog_source(
                 content_root.join("agriculture/crops.toml"),
@@ -69,7 +78,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Simulation::playable_scenario(&scenario, seed, execution.clone(), config)?
     } else {
-        if scenario_config.is_some() {
+        if explicit_config {
             return Err("scenario configuration requires a playable opening".into());
         }
         if let Some(path) = environment_config {

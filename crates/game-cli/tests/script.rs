@@ -1031,9 +1031,9 @@ fn normal_openings_and_seeded_random_selection_launch_through_the_cli() {
         assert!(result.status.success(), "{scenario}");
         let text = String::from_utf8(result.stdout).unwrap();
         let actual = if scenario == "random" {
-            game_assembly::scenarios::choose(41)
+            game_assembly::scenarios::choose(41).unwrap()
         } else {
-            scenario
+            scenario.to_owned()
         };
         assert!(text.starts_with(&format!("opening: {actual}\n")));
         let view: PlayerView = text
@@ -1045,6 +1045,59 @@ fn normal_openings_and_seeded_random_selection_launch_through_the_cli() {
             assert_eq!(view.life_stage, Some(LifeStage::Infant));
         }
     }
+}
+
+#[test]
+fn content_directory_can_supply_a_new_opening_id_to_the_cli() {
+    use std::io::Write;
+    fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let root = std::env::temp_dir().join(format!("legacy-cli-opening-{}", std::process::id()));
+    copy_tree(&source, &root);
+    let path = root.join("openings/temperate.toml");
+    let content = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("settlement-founder", "river-branch");
+    std::fs::write(path, content).unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_game-cli"))
+        .args(["--scenario", "river-branch", "--seed", "41", "--content"])
+        .arg(&root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"status\nquit\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.starts_with("opening: river-branch\n"));
+    let view: PlayerView = text
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .unwrap();
+    assert!(view.lineage.is_some() && view.environment.is_some());
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

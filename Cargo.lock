@@ -543,6 +543,7 @@ dependencies = [
  "game-api",
  "game-assembly",
  "game-cargo",
+ "game-content",
  "game-ecs",
  "game-lifecycle",
  "game-session",
