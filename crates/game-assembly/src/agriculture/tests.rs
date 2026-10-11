@@ -68,10 +68,7 @@ fn perform(sim: &mut Simulation, field: SiteId, operation: FarmOperation) {
         command: Command::Cultivate { field, operation },
     })
     .unwrap();
-    let completes = sim
-        .state
-        .components
-        .cultivation(sim.state.ruler)
+    let completes = game_agriculture::cultivation(&sim.state.components, sim.state.ruler)
         .unwrap()
         .completes;
     sim.advance(SimDuration(completes.0 - sim.state.time.0))
@@ -585,12 +582,11 @@ fn calendar_and_weather_are_configurable_and_validation_rejects_corruption() {
     config.environment.climate.seasonal_temperature = [30; 4];
     let configured =
         Simulation::farming_with_config(4, Execution::default(), config.clone()).unwrap();
-    let Location::AtArea(ruler_area) = *configured
-        .state
-        .components
-        .location(configured.state.ruler)
-        .expect("location exists")
-    else {
+    let Location::AtArea(ruler_area) = *game_spatial::location(
+        &configured.state.components,
+        game_ecs::StableId((configured.state.ruler).0),
+    )
+    .expect("location exists") else {
         panic!("fixture ruler starts in a local area");
     };
     assert_eq!(
@@ -629,7 +625,10 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
     let (mut sim, field) = compact(1);
     perform(&mut sim, field, FarmOperation::Prepare);
     let ruler = sim.state.ruler;
-    sim.state.components.body_mut(ruler).unwrap().vitals.fatigue = 0;
+    game_physiology::body_mut(&mut sim.state.components, ruler)
+        .unwrap()
+        .vitals
+        .fatigue = 0;
     sim.state.physical.as_mut().unwrap().rules.fatigue_limit = 7_000;
     sim.debug_actor_command(
         ruler,
@@ -659,7 +658,11 @@ fn pending_labor_survives_save_and_fatigue_interrupts_without_refunding_inputs()
         *sim.state.components.activity(ruler).unwrap(),
         Activity::Idle
     );
-    assert!(sim.state.components.cultivations().next().is_none());
+    assert!(
+        game_agriculture::cultivations(&sim.state.components)
+            .next()
+            .is_none()
+    );
     sim.debug_actor_command(ruler, Command::Rest).unwrap();
     sim.advance(SimDuration(3_500)).unwrap();
     perform(&mut sim, field, FarmOperation::Plant);

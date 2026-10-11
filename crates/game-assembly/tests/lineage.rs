@@ -316,10 +316,7 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
         sim.canonical_state().lineage.as_ref().unwrap().guardians[&guardian].assessments[&child]
             .ready
     );
-    let site = sim
-        .canonical_state()
-        .components
-        .sites()
+    let site = game_workshop::sites(&sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()
@@ -403,12 +400,13 @@ fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknow
     let mut sim =
         Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
     assert!(
-        !sim.canonical_state()
-            .components
-            .mind(child)
-            .expect("mind exists")
-            .routes
-            .contains_key(&AreaId(2))
+        !game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            child
+        )
+        .expect("mind exists")
+        .routes
+        .contains_key(&AreaId(2))
     );
     send(
         &mut sim,
@@ -418,12 +416,12 @@ fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknow
         },
     );
     sim.advance(MINUTE).unwrap();
-    let routes = &sim
-        .canonical_state()
-        .components
-        .mind(child)
-        .expect("mind exists")
-        .routes;
+    let routes = &game_characters::decisions::mind::<game_api::Command>(
+        &sim.canonical_state().components,
+        child,
+    )
+    .expect("mind exists")
+    .routes;
     assert!(routes.contains_key(&AreaId(2)));
     assert!(!routes.contains_key(&AreaId(3)));
     assert_eq!(sim.observe().lineage.unwrap().invocation_learning, 0);
@@ -522,10 +520,11 @@ fn guardian_spectating_exists_only_in_the_gap_and_never_reveals_a_future_child()
                 .unwrap();
             assert_eq!(
                 guardian.location,
-                *sim.canonical_state()
-                    .components
-                    .location(person.id)
-                    .expect("location exists")
+                *game_spatial::location(
+                    &sim.canonical_state().components,
+                    game_ecs::StableId((person.id).0)
+                )
+                .expect("location exists")
             );
         }
     }
@@ -564,10 +563,7 @@ fn simultaneous_births_use_persistent_order_without_rebinding_to_the_second_chil
     kill_ruler(&mut sim);
     let result = sim.advance(SimDuration(900_000)).unwrap();
     assert_eq!(result.reached, SimTime(240_000));
-    let newborns: Vec<_> = sim
-        .canonical_state()
-        .components
-        .lives()
+    let newborns: Vec<_> = game_lifecycle::all_lives(&sim.canonical_state().components)
         .map(|(_, row)| row)
         .filter(|life| life.born == SimTime(240_000))
         .map(|life| life.id)
@@ -613,9 +609,7 @@ fn a_birth_at_the_death_timestamp_waits_for_a_strictly_later_birth() {
     assert_eq!(world.current(), None);
     assert_eq!(world.waiting.as_ref().unwrap().died_at, SimTime(300_000));
     assert!(
-        sim.canonical_state()
-            .components
-            .lives()
+        game_lifecycle::all_lives(&sim.canonical_state().components)
             .map(|(_, row)| row)
             .any(|life| life.born == SimTime(300_000) && !life.parents.is_empty())
     );
@@ -667,9 +661,7 @@ fn a_confined_guardian_senses_the_newborn_but_regeneration_does_not_free_them() 
         custody
     );
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .body(guardian)
+        game_physiology::body(&sim.canonical_state().components, guardian)
             .expect("body exists")
             .vitals
             .health,
@@ -741,12 +733,13 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
         Quantity(0)
     );
     assert!(
-        sim.canonical_state()
-            .components
-            .mind(child)
-            .expect("mind exists")
-            .values
-            .is_empty()
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            child
+        )
+        .expect("mind exists")
+        .values
+        .is_empty()
     );
     assert!(
         sim.submit(Submission {
@@ -763,10 +756,7 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
 fn births_before_death_are_ineligible_and_an_unbounded_gap_manufactures_nothing() {
     let mut sim = fixture(1);
     sim.advance(SimDuration(300_000)).unwrap();
-    let previous_child = sim
-        .canonical_state()
-        .components
-        .lives()
+    let previous_child = game_lifecycle::all_lives(&sim.canonical_state().components)
         .map(|(_, row)| row)
         .find(|l| !l.parents.is_empty())
         .unwrap()
@@ -830,10 +820,11 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
             .find(|p| p.id == *guardian)
             .unwrap();
         assert_eq!(
-            *sim.canonical_state()
-                .components
-                .location(person.id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.canonical_state().components,
+                game_ecs::StableId((person.id).0)
+            )
+            .expect("location exists"),
             Location::InTransit {
                 from: AreaId(3),
                 to: AreaId(1),
@@ -856,10 +847,13 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
     })
     .unwrap();
     sim.advance(SimDuration(179_999)).unwrap();
-    assert!(guardians.iter().all(|id| matches!(
-        *sim.canonical_state().components.location(*id).expect("location exists"),
-        Location::InTransit { .. }
-    )));
+    assert!(guardians.iter().all(|id| {
+        matches!(
+            *game_spatial::location(&sim.canonical_state().components, game_ecs::StableId(id.0))
+                .expect("location exists"),
+            Location::InTransit { .. }
+        )
+    }));
     sim.advance(SimDuration(60_001)).unwrap();
     let care = sim
         .canonical_state()
@@ -874,9 +868,7 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
         .unwrap();
     assert_eq!(care.time, SimTime(540_000));
     assert!(
-        sim.canonical_state()
-            .components
-            .life(child)
+        game_lifecycle::life(&sim.canonical_state().components, child)
             .expect("life exists")
             .caregivers
             .iter()
@@ -894,12 +886,12 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
     // route at its current physical endpoint before arranging the next gap.
     sim.advance(SimDuration(180_000)).unwrap();
     kill_ruler(&mut sim);
-    let location = sim
-        .canonical_state()
-        .components
-        .location(guardian)
-        .expect("location exists")
-        .clone();
+    let location = game_spatial::location(
+        &sim.canonical_state().components,
+        game_ecs::StableId((guardian).0),
+    )
+    .expect("location exists")
+    .clone();
     let health = sim
         .canonical_state()
         .physical
@@ -909,25 +901,21 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
         .max_health;
     sim.debug_injure(guardian, health).unwrap();
     assert!(
-        sim.canonical_state()
-            .components
-            .body(guardian)
+        game_physiology::body(&sim.canonical_state().components, guardian)
             .expect("body exists")
             .vitals
             .alive
     );
     sim.advance(SimDuration(60_000)).unwrap();
-    let body = &sim
-        .canonical_state()
-        .components
-        .body(guardian)
-        .expect("body exists");
+    let body =
+        &game_physiology::body(&sim.canonical_state().components, guardian).expect("body exists");
     assert_eq!(body.vitals.health, 60_000);
     assert_eq!(
-        *sim.canonical_state()
-            .components
-            .location(guardian)
-            .expect("location exists"),
+        *game_spatial::location(
+            &sim.canonical_state().components,
+            game_ecs::StableId((guardian).0)
+        )
+        .expect("location exists"),
         location
     );
     assert_eq!(
@@ -936,9 +924,7 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
     );
     sim.advance(SimDuration(120_000)).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .body(guardian)
+        game_physiology::body(&sim.canonical_state().components, guardian)
             .expect("body exists")
             .vitals
             .health,

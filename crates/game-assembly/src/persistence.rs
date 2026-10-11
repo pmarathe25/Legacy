@@ -236,7 +236,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     if s.health.is_some() {
-        for (id, _) in s.components.shelters() {
+        for (id, _) in game_health::shelters(&s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -279,7 +279,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     if s.physical.is_some() {
-        for (id, _) in s.components.sites() {
+        for (id, _) in game_workshop::sites(&s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -364,7 +364,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
     }
     if s.development.is_some() {
-        for (id, _) in s.components.pregnancies() {
+        for (id, _) in game_lifecycle::all_pregnancies(&s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -408,8 +408,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         return Err(fail());
     }
     let people: BTreeMap<_, _> = s.people.iter().map(|p| (p.id, p)).collect();
-    if s.components
-        .locations()
+    if game_spatial::locations(&s.components)
+        .map(|(id, location)| (game_core::PersonId(id.0), location))
         .map(|(id, _)| id)
         .collect::<BTreeSet<_>>()
         != people.keys().copied().collect()
@@ -417,8 +417,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         return Err(fail());
     }
     game_spatial::resolve_locations(
-        s.components
-            .locations()
+        game_spatial::locations(&s.components)
+            .map(|(id, location)| (game_core::PersonId(id.0), location))
             .map(|(id, location)| (game_ecs::StableId(id.0), location)),
     )?;
 
@@ -456,7 +456,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|world| world.approaches.get(id))
                         .map(|approach| approach.completes);
-                    if !matches!(*s.components.location(p.id).expect("location exists"), Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
+                    if !matches!(*game_spatial::location(&s.components,game_ecs::StableId((p.id).0)).expect("location exists"), Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
                         || !scheduled_arrivals.insert(*id)
                     {
                         return Err(fail());
@@ -523,7 +523,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         {
             return Err(fail());
         }
-        let mut origin = match *s.components.location(p.id).expect("location exists") {
+        let mut origin = match *game_spatial::location(&s.components, game_ecs::StableId((p.id).0))
+            .expect("location exists")
+        {
             Location::AtArea(a) => {
                 if !p.route.is_empty() || !areas.contains(&a) {
                     return Err(fail());
@@ -543,10 +545,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .find(|a| a.id == from)
                     .and_then(|a| a.links.iter().find(|l| l.destination == to))
                     .ok_or_else(fail)?;
-                let dead = s
-                    .physical
-                    .as_ref()
-                    .is_some_and(|_| s.components.body(p.id).is_some_and(|a| !a.vitals.alive));
+                let dead = s.physical.as_ref().is_some_and(|_| {
+                    game_physiology::body(&s.components, p.id).is_some_and(|a| !a.vitals.alive)
+                });
                 if departed > s.time
                     || arrived_duration(departed, arrives)
                         != Some(match road_start {
@@ -855,7 +856,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .health
                         .as_ref()
-                        .is_some_and(|_| s.components.shelter(shelter).is_some())
+                        .is_some_and(|_| game_health::shelter(&s.components, shelter).is_some())
                 {
                     return Err(fail());
                 }
@@ -871,7 +872,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .health
                         .as_ref()
-                        .is_some_and(|_| s.components.shelter(shelter).is_some())
+                        .is_some_and(|_| game_health::shelter(&s.components, shelter).is_some())
                 {
                     return Err(fail());
                 }
@@ -1220,7 +1221,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .physical
                         .as_ref()
-                        .is_some_and(|_| s.components.site(site).is_some())
+                        .is_some_and(|_| game_workshop::site(&s.components, site).is_some())
                     || !s.inventories.contains_key(&output)
                     || quantity.0 == 0
                 {
@@ -1255,7 +1256,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .development
                     .as_ref()
-                    .is_some_and(|_| s.components.pregnancy(pregnancy).is_some())
+                    .is_some_and(|_| game_lifecycle::pregnancy(&s.components, pregnancy).is_some())
                     || parents.iter().any(|p| !people.contains_key(p))
                 {
                     return Err(fail());
@@ -1265,7 +1266,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .development
                     .as_ref()
-                    .is_some_and(|_| s.components.pregnancy(pregnancy).is_some())
+                    .is_some_and(|_| game_lifecycle::pregnancy(&s.components, pregnancy).is_some())
                 {
                     return Err(fail());
                 }
@@ -1278,7 +1279,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 if !s
                     .development
                     .as_ref()
-                    .is_some_and(|_| s.components.pregnancy(pregnancy).is_some())
+                    .is_some_and(|_| game_lifecycle::pregnancy(&s.components, pregnancy).is_some())
                     || !people.contains_key(&child)
                     || parents.iter().any(|p| !people.contains_key(p))
                 {
@@ -1428,10 +1429,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         record.project == project
                             && record.site == site
                             && match plan.kind {
-                                ProjectKind::Workshop => s
-                                    .physical
-                                    .as_ref()
-                                    .is_some_and(|_| s.components.site(site).is_some()),
+                                ProjectKind::Workshop => s.physical.as_ref().is_some_and(|_| {
+                                    game_workshop::site(&s.components, site).is_some()
+                                }),
                                 ProjectKind::Farm { plot, water } => {
                                     site == plot
                                         && s.agriculture
@@ -1741,16 +1741,15 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     if let Some(world) = &s.physical {
         validate_physical(s, world, &people, &areas, &physical_deadlines)?;
-    } else if s.components.bodies().next().is_some()
+    } else if game_physiology::bodies(&s.components).next().is_some()
         || s.components.activities().next().is_some()
-        || s.components.jobs().next().is_some()
-        || s.components.sites().next().is_some()
+        || game_workshop::jobs(&s.components).next().is_some()
+        || game_workshop::sites(&s.components).next().is_some()
     {
         return Err(fail());
     }
     if let Some(world) = &s.decisions {
-        if s.components
-            .minds()
+        if game_characters::decisions::minds::<game_api::Command>(&s.components)
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>()
             != people.keys().copied().collect::<BTreeSet<_>>()
@@ -1760,7 +1759,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         {
             return Err(fail());
         }
-        for (id, mind) in s.components.minds() {
+        for (id, mind) in game_characters::decisions::minds::<game_api::Command>(&s.components) {
             let id = &id;
             if !people.contains_key(id)
                 || mind.interests.values().any(|v| *v > 1_000)
@@ -1801,7 +1800,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     Subject::Site(id) => s
                         .physical
                         .as_ref()
-                        .is_some_and(|_| s.components.site(id).is_some()),
+                        .is_some_and(|_| game_workshop::site(&s.components, id).is_some()),
                     Subject::Project(id) => s
                         .projects
                         .as_ref()
@@ -1860,7 +1859,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || plan.prospects.site.is_some_and(|id| {
                         !s.physical
                             .as_ref()
-                            .is_some_and(|_| s.components.site(id).is_some())
+                            .is_some_and(|_| game_workshop::site(&s.components, id).is_some())
                     })
                     || plan
                         .prospects
@@ -1979,7 +1978,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             for (id, site) in &mind.sites {
                 if *id != site.site
-                    || !s.components.site(*id).is_some()
+                    || !game_workshop::site(&s.components, *id).is_some()
                     || !areas.contains(&site.area)
                     || !s.inventories.contains_key(&site.input)
                     || !s.inventories.contains_key(&site.tool)
@@ -2015,13 +2014,13 @@ fn validate_physical(
 ) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent physical state".into());
     let rules = &world.rules;
-    if s.components.bodies().count() != people.len()
+    if game_physiology::bodies(&s.components).count() != people.len()
         || s.components
             .activities()
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>()
             != people.keys().copied().collect()
-        || s.components.jobs().any(|(id, _)| !people.contains_key(&id))
+        || game_workshop::jobs(&s.components).any(|(id, _)| !people.contains_key(&id))
         || rules.hunger_harm == 0
         || rules.fatigue_limit == 0
         || rules.max_health == 0
@@ -2032,7 +2031,7 @@ fn validate_physical(
     {
         return Err(fail());
     }
-    for (id, site) in s.components.sites() {
+    for (id, site) in game_workshop::sites(&s.components) {
         let id = &id;
         if *id != site.id
             || !areas.contains(&site.area)
@@ -2064,10 +2063,10 @@ fn validate_physical(
     }
     let locations = crate::transport::resolved_locations_for(s)?;
     let mut care_targets = BTreeSet::new();
-    for (id, actor) in s.components.bodies() {
+    for (id, actor) in game_physiology::bodies(&s.components) {
         let id = &id;
         let activity = s.components.activity(*id).ok_or_else(fail)?;
-        let job = s.components.job(*id);
+        let job = game_workshop::job(&s.components, *id);
         let p = people.get(id).ok_or_else(fail)?;
         let carried = cargo.get(id).copied().unwrap_or(0);
         if actor.health_remainder >= 1_000
@@ -2076,7 +2075,8 @@ fn validate_physical(
             || actor.vitals.fatigue > rules.fatigue_limit
             || (carried > u128::from(physical::rules_for(s, *id).carrying_capacity.0)
                 && matches!(
-                    *s.components.location(p.id).expect("location exists"),
+                    *game_spatial::location(&s.components, game_ecs::StableId((p.id).0))
+                        .expect("location exists"),
                     Location::InTransit { .. }
                 ))
             || (p.hunger_exempt && (actor.vitals.hunger != 0 || !actor.vitals.alive))
@@ -2112,9 +2112,7 @@ fn validate_physical(
                         || numerator / denominator > u128::from(maximum)
                 }
                 || job.work_remainder >= job.rate.denominator
-                || !s
-                    .components
-                    .site(job.site)
+                || !game_workshop::site(&s.components, job.site)
                     .is_some_and(|site| job.remaining <= site.duration.0))
         {
             return Err(fail());
@@ -2186,7 +2184,7 @@ fn validate_physical(
                 operation,
                 completes,
             } if !s.agriculture.as_ref().is_some_and(|_| {
-                s.components.cultivation(*id).is_some_and(|job| {
+                game_agriculture::cultivation(&s.components, *id).is_some_and(|job| {
                     job.field == field && job.operation == operation && job.completes == completes
                 })
             }) =>
@@ -2197,7 +2195,7 @@ fn validate_physical(
                 let life = s
                     .development
                     .as_ref()
-                    .and_then(|_| s.components.life(*id))
+                    .and_then(|_| game_lifecycle::life(&s.components, *id))
                     .ok_or_else(fail)?;
                 let duration = if matches!(*activity, Activity::Play { .. }) {
                     MINUTE.0
@@ -2278,7 +2276,7 @@ fn validate_physical(
                 pregnancy,
                 completes,
             } if !s.development.as_ref().is_some_and(|_| {
-                s.components.pregnancy(pregnancy).is_some_and(|p| {
+                game_lifecycle::pregnancy(&s.components, pregnancy).is_some_and(|p| {
                     [p.gestator, p.partner].contains(id)
                         && p.state == development::PregnancyState::Conceiving { completes }
                 })

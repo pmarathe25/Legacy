@@ -8,7 +8,7 @@ impl Simulation {
         self.state
             .physical
             .as_ref()
-            .and_then(|_| self.state.components.body(actor))
+            .and_then(|_| game_physiology::body(&self.state.components, actor))
             .is_some_and(|body| {
                 body.vitals.alive
                     && body.vitals.health
@@ -40,11 +40,9 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        let mind = self
-            .state
-            .components
-            .mind(guardian)
-            .ok_or(Error::Unavailable)?;
+        let mind =
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, guardian)
+                .ok_or(Error::Unavailable)?;
         let source_carried = self
             .state
             .inventories
@@ -63,17 +61,11 @@ impl Simulation {
                         .any(|area| decisions::known_path(&mind.routes, *area, k.area).is_ok()),
                     _ => false,
                 });
-        let requester_available = self
-            .state
-            .components
-            .body(requester)
+        let requester_available = game_physiology::body(&self.state.components, requester)
             .expect("body exists")
             .vitals
             .alive
-            && self
-                .state
-                .components
-                .body(requester)
+            && game_physiology::body(&self.state.components, requester)
                 .expect("body exists")
                 .vitals
                 .health
@@ -335,10 +327,7 @@ impl Simulation {
         }
         let step = self.requested_delivery_step(guardian, &request);
         if matches!(step, Step::Continue) {
-            let available = self
-                .state
-                .components
-                .body(guardian)
+            let available = game_physiology::body(&self.state.components, guardian)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -425,9 +414,7 @@ impl Simulation {
                     && destination.good == request.delivery.requirement.good
                     && destination.location == InventoryLocation::Carried(requester)
                     && self.state.physical.as_ref().is_some_and(|_| {
-                        self.state
-                            .components
-                            .body(requester)
+                        game_physiology::body(&self.state.components, requester)
                             .expect("body exists")
                             .vitals
                             .alive
@@ -550,7 +537,9 @@ mod tests {
         let requester = sim.state.ruler;
         assert_ne!(requester, predecessor);
         assert_eq!(
-            sim.state.components.life(requester).unwrap().stage,
+            game_lifecycle::life(&sim.state.components, requester)
+                .unwrap()
+                .stage,
             LifeStage::Adult
         );
         sim.debug_actor_command(guardian, Command::Cancel).unwrap();
@@ -637,24 +626,25 @@ mod tests {
                 BTreeSet::from([guardian]),
             )
             .unwrap();
-        sim.state
-            .components
-            .mind_mut(guardian)
-            .unwrap()
-            .knowledge
-            .insert(
-                source,
-                StockKnowledge {
-                    inventory: source,
-                    area,
-                    good: Good::Water,
-                    quantity: Quantity(1000),
-                    accessible: true,
-                    observed_at: sim.state.time,
-                    learned_at: sim.state.time,
-                    source: KnowledgeSource::Observed(guardian),
-                },
-            );
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            guardian,
+        )
+        .unwrap()
+        .knowledge
+        .insert(
+            source,
+            StockKnowledge {
+                inventory: source,
+                area,
+                good: Good::Water,
+                quantity: Quantity(1000),
+                accessible: true,
+                observed_at: sim.state.time,
+                learned_at: sim.state.time,
+                source: KnowledgeSource::Observed(guardian),
+            },
+        );
         assert!(
             !sim.inventory_index
                 .get(&InventoryLocation::Carried(requester))

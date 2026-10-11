@@ -32,12 +32,9 @@ impl Simulation {
                 _ => {}
             }
         }
-        if let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
-        {
+        if let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        }) {
             for site in mind.sites.values() {
                 if mind
                     .knowledge
@@ -324,24 +321,26 @@ mod tests {
     fn personally_known_recipe_deficit_is_an_admitted_public_quantity() {
         let mut sim = Simulation::autonomy_fixture(1, Execution::default()).unwrap();
         let actor = sim.state.ruler;
-        let site = sim
-            .state
-            .components
-            .sites()
+        let site = game_workshop::sites(&sim.state.components)
             .map(|(_, site)| site)
             .find(|site| site.area == AreaId(1))
             .unwrap()
             .id;
-        let input = sim.state.components.site(site).expect("site exists").input;
-        sim.state.components.site_mut(site).unwrap().input_quantity = Quantity(250);
-        sim.state
-            .components
-            .mind_mut(actor)
-            .unwrap()
-            .sites
-            .get_mut(&site)
+        let input = game_workshop::site(&sim.state.components, site)
+            .expect("site exists")
+            .input;
+        game_workshop::site_mut(&mut sim.state.components, site)
             .unwrap()
             .input_quantity = Quantity(250);
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            actor,
+        )
+        .unwrap()
+        .sites
+        .get_mut(&site)
+        .unwrap()
+        .input_quantity = Quantity(250);
         sim.state.inventories.get_mut(&input).unwrap().quantity = Quantity(0);
         let source = sim
             .debug_add_inventory(

@@ -5,11 +5,11 @@ use std::collections::BTreeSet;
 fn fixture() -> (Simulation, InventoryId) {
     let mut sim = Simulation::new("health-fixture", 91, Execution::default()).unwrap();
     let actor = sim.canonical_state().ruler;
-    let area = match *sim
-        .canonical_state()
-        .components
-        .location(actor)
-        .expect("location exists")
+    let area = match *game_spatial::location(
+        &sim.canonical_state().components,
+        game_ecs::StableId((actor).0),
+    )
+    .expect("location exists")
     {
         Location::AtArea(area) => area,
         _ => unreachable!(),
@@ -135,10 +135,7 @@ fn malformed_clinical_actor_is_rejected_by_the_save_boundary() {
     let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     // Attach clinical data to an existing non-person entity, so the snapshot
     // remains structurally valid and the health actor boundary rejects it.
-    let foreign = sim
-        .canonical_state()
-        .components
-        .sites()
+    let foreign = game_workshop::sites(&sim.canonical_state().components)
         .next()
         .expect("fixture workshop")
         .0
@@ -214,10 +211,7 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         Quantity(1_000)
     );
     assert!(
-        whole
-            .canonical_state()
-            .components
-            .water_lot(water)
+        game_health::water_lot(&whole.canonical_state().components, water)
             .expect("water lot exists")
             .load()
             > 0
@@ -265,10 +259,7 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         Quantity(1_000)
     );
     assert!(
-        whole
-            .canonical_state()
-            .components
-            .water_lot(water)
+        game_health::water_lot(&whole.canonical_state().components, water)
             .expect("water lot exists")
             .load()
             > 0
@@ -296,10 +287,7 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         .unwrap();
     assert_eq!(whole.canonical_state(), restored.canonical_state());
     assert_eq!(
-        whole
-            .canonical_state()
-            .components
-            .water_lot(water)
+        game_health::water_lot(&whole.canonical_state().components, water)
             .expect("water lot exists")
             .load(),
         0
@@ -343,10 +331,7 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         Quantity(original_fuel.0 - fuel_cost.0)
     );
     assert!(
-        !whole
-            .canonical_state()
-            .components
-            .clinical(actor)
+        !game_health::clinical(&whole.canonical_state().components, actor)
             .expect("clinical state exists")
             .illnesses
             .contains_key(&IllnessKind::Enteric)

@@ -337,3 +337,10 @@ pub fn remove_job(store: &mut Store, actor: PersonId) -> Result<Option<Job>, Err
     }
     store.remove(StableId(actor.0))
 }
+
+pub fn ensure_knowledge(store: &mut Store, actor: PersonId) -> Result<&mut Knowledge, Error> {
+    if knowledge(store, actor).is_none() {
+        insert_knowledge(store, actor, Knowledge::default())?;
+    }
+    knowledge_mut(store, actor).ok_or(Error::Unavailable)
+}

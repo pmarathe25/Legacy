@@ -74,7 +74,10 @@ impl Simulation {
         let mut personality = decisions::Personality::industrious();
         personality.aggression = 900;
         personality.risk_tolerance = 900;
-        let dream = sim.state.components.mind(target).unwrap().dream;
+        let dream =
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, target)
+                .unwrap()
+                .dream;
         sim.debug_set_personality(target, personality, dream)?;
         Ok(sim)
     }
@@ -90,19 +93,14 @@ impl Simulation {
             || self.state.combat.as_ref().is_some_and(|w| {
                 w.captivity.contains_key(&actor)
                     || self.state.physical.as_ref().is_some_and(|_| {
-                        self.state
-                            .components
-                            .body(actor)
+                        game_physiology::body(&self.state.components, actor)
                             .is_some_and(|a| a.vitals.health <= w.rules.incapacitation)
                     })
             })
     }
     pub(crate) fn can_fight(&self, actor: PersonId) -> bool {
         let w = self.state.combat.as_ref().unwrap();
-        let v = &self
-            .state
-            .components
-            .body(actor)
+        let v = &game_physiology::body(&self.state.components, actor)
             .expect("body exists")
             .vitals;
         w.rules.can_fight(
@@ -142,11 +140,11 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         let mut anchor = actor;
-        while let Location::Carried { carrier } = *self
-            .state
-            .components
-            .location(self.state.people[self.person_index[&anchor]].id)
-            .expect("location exists")
+        while let Location::Carried { carrier } = *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[self.person_index[&anchor]].id).0),
+        )
+        .expect("location exists")
         {
             anchor = carrier;
         }
@@ -289,10 +287,7 @@ impl Simulation {
                 .ok()
                 .map(|p| p.key())
             || e.fighters[&self.state.ruler].withdrawn
-            || !self
-                .state
-                .components
-                .body(self.state.ruler)
+            || !game_physiology::body(&self.state.components, self.state.ruler)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -431,11 +426,11 @@ impl Simulation {
         };
         for actor in &ids {
             let mut anchor = *actor;
-            while let Location::Carried { carrier } = *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[&anchor]].id)
-                .expect("location exists")
+            while let Location::Carried { carrier } = *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[&anchor]].id).0),
+            )
+            .expect("location exists")
             {
                 anchor = carrier;
             }
@@ -697,11 +692,11 @@ impl Simulation {
             .keys()
             .filter_map(|actor| {
                 let mut anchor = *actor;
-                while let Location::Carried { carrier } = *self
-                    .state
-                    .components
-                    .location(self.state.people[self.person_index[&anchor]].id)
-                    .expect("location exists")
+                while let Location::Carried { carrier } = *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[&anchor]].id).0),
+                )
+                .expect("location exists")
                 {
                     anchor = carrier;
                 }
@@ -737,9 +732,7 @@ impl Simulation {
             .map(|fighter| {
                 (
                     fighter.actor,
-                    self.state
-                        .components
-                        .body(fighter.actor)
+                    game_physiology::body(&self.state.components, fighter.actor)
                         .expect("body exists")
                         .vitals
                         .fatigue,
@@ -776,10 +769,7 @@ impl Simulation {
                     o.actor,
                     o.position,
                     !o.withdrawn
-                        && self
-                            .state
-                            .components
-                            .body(o.actor)
+                        && game_physiology::body(&self.state.components, o.actor)
                             .expect("body exists")
                             .vitals
                             .alive,
@@ -850,11 +840,11 @@ impl Simulation {
         let map = w.map(e.map).expect("encounter map");
         let position = w.turn_position(id, actor, movement)?;
         if matches!(
-            *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[&actor]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[&actor]].id).0)
+            )
+            .expect("location exists"),
             Location::Carried { .. }
         ) && movement.is_some_and(|point| point != e.fighters[&actor].position)
         {
@@ -877,10 +867,7 @@ impl Simulation {
             CombatAction::Attack { target } => {
                 if target == actor
                     || !reachable(target)
-                    || !self
-                        .state
-                        .components
-                        .body(target)
+                    || !game_physiology::body(&self.state.components, target)
                         .expect("body exists")
                         .vitals
                         .alive
@@ -889,10 +876,7 @@ impl Simulation {
                 }
             }
             CombatAction::Capture { target } => {
-                let body = &self
-                    .state
-                    .components
-                    .body(target)
+                let body = &game_physiology::body(&self.state.components, target)
                     .ok_or(Error::Unavailable)?
                     .vitals;
                 if !w.capture_possible(
@@ -916,11 +900,11 @@ impl Simulation {
             }
             CombatAction::Retreat { destination } => {
                 if matches!(
-                    *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[&actor]].id)
-                        .expect("location exists"),
+                    *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[&actor]].id).0)
+                    )
+                    .expect("location exists"),
                     Location::Carried { .. }
                 ) {
                     return Err(Error::Unavailable);
@@ -992,11 +976,11 @@ impl Simulation {
                 None,
             )?;
             let mut anchor = target;
-            while let Location::Carried { carrier } = *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[&anchor]].id)
-                .expect("location exists")
+            while let Location::Carried { carrier } = *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[&anchor]].id).0),
+            )
+            .expect("location exists")
             {
                 anchor = carrier;
             }
@@ -1131,11 +1115,13 @@ impl Simulation {
                     .keys()
                     .filter_map(|person| {
                         let mut current = *person;
-                        while let Location::Carried { carrier } = *self
-                            .state
-                            .components
-                            .location(self.state.people[self.person_index[&current]].id)
-                            .expect("location exists")
+                        while let Location::Carried { carrier } = *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId(
+                                (self.state.people[self.person_index[&current]].id).0,
+                            ),
+                        )
+                        .expect("location exists")
                         {
                             current = carrier;
                         }
@@ -1186,7 +1172,7 @@ impl Simulation {
         Ok(())
     }
     fn damage_from_combat(&mut self, actor: PersonId, damage: u64) {
-        let body = self.state.components.body_mut(actor).unwrap();
+        let body = game_physiology::body_mut(&mut self.state.components, actor).unwrap();
         body.vitals.health = body.vitals.health.saturating_sub(damage);
         if body.vitals.health == 0 && !self.state.people[self.person_index[&actor]].hunger_exempt {
             self.end_life(actor);
@@ -1259,17 +1245,19 @@ impl Simulation {
                         && map.clear(from, destination)
                         && distance(from, e.fighters[&target].position)
                             <= u128::from(w.rules.reach).pow(2);
-                    let health = self
-                        .state
-                        .components
-                        .body(actor)
+                    let health = game_physiology::body(&self.state.components, actor)
                         .expect("body exists")
                         .vitals
                         .health;
                     let borrowed = self.invocation_personality(actor);
-                    let traits = borrowed
-                        .as_ref()
-                        .unwrap_or(&self.state.components.mind(actor).unwrap().personality);
+                    let traits = borrowed.as_ref().unwrap_or(
+                        &game_characters::decisions::mind::<game_api::Command>(
+                            &self.state.components,
+                            actor,
+                        )
+                        .unwrap()
+                        .personality,
+                    );
                     let action = if rescue == Some(target)
                         && reachable
                         && self.can_release(actor, target)
@@ -1409,11 +1397,11 @@ impl Simulation {
         let e = self.state.combat.as_ref().unwrap().encounters[&id].clone();
         for f in e.fighters.values().filter(|f| f.retreat.is_some()) {
             if matches!(
-                *self
-                    .state
-                    .components
-                    .location(self.state.people[self.person_index[&f.actor]].id)
-                    .expect("location exists"),
+                *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[&f.actor]].id).0)
+                )
+                .expect("location exists"),
                 Location::Carried { .. }
             ) {
                 continue;
@@ -1442,11 +1430,13 @@ impl Simulation {
             .filter(|f| {
                 f.retreat.is_some()
                     && matches!(
-                        *self
-                            .state
-                            .components
-                            .location(self.state.people[self.person_index[&f.actor]].id)
-                            .expect("location exists"),
+                        *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId(
+                                (self.state.people[self.person_index[&f.actor]].id).0
+                            )
+                        )
+                        .expect("location exists"),
                         Location::Carried { .. }
                     )
             })
@@ -1475,10 +1465,7 @@ impl Simulation {
             .values()
             .filter(|f| {
                 !f.withdrawn
-                    && self
-                        .state
-                        .components
-                        .body(f.actor)
+                    && game_physiology::body(&self.state.components, f.actor)
                         .expect("body exists")
                         .vitals
                         .alive
@@ -1725,7 +1712,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             if e.active && !f.withdrawn {
                 let mut anchor = *actor;
                 while let Location::Carried { carrier } =
-                    *s.components.location(anchor).ok_or_else(fail)?
+                    *game_spatial::location(&s.components, game_ecs::StableId((anchor).0))
+                        .ok_or_else(fail)?
                 {
                     anchor = carrier;
                 }
@@ -1752,7 +1740,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             if e.active
                 && (!f.withdrawn || f.retreat.is_some())
-                && s.components.body(*actor).expect("body exists").vitals.alive
+                && game_physiology::body(&s.components, *actor)
+                    .expect("body exists")
+                    .vitals
+                    .alive
                 && (!active.insert(*actor)
                     || *s.components.activity(*actor).expect("body exists")
                         != (Activity::Combat { encounter: *id })
@@ -1810,11 +1801,11 @@ mod reinforcement_tests {
         sim.debug_move_actor(reinforcement, AreaId(2)).unwrap();
         sim.advance(SimDuration(120_000)).unwrap();
         sim.debug_move_actor(reinforcement, AreaId(1)).unwrap();
-        let arrival = match *sim
-            .state
-            .components
-            .location(sim.state.people[sim.person_index[&reinforcement]].id)
-            .expect("location exists")
+        let arrival = match *game_spatial::location(
+            &sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&reinforcement]].id).0),
+        )
+        .expect("location exists")
         {
             Location::InTransit { arrives, .. } => arrives,
             _ => panic!("reinforcements must travel"),

@@ -30,16 +30,14 @@ impl Simulation {
                 "invalid social development rules or missing human domains".into(),
             ));
         }
-        let development = self
-            .state
-            .components
-            .minds()
-            .map(|(id, mind)| {
-                let mut record = baseline(&mind.personality, mind.dream);
-                record.next_choice = self.state.time;
-                (id, record)
-            })
-            .collect();
+        let development =
+            game_characters::decisions::minds::<game_api::Command>(&self.state.components)
+                .map(|(id, mind)| {
+                    let mut record = baseline(&mind.personality, mind.dream);
+                    record.next_choice = self.state.time;
+                    (id, record)
+                })
+                .collect();
         self.state.social = Some(World {
             rules,
             development,
@@ -58,17 +56,17 @@ impl Simulation {
         self.state
             .development
             .as_ref()
-            .and_then(|_| self.state.components.life(actor))
+            .and_then(|_| game_lifecycle::life(&self.state.components, actor))
             .is_some_and(|life| matches!(life.stage, LifeStage::Adult | LifeStage::Elder))
     }
     fn social_speech(&self, actor: PersonId) -> bool {
         self.person_index.get(&actor).is_some_and(|index| {
             matches!(
-                *self
-                    .state
-                    .components
-                    .location(self.state.people[*index].id)
-                    .expect("location exists"),
+                *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[*index].id).0)
+                )
+                .expect("location exists"),
                 Location::AtArea(_)
             )
         }) && self.independent(actor)
@@ -77,7 +75,7 @@ impl Simulation {
                 .state
                 .physical
                 .as_ref()
-                .and_then(|_| self.state.components.body(actor))
+                .and_then(|_| game_physiology::body(&self.state.components, actor))
                 .is_some_and(|body| {
                     body.vitals.alive
                         && body.vitals.health > 0
@@ -93,21 +91,19 @@ impl Simulation {
         first != second
             && self.social_speech(first)
             && self.social_speech(second)
-            && *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[&first]].id)
+            && *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[&first]].id).0),
+            )
+            .expect("location exists")
+                == *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[&second]].id).0),
+                )
                 .expect("location exists")
-                == *self
-                    .state
-                    .components
-                    .location(self.state.people[self.person_index[&second]].id)
-                    .expect("location exists")
     }
     fn relationship(&self, first: PersonId, second: PersonId) -> decisions::Relationship {
-        self.state
-            .components
-            .mind(first)
+        game_characters::decisions::mind::<game_api::Command>(&self.state.components, first)
             .unwrap()
             .relationships
             .get(&second)
@@ -123,9 +119,13 @@ impl Simulation {
         sender: PersonId,
         topic: SocialTopic,
     ) -> bool {
-        let mind = &self.state.components.mind(recipient).unwrap();
+        let mind = &game_characters::decisions::mind::<game_api::Command>(
+            &self.state.components,
+            recipient,
+        )
+        .unwrap();
         let relation = self.relationship(recipient, sender);
-        let body = self.state.components.body(recipient).expect("body exists");
+        let body = game_physiology::body(&self.state.components, recipient).expect("body exists");
         let physical = self.body_rules(recipient);
         game_characters::social::conversation_willing(
             topic,
@@ -184,9 +184,7 @@ impl Simulation {
         Ok(())
     }
     fn social_tool(&self, actor: PersonId) -> Option<InventoryId> {
-        self.state
-            .components
-            .mind(actor)?
+        game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?
             .knowledge
             .values()
             .filter(|known| {
@@ -208,10 +206,7 @@ impl Simulation {
             return false;
         }
         !self.combat_restricts(actor)
-            && self
-                .state
-                .components
-                .body(actor)
+            && game_physiology::body(&self.state.components, actor)
                 .is_some_and(|body| body.vitals.fatigue < self.body_rules(actor).fatigue_limit)
     }
     fn social_material(
@@ -220,17 +215,14 @@ impl Simulation {
         good: Good,
         quantity: Quantity,
     ) -> Option<InventoryId> {
-        let Location::AtArea(area) = *self
-            .state
-            .components
-            .location(self.state.people[*self.person_index.get(&actor)?].id)
-            .expect("location exists")
-        else {
+        let Location::AtArea(area) = *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[*self.person_index.get(&actor)?].id).0),
+        )
+        .expect("location exists") else {
             return None;
         };
-        self.state
-            .components
-            .mind(actor)?
+        game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?
             .knowledge
             .values()
             .filter(|known| known.good == good && known.accessible && known.quantity >= quantity)
@@ -292,7 +284,11 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                let mind = &self.state.components.mind(teacher).unwrap();
+                let mind = &game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    teacher,
+                )
+                .unwrap();
                 let relation = self.relationship(teacher, actor);
                 if i32::from(mind.personality.empathy + mind.personality.patience) / 2
                     + relation.affection
@@ -322,7 +318,7 @@ impl Simulation {
                             .state
                             .skills
                             .as_ref()
-                            .and_then(|_| self.state.components.personal_skills(teacher))
+                            .and_then(|_| game_skills::skills(&self.state.components, teacher))
                             .map(|row| &row.records)
                             .and_then(|r| r.get(&skill))
                         else {
@@ -365,15 +361,16 @@ impl Simulation {
                                         .map(|(_, value)| value)
                                         .any(|field| {
                                             field.area
-                                                == match *self
-                                                    .state
-                                                    .components
-                                                    .location(
-                                                        self.state.people
+                                                == match *game_spatial::location(
+                                                    &self.state.components,
+                                                    game_ecs::StableId(
+                                                        (self.state.people
                                                             [self.person_index[&teacher]]
-                                                            .id,
-                                                    )
-                                                    .expect("location exists")
+                                                            .id)
+                                                            .0,
+                                                    ),
+                                                )
+                                                .expect("location exists")
                                                 {
                                                     Location::AtArea(a) => a,
                                                     _ => unreachable!(),
@@ -555,17 +552,11 @@ impl Simulation {
     fn social_interaction_valid(&self, interaction: &Interaction) -> bool {
         let actors = interaction.actors();
         if actors.iter().any(|actor| {
-            !self
-                .state
-                .components
-                .body(*actor)
+            !game_physiology::body(&self.state.components, *actor)
                 .expect("body exists")
                 .vitals
                 .alive
-                || self
-                    .state
-                    .components
-                    .body(*actor)
+                || game_physiology::body(&self.state.components, *actor)
                     .expect("body exists")
                     .vitals
                     .health
@@ -574,17 +565,18 @@ impl Simulation {
         }) {
             return false;
         }
-        let location = self
-            .state
-            .components
-            .location(self.state.people[self.person_index[&actors[0]]].id)
-            .expect("location exists");
+        let location = game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[self.person_index[&actors[0]]].id).0),
+        )
+        .expect("location exists");
         if !matches!(location, Location::AtArea(_))
             || actors.iter().any(|actor| {
-                self.state
-                    .components
-                    .location(self.state.people[self.person_index[actor]].id)
-                    .expect("location exists")
+                game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[actor]].id).0),
+                )
+                .expect("location exists")
                     != location
             })
         {
@@ -741,17 +733,17 @@ impl Simulation {
                     .finish_conversation(first, second, topic)
                     .expect("validated paired conversation");
                 for (id, other) in [(effect.first, effect.second), (effect.second, effect.first)] {
-                    let relationship = self
-                        .state
-                        .components
-                        .mind_mut(id)
-                        .unwrap()
-                        .relationships
-                        .entry(other)
-                        .or_insert(decisions::Relationship {
-                            affection: 0,
-                            trust: 0,
-                        });
+                    let relationship = game_characters::decisions::mind_mut::<game_api::Command>(
+                        &mut self.state.components,
+                        id,
+                    )
+                    .unwrap()
+                    .relationships
+                    .entry(other)
+                    .or_insert(decisions::Relationship {
+                        affection: 0,
+                        trust: 0,
+                    });
                     relationship.affection =
                         (relationship.affection + effect.affection_gain).min(1_000);
                     relationship.trust = (relationship.trust + effect.trust_gain).min(1_000);
@@ -770,7 +762,13 @@ impl Simulation {
                 ..
             } => {
                 if topic == InstructionTopic::Routes {
-                    let remembered = &mut self.state.components.mind_mut(student).unwrap().routes;
+                    let remembered =
+                        &mut game_characters::decisions::mind_mut::<game_api::Command>(
+                            &mut self.state.components,
+                            student,
+                        )
+                        .unwrap()
+                        .routes;
                     for (area, neighbors) in routes {
                         remembered.entry(area).or_default().extend(neighbors);
                     }
@@ -818,13 +816,13 @@ impl Simulation {
                 // Biological traits are authored by the separate genetic model.
                 // Social learning neither copies them from a caregiver nor
                 // changes an inherited genotype.
-                let personality = self
-                    .state
-                    .components
-                    .mind(child)
-                    .unwrap()
-                    .personality
-                    .clone();
+                let personality = game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    child,
+                )
+                .unwrap()
+                .personality
+                .clone();
                 let mut record = baseline(&personality, decisions::Aspiration::Comfort);
                 record.next_choice = self.state.time;
                 self.state
@@ -833,11 +831,11 @@ impl Simulation {
                     .unwrap()
                     .development
                     .insert(child, record);
-                let location = (*self
-                    .state
-                    .components
-                    .location(self.state.people[self.person_index[&child]].id)
-                    .expect("location exists"))
+                let location = (*game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[&child]].id).0),
+                )
+                .expect("location exists"))
                 .clone();
                 let witnesses: Vec<_> = self
                     .state
@@ -845,16 +843,13 @@ impl Simulation {
                     .iter()
                     .filter(|person| {
                         person.id != child
-                            && *self
-                                .state
-                                .components
-                                .location(person.id)
-                                .expect("location exists")
+                            && *game_spatial::location(
+                                &self.state.components,
+                                game_ecs::StableId((person.id).0),
+                            )
+                            .expect("location exists")
                                 == location
-                            && self
-                                .state
-                                .components
-                                .body(person.id)
+                            && game_physiology::body(&self.state.components, person.id)
                                 .expect("body exists")
                                 .vitals
                                 .alive
@@ -952,24 +947,22 @@ impl Simulation {
             .collect();
         let social = self.state.social.as_ref().unwrap();
         for (actor, control, independent) in agency {
-            let vitals = self
-                .state
-                .components
-                .body(actor)
+            let vitals = game_physiology::body(&self.state.components, actor)
                 .expect("body exists")
                 .vitals
                 .clone();
-            self.state
-                .components
-                .mind_mut(actor)
-                .unwrap()
-                .develop_aspiration(
-                    &social.development[&actor],
-                    control,
-                    independent,
-                    &vitals,
-                    social.rules.aspiration_margin,
-                );
+            game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                actor,
+            )
+            .unwrap()
+            .develop_aspiration(
+                &social.development[&actor],
+                control,
+                independent,
+                &vitals,
+                social.rules.aspiration_margin,
+            );
         }
 
         // These are deliberate local declarations of teaching availability.
@@ -984,16 +977,19 @@ impl Simulation {
         let mut local: BTreeMap<AreaId, Vec<PersonId>> = BTreeMap::new();
         let mut declarations: BTreeMap<AreaId, Vec<Offer>> = BTreeMap::new();
         for teacher in &speakers {
-            let Location::AtArea(area) = *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[teacher]].id)
-                .expect("location exists")
-            else {
+            let Location::AtArea(area) = *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[teacher]].id).0),
+            )
+            .expect("location exists") else {
                 continue;
             };
             local.entry(area).or_default().push(*teacher);
-            let mind = &self.state.components.mind(*teacher).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                *teacher,
+            )
+            .unwrap();
             if !mind.offers_teaching() {
                 continue;
             }
@@ -1005,7 +1001,7 @@ impl Simulation {
                 .state
                 .skills
                 .as_ref()
-                .and_then(|_| self.state.components.personal_skills(*teacher))
+                .and_then(|_| game_skills::skills(&self.state.components, *teacher))
                 .map(|row| &row.records)
             {
                 for (skill, progress) in records {
@@ -1032,12 +1028,11 @@ impl Simulation {
             offers.sort_by_key(|offer| offer.teacher);
         }
         for observer in &speakers {
-            let Location::AtArea(area) = *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[observer]].id)
-                .expect("location exists")
-            else {
+            let Location::AtArea(area) = *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[observer]].id).0),
+            )
+            .expect("location exists") else {
                 continue;
             };
             let Some(declared) = declarations.get(&area) else {
@@ -1074,13 +1069,16 @@ impl Simulation {
             if record.next_choice > self.state.time {
                 continue;
             }
-            let mind = &self.state.components.mind(actor).unwrap();
-            let Location::AtArea(area) = *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[&actor]].id)
-                .expect("location exists")
-            else {
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                actor,
+            )
+            .unwrap();
+            let Location::AtArea(area) = *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[&actor]].id).0),
+            )
+            .expect("location exists") else {
                 continue;
             };
             let nearby = &local[&area];
@@ -1239,7 +1237,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         return Err(fail());
     }
     for actor in world.development.keys() {
-        if !people.contains_key(actor) || state.components.mind(*actor).is_none() {
+        if !people.contains_key(actor)
+            || game_characters::decisions::mind::<game_api::Command>(&state.components, *actor)
+                .is_none()
+        {
             return Err(fail());
         }
     }
@@ -1256,20 +1257,17 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         let actors = interaction.actors();
         for actor in &actors {
             let person = people.get(actor).ok_or_else(fail)?;
-            let body = state.components.body(*actor).ok_or_else(fail)?;
+            let body = game_physiology::body(&state.components, *actor).ok_or_else(fail)?;
             if !body.vitals.alive
                 || !matches!(
-                    *state
-                        .components
-                        .location(person.id)
+                    *game_spatial::location(&state.components, game_ecs::StableId((person.id).0))
                         .expect("location exists"),
                     Location::AtArea(_)
                 )
-                || *state
-                    .components
-                    .location(person.id)
+                || *game_spatial::location(&state.components, game_ecs::StableId((person.id).0))
                     .expect("location exists")
-                    != *state.components.location(actors[0]).ok_or_else(fail)?
+                    != *game_spatial::location(&state.components, game_ecs::StableId((actors[0]).0))
+                        .ok_or_else(fail)?
             {
                 return Err(fail());
             }
@@ -1392,10 +1390,11 @@ mod tests {
         .unwrap();
         let village = sim.state.areas[0].id;
         for person in &mut sim.state.people {
-            *sim.state
-                .components
-                .location_mut(person.id)
-                .expect("location exists") = Location::AtArea(village);
+            *game_spatial::location_mut(
+                &mut sim.state.components,
+                game_ecs::StableId((person.id).0),
+            )
+            .expect("location exists") = Location::AtArea(village);
             person.route.clear();
         }
         sim.state
@@ -1411,7 +1410,11 @@ mod tests {
         // Ordinary chosen needs remain real, with sufficient authored supplies.
         for actor in ids {
             sim.interrupt_actor_activity(actor);
-            let mind = sim.state.components.mind_mut(actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap();
             mind.personality.sociability = 950;
             mind.personality.empathy = 950;
             mind.personality.patience = 950;
@@ -1432,16 +1435,14 @@ mod tests {
     fn actual_birth(sim: &mut Simulation, first: PersonId, second: PersonId) -> PersonId {
         // The relocated peer acquires an actual local report, rather than a
         // fixture granting knowledge merely because its body changed area.
-        let food = sim
-            .state
-            .components
-            .mind(first)
-            .unwrap()
-            .knowledge
-            .values()
-            .find(|fact| fact.good == Good::Food && fact.accessible && fact.quantity.0 >= 3_000)
-            .unwrap()
-            .inventory;
+        let food =
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, first)
+                .unwrap()
+                .knowledge
+                .values()
+                .find(|fact| fact.good == Good::Food && fact.accessible && fact.quantity.0 >= 3_000)
+                .unwrap()
+                .inventory;
         sim.debug_actor_command(
             first,
             Command::Tell {
@@ -1453,7 +1454,11 @@ mod tests {
         sim.advance(MINUTE).unwrap();
         for (actor, partner) in [(first, second), (second, first)] {
             cancel(sim, actor);
-            let mind = sim.state.components.mind_mut(actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.relationships.insert(
                 partner,
@@ -1477,10 +1482,7 @@ mod tests {
             );
             sim.advance(MINUTE).unwrap();
         }
-        let active = sim
-            .state
-            .components
-            .pregnancies()
+        let active = game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(_, row)| row)
             .any(|pregnancy| {
                 pregnancy.gestator == first
@@ -1493,10 +1495,7 @@ mod tests {
         if !active {
             sim.start_conception(first, second).unwrap();
         }
-        let birth_at = sim
-            .state
-            .components
-            .pregnancies()
+        let birth_at = game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 if pregnancy.gestator != first {
@@ -1516,12 +1515,14 @@ mod tests {
         // This authored pair now prefers supporting their actual child. The
         // fixture does not assume that their old intent obliges more births.
         for actor in [first, second] {
-            sim.state.components.mind_mut(actor).unwrap().dream =
-                decisions::Aspiration::SupportOthers;
+            game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap()
+            .dream = decisions::Aspiration::SupportOthers;
         }
-        sim.state
-            .components
-            .pregnancies()
+        game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(_, row)| row)
             .filter_map(|p| match p.state {
                 development::PregnancyState::Born(child)
@@ -1542,14 +1543,19 @@ mod tests {
         let village = sim.state.areas[0].id;
         let farm = sim.state.areas[1].id;
         let forest = sim.state.areas[2].id;
-        sim.state
-            .components
-            .mind_mut(student)
-            .unwrap()
-            .routes
-            .clear();
-        sim.state.components.mind_mut(teacher).unwrap().routes =
-            BTreeMap::from([(farm, BTreeMap::from([(village, MINUTE)]))]);
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            student,
+        )
+        .unwrap()
+        .routes
+        .clear();
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            teacher,
+        )
+        .unwrap()
+        .routes = BTreeMap::from([(farm, BTreeMap::from([(village, MINUTE)]))]);
         social(
             &mut sim,
             student,
@@ -1562,24 +1568,30 @@ mod tests {
             *sim.state.components.activity(teacher).expect("body exists"),
             Activity::Instruction { .. }
         ));
-        let frozen = sim.state.components.mind(teacher).unwrap().routes.clone();
-        sim.state
-            .components
-            .mind_mut(teacher)
-            .unwrap()
-            .routes
-            .insert(forest, BTreeMap::from([(farm, MINUTE)]));
+        let frozen =
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, teacher)
+                .unwrap()
+                .routes
+                .clone();
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            teacher,
+        )
+        .unwrap()
+        .routes
+        .insert(forest, BTreeMap::from([(farm, MINUTE)]));
         sim.advance(SimDuration(59_999)).unwrap();
         assert!(
-            !sim.state
-                .components
-                .mind(student)
+            !game_characters::decisions::mind::<game_api::Command>(&sim.state.components, student)
                 .unwrap()
                 .routes
                 .contains_key(&farm)
         );
         sim.advance(SimDuration(1)).unwrap();
-        let known = &sim.state.components.mind(student).unwrap().routes;
+        let known =
+            &game_characters::decisions::mind::<game_api::Command>(&sim.state.components, student)
+                .unwrap()
+                .routes;
         assert_eq!(known.get(&farm), frozen.get(&farm));
         assert!(!known.contains_key(&forest));
         assert!(sim.state.events.iter().any(|event|matches!(event.kind,EventKind::InstructionCompleted{teacher:t,student:s,..}if t==teacher&&s==student)));
@@ -1602,10 +1614,7 @@ mod tests {
             .unwrap()
             .id;
         let before = sim.state.inventories[&timber].quantity.0;
-        let prior = sim
-            .state
-            .components
-            .personal_skills(actor)
+        let prior = game_skills::skills(&sim.state.components, actor)
             .map(|row| &row.records)
             .and_then(|records| records.get(&Skill::Craft))
             .map_or(0, |progress| progress.practice_ms);
@@ -1620,7 +1629,10 @@ mod tests {
         sim.advance(SimDuration(30_000)).unwrap();
         cancel(&mut sim, actor);
         assert_eq!(
-            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms,
+            game_skills::skills(&sim.state.components, actor)
+                .unwrap()
+                .records[&Skill::Craft]
+                .practice_ms,
             prior + 30_000
         );
         sim.debug_set_personality(
@@ -1629,11 +1641,16 @@ mod tests {
             decisions::Aspiration::Comfort,
         )
         .unwrap();
-        let own =
-            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms;
+        let own = game_skills::skills(&sim.state.components, actor)
+            .unwrap()
+            .records[&Skill::Craft]
+            .practice_ms;
         sim.advance(SimDuration(30_000)).unwrap();
         assert_eq!(
-            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms,
+            game_skills::skills(&sim.state.components, actor)
+                .unwrap()
+                .records[&Skill::Craft]
+                .practice_ms,
             own
         );
     }
@@ -1665,8 +1682,10 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert!(sim.state.social.as_ref().unwrap().interactions.is_empty());
-        let learned =
-            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms;
+        let learned = game_skills::skills(&sim.state.components, actor)
+            .unwrap()
+            .records[&Skill::Craft]
+            .practice_ms;
         sim.debug_set_personality(
             actor,
             decisions::Personality::restful(),
@@ -1675,7 +1694,10 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.state.components.personal_skills(actor).unwrap().records[&Skill::Craft].practice_ms,
+            game_skills::skills(&sim.state.components, actor)
+                .unwrap()
+                .records[&Skill::Craft]
+                .practice_ms,
             learned
         );
         assert!(!sim.state.events.iter().any(|event| matches!(event.kind, EventKind::PracticeCompleted { actor: worker, .. } if worker == actor)));
@@ -1708,7 +1730,12 @@ mod tests {
             Err(Error::Unavailable)
         );
         assert_eq!(sim.state, before);
-        sim.state.components.mind_mut(recipient).unwrap().dream = decisions::Aspiration::Comfort;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            recipient,
+        )
+        .unwrap()
+        .dream = decisions::Aspiration::Comfort;
         social(
             &mut sim,
             actor,
@@ -1733,7 +1760,13 @@ mod tests {
         let first = sim.state.people[3].id;
         let second = sim.state.people[4].id;
         let child = actual_birth(&mut sim, first, second);
-        assert!(sim.state.components.mind(child).unwrap().routes.len() <= 1);
+        assert!(
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, child)
+                .unwrap()
+                .routes
+                .len()
+                <= 1
+        );
         assert!(
             sim.own_skill_view(child)
                 .iter()
@@ -1743,17 +1776,19 @@ mod tests {
         sim.advance(SimDuration(660_000)).unwrap();
         assert!(sim.state.social.as_ref().unwrap().development[&child].experiences > 0);
         assert_eq!(
-            sim.state.components.life(child).unwrap().stage,
+            game_lifecycle::life(&sim.state.components, child)
+                .unwrap()
+                .stage,
             LifeStage::Adult
         );
         assert_ne!(
-            sim.state.components.mind(child).unwrap().dream,
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, child)
+                .unwrap()
+                .dream,
             decisions::Aspiration::Comfort
         );
         assert!(
-            sim.state
-                .components
-                .life(child)
+            game_lifecycle::life(&sim.state.components, child)
                 .unwrap()
                 .caregivers
                 .iter()
@@ -1846,7 +1881,11 @@ mod generations {
         // These additional adults begin this fixture with their own intention;
         // later children develop aims from the actual care and activities below.
         for actor in [parents[1].0, parents[1].1] {
-            let mind = sim.state.components.mind_mut(actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 650;
             mind.personality.sociability = 1_000;
@@ -1863,21 +1902,22 @@ mod generations {
                 .insert(actor, record);
         }
         for (gestator, partner) in parents {
-            let already_chosen =
-                sim.state
-                    .components
-                    .pregnancies()
-                    .map(|(_, row)| row)
-                    .any(|pregnancy| {
-                        pregnancy.gestator == gestator
-                            && matches!(
-                                pregnancy.state,
-                                development::PregnancyState::Gestating { .. }
-                            )
-                    });
+            let already_chosen = game_lifecycle::all_pregnancies(&sim.state.components)
+                .map(|(_, row)| row)
+                .any(|pregnancy| {
+                    pregnancy.gestator == gestator
+                        && matches!(
+                            pregnancy.state,
+                            development::PregnancyState::Gestating { .. }
+                        )
+                });
             for (actor, other) in [(gestator, partner), (partner, gestator)] {
                 sim.debug_actor_command(actor, Command::Cancel).unwrap();
-                let mind = sim.state.components.mind_mut(actor).unwrap();
+                let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                    &mut sim.state.components,
+                    actor,
+                )
+                .unwrap();
                 mind.dream = decisions::Aspiration::Parenthood;
                 mind.personality.empathy = 650;
                 mind.personality.sociability = 1_000;
@@ -1901,27 +1941,21 @@ mod generations {
                         .unwrap();
                     sim.advance(MINUTE).unwrap();
                 }
-                let active =
-                    sim.state
-                        .components
-                        .pregnancies()
-                        .map(|(_, row)| row)
-                        .any(|pregnancy| {
-                            pregnancy.gestator == gestator
-                                && matches!(
-                                    pregnancy.state,
-                                    development::PregnancyState::Conceiving { .. }
-                                        | development::PregnancyState::Gestating { .. }
-                                )
-                        });
+                let active = game_lifecycle::all_pregnancies(&sim.state.components)
+                    .map(|(_, row)| row)
+                    .any(|pregnancy| {
+                        pregnancy.gestator == gestator
+                            && matches!(
+                                pregnancy.state,
+                                development::PregnancyState::Conceiving { .. }
+                                    | development::PregnancyState::Gestating { .. }
+                            )
+                    });
                 if !active {
                     sim.start_conception(gestator, partner).unwrap();
                 }
             }
-            let birth_at = sim
-                .state
-                .components
-                .pregnancies()
+            let birth_at = game_lifecycle::all_pregnancies(&sim.state.components)
                 .map(|(_, row)| row)
                 .find_map(|pregnancy| {
                     if pregnancy.gestator != gestator {
@@ -1938,10 +1972,7 @@ mod generations {
                 .unwrap();
             sim.advance(SimDuration(birth_at - sim.state.time.0))
                 .unwrap();
-            let child = sim
-                .state
-                .components
-                .pregnancies()
+            let child = game_lifecycle::all_pregnancies(&sim.state.components)
                 .map(|(_, row)| row)
                 .find_map(|pregnancy| match pregnancy.state {
                     development::PregnancyState::Born(child) if pregnancy.gestator == gestator => {
@@ -1952,8 +1983,12 @@ mod generations {
                 .unwrap();
             children.push(child);
             for actor in [gestator, partner] {
-                sim.state.components.mind_mut(actor).unwrap().dream =
-                    decisions::Aspiration::SupportOthers;
+                game_characters::decisions::mind_mut::<game_api::Command>(
+                    &mut sim.state.components,
+                    actor,
+                )
+                .unwrap()
+                .dream = decisions::Aspiration::SupportOthers;
             }
         }
         let food = sim
@@ -1986,7 +2021,13 @@ mod generations {
         }
         let adult_at = children
             .iter()
-            .map(|child| sim.state.components.life(*child).unwrap().born.0 + 600_000)
+            .map(|child| {
+                game_lifecycle::life(&sim.state.components, *child)
+                    .unwrap()
+                    .born
+                    .0
+                    + 600_000
+            })
             .max()
             .unwrap();
         if sim.state.time.0 < adult_at {
@@ -1995,11 +2036,18 @@ mod generations {
         }
         for child in &children {
             assert_eq!(
-                sim.state.components.life(*child).unwrap().stage,
+                game_lifecycle::life(&sim.state.components, *child)
+                    .unwrap()
+                    .stage,
                 LifeStage::Adult
             );
             assert_eq!(
-                sim.state.components.mind(*child).unwrap().dream,
+                game_characters::decisions::mind::<game_api::Command>(
+                    &sim.state.components,
+                    *child
+                )
+                .unwrap()
+                .dream,
                 decisions::Aspiration::Parenthood,
                 "child {child:?} at {:?}: {:?}, body {:?}",
                 sim.state.time,
@@ -2011,12 +2059,14 @@ mod generations {
             assert!(!sim.state.inventories[&food].access.contains(child));
         }
         assert_ne!(
-            sim.state.components.life(children[0]).unwrap().reproduction,
-            sim.state.components.life(children[1]).unwrap().reproduction,
+            game_lifecycle::life(&sim.state.components, children[0])
+                .unwrap()
+                .reproduction,
+            game_lifecycle::life(&sim.state.components, children[1])
+                .unwrap()
+                .reproduction,
             "this seeded pair must have compatible biological roles; pregnancies {:?}",
-            sim.state
-                .components
-                .pregnancies()
+            game_lifecycle::all_pregnancies(&sim.state.components)
                 .map(|(_, row)| row)
                 .map(|pregnancy| (pregnancy.id, &pregnancy.state))
                 .collect::<Vec<_>>()
@@ -2087,10 +2137,7 @@ mod generations {
         }
         sim.start_conception(first, second).unwrap();
         sim.advance(SimDuration(240_000)).unwrap();
-        let grandchild = sim
-            .state
-            .components
-            .pregnancies()
+        let grandchild = game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(_, row)| row)
             .find_map(|pregnancy| match pregnancy.state {
                 development::PregnancyState::Born(child)
@@ -2102,7 +2149,10 @@ mod generations {
             })
             .unwrap();
         assert_eq!(
-            sim.state.components.life(grandchild).unwrap().parents.len(),
+            game_lifecycle::life(&sim.state.components, grandchild)
+                .unwrap()
+                .parents
+                .len(),
             2
         );
         assert!(

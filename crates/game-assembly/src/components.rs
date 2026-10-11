@@ -43,494 +43,7 @@ impl Components {
                 ),
         )
     }
-    pub fn person_genome(&self, id: game_api::PersonId) -> Option<&game_genetics::PersonGenome> {
-        game_genetics::person_genome(&self.0, id)
-    }
-    pub fn person_genome_mut(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Option<&mut game_genetics::PersonGenome> {
-        game_genetics::person_genome_mut(&mut self.0, id)
-    }
-    pub fn person_genomes(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_genetics::PersonGenome)> {
-        game_genetics::all_person_genomes(&self.0)
-    }
-    pub fn inheritance(&self, id: game_api::PregnancyId) -> Option<&game_genetics::Inheritance> {
-        game_genetics::inheritance(&self.0, id)
-    }
-    pub fn inheritance_mut(
-        &mut self,
-        id: game_api::PregnancyId,
-    ) -> Option<&mut game_genetics::Inheritance> {
-        game_genetics::inheritance_mut(&mut self.0, id)
-    }
-    pub fn inheritances(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PregnancyId, &game_genetics::Inheritance)> {
-        game_genetics::all_inheritances(&self.0)
-    }
-    pub fn trait_development_row(
-        &self,
-        id: game_api::PersonId,
-    ) -> Option<&game_physiology::traits::Development> {
-        game_physiology::traits::development(&self.0, id)
-    }
-    pub fn trait_development_row_mut(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Option<&mut game_physiology::traits::Development> {
-        game_physiology::traits::development_mut(&mut self.0, id)
-    }
-    pub fn trait_developments(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_physiology::traits::Development)> {
-        game_physiology::traits::all_developments(&self.0)
-    }
-    pub fn person_temperament(
-        &self,
-        id: game_api::PersonId,
-    ) -> Option<&game_characters::temperament::PersonTemperament> {
-        game_characters::temperament::person_temperament(&self.0, id)
-    }
-    pub fn person_temperament_mut(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Option<&mut game_characters::temperament::PersonTemperament> {
-        game_characters::temperament::person_temperament_mut(&mut self.0, id)
-    }
-    pub fn person_temperaments(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            game_api::PersonId,
-            &game_characters::temperament::PersonTemperament,
-        ),
-    > {
-        game_characters::temperament::all_person_temperaments(&self.0)
-    }
-    pub fn cultivation(&self, actor: game_api::PersonId) -> Option<&game_agriculture::Cultivation> {
-        self.0.get(game_ecs::StableId(actor.0))
-    }
-    pub fn cultivation_mut(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Option<&mut game_agriculture::Cultivation> {
-        self.0.get_mut(game_ecs::StableId(actor.0))
-    }
-    pub fn cultivations(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_agriculture::Cultivation)> {
-        self.0
-            .iter::<game_agriculture::Cultivation>()
-            .map(|(id, row)| (game_api::PersonId(id.0), row))
-    }
-    pub fn insert_cultivation(
-        &mut self,
-        actor: game_api::PersonId,
-        row: game_agriculture::Cultivation,
-    ) -> Result<(), Error> {
-        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
-    }
-    pub fn remove_cultivation(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Result<Option<game_agriculture::Cultivation>, Error> {
-        if !self.0.contains(game_ecs::StableId(actor.0)) {
-            return Ok(None);
-        }
-        self.0.remove(game_ecs::StableId(actor.0))
-    }
-    pub fn gathering(&self, actor: game_api::PersonId) -> Option<&game_ecology::Gathering> {
-        self.0.get(game_ecs::StableId(actor.0))
-    }
-    pub fn gathering_mut(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Option<&mut game_ecology::Gathering> {
-        self.0.get_mut(game_ecs::StableId(actor.0))
-    }
-    pub fn gatherings(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_ecology::Gathering)> {
-        self.0
-            .iter::<game_ecology::Gathering>()
-            .map(|(id, row)| (game_api::PersonId(id.0), row))
-    }
-    pub fn insert_gathering(
-        &mut self,
-        actor: game_api::PersonId,
-        row: game_ecology::Gathering,
-    ) -> Result<(), Error> {
-        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
-    }
-    pub fn remove_gathering(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Result<Option<game_ecology::Gathering>, Error> {
-        if !self.0.contains(game_ecs::StableId(actor.0)) {
-            return Ok(None);
-        }
-        self.0.remove(game_ecs::StableId(actor.0))
-    }
-    pub fn ecology_knowledge(&self, actor: game_api::PersonId) -> Option<&game_ecology::Knowledge> {
-        self.0.get(game_ecs::StableId(actor.0))
-    }
-    pub fn ecology_knowledge_mut(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Option<&mut game_ecology::Knowledge> {
-        self.0.get_mut(game_ecs::StableId(actor.0))
-    }
-    pub fn ecology_knowledges(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_ecology::Knowledge)> {
-        self.0
-            .iter::<game_ecology::Knowledge>()
-            .map(|(id, row)| (game_api::PersonId(id.0), row))
-    }
-    pub fn insert_ecology_knowledge(
-        &mut self,
-        actor: game_api::PersonId,
-        row: game_ecology::Knowledge,
-    ) -> Result<(), Error> {
-        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
-    }
-    pub fn remove_ecology_knowledge(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Result<Option<game_ecology::Knowledge>, Error> {
-        if !self.0.contains(game_ecs::StableId(actor.0)) {
-            return Ok(None);
-        }
-        self.0.remove(game_ecs::StableId(actor.0))
-    }
-    pub fn ecology_requests(&self, actor: game_api::PersonId) -> Option<&game_ecology::Requests> {
-        self.0.get(game_ecs::StableId(actor.0))
-    }
-    pub fn ecology_requests_mut(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Option<&mut game_ecology::Requests> {
-        self.0.get_mut(game_ecs::StableId(actor.0))
-    }
-    pub fn ecology_request_rows(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_ecology::Requests)> {
-        self.0
-            .iter::<game_ecology::Requests>()
-            .map(|(id, row)| (game_api::PersonId(id.0), row))
-    }
-    pub fn insert_ecology_requests(
-        &mut self,
-        actor: game_api::PersonId,
-        row: game_ecology::Requests,
-    ) -> Result<(), Error> {
-        self.0.insert_or_spawn(game_ecs::StableId(actor.0), row)
-    }
-    pub fn remove_ecology_requests(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Result<Option<game_ecology::Requests>, Error> {
-        if !self.0.contains(game_ecs::StableId(actor.0)) {
-            return Ok(None);
-        }
-        self.0.remove(game_ecs::StableId(actor.0))
-    }
-    pub fn ensure_ecology_knowledge(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Result<&mut game_ecology::Knowledge, Error> {
-        if self.ecology_knowledge(actor).is_none() {
-            self.insert_ecology_knowledge(actor, game_ecology::Knowledge::default())?;
-        }
-        self.ecology_knowledge_mut(actor).ok_or(Error::Unavailable)
-    }
-    pub fn ensure_ecology_requests(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Result<&mut game_ecology::Requests, Error> {
-        if self.ecology_requests(actor).is_none() {
-            self.insert_ecology_requests(actor, game_ecology::Requests::default())?;
-        }
-        self.ecology_requests_mut(actor).ok_or(Error::Unavailable)
-    }
-    pub fn mind(&self, id: game_api::PersonId) -> Option<&crate::decisions::Mind> {
-        game_characters::decisions::mind::<game_api::Command>(&self.0, id)
-    }
-    pub fn mind_mut(&mut self, id: game_api::PersonId) -> Option<&mut crate::decisions::Mind> {
-        game_characters::decisions::mind_mut::<game_api::Command>(&mut self.0, id)
-    }
-    pub fn minds(&self) -> impl Iterator<Item = (game_api::PersonId, &crate::decisions::Mind)> {
-        game_characters::decisions::minds::<game_api::Command>(&self.0)
-    }
-    pub fn insert_mind(
-        &mut self,
-        id: game_api::PersonId,
-        row: crate::decisions::Mind,
-    ) -> Result<(), Error> {
-        game_characters::decisions::insert_mind::<game_api::Command>(&mut self.0, id, row)
-    }
-    pub fn life(&self, id: game_api::PersonId) -> Option<&game_lifecycle::Life> {
-        game_lifecycle::life(&self.0, id)
-    }
-    pub fn life_mut(&mut self, id: game_api::PersonId) -> Option<&mut game_lifecycle::Life> {
-        game_lifecycle::life_mut(&mut self.0, id)
-    }
-    pub fn lives(&self) -> impl Iterator<Item = (game_api::PersonId, &game_lifecycle::Life)> {
-        game_lifecycle::all_lives(&self.0)
-    }
-    pub fn insert_life(&mut self, row: game_lifecycle::Life) -> Result<(), Error> {
-        game_lifecycle::insert_life(&mut self.0, row)
-    }
-    pub fn pregnancy(&self, id: game_api::PregnancyId) -> Option<&game_lifecycle::Pregnancy> {
-        game_lifecycle::pregnancy(&self.0, id)
-    }
-    pub fn pregnancy_mut(
-        &mut self,
-        id: game_api::PregnancyId,
-    ) -> Option<&mut game_lifecycle::Pregnancy> {
-        game_lifecycle::pregnancy_mut(&mut self.0, id)
-    }
-    pub fn pregnancies(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PregnancyId, &game_lifecycle::Pregnancy)> {
-        game_lifecycle::all_pregnancies(&self.0)
-    }
-    pub fn insert_pregnancy(&mut self, row: game_lifecycle::Pregnancy) -> Result<(), Error> {
-        game_lifecycle::insert_pregnancy(&mut self.0, row)
-    }
-    pub fn remove_pregnancy(
-        &mut self,
-        id: game_api::PregnancyId,
-    ) -> Result<Option<game_lifecycle::Pregnancy>, Error> {
-        game_lifecycle::remove_pregnancy(&mut self.0, id)
-    }
-    pub fn water_lot(&self, id: game_api::InventoryId) -> Option<&game_health::WaterLot> {
-        game_health::water_lot(&self.0, id)
-    }
-    pub fn water_lot_mut(
-        &mut self,
-        id: game_api::InventoryId,
-    ) -> Option<&mut game_health::WaterLot> {
-        game_health::water_lot_mut(&mut self.0, id)
-    }
-    pub fn water_lots(
-        &self,
-    ) -> impl Iterator<Item = (game_api::InventoryId, &game_health::WaterLot)> {
-        game_health::water_lots(&self.0)
-    }
-    pub fn insert_water_lot(
-        &mut self,
-        id: game_api::InventoryId,
-        row: game_health::WaterLot,
-    ) -> Result<(), Error> {
-        game_health::insert_water_lot(&mut self.0, id, row)
-    }
-    pub fn remove_water_lot(
-        &mut self,
-        id: game_api::InventoryId,
-    ) -> Result<Option<game_health::WaterLot>, Error> {
-        game_health::remove_water_lot(&mut self.0, id)
-    }
-    pub fn shelter_occupancy(&self, id: game_api::PersonId) -> Option<&game_health::Occupancy> {
-        game_health::occupancy(&self.0, id)
-    }
-    pub fn shelter_occupancy_mut(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Option<&mut game_health::Occupancy> {
-        game_health::occupancy_mut(&mut self.0, id)
-    }
-    pub fn occupancies(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_health::Occupancy)> {
-        game_health::occupancies(&self.0)
-    }
-    pub fn insert_shelter_occupancy(
-        &mut self,
-        id: game_api::PersonId,
-        row: game_health::Occupancy,
-    ) -> Result<(), Error> {
-        game_health::insert_occupancy(&mut self.0, id, row)
-    }
-    pub fn remove_shelter_occupancy(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Result<Option<game_health::Occupancy>, Error> {
-        game_health::remove_occupancy(&mut self.0, id)
-    }
-    pub fn health_knowledge(&self, id: game_api::PersonId) -> Option<&game_health::Knowledge> {
-        game_health::knowledge(&self.0, id)
-    }
-    pub fn health_knowledge_mut(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Option<&mut game_health::Knowledge> {
-        game_health::knowledge_mut(&mut self.0, id)
-    }
-    pub fn knowledges(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_health::Knowledge)> {
-        game_health::knowledges(&self.0)
-    }
-    pub fn insert_health_knowledge(
-        &mut self,
-        id: game_api::PersonId,
-        row: game_health::Knowledge,
-    ) -> Result<(), Error> {
-        game_health::insert_knowledge(&mut self.0, id, row)
-    }
-    pub fn remove_health_knowledge(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Result<Option<game_health::Knowledge>, Error> {
-        game_health::remove_knowledge(&mut self.0, id)
-    }
-    pub fn ensure_health_knowledge(
-        &mut self,
-        id: game_api::PersonId,
-    ) -> Result<&mut game_health::Knowledge, Error> {
-        if self.health_knowledge(id).is_none() {
-            self.insert_health_knowledge(id, game_health::Knowledge::default())?;
-        }
-        self.health_knowledge_mut(id).ok_or(Error::Unavailable)
-    }
-    pub fn shelter(&self, id: game_api::ShelterId) -> Option<&game_health::Shelter> {
-        game_health::shelter(&self.0, id)
-    }
-    pub fn shelter_mut(&mut self, id: game_api::ShelterId) -> Option<&mut game_health::Shelter> {
-        game_health::shelter_mut(&mut self.0, id)
-    }
-    pub fn shelters(&self) -> impl Iterator<Item = (game_api::ShelterId, &game_health::Shelter)> {
-        game_health::shelters(&self.0)
-    }
-    pub fn insert_shelter(&mut self, row: game_health::Shelter) -> Result<(), Error> {
-        game_health::insert_shelter(&mut self.0, row)
-    }
-    pub fn remove_shelter(
-        &mut self,
-        id: game_api::ShelterId,
-    ) -> Result<Option<game_health::Shelter>, Error> {
-        game_health::remove_shelter(&mut self.0, id)
-    }
-    pub fn health_offer(
-        &self,
-        giver: game_api::PersonId,
-        patient: game_api::PersonId,
-    ) -> Option<&game_health::Offer> {
-        game_health::offer(&self.0, giver, patient)
-    }
-    pub fn health_offer_mut(
-        &mut self,
-        giver: game_api::PersonId,
-        patient: game_api::PersonId,
-    ) -> Option<&mut game_health::Offer> {
-        game_health::offer_mut(&mut self.0, giver, patient)
-    }
-    pub fn health_offers(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, game_api::PersonId, &game_health::Offer)> {
-        game_health::all_offers(&self.0)
-    }
-    pub fn insert_health_offer(&mut self, offer: game_health::Offer) -> Result<(), Error> {
-        game_health::insert_offer(&mut self.0, offer)
-    }
-    pub fn clinical(&self, actor: game_api::PersonId) -> Option<&game_health::Clinical> {
-        game_health::clinical(&self.0, actor)
-    }
-    pub fn clinical_mut(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Option<&mut game_health::Clinical> {
-        game_health::clinical_mut(&mut self.0, actor)
-    }
-    pub fn clinicals(&self) -> impl Iterator<Item = (game_api::PersonId, &game_health::Clinical)> {
-        game_health::clinicals(&self.0)
-    }
-    pub fn insert_clinical(
-        &mut self,
-        actor: game_api::PersonId,
-        clinical: game_health::Clinical,
-    ) -> Result<(), Error> {
-        game_health::insert_clinical(&mut self.0, actor, clinical)
-    }
-    pub fn health_job(&self, actor: game_api::PersonId) -> Option<&game_health::Job> {
-        game_health::job(&self.0, actor)
-    }
-    pub fn health_job_mut(&mut self, actor: game_api::PersonId) -> Option<&mut game_health::Job> {
-        game_health::job_mut(&mut self.0, actor)
-    }
-    pub fn health_jobs(&self) -> impl Iterator<Item = (game_api::PersonId, &game_health::Job)> {
-        game_health::jobs(&self.0)
-    }
-    pub fn insert_health_job(&mut self, job: game_health::Job) -> Result<(), Error> {
-        game_health::insert_job(&mut self.0, job)
-    }
-    pub fn remove_health_job(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Result<Option<game_health::Job>, Error> {
-        game_health::remove_job(&mut self.0, actor)
-    }
-    pub fn body(&self, actor: game_api::PersonId) -> Option<&game_physiology::Body> {
-        game_physiology::body(&self.0, actor)
-    }
-    pub fn body_mut(&mut self, actor: game_api::PersonId) -> Option<&mut game_physiology::Body> {
-        game_physiology::body_mut(&mut self.0, actor)
-    }
-    pub fn bodies(&self) -> impl Iterator<Item = (game_api::PersonId, &game_physiology::Body)> {
-        game_physiology::bodies(&self.0)
-    }
-    pub fn personal_skills(&self, actor: game_api::PersonId) -> Option<&game_skills::Skills> {
-        game_skills::skills(&self.0, actor)
-    }
-    pub fn personal_skills_mut(
-        &mut self,
-        actor: game_api::PersonId,
-    ) -> Option<&mut game_skills::Skills> {
-        game_skills::skills_mut(&mut self.0, actor)
-    }
-    pub fn all_personal_skills(
-        &self,
-    ) -> impl Iterator<Item = (game_api::PersonId, &game_skills::Skills)> {
-        game_skills::all_skills(&self.0)
-    }
-    pub fn site(&self, id: game_api::SiteId) -> Option<&game_workshop::Site> {
-        game_workshop::site(&self.0, id)
-    }
-    pub fn site_mut(&mut self, id: game_api::SiteId) -> Option<&mut game_workshop::Site> {
-        game_workshop::site_mut(&mut self.0, id)
-    }
-    pub fn sites(&self) -> impl Iterator<Item = (game_api::SiteId, &game_workshop::Site)> {
-        game_workshop::sites(&self.0)
-    }
-    pub fn insert_site(&mut self, site: game_workshop::Site) -> Result<(), Error> {
-        game_workshop::insert_site(&mut self.0, site)
-    }
-    pub fn remove_site(
-        &mut self,
-        id: game_api::SiteId,
-    ) -> Result<Option<game_workshop::Site>, Error> {
-        game_workshop::remove_site(&mut self.0, id)
-    }
-    pub fn location(&self, actor: game_api::PersonId) -> Option<&game_api::Location> {
-        game_spatial::location(&self.0, game_ecs::StableId(actor.0))
-    }
-    pub fn location_mut(&mut self, actor: game_api::PersonId) -> Option<&mut game_api::Location> {
-        game_spatial::location_mut(&mut self.0, game_ecs::StableId(actor.0))
-    }
-    pub fn set_location(
-        &mut self,
-        actor: game_api::PersonId,
-        location: game_api::Location,
-    ) -> Result<(), Error> {
-        game_spatial::set_location(&mut self.0, game_ecs::StableId(actor.0), location)
-    }
-    pub fn locations(&self) -> impl Iterator<Item = (game_api::PersonId, &game_api::Location)> {
-        game_spatial::locations(&self.0).map(|(id, location)| (game_api::PersonId(id.0), location))
-    }
+
     pub fn activity(&self, actor: game_api::PersonId) -> Option<&game_api::Activity> {
         self.0.get(game_ecs::StableId(actor.0))
     }
@@ -548,26 +61,6 @@ impl Components {
         activity: game_api::Activity,
     ) -> Result<(), Error> {
         self.0.insert(game_ecs::StableId(actor.0), activity)
-    }
-    pub fn job(&self, actor: game_api::PersonId) -> Option<&game_workshop::Job> {
-        game_workshop::job(&self.0, actor)
-    }
-    pub fn job_mut(&mut self, actor: game_api::PersonId) -> Option<&mut game_workshop::Job> {
-        game_workshop::job_mut(&mut self.0, actor)
-    }
-    pub fn jobs(&self) -> impl Iterator<Item = (game_api::PersonId, &game_workshop::Job)> {
-        game_workshop::jobs(&self.0)
-    }
-    pub fn set_job(
-        &mut self,
-        actor: game_api::PersonId,
-        job: Option<game_workshop::Job>,
-    ) -> Result<(), Error> {
-        if let Some(job) = job {
-            game_workshop::insert_job(&mut self.0, actor, job)
-        } else {
-            game_workshop::remove_job(&mut self.0, actor).map(|_| ())
-        }
     }
 }
 impl Deref for Components {
@@ -643,10 +136,7 @@ mod tests {
     fn body_activity_and_workshop_jobs_are_independent_canonical_columns() {
         let mut sim = Simulation::survival_fixture(13, Execution::default()).unwrap();
         let ruler = sim.state.ruler;
-        let site = sim
-            .state
-            .components
-            .sites()
+        let site = game_workshop::sites(&sim.state.components)
             .map(|(id, _)| id)
             .next()
             .unwrap();
@@ -676,7 +166,7 @@ mod tests {
         );
         let restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         assert_eq!(sim.canonical_state(), restored.canonical_state());
-        assert!(restored.state.components.job(ruler).is_some());
+        assert!(game_workshop::job(&restored.state.components, ruler).is_some());
     }
 
     #[test]
@@ -695,9 +185,7 @@ mod tests {
         sim.physical_query.refresh(&sim.state.components).unwrap();
         let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
         let actor = sim.state.ruler;
-        sim.state
-            .components
-            .trait_development_row_mut(actor)
+        game_physiology::traits::development_mut(&mut sim.state.components, actor)
             .unwrap()
             .physical_training_milli += 1;
         let before = sim.canonical_state().clone();
@@ -748,12 +236,13 @@ mod tests {
     fn invalid_final_founder_traits_leave_admission_inert() {
         let mut sim = Simulation::skills_fixture(87, Execution::default()).unwrap();
         let last = sim.state.people.last().unwrap().id;
-        sim.state
-            .components
-            .mind_mut(last)
-            .unwrap()
-            .personality
-            .empathy = 1_001;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            last,
+        )
+        .unwrap()
+        .personality
+        .empathy = 1_001;
         let before = sim.canonical_state().clone();
         let content =
             crate::genetics::Content::read(crate::genetics::Config::default().content_dir).unwrap();
@@ -821,10 +310,7 @@ mod tests {
             .unwrap();
         let ruler = sim.state.ruler;
         let enemy = sim.state.people[3].id;
-        let area = sim
-            .state
-            .components
-            .location(ruler)
+        let area = game_spatial::location(&sim.state.components, game_ecs::StableId((ruler).0))
             .unwrap()
             .cell()
             .unwrap();
@@ -871,10 +357,10 @@ mod tests {
         // An authored pending NPC turn runs through the normal advance path.
         battle.order = vec![enemy, ruler];
         battle.cursor = 0;
-        assert!(sim.state.components.shelter_occupancy(ruler).is_some());
+        assert!(game_health::occupancy(&sim.state.components, ruler).is_some());
         let advanced = sim.advance(game_api::SimDuration(1)).unwrap();
         assert_eq!(advanced.reached, SimTime(1));
-        assert!(sim.state.components.shelter_occupancy(ruler).is_none());
+        assert!(game_health::occupancy(&sim.state.components, ruler).is_none());
         assert!(sim.state.events.iter().any(|event| matches!(event.kind,game_api::EventKind::Struck {actor,target,..} if actor == enemy && target == ruler)));
         assert!(
             sim.state.events.iter().any(
@@ -898,7 +384,7 @@ mod tests {
         let ruler = farm.state.ruler;
         farm.debug_move_actor(ruler, area).unwrap();
         if let game_api::Location::InTransit { arrives, .. } =
-            *farm.state.components.location(ruler).unwrap()
+            *game_spatial::location(&farm.state.components, game_ecs::StableId((ruler).0)).unwrap()
         {
             farm.advance(game_api::SimDuration(arrives.0 - farm.state.time.0))
                 .unwrap();
@@ -984,12 +470,10 @@ mod tests {
     fn initial_mind_admission_rejects_a_late_bad_row_without_publishing() {
         let source = Simulation::autonomy_fixture(94, Execution::default()).unwrap();
         let mut sim = Simulation::survival_fixture(94, Execution::default()).unwrap();
-        let mut rows: std::collections::BTreeMap<_, _> = source
-            .state
-            .components
-            .minds()
-            .map(|(id, mind)| (id, mind.clone()))
-            .collect();
+        let mut rows: std::collections::BTreeMap<_, _> =
+            game_characters::decisions::minds::<game_api::Command>(&source.state.components)
+                .map(|(id, mind)| (id, mind.clone()))
+                .collect();
         rows.last_entry().unwrap().get_mut().personality.empathy = 1_001;
         let before = sim.canonical_state().clone();
         assert!(sim.initialize_decision_people(rows).is_err());
@@ -1025,9 +509,11 @@ mod tests {
             Simulation::load(&serde_json::to_vec(&missing).unwrap(), Execution::default()).is_err()
         );
         let mut orphan = Simulation::survival_fixture(92, Execution::default()).unwrap();
-        let mut life = sim.state.components.life(sim.state.ruler).unwrap().clone();
+        let mut life = game_lifecycle::life(&sim.state.components, sim.state.ruler)
+            .unwrap()
+            .clone();
         life.id = orphan.state.ruler;
-        orphan.state.components.insert_life(life).unwrap();
+        game_lifecycle::insert_life(&mut orphan.state.components, life).unwrap();
         assert!(
             matches!(Simulation::load(&orphan.save().unwrap(), Execution::default()), Err(game_api::Error::InvalidSave(message)) if message == "lifecycle components require lifecycle runtime")
         );
@@ -1040,7 +526,10 @@ mod tests {
         let partner = sim.state.people[4].id;
         sim.debug_actor_command(actor, game_api::Command::Conceive { partner })
             .unwrap();
-        let pregnancy = sim.state.components.pregnancies().next().unwrap().0;
+        let pregnancy = game_lifecycle::all_pregnancies(&sim.state.components)
+            .next()
+            .unwrap()
+            .0;
         let age = sim
             .state
             .development
@@ -1048,8 +537,9 @@ mod tests {
             .unwrap()
             .prepare_age(&sim.state.components, actor, sim.state.time, true, 0, true)
             .unwrap();
-        sim.state.components.life_mut(actor).unwrap().preference =
-            Some((game_api::ChildhoodInterest::Company, SimTime(1)));
+        game_lifecycle::life_mut(&mut sim.state.components, actor)
+            .unwrap()
+            .preference = Some((game_api::ChildhoodInterest::Company, SimTime(1)));
         let before = sim.canonical_state().clone();
         assert!(
             age.commit(
@@ -1065,8 +555,9 @@ mod tests {
             .as_ref()
             .unwrap()
             .prepare_interruption(&sim.state.components, actor, false, [pregnancy]);
-        sim.state.components.pregnancy_mut(pregnancy).unwrap().state =
-            game_lifecycle::PregnancyState::Ended;
+        game_lifecycle::pregnancy_mut(&mut sim.state.components, pregnancy)
+            .unwrap()
+            .state = game_lifecycle::PregnancyState::Ended;
         let before = sim.canonical_state().clone();
         assert!(
             interruption
@@ -1083,10 +574,12 @@ mod tests {
     fn health_knowledge_without_the_health_runtime_is_rejected() {
         let mut sim = Simulation::survival_fixture(88, Execution::default()).unwrap();
         assert!(sim.state.health.is_none());
-        sim.state
-            .components
-            .insert_health_knowledge(sim.state.ruler, game_health::Knowledge::default())
-            .unwrap();
+        game_health::insert_knowledge(
+            &mut sim.state.components,
+            sim.state.ruler,
+            game_health::Knowledge::default(),
+        )
+        .unwrap();
         assert!(
             matches!(Simulation::load(&sim.save().unwrap(), Execution::default()),
             Err(game_api::Error::InvalidSave(message)) if message == "health components require health runtime")
@@ -1140,16 +633,13 @@ mod tests {
         for change_job in [false, true] {
             let mut sim = Simulation::health_fixture(83, Execution::default()).unwrap();
             let actor = sim.state.ruler;
-            let area = sim
-                .state
-                .components
-                .location(actor)
+            let area = game_spatial::location(&sim.state.components, game_ecs::StableId((actor).0))
                 .unwrap()
                 .cell()
                 .unwrap();
-            sim.state
-                .components
-                .insert_health_job(game_health::Job {
+            game_health::insert_job(
+                &mut sim.state.components,
+                game_health::Job {
                     actor,
                     area,
                     completes: SimTime(60_000),
@@ -1158,8 +648,9 @@ mod tests {
                         skill_ms: 0,
                         elapsed: 0,
                     },
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
             sim.state
                 .components
                 .set_activity(
@@ -1173,13 +664,13 @@ mod tests {
             sim.physical_query.refresh(&sim.state.components).unwrap();
             let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
             if change_job {
-                sim.state
-                    .components
-                    .health_job_mut(actor)
+                game_health::job_mut(&mut sim.state.components, actor)
                     .unwrap()
                     .completes = SimTime(60_001);
             } else {
-                sim.state.components.clinical_mut(actor).unwrap().thirst += 1;
+                game_health::clinical_mut(&mut sim.state.components, actor)
+                    .unwrap()
+                    .thirst += 1;
             }
             let before = sim.canonical_state().clone();
             assert!(sim.commit_prepared_step(prepared).is_err());
@@ -1192,9 +683,7 @@ mod tests {
         let mut sim = Simulation::survival_fixture(14, Execution::default()).unwrap();
         sim.physical_query.refresh(&sim.state.components).unwrap();
         let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
-        sim.state
-            .components
-            .body_mut(sim.state.ruler)
+        game_physiology::body_mut(&mut sim.state.components, sim.state.ruler)
             .unwrap()
             .vitals
             .hunger += 1;
@@ -1216,18 +705,22 @@ mod tests {
         let mut newcomer = sim.state.people[0].clone();
         newcomer.id = game_api::PersonId(crate::allocate(&mut sim.state).unwrap());
         newcomer.role = game_api::Role::Citizen;
-        let body = sim.state.components.body(sim.state.ruler).unwrap().clone();
-        game_physiology::insert_body(&mut sim.state.components, newcomer.id, body).unwrap();
-        let location = sim
-            .state
-            .components
-            .location(sim.state.ruler)
+        let body = game_physiology::body(&sim.state.components, sim.state.ruler)
             .unwrap()
             .clone();
-        sim.state
-            .components
-            .set_location(newcomer.id, location)
-            .unwrap();
+        game_physiology::insert_body(&mut sim.state.components, newcomer.id, body).unwrap();
+        let location = game_spatial::location(
+            &sim.state.components,
+            game_ecs::StableId((sim.state.ruler).0),
+        )
+        .unwrap()
+        .clone();
+        game_spatial::set_location(
+            &mut sim.state.components,
+            game_ecs::StableId((newcomer.id).0),
+            location,
+        )
+        .unwrap();
         sim.state
             .components
             .set_activity(newcomer.id, game_api::Activity::Idle)
@@ -1279,14 +772,18 @@ mod tests {
         let first = sim.state.people[0].id;
         let second = sim.state.people[1].id;
         let mut state = sim.canonical_state().clone();
-        state
-            .components
-            .set_location(first, game_api::Location::Carried { carrier: second })
-            .unwrap();
-        state
-            .components
-            .set_location(second, game_api::Location::Carried { carrier: first })
-            .unwrap();
+        game_spatial::set_location(
+            &mut state.components,
+            game_ecs::StableId((first).0),
+            game_api::Location::Carried { carrier: second },
+        )
+        .unwrap();
+        game_spatial::set_location(
+            &mut state.components,
+            game_ecs::StableId((second).0),
+            game_api::Location::Carried { carrier: first },
+        )
+        .unwrap();
         let mut corrupt = json.clone();
         corrupt["state"] = serde_json::to_value(&state).unwrap();
         assert!(
@@ -1318,7 +815,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.state.components.sites().count()
+            game_workshop::sites(&sim.state.components).count()
         );
         let restored = Simulation::load(
             &saved,
@@ -1334,10 +831,9 @@ mod tests {
         let person = &kernel.state.people[0];
         let id = game_api::SiteId(person.id.0);
         let stock = person.inventory;
-        kernel
-            .state
-            .components
-            .insert_site(game_workshop::Site {
+        game_workshop::insert_site(
+            &mut kernel.state.components,
+            game_workshop::Site {
                 id,
                 area: kernel.state.areas[0].id,
                 input: stock,
@@ -1348,8 +844,9 @@ mod tests {
                 duration: SimDuration(1),
                 access: std::collections::BTreeSet::new(),
                 last_granted: None,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(Simulation::load(&kernel.save().unwrap(), Execution::default()).is_err());
     }
 

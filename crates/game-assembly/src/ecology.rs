@@ -173,11 +173,11 @@ impl Simulation {
         Ok(id)
     }
     fn ecology_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
-        match *self.state.components.location(actor)? {
+        match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))? {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -189,7 +189,7 @@ impl Simulation {
             && !self.care_index.contains_key(&actor)
     }
     pub(crate) fn ecology_job_tool(&self, actor: PersonId) -> Option<InventoryId> {
-        self.state.components.gathering(actor)?.tool
+        game_ecology::gathering(&self.state.components, actor)?.tool
     }
     fn ecology_tool(&self, actor: PersonId) -> Option<InventoryId> {
         self.ecology_tool_for_planning(actor, None)
@@ -261,10 +261,7 @@ impl Simulation {
                 self.observe_ecology();
             }
             EcologyAction::RequestAccess { resource } => {
-                if self
-                    .state
-                    .components
-                    .ecology_requests(actor)
+                if game_ecology::requests(&self.state.components, actor)
                     .and_then(|row| row.next_request.get(&resource))
                     .is_some_and(|t| *t > self.state.time)
                 {
@@ -292,9 +289,7 @@ impl Simulation {
                     return Err(Error::Unavailable);
                 }
                 self.ensure_event_capacity(2)?;
-                self.state
-                    .components
-                    .ensure_ecology_requests(actor)
+                game_ecology::ensure_requests(&mut self.state.components, actor)
                     .expect("known requester")
                     .next_request
                     .insert(resource, next_request);
@@ -303,7 +298,11 @@ impl Simulation {
                     actor,
                     custodian,
                 });
-                let mind = &self.state.components.mind(custodian).unwrap();
+                let mind = &game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    custodian,
+                )
+                .unwrap();
                 if custodian != self.state.ruler
                     && self.ecology_able(custodian)
                     && mind.personality.empathy >= 700
@@ -353,7 +352,9 @@ impl Simulation {
             .ok_or(Error::Unavailable)?;
         let adult = self.state.development.as_ref().is_none_or(|_| {
             matches!(
-                self.state.components.life(actor).unwrap().stage,
+                game_lifecycle::life(&self.state.components, actor)
+                    .unwrap()
+                    .stage,
                 LifeStage::Adult | LifeStage::Elder
             )
         });
@@ -377,10 +378,7 @@ impl Simulation {
                     now: self.state.time,
                     area: self.ecology_area(actor).ok_or(Error::Unavailable)?,
                     capable: self.ecology_able(actor)
-                        && self
-                            .state
-                            .components
-                            .body(actor)
+                        && game_physiology::body(&self.state.components, actor)
                             .expect("body exists")
                             .vitals
                             .fatigue
@@ -423,9 +421,7 @@ impl Simulation {
             )?
         };
         self.interrupt_actor_activity(actor);
-        self.state
-            .components
-            .insert_gathering(actor, plan.job(destination))
+        game_ecology::insert_gathering(&mut self.state.components, actor, plan.job(destination))
             .expect("validated gathering");
         *self.state.components.activity_mut(actor).unwrap() = Activity::Gather {
             resource,
@@ -453,7 +449,11 @@ impl Simulation {
             && self.can_fight(actor)
             && self.can_fight(custodian)
         {
-            let mind = &self.state.components.mind(custodian).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                custodian,
+            )
+            .unwrap();
             if mind.personality.aggression >= 500 && mind.personality.risk_tolerance >= 500 {
                 self.debug_start_encounter(vec![(actor, 0), (custodian, 1)])?;
             }
@@ -610,7 +610,7 @@ impl Simulation {
         if self.state.ecology.is_none() {
             return EcologyView::default();
         }
-        let Some(knowledge) = self.state.components.ecology_knowledge(actor) else {
+        let Some(knowledge) = game_ecology::knowledge(&self.state.components, actor) else {
             return EcologyView::default();
         };
         EcologyView {
@@ -698,17 +698,16 @@ impl Simulation {
         let facts = game_ecology::GatherFacts {
             now: self.state.time,
             area,
-            capable: self
-                .state
-                .components
-                .body(actor)
+            capable: game_physiology::body(&self.state.components, actor)
                 .expect("body exists")
                 .vitals
                 .fatigue
                 < physical.rules.fatigue_limit,
             adult: self.state.development.as_ref().is_none_or(|_| {
                 matches!(
-                    self.state.components.life(actor).unwrap().stage,
+                    game_lifecycle::life(&self.state.components, actor)
+                        .unwrap()
+                        .stage,
                     LifeStage::Adult | LifeStage::Elder
                 )
             }),
@@ -755,20 +754,17 @@ impl Simulation {
         let Some(area) = self.ecology_area(actor) else {
             return Vec::new();
         };
-        let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
-        else {
+        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        }) else {
             return Vec::new();
         };
         let available = self.available_ecology_commands_for_planning(actor, resources);
-        let local = self.state.components.ecology_knowledge(actor).map(|row|&row.known_resources).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
+        let local = game_ecology::knowledge(&self.state.components,actor).map(|row|&row.known_resources).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
             let q = Quantity(quantity.0.min(room.0).min(known.available.0));
             let facts = game_ecology::GatherFacts { now: self.state.time, area,
-                capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|_| self.state.components.body(actor).expect("body exists").vitals.fatigue < self.body_rules(actor).fatigue_limit),
-                adult: self.state.development.as_ref().is_none_or(|_| matches!(self.state.components.life(actor).unwrap().stage, LifeStage::Adult | LifeStage::Elder)),
+                capable: self.ecology_able(actor) && self.state.physical.as_ref().is_some_and(|_| game_physiology::body(&self.state.components,actor).expect("body exists").vitals.fatigue < self.body_rules(actor).fatigue_limit),
+                adult: self.state.development.as_ref().is_none_or(|_| matches!(game_lifecycle::life(&self.state.components,actor).unwrap().stage, LifeStage::Adult | LifeStage::Elder)),
                 carrying_room: room, tool: self.ecology_tool_for_planning(actor, resources) };
             game_ecology::LocalAcquisition { resource: known.id,
                 can_prepare: world.gathering_conditions(&self.state.components, actor, known.id, q, !known.accessible, facts).is_ok(),
@@ -854,12 +850,9 @@ impl Simulation {
         if !self.ecology_able(actor) {
             return Vec::new();
         }
-        let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
-        else {
+        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        }) else {
             return Vec::new();
         };
         let Some(area) = self.ecology_area(actor) else {
@@ -896,12 +889,13 @@ impl Simulation {
         let Some(world) = &self.state.ecology else {
             if self.state.components.iter::<Resource>().next().is_some()
                 || self.state.components.iter::<Plot>().next().is_some()
-                || self.state.components.gatherings().next().is_some()
-                || self.state.components.ecology_knowledges().next().is_some()
-                || self
-                    .state
-                    .components
-                    .ecology_request_rows()
+                || game_ecology::gatherings(&self.state.components)
+                    .next()
+                    .is_some()
+                || game_ecology::all_knowledge(&self.state.components)
+                    .next()
+                    .is_some()
+                || game_ecology::all_requests(&self.state.components)
                     .next()
                     .is_some()
             {
@@ -948,12 +942,12 @@ impl Simulation {
                     .agriculture
                     .as_ref()
                     .is_some_and(|w| w.field(&self.state.components, *id).is_some())
-                || self.state.components.site(*id).is_some()
+                || game_workshop::site(&self.state.components, *id).is_some()
             {
                 return Err(bad());
             }
         }
-        for (actor, job) in self.state.components.gatherings() {
+        for (actor, job) in game_ecology::gatherings(&self.state.components) {
             let actor = &actor;
             let source = world
                 .resource(&self.state.components, job.resource)
@@ -987,38 +981,28 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        if self
-            .state
-            .components
-            .ecology_request_rows()
-            .any(|(actor, row)| {
-                let actor = &actor;
-                let known = &row.next_request;
-                !people.contains(actor)
-                    || known.keys().any(|resource| {
-                        !world.resource(&self.state.components, *resource).is_some()
-                    })
-            })
-        {
+        if game_ecology::all_requests(&self.state.components).any(|(actor, row)| {
+            let actor = &actor;
+            let known = &row.next_request;
+            !people.contains(actor)
+                || known
+                    .keys()
+                    .any(|resource| !world.resource(&self.state.components, *resource).is_some())
+        }) {
             return Err(bad());
         }
-        if self
-            .state
-            .components
-            .ecology_knowledges()
-            .any(|(actor, row)| {
-                let actor = &actor;
-                let observed = &row.observed_areas;
-                !people.contains(actor)
-                    || observed.len() > 16
-                    || observed
-                        .iter()
-                        .any(|(area, at)| !area_exists(*area) || *at > self.state.time)
-            })
-        {
+        if game_ecology::all_knowledge(&self.state.components).any(|(actor, row)| {
+            let actor = &actor;
+            let observed = &row.observed_areas;
+            !people.contains(actor)
+                || observed.len() > 16
+                || observed
+                    .iter()
+                    .any(|(area, at)| !area_exists(*area) || *at > self.state.time)
+        }) {
             return Err(bad());
         }
-        for (actor, row) in self.state.components.ecology_knowledges() {
+        for (actor, row) in game_ecology::all_knowledge(&self.state.components) {
             let actor = &actor;
             let known = &row.known_resources;
             if !people.contains(actor)
@@ -1039,7 +1023,7 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        for (actor, row) in self.state.components.ecology_knowledges() {
+        for (actor, row) in game_ecology::all_knowledge(&self.state.components) {
             let actor = &actor;
             let known = &row.known_plots;
             if !people.contains(actor)
@@ -1092,10 +1076,11 @@ mod tests {
             .id
     }
     fn local(sim: &mut Simulation, actor: PersonId, area: AreaId) {
-        *sim.state
-            .components
-            .location_mut(sim.state.people[sim.person_index[&actor]].id)
-            .expect("location exists") = Location::AtArea(area);
+        *game_spatial::location_mut(
+            &mut sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0),
+        )
+        .expect("location exists") = Location::AtArea(area);
         sim.observe_ecology();
     }
     #[test]
@@ -1120,7 +1105,9 @@ mod tests {
             },
         )
         .unwrap();
-        let destination = sim.state.components.gathering(actor).unwrap().destination;
+        let destination = game_ecology::gathering(&sim.state.components, actor)
+            .unwrap()
+            .destination;
         assert_eq!(sim.state.inventories[&destination].quantity, Quantity(0));
         sim.advance(SimDuration(59_999)).unwrap();
         assert_eq!(
@@ -1209,7 +1196,9 @@ mod tests {
             },
         )
         .unwrap();
-        let destination = sim.state.components.gathering(actor).unwrap().destination;
+        let destination = game_ecology::gathering(&sim.state.components, actor)
+            .unwrap()
+            .destination;
         sim.advance(SimDuration(30_000)).unwrap();
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.advance(SimDuration(30_000)).unwrap();
@@ -1328,7 +1317,7 @@ mod tests {
         )
         .unwrap();
         assert!(sim.in_combat(actor));
-        assert!(!sim.state.components.gathering(actor).is_some());
+        assert!(!game_ecology::gathering(&sim.state.components, actor).is_some());
         assert_eq!(
             sim.state
                 .ecology

@@ -59,11 +59,8 @@ impl Simulation {
         assert!(stock.quantity >= amount);
         let quantity = stock.quantity.0;
         self.state.health.get_or_insert_with(Runtime::default);
-        let existing = self
-            .state
-            .components
-            .water_lot(inventory)
-            .map_or(0, WaterLot::load);
+        let existing =
+            game_health::water_lot(&self.state.components, inventory).map_or(0, WaterLot::load);
         let lot = game_health::collect_water(CollectionInput {
             quantity_after: quantity,
             existing_load: existing,
@@ -71,23 +68,16 @@ impl Simulation {
             contamination,
         })
         .expect("validated physical collection");
-        self.state
-            .components
-            .insert_water_lot(inventory, lot)
+        game_health::insert_water_lot(&mut self.state.components, inventory, lot)
             .expect("validated water lot");
         if let InventoryLocation::Carried(actor) = stock.location {
-            let old = self
-                .state
-                .components
-                .health_knowledge(actor)
+            let old = game_health::knowledge(&self.state.components, actor)
                 .and_then(|k| k.water.get(&inventory))
                 .cloned();
             let purified = contamination == 0
                 && (quantity == amount.0 || old.as_ref().is_some_and(|s| s.purified));
             let suspected_unsafe = contamination > 0 || old.is_some_and(|s| s.suspected_unsafe);
-            self.state
-                .components
-                .ensure_health_knowledge(actor)
+            game_health::ensure_knowledge(&mut self.state.components, actor)
                 .expect("known health observer")
                 .water
                 .insert(
@@ -115,16 +105,10 @@ impl Simulation {
                 let source_before = self.state.inventories[&source].quantity.0 + quantity.0;
                 let destination_before =
                     self.state.inventories[&destination].quantity.0 - quantity.0;
-                let a = self
-                    .state
-                    .components
-                    .water_lot(source)
+                let a = game_health::water_lot(&self.state.components, source)
                     .cloned()
                     .unwrap_or_else(|| WaterLot::new(source_before, 0));
-                let b = self
-                    .state
-                    .components
-                    .water_lot(destination)
+                let b = game_health::water_lot(&self.state.components, destination)
                     .cloned()
                     .unwrap_or_else(|| WaterLot::new(destination_before, 0));
                 let effect = game_health::transfer_water(WaterTransferInput {
@@ -133,14 +117,14 @@ impl Simulation {
                     quantity: quantity.0,
                 })
                 .expect("validated physical transfer");
-                self.state
-                    .components
-                    .insert_water_lot(source, effect.source)
+                game_health::insert_water_lot(&mut self.state.components, source, effect.source)
                     .expect("validated water lot");
-                self.state
-                    .components
-                    .insert_water_lot(destination, effect.destination)
-                    .expect("validated water lot");
+                game_health::insert_water_lot(
+                    &mut self.state.components,
+                    destination,
+                    effect.destination,
+                )
+                .expect("validated water lot");
             }
             EventKind::Consumed {
                 source, quantity, ..
@@ -149,41 +133,37 @@ impl Simulation {
                 source, quantity, ..
             } if self.state.inventories[&source].good == Good::Water => {
                 let before = self.state.inventories[&source].quantity.0 + quantity.0;
-                let lot = self
-                    .state
-                    .components
-                    .water_lot(source)
+                let lot = game_health::water_lot(&self.state.components, source)
                     .cloned()
                     .unwrap_or_else(|| WaterLot::new(before, 0));
                 let effect = game_health::consume_water(&lot, quantity.0)
                     .expect("validated physical consumption");
-                self.state
-                    .components
-                    .insert_water_lot(source, effect.remaining)
+                game_health::insert_water_lot(&mut self.state.components, source, effect.remaining)
                     .expect("validated water lot");
             }
             EventKind::Produced {
                 output, quantity, ..
             } if self.state.inventories[&output].good == Good::Water => {
                 let quantity_now = self.state.inventories[&output].quantity.0;
-                let load = self
-                    .state
-                    .components
-                    .water_lot(output)
+                let load = game_health::water_lot(&self.state.components, output)
                     .map_or(0, WaterLot::load);
                 let _ = quantity;
-                self.state
-                    .components
-                    .insert_water_lot(output, WaterLot::new(quantity_now, load))
-                    .expect("validated water lot");
+                game_health::insert_water_lot(
+                    &mut self.state.components,
+                    output,
+                    WaterLot::new(quantity_now, load),
+                )
+                .expect("validated water lot");
             }
             EventKind::Spoiled { inventory, .. }
                 if self.state.inventories[&inventory].good == Good::Water =>
             {
-                self.state
-                    .components
-                    .insert_water_lot(inventory, WaterLot::new(0, 0))
-                    .expect("validated water lot");
+                game_health::insert_water_lot(
+                    &mut self.state.components,
+                    inventory,
+                    WaterLot::new(0, 0),
+                )
+                .expect("validated water lot");
             }
             _ => {}
         }
@@ -214,7 +194,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         .people
         .iter()
         .map(|person| {
-            let body = state.components.body(person.id).ok_or_else(|| {
+            let body = game_physiology::body(&state.components, person.id).ok_or_else(|| {
                 Error::InvalidSave("health requires a body for each person".into())
             })?;
             let activity = state.components.activity(person.id).ok_or_else(|| {
@@ -268,10 +248,12 @@ impl Simulation {
         validate_rules(&rules)?;
         self.state.health.get_or_insert_with(Runtime::default).rules = rules;
         for p in &self.state.people {
-            if self.state.components.clinical(p.id).is_none() {
-                self.state
-                    .components
-                    .insert_clinical(p.id, Clinical::default())?;
+            if game_health::clinical(&self.state.components, p.id).is_none() {
+                game_health::insert_clinical(
+                    &mut self.state.components,
+                    p.id,
+                    Clinical::default(),
+                )?;
             }
         }
         Ok(())
@@ -292,7 +274,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|_| self.state.components.body(actor))
+            .and_then(|_| game_physiology::body(&self.state.components, actor))
             .ok_or(Error::Unavailable)?;
         if !body.vitals.alive
             || self.in_combat(actor)
@@ -346,11 +328,9 @@ impl Simulation {
     }
     fn health_tactical_place(&self, actor: PersonId) -> Option<(EncounterId, PersonId)> {
         let mut anchor = actor;
-        while let Location::Carried { carrier } = *self
-            .state
-            .components
-            .location(anchor)
-            .expect("location exists")
+        while let Location::Carried { carrier } =
+            *game_spatial::location(&self.state.components, game_ecs::StableId((anchor).0))
+                .expect("location exists")
         {
             anchor = carrier;
         }
@@ -400,7 +380,7 @@ impl Simulation {
             .state
             .health
             .as_ref()
-            .and_then(|_| self.state.components.water_lot(source))
+            .and_then(|_| game_health::water_lot(&self.state.components, source))
             .cloned()
             .unwrap_or_else(|| WaterLot::new(self.state.inventories[&source].quantity.0, 0));
         game_health::consume_water(&lot, quantity.0)
@@ -415,10 +395,7 @@ impl Simulation {
         dose: u128,
     ) -> Result<(), Error> {
         let w = self.state.health.as_ref().unwrap();
-        let state = self
-            .state
-            .components
-            .clinical(patient)
+        let state = game_health::clinical(&self.state.components, patient)
             .cloned()
             .unwrap_or_default();
         let state = game_health::receive_water(
@@ -430,7 +407,7 @@ impl Simulation {
             quantity,
             dose,
         )?;
-        self.state.components.insert_clinical(patient, state)?;
+        game_health::insert_clinical(&mut self.state.components, patient, state)?;
         Ok(())
     }
     fn preflight_water_received(
@@ -448,7 +425,7 @@ impl Simulation {
     pub(crate) fn health_selected_tool(&self, actor: PersonId) -> Option<InventoryId> {
         match &{
             self.state.health.as_ref()?;
-            self.state.components.health_job(actor)?
+            game_health::job(&self.state.components, actor)?
         }
         .work
         {
@@ -466,7 +443,7 @@ impl Simulation {
         self.state
             .health
             .as_ref()
-            .and_then(|_| self.state.components.health_job(actor))
+            .and_then(|_| game_health::job(&self.state.components, actor))
             .is_some_and(|job| {
                 !matches!(job.work, Work::Drink { .. }) && self.health_job_can_progress(job)
             })
@@ -500,11 +477,11 @@ impl Simulation {
             at_area: matches!(self.resolved_location(actor), Location::AtArea(_)),
             carried: self.person_index.get(&actor).is_some_and(|index| {
                 matches!(
-                    *self
-                        .state
-                        .components
-                        .location(self.state.people[*index].id)
-                        .expect("location exists"),
+                    *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[*index].id).0)
+                    )
+                    .expect("location exists"),
                     Location::Carried { .. }
                 )
             }),
@@ -586,30 +563,28 @@ impl Simulation {
     }
     pub(crate) fn health_after_putdown(&mut self, passenger: PersonId, shelter: Option<ShelterId>) {
         let location = self.resolved_location(passenger);
-        let alive = self
-            .state
-            .physical
-            .as_ref()
-            .is_some_and(|_| self.state.components.body(passenger).unwrap().vitals.alive);
+        let alive = self.state.physical.as_ref().is_some_and(|_| {
+            game_physiology::body(&self.state.components, passenger)
+                .unwrap()
+                .vitals
+                .alive
+        });
         if self.state.health.is_none() {
             return;
         }
-        self.state
-            .components
-            .remove_shelter_occupancy(passenger)
+        game_health::remove_occupancy(&mut self.state.components, passenger)
             .expect("registered occupancy");
         if let Some(shelter) = shelter.filter(|id| {
             alive
-                && self
-                    .state
-                    .components
-                    .shelter(*id)
+                && game_health::shelter(&self.state.components, *id)
                     .is_some_and(|s| location == Location::AtArea(s.area))
         }) {
-            self.state
-                .components
-                .insert_shelter_occupancy(passenger, Occupancy { shelter })
-                .expect("validated shelter");
+            game_health::insert_occupancy(
+                &mut self.state.components,
+                passenger,
+                Occupancy { shelter },
+            )
+            .expect("validated shelter");
         }
         self.observe_health();
     }
@@ -850,14 +825,17 @@ impl Simulation {
         }
     }
     fn health_shelter_actor(&self, actor: PersonId) -> Option<game_health::ShelterActorFacts> {
-        let location = self.state.components.location(actor)?;
+        let location =
+            game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))?;
         Some(game_health::ShelterActorFacts {
             actor,
             carrier: match location {
                 Location::Carried { carrier } => Some(*carrier),
                 _ => None,
             },
-            alive: self.state.components.body(actor)?.vitals.alive,
+            alive: game_physiology::body(&self.state.components, actor)?
+                .vitals
+                .alive,
             physical_area: match self.resolved_location(actor) {
                 Location::AtArea(area) => Some(area),
                 _ => None,
@@ -874,14 +852,14 @@ impl Simulation {
                 self.health_shelter_actor(id)
             })
             .expect("valid shelter chain")?;
-        self.state.components.shelter(id)
+        game_health::shelter(&self.state.components, id)
     }
     fn health_local_actor(
         &self,
         actor: PersonId,
         resolved: &Location,
     ) -> game_health::LocalHealthActor<game_transport::PositionKey> {
-        let body = self.state.components.body(actor).expect("body exists");
+        let body = game_physiology::body(&self.state.components, actor).expect("body exists");
         game_health::LocalHealthActor {
             actor,
             place: transport::location_position(resolved, self.state.time)
@@ -891,11 +869,11 @@ impl Simulation {
                 Location::AtArea(area) => Some(*area),
                 _ => None,
             },
-            carrier: match self
-                .state
-                .components
-                .location(actor)
-                .expect("location exists")
+            carrier: match game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((actor).0),
+            )
+            .expect("location exists")
             {
                 Location::Carried { carrier } => Some(*carrier),
                 _ => None,
@@ -981,26 +959,21 @@ impl Simulation {
     #[cfg(test)]
     fn oracle_effective_shelter(&self, actor: PersonId) -> Option<&Shelter> {
         self.state.health.as_ref()?;
-        if let Location::Carried { carrier } = *self
-            .state
-            .components
-            .location(actor)
-            .expect("location exists")
+        if let Location::Carried { carrier } =
+            *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
+                .expect("location exists")
         {
-            return self
-                .state
-                .components
-                .body(actor)?
+            return game_physiology::body(&self.state.components, actor)?
                 .vitals
                 .alive
                 .then(|| self.oracle_effective_shelter(carrier))
                 .flatten();
         }
-        let shelter = self
-            .state
-            .components
-            .shelter(self.state.components.shelter_occupancy(actor)?.shelter)?;
-        let body = self.state.components.body(actor)?;
+        let shelter = game_health::shelter(
+            &self.state.components,
+            game_health::occupancy(&self.state.components, actor)?.shelter,
+        )?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive
             || self.resolved_location(actor) != Location::AtArea(shelter.area)
             || matches!(
@@ -1029,8 +1002,8 @@ impl Simulation {
         {
             return false;
         }
-        if matches!(*self.state.components.location(a).expect("location exists"), Location::Carried { carrier } if carrier == b)
-            || matches!(*self.state.components.location(b).expect("location exists"), Location::Carried { carrier } if carrier == a)
+        if matches!(*game_spatial::location(&self.state.components,game_ecs::StableId((a).0)).expect("location exists"), Location::Carried { carrier } if carrier == b)
+            || matches!(*game_spatial::location(&self.state.components,game_ecs::StableId((b).0)).expect("location exists"), Location::Carried { carrier } if carrier == a)
         {
             return true;
         }
@@ -1039,7 +1012,7 @@ impl Simulation {
         if sa.is_some() && sa == sb {
             return true;
         }
-        if self.state.components.health_jobs().any(|(_,job)|matches!(job.work,Work::Treat {patient,..} if job.actor==a&&patient==b||job.actor==b&&patient==a)){return true;}
+        if game_health::jobs(&self.state.components).any(|(_,job)|matches!(job.work,Work::Treat {patient,..} if job.actor==a&&patient==b||job.actor==b&&patient==a)){return true;}
         if sa != sb {
             return false;
         }
@@ -1092,7 +1065,10 @@ impl Simulation {
             state,
             now: self.state.time,
             next,
-            alive: self.state.components.body(actor).unwrap().vitals.alive,
+            alive: game_physiology::body(&self.state.components, actor)
+                .unwrap()
+                .vitals
+                .alive,
             thirst_enabled: !self.state.people[self.person_index[&actor]].hunger_exempt,
             resting: *self.state.components.activity(actor).unwrap() == Activity::Rest,
             exposure,
@@ -1112,7 +1088,7 @@ impl Simulation {
             .health
             .as_ref()
             .and_then(|world| {
-                self.state.components.clinical(actor).map(|clinical| {
+                game_health::clinical(&self.state.components, actor).map(|clinical| {
                     game_health::exposure_urgency(clinical.cold, world.rules.cold_harm)
                 })
             })
@@ -1122,7 +1098,7 @@ impl Simulation {
         self.state
             .health
             .as_ref()
-            .and_then(|_| self.state.components.clinical(target))
+            .and_then(|_| game_health::clinical(&self.state.components, target))
             .map_or(0, |state| {
                 game_health::hydration_urgency(state, self.health_physiology(target))
             })
@@ -1142,7 +1118,7 @@ impl Simulation {
             ..exposure
         };
         let empty = Clinical::default();
-        let state = self.state.components.clinical(actor).unwrap_or(&empty);
+        let state = game_health::clinical(&self.state.components, actor).unwrap_or(&empty);
         let next = SimTime(
             self.state
                 .time
@@ -1168,7 +1144,11 @@ impl Simulation {
         let empty = Clinical::default();
         let mut clinical = Vec::new();
         for person in &self.state.people {
-            if !self.state.components.body(person.id).unwrap().vitals.alive {
+            if !game_physiology::body(&self.state.components, person.id)
+                .unwrap()
+                .vitals
+                .alive
+            {
                 continue;
             }
             let state = game_health::clinical(&self.state.components, person.id).unwrap_or(&empty);
@@ -1205,7 +1185,7 @@ impl Simulation {
         };
         let mut boundary = limit;
         let exposures = self.health_exposures()?;
-        for (_, job) in self.state.components.health_jobs() {
+        for (_, job) in game_health::jobs(&self.state.components) {
             if self.health_job_can_progress(job) && job.completes > self.state.time {
                 boundary = boundary.min(job.completes);
             }
@@ -1214,7 +1194,7 @@ impl Simulation {
         // finds combined body limits using game-physiology.
         for person in &self.state.people {
             let empty = Clinical::default();
-            let state = self.state.components.clinical(person.id).unwrap_or(&empty);
+            let state = game_health::clinical(&self.state.components, person.id).unwrap_or(&empty);
             boundary = boundary.min(game_health::clinical_boundary(
                 self.clinical_input(person.id, state, limit, exposures[&person.id]),
                 limit,
@@ -1227,10 +1207,7 @@ impl Simulation {
             return Ok(());
         };
         let runtime = self.state.health.as_ref().ok_or(Error::Unavailable)?;
-        let living: BTreeSet<_> = self
-            .state
-            .components
-            .bodies()
+        let living: BTreeSet<_> = game_physiology::bodies(&self.state.components)
             .filter(|(_, body)| body.vitals.alive)
             .map(|(actor, _)| actor)
             .collect();
@@ -1258,31 +1235,30 @@ impl Simulation {
             return Ok(());
         };
         self.ensure_event_capacity(
-            self.state.components.clinicals().count() * 5
-                + self.state.components.health_jobs().count() * 5
+            game_health::clinicals(&self.state.components).count() * 5
+                + game_health::jobs(&self.state.components).count() * 5
                 + 2,
         )?;
-        let ids: Vec<_> = self
-            .state
-            .components
-            .clinicals()
+        let ids: Vec<_> = game_health::clinicals(&self.state.components)
             .map(|(id, _)| id)
             .collect();
         for actor in ids {
-            if !self.state.components.body(actor).unwrap().vitals.alive {
+            if !game_physiology::body(&self.state.components, actor)
+                .unwrap()
+                .vitals
+                .alive
+            {
                 self.cancel_health_activity(actor);
                 continue;
             }
             let w = self.state.health.as_ref().unwrap();
             let transition = game_health::reconcile_clinical(
-                self.state.components.clinical(actor).unwrap(),
+                game_health::clinical(&self.state.components, actor).unwrap(),
                 &w.rules,
                 self.state.time,
                 true,
             )?;
-            self.state
-                .components
-                .insert_clinical(actor, transition.state)?;
+            game_health::insert_clinical(&mut self.state.components, actor, transition.state)?;
             for event in transition.events {
                 match event {
                     ClinicalEvent::Started(kind) => {
@@ -1294,10 +1270,7 @@ impl Simulation {
                 }
             }
         }
-        let due = self
-            .state
-            .components
-            .health_jobs()
+        let due = game_health::jobs(&self.state.components)
             .map(|(_, job)| job)
             .filter(|job| job.completes <= self.state.time)
             .cloned()
@@ -1385,17 +1358,20 @@ impl Simulation {
         self.consume_health_stock(custodian, source, quantity);
         let mut access = access;
         access.insert(custodian);
-        self.state.components.insert_shelter(Shelter {
-            id,
-            area,
-            custodian,
-            access,
-            capacity,
-            insulation,
-            built_at,
-            timber_used: quantity,
-            labor_ms,
-        })?;
+        game_health::insert_shelter(
+            &mut self.state.components,
+            Shelter {
+                id,
+                area,
+                custodian,
+                access,
+                capacity,
+                insulation,
+                built_at,
+                timber_used: quantity,
+                labor_ms,
+            },
+        )?;
         self.emit(EventKind::ShelterBuilt {
             shelter: id,
             builder: custodian,
@@ -1408,42 +1384,34 @@ impl Simulation {
         shelter: ShelterId,
     ) -> Result<(), Error> {
         self.state.health.as_ref().ok_or(Error::Unavailable)?;
-        let s = self
-            .state
-            .components
-            .shelter(shelter)
-            .ok_or(Error::Unavailable)?;
-        if *self
-            .state
-            .components
-            .location(
-                self.state.people[*self.person_index.get(&person).ok_or(Error::Unavailable)?].id,
-            )
-            .expect("location exists")
+        let s = game_health::shelter(&self.state.components, shelter).ok_or(Error::Unavailable)?;
+        if *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId(
+                (self.state.people[*self.person_index.get(&person).ok_or(Error::Unavailable)?].id)
+                    .0,
+            ),
+        )
+        .expect("location exists")
             != Location::AtArea(s.area)
             || !s.access.contains(&person)
-            || self.state.components.shelter_occupancy(person).is_some()
-            || self
-                .state
-                .components
-                .occupancies()
+            || game_health::occupancy(&self.state.components, person).is_some()
+            || game_health::occupancies(&self.state.components)
                 .filter(|(_, row)| row.shelter == shelter)
                 .count()
                 >= s.capacity as usize
         {
             return Err(Error::Unavailable);
         }
-        self.state
-            .components
-            .insert_shelter_occupancy(person, Occupancy { shelter })
+        game_health::insert_occupancy(&mut self.state.components, person, Occupancy { shelter })
             .expect("validated shelter");
         Ok(())
     }
     pub(crate) fn dependent_signal_visible(&self, observer: PersonId, subject: PersonId) -> bool {
         if !self.person_index.contains_key(&observer)
             || !self.person_index.contains_key(&subject)
-            || self.state.components.body(observer).is_none()
-            || self.state.components.body(subject).is_none()
+            || game_physiology::body(&self.state.components, observer).is_none()
+            || game_physiology::body(&self.state.components, subject).is_none()
         {
             return false;
         }
@@ -1470,8 +1438,8 @@ impl Simulation {
     fn can_observe_health(&self, observer: PersonId, subject: PersonId) -> bool {
         if !self.person_index.contains_key(&observer)
             || !self.person_index.contains_key(&subject)
-            || self.state.components.body(observer).is_none()
-            || self.state.components.body(subject).is_none()
+            || game_physiology::body(&self.state.components, observer).is_none()
+            || game_physiology::body(&self.state.components, subject).is_none()
         {
             return false;
         }
@@ -1505,9 +1473,7 @@ impl Simulation {
                 &self.state.components,
                 self.state.time,
                 actor,
-                self.state
-                    .components
-                    .body(actor)
+                game_physiology::body(&self.state.components, actor)
                     .expect("body exists")
                     .vitals
                     .health,
@@ -1540,7 +1506,7 @@ impl Simulation {
             .state
             .health
             .as_ref()
-            .and_then(|_| self.state.components.clinical(person));
+            .and_then(|_| game_health::clinical(&self.state.components, person));
         let rules = &self.state.health.as_ref().unwrap().rules;
         let has = |kind| {
             state
@@ -1553,7 +1519,10 @@ impl Simulation {
             nausea: has(IllnessKind::Enteric),
             cough: has(IllnessKind::Respiratory),
             shivering: state.is_some_and(|c| c.cold >= rules.cold_harm / 2),
-            wounded: self.state.components.body(person).unwrap().vitals.health
+            wounded: game_physiology::body(&self.state.components, person)
+                .unwrap()
+                .vitals
+                .health
                 < self.body_rules(person).max_health / 2,
             observed_at: self.state.time,
         }
@@ -1579,16 +1548,10 @@ impl Simulation {
     }
     pub(crate) fn health_view(&self, actor: PersonId) -> Option<HealthView> {
         self.state.health.as_ref()?;
-        let clinical = self
-            .state
-            .components
-            .clinical(actor)
+        let clinical = game_health::clinical(&self.state.components, actor)
             .cloned()
             .unwrap_or_default();
-        let known = self
-            .state
-            .components
-            .health_knowledge(actor)
+        let known = game_health::knowledge(&self.state.components, actor)
             .cloned()
             .unwrap_or_default();
         Some(HealthView {
@@ -1597,10 +1560,7 @@ impl Simulation {
             symptoms: self.visible_symptoms(actor),
             sheltered: self.effective_shelter(actor).map(|s| s.id),
             treatment_until: clinical.treatment.as_ref().map(|c| c.until),
-            offers: self
-                .state
-                .components
-                .health_offers()
+            offers: game_health::all_offers(&self.state.components)
                 .map(|(_, _, offer)| offer)
                 .filter(|o| o.caregiver == actor || o.patient == actor)
                 .map(|o| TreatmentOfferView {
@@ -1630,10 +1590,7 @@ impl Simulation {
             return Vec::new();
         };
         let mut actions = Vec::new();
-        for offer in self
-            .state
-            .components
-            .health_offers()
+        for offer in game_health::all_offers(&self.state.components)
             .map(|(_, _, offer)| offer)
             .filter(|o| {
                 o.patient == actor
@@ -1650,10 +1607,7 @@ impl Simulation {
                 caregiver: offer.caregiver,
             });
         }
-        for person in self
-            .state
-            .components
-            .health_knowledge(actor)
+        for person in game_health::knowledge(&self.state.components, actor)
             .into_iter()
             .flat_map(|k| k.people.keys())
             .filter(|person| {
@@ -1667,18 +1621,13 @@ impl Simulation {
         if self.health_area(actor, true).is_ok() {
             let can_enter = self.resolved_location(actor) == Location::AtArea(area)
                 && !matches!(
-                    *self
-                        .state
-                        .components
-                        .location(actor)
+                    *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                         .expect("location exists"),
                     Location::Carried { .. }
                 );
-            let mind = self
-                .state
-                .decisions
-                .as_ref()
-                .and_then(|_| self.state.components.mind(actor));
+            let mind = self.state.decisions.as_ref().and_then(|_| {
+                game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+            });
             if let Some(mind) = mind {
                 for stock in mind.knowledge.values().filter(|stock| {
                     stock.good == Good::Water
@@ -1729,20 +1678,14 @@ impl Simulation {
                     }
                 }
             }
-            for shelter in self
-                .state
-                .components
-                .health_knowledge(actor)
+            for shelter in game_health::knowledge(&self.state.components, actor)
                 .into_iter()
                 .flat_map(|k| k.shelters.values())
                 .filter(|s| {
                     can_enter
                         && s.area == area
                         && s.accessible
-                        && self
-                            .state
-                            .components
-                            .shelter_occupancy(actor)
+                        && game_health::occupancy(&self.state.components, actor)
                             .map(|row| row.shelter)
                             != Some(s.id)
                         && s.known_occupants.len() < s.capacity as usize
@@ -1752,7 +1695,7 @@ impl Simulation {
                     shelter: shelter.id,
                 });
             }
-            if can_enter && self.state.components.shelter_occupancy(actor).is_some() {
+            if can_enter && game_health::occupancy(&self.state.components, actor).is_some() {
                 actions.push(HealthAction::LeaveShelter);
             }
         }
@@ -1769,7 +1712,9 @@ impl Simulation {
         self.state
             .decisions
             .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
+            .and_then(|_| {
+                game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+            })
             .into_iter()
             .flat_map(|mind| mind.knowledge.values())
             .filter(|s| matches!(s.good, Good::Water | Good::Timber | Good::Tool | Good::Herb))
@@ -1805,7 +1750,8 @@ impl Simulation {
         resources: Option<&equipment::RankingResources>,
     ) -> Option<HealthPlanningData> {
         let area = self.health_area(actor, true).ok()?;
-        let mind = self.state.components.mind(actor)?;
+        let mind =
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?;
         let traits = self
             .invocation_personality(actor)
             .unwrap_or_else(|| mind.personality.clone());
@@ -1839,10 +1785,7 @@ impl Simulation {
             sheltered: self.effective_shelter(actor).is_some(),
             can_enter_shelter: facts.stationary
                 && !matches!(
-                    *self
-                        .state
-                        .components
-                        .location(actor)
+                    *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                         .expect("location exists"),
                     Location::Carried { .. }
                 ),
@@ -1891,7 +1834,8 @@ impl Simulation {
     }
     pub(crate) fn health_actor_busy(&self, actor: PersonId) -> bool {
         self.state.health.as_ref().is_some_and(|_| {
-            self.state.components.health_job(actor).is_some() || self.health_patient_resting(actor)
+            game_health::job(&self.state.components, actor).is_some()
+                || self.health_patient_resting(actor)
         })
     }
     pub(crate) fn review_health(&mut self) -> Result<(), Error> {
@@ -1904,10 +1848,7 @@ impl Simulation {
         self.preflight_health(self.state.time)?;
         self.state.health.as_mut().unwrap().last_review = self.state.time;
         self.observe_health();
-        let jobs: Vec<_> = self
-            .state
-            .components
-            .health_jobs()
+        let jobs: Vec<_> = game_health::jobs(&self.state.components)
             .map(|(_, job)| job)
             .cloned()
             .collect();
@@ -1915,7 +1856,7 @@ impl Simulation {
             if job.actor == self.state.ruler && !self.past_life_controls_actor(job.actor) {
                 continue;
             }
-            let body = self.state.components.body(job.actor).unwrap();
+            let body = game_physiology::body(&self.state.components, job.actor).unwrap();
             let physical = self.body_rules(job.actor);
             if game_health::should_pause_work(
                 &job.work,
@@ -1932,10 +1873,7 @@ impl Simulation {
                 let _ = self.debug_actor_command(job.actor, Command::Rest);
             }
         }
-        let offers: Vec<_> = self
-            .state
-            .components
-            .health_offers()
+        let offers: Vec<_> = game_health::all_offers(&self.state.components)
             .map(|(_, _, offer)| offer)
             .cloned()
             .collect();
@@ -1959,10 +1897,7 @@ impl Simulation {
             let action = game_health::offer_response(offer.caregiver, &symptoms, trust);
             let _ = self.health_command(offer.patient, &action);
         }
-        let offers: Vec<_> = self
-            .state
-            .components
-            .health_offers()
+        let offers: Vec<_> = game_health::all_offers(&self.state.components)
             .map(|(_, _, offer)| offer)
             .filter(|o| o.accepted && o.caregiver != self.state.ruler)
             .cloned()
@@ -1990,25 +1925,27 @@ impl Simulation {
             .map(|p| p.id)
             .collect();
         for caregiver in healers {
-            let mind = &self.state.components.mind(caregiver).expect("mind exists");
-            let body = self.state.components.body(caregiver).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                caregiver,
+            )
+            .expect("mind exists");
+            let body = game_physiology::body(&self.state.components, caregiver).unwrap();
             let rules = &self.state.health.as_ref().unwrap().rules;
             let physical = self.body_rules(caregiver);
             let stocks = self.remembered_health_stocks(caregiver, None);
-            let patients = self
-                .state
-                .components
-                .health_knowledge(caregiver)
+            let patients = game_health::knowledge(&self.state.components, caregiver)
                 .into_iter()
                 .flat_map(|k| k.people.values())
                 .map(|symptoms| game_health::PatientOpportunity {
                     symptoms: symptoms.clone(),
                     contact: self.can_observe_health(caregiver, symptoms.person),
-                    offer_exists: self
-                        .state
-                        .components
-                        .health_offer(caregiver, symptoms.person)
-                        .is_some(),
+                    offer_exists: game_health::offer(
+                        &self.state.components,
+                        caregiver,
+                        symptoms.person,
+                    )
+                    .is_some(),
                     busy: self.health_patient_resting(symptoms.person),
                 })
                 .collect::<Vec<_>>();
@@ -2037,9 +1974,9 @@ impl Simulation {
     }
     pub(crate) fn health_event_bound(&self) -> usize {
         self.state.health.as_ref().map_or(0, |_| {
-            self.state.components.clinicals().count() * 8
-                + self.state.components.health_jobs().count() * 8
-                + self.state.components.health_offers().count() * 4
+            game_health::clinicals(&self.state.components).count() * 8
+                + game_health::jobs(&self.state.components).count() * 8
+                + game_health::all_offers(&self.state.components).count() * 4
         })
     }
     pub(crate) fn preflight_health(&self, next: SimTime) -> Result<(), Error> {
@@ -2076,10 +2013,7 @@ impl Simulation {
         }
         let quantity = self.state.inventories[&source].quantity.0;
         self.state.health.as_ref().ok_or(Error::Unavailable)?;
-        let safe = self
-            .state
-            .components
-            .water_lot(source)
+        let safe = game_health::water_lot(&self.state.components, source)
             .is_none_or(|lot| lot.load() == 0);
         if !safe {
             return Err(Error::InvalidConfiguration(
@@ -2087,9 +2021,7 @@ impl Simulation {
             ));
         }
         let _ = quantity;
-        self.state
-            .components
-            .ensure_health_knowledge(observer)
+        game_health::ensure_knowledge(&mut self.state.components, observer)
             .expect("known health observer")
             .water
             .insert(
@@ -2136,7 +2068,7 @@ impl Simulation {
         let Some(physical) = &self.state.physical else {
             return false;
         };
-        let Some(body) = self.state.components.body(job.actor) else {
+        let Some(body) = game_physiology::body(&self.state.components, job.actor) else {
             return false;
         };
         let patient = job
@@ -2171,54 +2103,48 @@ impl Simulation {
                     .iter()
                     .find(|parent| {
                         self.state.development.as_ref().is_some_and(|_| {
-                            self.state.components.life(**parent).is_some_and(|life| {
-                                life.reproduction == development::Reproduction::Gestates
-                            })
+                            game_lifecycle::life(&self.state.components, **parent).is_some_and(
+                                |life| life.reproduction == development::Reproduction::Gestates,
+                            )
                         })
                     })
                     .copied();
                 if let Some(shelter) =
                     mother.and_then(|parent| self.effective_shelter(parent).map(|s| s.id))
                 {
-                    self.state
-                        .components
-                        .insert_shelter_occupancy(child, Occupancy { shelter })
-                        .expect("validated shelter");
+                    game_health::insert_occupancy(
+                        &mut self.state.components,
+                        child,
+                        Occupancy { shelter },
+                    )
+                    .expect("validated shelter");
                 }
-                if self.state.components.clinical(child).is_none() {
-                    self.state
-                        .components
-                        .insert_clinical(child, Clinical::default())
-                        .expect("validated newborn clinical row");
+                if game_health::clinical(&self.state.components, child).is_none() {
+                    game_health::insert_clinical(
+                        &mut self.state.components,
+                        child,
+                        Clinical::default(),
+                    )
+                    .expect("validated newborn clinical row");
                 }
             }
             EventKind::Died { actor } => {
-                self.state
-                    .components
-                    .remove_shelter_occupancy(actor)
+                game_health::remove_occupancy(&mut self.state.components, actor)
                     .expect("registered occupancy");
             }
             EventKind::IllnessStarted {
                 actor,
                 kind: IllnessKind::Enteric,
             } => {
-                if let Some((source, drank)) = self
-                    .state
-                    .components
-                    .clinical(actor)
-                    .and_then(|c| c.last_drink)
+                if let Some((source, drank)) =
+                    game_health::clinical(&self.state.components, actor).and_then(|c| c.last_drink)
                     && self.state.time.0.saturating_sub(drank.0)
                         <= self.state.health.as_ref().unwrap().rules.incubation.0
-                    && !self
-                        .state
-                        .components
-                        .health_knowledge(actor)
+                    && !game_health::knowledge(&self.state.components, actor)
                         .and_then(|k| k.water.get(&source))
                         .is_some_and(|s| s.purified)
                 {
-                    self.state
-                        .components
-                        .ensure_health_knowledge(actor)
+                    game_health::ensure_knowledge(&mut self.state.components, actor)
                         .expect("known health observer")
                         .water
                         .insert(
@@ -2239,16 +2165,10 @@ impl Simulation {
                 destination,
                 quantity,
             } if self.state.inventories[&source].good == Good::Water => {
-                let source_known = self
-                    .state
-                    .components
-                    .health_knowledge(actor)
+                let source_known = game_health::knowledge(&self.state.components, actor)
                     .and_then(|k| k.water.get(&source))
                     .cloned();
-                let destination_known = self
-                    .state
-                    .components
-                    .health_knowledge(actor)
+                let destination_known = game_health::knowledge(&self.state.components, actor)
                     .and_then(|k| k.water.get(&destination))
                     .cloned();
                 if let Some(source_known) = source_known {
@@ -2258,9 +2178,7 @@ impl Simulation {
                             || destination_known.as_ref().is_some_and(|d| d.purified));
                     let suspected_unsafe = source_known.suspected_unsafe
                         || destination_known.is_some_and(|d| d.suspected_unsafe);
-                    self.state
-                        .components
-                        .ensure_health_knowledge(actor)
+                    game_health::ensure_knowledge(&mut self.state.components, actor)
                         .expect("known health observer")
                         .water
                         .insert(
@@ -2277,9 +2195,7 @@ impl Simulation {
             EventKind::Produced { actor, output, .. }
                 if self.state.inventories[&output].good == Good::Water =>
             {
-                self.state
-                    .components
-                    .ensure_health_knowledge(actor)
+                game_health::ensure_knowledge(&mut self.state.components, actor)
                     .expect("known health observer")
                     .water
                     .remove(&output);
@@ -2293,7 +2209,7 @@ impl Simulation {
     pub(crate) fn health_practice_skill(&self, actor: PersonId) -> Option<Skill> {
         let job = {
             self.state.health.as_ref()?;
-            self.state.components.health_job(actor)?
+            game_health::job(&self.state.components, actor)?
         };
         if !self.health_job_can_progress(job) {
             return None;
@@ -2312,8 +2228,9 @@ impl Simulation {
         giver: PersonId,
         patient: PersonId,
     ) -> Option<(InventoryId, InventoryId)> {
-        let mind = self.state.components.mind(giver)?;
-        let body = self.state.components.body(giver)?;
+        let mind =
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, giver)?;
+        let body = game_physiology::body(&self.state.components, giver)?;
         let rules = &self.state.health.as_ref()?.rules;
         let physical = self.body_rules(giver);
         let stocks = self.remembered_health_stocks(giver, None);
@@ -2342,7 +2259,7 @@ impl Simulation {
             let life = active.dominant?;
             return Some(&w.history.get(&life)?.mind);
         }
-        self.state.components.mind(actor)
+        game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
     }
 }
 
@@ -2404,7 +2321,9 @@ mod integration_tests {
             ),
             (120_000, 200_000, 400)
         );
-        whole.state.components.clinical_mut(actor).unwrap().thirst = 100_000;
+        game_health::clinical_mut(&mut whole.state.components, actor)
+            .unwrap()
+            .thirst = 100_000;
         let mut sliced = Simulation::load(&whole.save().unwrap(), Execution::default()).unwrap();
         whole.advance(SimDuration(40_003)).unwrap();
         for elapsed in [1, 19_999, 7_001, 13_002] {
@@ -2412,7 +2331,10 @@ mod integration_tests {
         }
         assert_eq!(whole.canonical_state(), sliced.canonical_state());
         assert!(
-            whole.state.components.body(actor).unwrap().vitals.health
+            game_physiology::body(&whole.state.components, actor)
+                .unwrap()
+                .vitals
+                .health
                 < whole.body_rules(actor).max_health
         );
         assert_eq!(whole.state.health.as_ref().unwrap().rules, rules);
@@ -2427,7 +2349,9 @@ mod integration_tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        whole.state.components.clinical_mut(actor).unwrap().thirst = 250_000;
+        game_health::clinical_mut(&mut whole.state.components, actor)
+            .unwrap()
+            .thirst = 250_000;
         whole
             .debug_actor_command(
                 actor,
@@ -2438,7 +2362,9 @@ mod integration_tests {
             .unwrap();
         whole.advance(rules.drinking_time).unwrap();
         assert_eq!(
-            whole.state.components.clinical(actor).unwrap().thirst,
+            game_health::clinical(&whole.state.components, actor)
+                .unwrap()
+                .thirst,
             60_000
         );
         assert_eq!(whole.state.inventories[&water].quantity, Quantity(0));
@@ -2449,7 +2375,9 @@ mod integration_tests {
     fn absent_genetics_and_neutral_traits_produce_identical_clinical_inputs() {
         let mut sim = Simulation::health_fixture(58, Execution::default()).unwrap();
         let actor = sim.state.ruler;
-        sim.state.components.clinical_mut(actor).unwrap().thirst = 200_000;
+        game_health::clinical_mut(&mut sim.state.components, actor)
+            .unwrap()
+            .thirst = 200_000;
         let before = sim.evaluate_health(SimTime(1_003)).unwrap();
         let before_delta = sim
             .health_body_delta(actor, 1_003, sim.health_exposure(actor))
@@ -2493,12 +2421,13 @@ mod integration_tests {
                 None,
             )
             .unwrap();
-        sim.state
-            .components
-            .mind_mut(actor)
-            .unwrap()
-            .personality
-            .empathy = 900;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            actor,
+        )
+        .unwrap()
+        .personality
+        .empathy = 900;
         for good in [Good::Herb, Good::Water] {
             let inventory = sim
                 .debug_add_inventory(
@@ -2509,27 +2438,31 @@ mod integration_tests {
                     BTreeSet::from([actor]),
                 )
                 .unwrap();
-            sim.state
-                .components
-                .mind_mut(actor)
-                .unwrap()
-                .knowledge
-                .insert(
+            game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap()
+            .knowledge
+            .insert(
+                inventory,
+                StockKnowledge {
                     inventory,
-                    StockKnowledge {
-                        inventory,
-                        area,
-                        good,
-                        quantity: Quantity(2_000),
-                        accessible: true,
-                        observed_at: sim.state.time,
-                        learned_at: sim.state.time,
-                        source: KnowledgeSource::Observed(actor),
-                    },
-                );
+                    area,
+                    good,
+                    quantity: Quantity(2_000),
+                    accessible: true,
+                    observed_at: sim.state.time,
+                    learned_at: sim.state.time,
+                    source: KnowledgeSource::Observed(actor),
+                },
+            );
         }
         assert!(sim.willing_health_supplies(actor, actor).is_some());
-        sim.state.components.body_mut(actor).unwrap().vitals.hunger = 250_000;
+        game_physiology::body_mut(&mut sim.state.components, actor)
+            .unwrap()
+            .vitals
+            .hunger = 250_000;
         assert!(250_000 < sim.state.physical.as_ref().unwrap().rules.meal_relief);
         assert!(250_000 > sim.body_rules(actor).meal_relief);
         assert!(sim.willing_health_supplies(actor, actor).is_none());
@@ -2591,10 +2524,7 @@ mod integration_tests {
         }
         assert_eq!(whole.canonical_state(), sliced.canonical_state());
         assert_eq!(
-            whole
-                .state
-                .components
-                .clinical(actor)
+            game_health::clinical(&whole.state.components, actor)
                 .unwrap()
                 .treatment
                 .as_ref()
@@ -2617,10 +2547,12 @@ mod integration_tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        sim.state
-            .components
-            .insert_water_lot(water, WaterLot::new(2_000, 2_000_000))
-            .unwrap();
+        game_health::insert_water_lot(
+            &mut sim.state.components,
+            water,
+            WaterLot::new(2_000, 2_000_000),
+        )
+        .unwrap();
         sim.submit(Submission {
             caller_sequence: 1,
             command: Command::Health {
@@ -2631,7 +2563,9 @@ mod integration_tests {
         sim.advance(SimDuration(10_000)).unwrap();
         assert_eq!(sim.state.inventories[&water].quantity, Quantity(1_000));
         assert_eq!(
-            sim.state.components.water_lot(water).unwrap().load(),
+            game_health::water_lot(&sim.state.components, water)
+                .unwrap()
+                .load(),
             1_000_000
         );
         assert!(!sim.observe().health.unwrap().symptoms.nausea);
@@ -2650,9 +2584,18 @@ mod integration_tests {
                             kind: IllnessKind::Enteric
                         }))
         );
-        let before = sim.state.components.body(actor).unwrap().vitals.health;
+        let before = game_physiology::body(&sim.state.components, actor)
+            .unwrap()
+            .vitals
+            .health;
         sim.advance(SimDuration(1_000)).unwrap();
-        assert!(sim.state.components.body(actor).unwrap().vitals.health < before);
+        assert!(
+            game_physiology::body(&sim.state.components, actor)
+                .unwrap()
+                .vitals
+                .health
+                < before
+        );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
     #[test]
@@ -2691,15 +2634,15 @@ mod integration_tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let current = whole.state.components.body(actor).unwrap().vitals.health;
+        let current = game_physiology::body(&whole.state.components, actor)
+            .unwrap()
+            .vitals
+            .health;
         let threshold = whole.state.combat.as_ref().unwrap().rules.incapacitation;
         whole
             .debug_injure(actor, current - (threshold + 5_000))
             .unwrap();
-        whole
-            .state
-            .components
-            .clinical_mut(actor)
+        game_health::clinical_mut(&mut whole.state.components, actor)
             .unwrap()
             .illnesses
             .insert(
@@ -2739,7 +2682,9 @@ mod integration_tests {
             95_000
         );
         assert!(matches!(
-            whole.state.components.health_job(actor).unwrap().work,
+            game_health::job(&whole.state.components, actor)
+                .unwrap()
+                .work,
             Work::Treat { elapsed: 5_000, .. }
         ));
     }
@@ -2753,9 +2698,7 @@ mod integration_tests {
         for person in people {
             sim.interrupt_actor_activity(person);
         }
-        *sim.state
-            .components
-            .location_mut(worker)
+        *game_spatial::location_mut(&mut sim.state.components, game_ecs::StableId((worker).0))
             .expect("location exists") = Location::AtArea(area);
         let tool = sim
             .debug_add_inventory(
@@ -2793,18 +2736,17 @@ mod integration_tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let site = sim
-            .state
-            .components
-            .sites()
+        let site = game_workshop::sites(&sim.state.components)
             .map(|(_, site)| site)
             .find(|site| site.area == area)
             .unwrap()
             .id;
-        let output = sim.state.components.site(site).expect("site exists").output;
+        let output = game_workshop::site(&sim.state.components, site)
+            .expect("site exists")
+            .output;
         let before = sim.state.inventories[&output].quantity;
         {
-            let site = sim.state.components.site_mut(site).unwrap();
+            let site = game_workshop::site_mut(&mut sim.state.components, site).unwrap();
             site.tool = tool;
             site.duration = SimDuration(30_000);
             site.access.insert(worker);
@@ -2876,7 +2818,9 @@ mod integration_tests {
                 SimTime(0),
             )
             .unwrap();
-        sim.state.components.clinical_mut(actor).unwrap().cold = 20_000;
+        game_health::clinical_mut(&mut sim.state.components, actor)
+            .unwrap()
+            .cold = 20_000;
         sim.observe_health();
         let expected = Command::Health {
             action: HealthAction::EnterShelter { shelter },
@@ -2942,9 +2886,7 @@ mod transport_health_tests {
         .unwrap();
         sim.advance(SimDuration(6_000)).unwrap();
         assert_eq!(
-            *sim.state
-                .components
-                .location(passenger)
+            *game_spatial::location(&sim.state.components, game_ecs::StableId((passenger).0))
                 .expect("location exists"),
             Location::Carried { carrier: bearer }
         );
@@ -2986,17 +2928,13 @@ mod transport_health_tests {
         assert_eq!(sim.effective_shelter(passenger).unwrap().id, shelter);
         assert_eq!(sim.health_exposure(passenger).insulation, 650);
         assert!(
-            !sim.state
-                .components
-                .shelter(shelter)
+            !game_health::shelter(&sim.state.components, shelter)
                 .unwrap()
                 .access
                 .contains(&passenger)
         );
         assert!(
-            sim.state
-                .components
-                .health_knowledge(bearer)
+            game_health::knowledge(&sim.state.components, bearer)
                 .unwrap()
                 .shelters[&shelter]
                 .known_occupants
@@ -3011,9 +2949,7 @@ mod transport_health_tests {
         .unwrap();
         assert_eq!(sim.effective_shelter(passenger).unwrap().id, shelter);
         assert!(
-            !sim.state
-                .components
-                .shelter(shelter)
+            !game_health::shelter(&sim.state.components, shelter)
                 .unwrap()
                 .access
                 .contains(&passenger)
@@ -3044,24 +2980,25 @@ mod transport_health_tests {
             )
             .unwrap();
         for source in [endpoint, water] {
-            sim.state
-                .components
-                .mind_mut(bearer)
-                .unwrap()
-                .knowledge
-                .insert(
-                    source,
-                    StockKnowledge {
-                        inventory: source,
-                        area: home,
-                        good: Good::Water,
-                        quantity: Quantity(2_000),
-                        accessible: true,
-                        observed_at: sim.state.time,
-                        learned_at: sim.state.time,
-                        source: KnowledgeSource::Observed(bearer),
-                    },
-                );
+            game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                bearer,
+            )
+            .unwrap()
+            .knowledge
+            .insert(
+                source,
+                StockKnowledge {
+                    inventory: source,
+                    area: home,
+                    good: Good::Water,
+                    quantity: Quantity(2_000),
+                    accessible: true,
+                    observed_at: sim.state.time,
+                    learned_at: sim.state.time,
+                    source: KnowledgeSource::Observed(bearer),
+                },
+            );
         }
         sim.seed_water_safety(bearer, water).unwrap();
         assert!(
@@ -3083,7 +3020,9 @@ mod transport_health_tests {
             sim.resolved_location(bearer),
             Location::StoppedOnRoad { .. }
         ));
-        sim.state.components.clinical_mut(bearer).unwrap().thirst = 100_000;
+        game_health::clinical_mut(&mut sim.state.components, bearer)
+            .unwrap()
+            .thirst = 100_000;
         assert_eq!(
             sim.health_candidate(bearer, None),
             Some(Command::Health {
@@ -3188,9 +3127,7 @@ mod transport_health_tests {
         }
         assert_eq!(sim.state, sliced.state);
         assert!(
-            sim.state
-                .components
-                .clinical(passenger)
+            game_health::clinical(&sim.state.components, passenger)
                 .unwrap()
                 .treatment
                 .is_some()
@@ -3222,7 +3159,9 @@ mod transport_health_tests {
             x: 20_000,
             y: 8_000,
         };
-        sim.state.components.clinical_mut(enemy).unwrap().cold = 120_000;
+        game_health::clinical_mut(&mut sim.state.components, enemy)
+            .unwrap()
+            .cold = 120_000;
         assert!(!sim.health_tactical_clear(
             sim.health_tactical_place(passenger),
             sim.health_tactical_place(enemy),
@@ -3230,9 +3169,7 @@ mod transport_health_tests {
         ));
         sim.observe_health();
         assert!(
-            !sim.state
-                .components
-                .health_knowledge(bearer)
+            !game_health::knowledge(&sim.state.components, bearer)
                 .unwrap()
                 .people[&enemy]
                 .shivering
@@ -3249,10 +3186,7 @@ mod index_tests {
     fn population_fixture(population: usize) -> Simulation {
         let sample = Simulation::health_fixture(71, Execution::default()).unwrap();
         let sample_world = sample.state.physical.as_ref().unwrap();
-        let template = sample
-            .state
-            .components
-            .body(sample.state.ruler)
+        let template = game_physiology::body(&sample.state.components, sample.state.ruler)
             .unwrap()
             .clone();
         let activity = sample
@@ -3261,14 +3195,19 @@ mod index_tests {
             .activity(sample.state.ruler)
             .unwrap()
             .clone();
-        let job = sample.state.components.job(sample.state.ruler).cloned();
+        let job = game_workshop::job(&sample.state.components, sample.state.ruler).cloned();
         let mut sim = Simulation::kernel_fixture(71, population, Execution::default()).unwrap();
         sim.initialize_physical_people(sample_world.rules.clone())
             .unwrap();
         for person in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
-            *sim.state.components.body_mut(person).unwrap() = template.clone();
+            *game_physiology::body_mut(&mut sim.state.components, person).unwrap() =
+                template.clone();
             *sim.state.components.activity_mut(person).unwrap() = activity.clone();
-            sim.state.components.set_job(person, job.clone()).unwrap();
+            if let Some(job) = job.clone() {
+                game_workshop::insert_job(&mut sim.state.components, person, job).unwrap();
+            } else {
+                game_workshop::remove_job(&mut sim.state.components, person).unwrap();
+            }
         }
         sim.initialize_health(Rules::fixture()).unwrap();
         sim
@@ -3284,18 +3223,16 @@ mod index_tests {
                     .into_iter()
                     .enumerate()
                 {
-                    exposure.infectious_contacts[index] = sim
-                        .state
-                        .components
-                        .clinicals()
-                        .filter(|(other, state)| {
-                            state
-                                .illnesses
-                                .get(&kind)
-                                .is_some_and(|i| i.symptomatic && i.recovers > sim.state.time)
-                                && sim.in_health_contact(person.id, *other)
-                        })
-                        .count() as u64;
+                    exposure.infectious_contacts[index] =
+                        game_health::clinicals(&sim.state.components)
+                            .filter(|(other, state)| {
+                                state
+                                    .illnesses
+                                    .get(&kind)
+                                    .is_some_and(|i| i.symptomatic && i.recovers > sim.state.time)
+                                    && sim.in_health_contact(person.id, *other)
+                            })
+                            .count() as u64;
                 }
                 (person.id, exposure)
             })
@@ -3303,23 +3240,18 @@ mod index_tests {
     }
 
     fn exhaustive_observations(sim: &Simulation) -> BTreeMap<PersonId, Knowledge> {
-        let mut known: BTreeMap<_, _> = sim
-            .state
-            .components
-            .knowledges()
+        let mut known: BTreeMap<_, _> = game_health::knowledges(&sim.state.components)
             .map(|(id, row)| (id, row.clone()))
             .collect();
-        for observer in sim
-            .state
-            .people
-            .iter()
-            .filter(|p| sim.state.components.body(p.id).unwrap().vitals.alive)
-        {
-            let Location::AtArea(area) = *sim
-                .state
-                .components
-                .location(observer.id)
-                .expect("location exists")
+        for observer in sim.state.people.iter().filter(|p| {
+            game_physiology::body(&sim.state.components, p.id)
+                .unwrap()
+                .vitals
+                .alive
+        }) {
+            let Location::AtArea(area) =
+                *game_spatial::location(&sim.state.components, game_ecs::StableId((observer.id).0))
+                    .expect("location exists")
             else {
                 continue;
             };
@@ -3334,10 +3266,7 @@ mod index_tests {
                 .take(64)
                 .map(|p| (p, sim.oracle_visible_symptoms(p)))
                 .collect();
-            let shelters: Vec<_> = sim
-                .state
-                .components
-                .shelters()
+            let shelters: Vec<_> = game_health::shelters(&sim.state.components)
                 .map(|(_, row)| row)
                 .filter(|s| s.area == area)
                 .map(|s| {
@@ -3350,10 +3279,7 @@ mod index_tests {
                             insulation: s.insulation,
                             custodian: s.custodian,
                             accessible: s.access.contains(&observer.id),
-                            known_occupants: sim
-                                .state
-                                .components
-                                .occupancies()
+                            known_occupants: game_health::occupancies(&sim.state.components)
                                 .filter(|(p, row)| {
                                     row.shelter == s.id
                                         && sim.oracle_can_observe_health(observer.id, *p)
@@ -3381,9 +3307,9 @@ mod index_tests {
         ];
         sim.state.next_id += 2;
         for id in ids {
-            sim.state
-                .components
-                .insert_shelter(Shelter {
+            game_health::insert_shelter(
+                &mut sim.state.components,
+                Shelter {
                     id,
                     area,
                     custodian: actor,
@@ -3393,8 +3319,9 @@ mod index_tests {
                     built_at: SimTime(0),
                     timber_used: Quantity(64_000),
                     labor_ms: 60_000,
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
         }
         ids
     }
@@ -3405,30 +3332,25 @@ mod index_tests {
         let people: Vec<_> = sim.state.people.iter().map(|p| p.id).collect();
         let shelters = add_shelters(&mut sim);
         for phase in 0..18 {
-            let occupants: Vec<_> = sim
-                .state
-                .components
-                .occupancies()
+            let occupants: Vec<_> = game_health::occupancies(&sim.state.components)
                 .map(|(id, _)| id)
                 .collect();
             for id in occupants {
-                sim.state.components.remove_shelter_occupancy(id).unwrap();
+                game_health::remove_occupancy(&mut sim.state.components, id).unwrap();
             }
-            let ids: Vec<_> = sim
-                .state
-                .components
-                .health_jobs()
+            let ids: Vec<_> = game_health::jobs(&sim.state.components)
                 .map(|(id, _)| id)
                 .collect();
             for id in ids {
-                sim.state.components.remove_health_job(id).unwrap();
+                game_health::remove_job(&mut sim.state.components, id).unwrap();
             }
             for (index, actor) in people.iter().enumerate() {
                 let area = sim.state.areas[if index < 6 { 0 } else { (index + phase) % 3 }].id;
-                *sim.state
-                    .components
-                    .location_mut(*actor)
-                    .expect("location exists") = if (index + phase) % 11 == 0 {
+                *game_spatial::location_mut(
+                    &mut sim.state.components,
+                    game_ecs::StableId(actor.0),
+                )
+                .expect("location exists") = if (index + phase) % 11 == 0 {
                     Location::InTransit {
                         from: area,
                         to: if area == sim.state.areas[0].id {
@@ -3444,18 +3366,17 @@ mod index_tests {
                     Location::AtArea(area)
                 };
                 if area == sim.state.areas[0].id && (index + phase) % 3 != 2 {
-                    sim.state
-                        .components
-                        .insert_shelter_occupancy(
-                            *actor,
-                            Occupancy {
-                                shelter: shelters[(index + phase) % 2],
-                            },
-                        )
-                        .unwrap();
+                    game_health::insert_occupancy(
+                        &mut sim.state.components,
+                        *actor,
+                        Occupancy {
+                            shelter: shelters[(index + phase) % 2],
+                        },
+                    )
+                    .unwrap();
                 }
                 let max_health = sim.body_rules(*actor).max_health;
-                let body = sim.state.components.body_mut(*actor).unwrap();
+                let body = game_physiology::body_mut(&mut sim.state.components, *actor).unwrap();
                 body.vitals.alive = (index + phase) % 13 != 0;
                 body.vitals.health = if body.vitals.alive { max_health } else { 0 };
                 let recipient = people[(index + 1) % people.len()];
@@ -3490,7 +3411,7 @@ mod index_tests {
                     },
                     _ => Activity::Idle,
                 };
-                let state = sim.state.components.clinical_mut(*actor).unwrap();
+                let state = game_health::clinical_mut(&mut sim.state.components, *actor).unwrap();
                 state.illnesses.clear();
                 for (kind_index, kind) in [IllnessKind::Enteric, IllnessKind::Respiratory]
                     .into_iter()
@@ -3512,9 +3433,9 @@ mod index_tests {
                     );
                 }
             }
-            sim.state
-                .components
-                .insert_health_job(Job {
+            game_health::insert_job(
+                &mut sim.state.components,
+                Job {
                     actor: people[0],
                     area: sim.state.areas[0].id,
                     completes: SimTime(60_000),
@@ -3523,8 +3444,9 @@ mod index_tests {
                         skill_ms: 0,
                         elapsed: 0,
                     },
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
             sim.state.missions = Some(missions::World {
                 missions: BTreeMap::new(),
                 recruitments: BTreeMap::new(),
@@ -3556,9 +3478,7 @@ mod index_tests {
             let expected = exhaustive_observations(&sim);
             sim.observe_health();
             assert_eq!(
-                sim.state
-                    .components
-                    .knowledges()
+                game_health::knowledges(&sim.state.components)
                     .map(|(id, row)| (id, row.clone()))
                     .collect::<BTreeMap<_, _>>(),
                 expected,
@@ -3566,9 +3486,7 @@ mod index_tests {
             );
             sim.cancel_health_activity(people[0]);
             sim.state.missions.as_mut().unwrap().talks.clear();
-            sim.state
-                .components
-                .body_mut(people[1])
+            game_physiology::body_mut(&mut sim.state.components, people[1])
                 .unwrap()
                 .vitals
                 .alive = false;
@@ -3582,9 +3500,7 @@ mod index_tests {
         let mut sim = population_fixture(90);
         let area = sim.state.areas[0].id;
         for p in &mut sim.state.people {
-            *sim.state
-                .components
-                .location_mut(p.id)
+            *game_spatial::location_mut(&mut sim.state.components, game_ecs::StableId((p.id).0))
                 .expect("location exists") = Location::AtArea(area);
         }
         add_shelters(&mut sim);
@@ -3599,9 +3515,7 @@ mod index_tests {
             .collect();
         sim.observe_health();
         assert_eq!(
-            sim.state
-                .components
-                .knowledges()
+            game_health::knowledges(&sim.state.components)
                 .map(|(id, row)| (id, row.clone()))
                 .collect::<BTreeMap<_, _>>(),
             expected
@@ -3628,9 +3542,7 @@ mod index_tests {
             sim.observe_health();
             let observe_indexed = start.elapsed();
             assert_eq!(
-                sim.state
-                    .components
-                    .knowledges()
+                game_health::knowledges(&sim.state.components)
                     .map(|(id, row)| (id, row.clone()))
                     .collect::<BTreeMap<_, _>>(),
                 expected
@@ -3674,12 +3586,11 @@ mod supply_composition_tests {
         }
         sim.initialize_health(Rules::fixture()).unwrap();
         let relief = sim.state.health.as_ref().unwrap().rules.drink_relief;
-        sim.state.components.clinical_mut(actor).unwrap().thirst = relief;
+        game_health::clinical_mut(&mut sim.state.components, actor)
+            .unwrap()
+            .thirst = relief;
         sim.review_decisions().unwrap();
-        let source = sim
-            .state
-            .components
-            .ecology_knowledge(actor)
+        let source = game_ecology::knowledge(&sim.state.components, actor)
             .unwrap()
             .known_resources
             .values()
@@ -3704,7 +3615,9 @@ mod supply_composition_tests {
         }
         assert_eq!(sim.state, before);
         sim.debug_actor_command(actor, command).unwrap();
-        let complete = sim.state.components.gathering(actor).unwrap().completes;
+        let complete = game_ecology::gathering(&sim.state.components, actor)
+            .unwrap()
+            .completes;
         let duration = complete.0 - sim.state.time.0;
         let mut restored = Simulation::load(
             &sim.save().unwrap(),
@@ -3748,7 +3661,9 @@ mod supply_composition_tests {
         else {
             panic!("collected water must go through native intake: {command:?}");
         };
-        let thirst = sim.state.components.clinical(actor).unwrap().thirst;
+        let thirst = game_health::clinical(&sim.state.components, actor)
+            .unwrap()
+            .thirst;
         for world in [&mut sim, &mut restored] {
             world
                 .debug_actor_command(
@@ -3764,7 +3679,12 @@ mod supply_composition_tests {
         restored.advance(duration).unwrap();
         assert_eq!(sim.state, restored.state);
         assert_eq!(sim.state.inventories[&water].quantity, Quantity(0));
-        assert!(sim.state.components.clinical(actor).unwrap().thirst < thirst);
+        assert!(
+            game_health::clinical(&sim.state.components, actor)
+                .unwrap()
+                .thirst
+                < thirst
+        );
         assert!(sim.state.events.iter().any(|event|matches!(event.kind,EventKind::Drank {actor:drinker,source,..} if drinker==actor && source==water)));
     }
     #[test]
@@ -3803,7 +3723,11 @@ mod supply_composition_tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let mind = sim.state.components.mind_mut(actor).unwrap();
+        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            actor,
+        )
+        .unwrap();
         mind.knowledge.retain(|_, stock| stock.good != Good::Water);
         for id in [moving, alternate] {
             mind.knowledge.insert(
@@ -3821,20 +3745,20 @@ mod supply_composition_tests {
             );
         }
         let relief = sim.state.health.as_ref().unwrap().rules.drink_relief;
-        sim.state.components.clinical_mut(actor).unwrap().thirst = relief;
+        game_health::clinical_mut(&mut sim.state.components, actor)
+            .unwrap()
+            .thirst = relief;
         assert_eq!(
             sim.health_candidate(actor, None),
             Some(Command::Health {
                 action: HealthAction::Drink { source: moving }
             })
         );
-        let remembered = sim
-            .state
-            .components
-            .mind(actor)
-            .expect("mind exists")
-            .knowledge[&moving]
-            .clone();
+        let remembered =
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, actor)
+                .expect("mind exists")
+                .knowledge[&moving]
+                .clone();
         sim.debug_move_actor(holder, AreaId(3)).unwrap();
         sim.advance(SimDuration(1)).unwrap();
         let before = sim.state.clone();
@@ -3846,9 +3770,7 @@ mod supply_composition_tests {
         );
         assert_eq!(sim.state, before);
         assert_eq!(
-            sim.state
-                .components
-                .mind(actor)
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, actor)
                 .expect("mind exists")
                 .knowledge[&moving],
             remembered
@@ -3883,7 +3805,10 @@ mod supply_composition_tests {
             .find(|person| {
                 person.id != child
                     && sim.independent(person.id)
-                    && sim.state.components.body(person.id).unwrap().vitals.alive
+                    && game_physiology::body(&sim.state.components, person.id)
+                        .unwrap()
+                        .vitals
+                        .alive
             })
             .unwrap()
             .id;
@@ -3892,7 +3817,12 @@ mod supply_composition_tests {
             .people
             .clone()
             .into_iter()
-            .filter(|person| sim.state.components.body(person.id).unwrap().vitals.alive)
+            .filter(|person| {
+                game_physiology::body(&sim.state.components, person.id)
+                    .unwrap()
+                    .vitals
+                    .alive
+            })
             .map(|person| person.id)
             .collect::<Vec<_>>()
         {
@@ -3925,21 +3855,25 @@ mod supply_composition_tests {
             .unwrap();
         sim.set_initial_shelter_occupancy(child, shelter).unwrap();
         let hunger = sim.body_rules(child).hunger_harm;
-        sim.state.components.body_mut(child).unwrap().vitals.hunger = hunger;
-        let thirst = sim.state.health.as_ref().unwrap().rules.thirst_harm;
-        sim.state.components.clinical_mut(child).unwrap().thirst = thirst;
-        sim.state
-            .components
-            .mind_mut(observer)
+        game_physiology::body_mut(&mut sim.state.components, child)
             .unwrap()
-            .child_signals
-            .clear();
+            .vitals
+            .hunger = hunger;
+        let thirst = sim.state.health.as_ref().unwrap().rules.thirst_harm;
+        game_health::clinical_mut(&mut sim.state.components, child)
+            .unwrap()
+            .thirst = thirst;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            observer,
+        )
+        .unwrap()
+        .child_signals
+        .clear();
         assert!(!sim.dependent_signal_visible(observer, child));
         sim.review_decisions().unwrap();
         assert!(
-            !sim.state
-                .components
-                .mind(observer)
+            !game_characters::decisions::mind::<game_api::Command>(&sim.state.components, observer)
                 .expect("mind exists")
                 .child_signals
                 .contains_key(&child)
@@ -3966,7 +3900,7 @@ mod supply_composition_tests {
         .unwrap();
         sim.advance(SimDuration(6_000)).unwrap();
         assert!(
-            matches!(*sim.state.components.location(child).expect("location exists"),Location::Carried {carrier} if carrier==observer)
+            matches!(*game_spatial::location(&sim.state.components,game_ecs::StableId((child).0)).expect("location exists"),Location::Carried {carrier} if carrier==observer)
         );
         sim.debug_actor_command(
             observer,

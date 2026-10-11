@@ -114,9 +114,16 @@ impl Simulation {
         )?;
         // Initial permission knowledge is authored alongside the fixture's
         // exclusive store, rather than retaining the earlier shared fixture.
-        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        let actors: Vec<_> =
+            game_characters::decisions::minds::<game_api::Command>(&sim.state.components)
+                .map(|(id, _)| id)
+                .collect();
         for person in actors {
-            let mind = sim.state.components.mind_mut(person).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                person,
+            )
+            .unwrap();
             if let Some(fact) = mind.knowledge.get_mut(&food) {
                 fact.accessible = person == custodian;
             }
@@ -125,11 +132,11 @@ impl Simulation {
     }
 
     fn property_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive {
             return None;
         }
-        match *self.state.components.location(actor)? {
+        match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))? {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -160,10 +167,7 @@ impl Simulation {
             && self.independent(actor)
             && !self.combat_restricts(actor)
             && !self.care_index.contains_key(&actor)
-            && self
-                .state
-                .components
-                .body(actor)
+            && game_physiology::body(&self.state.components, actor)
                 .expect("body exists")
                 .vitals
                 .health
@@ -180,9 +184,7 @@ impl Simulation {
                 .physical
                 .as_ref()
                 .and_then(|w| {
-                    self.state
-                        .components
-                        .body(actor)
+                    game_physiology::body(&self.state.components, actor)
                         .map(|body| body.vitals.fatigue < w.rules.fatigue_limit)
                 })
                 .unwrap_or(false),
@@ -315,7 +317,12 @@ impl Simulation {
                         .state
                         .decisions
                         .as_ref()
-                        .and_then(|_| self.state.components.mind(custodian))
+                        .and_then(|_| {
+                            game_characters::decisions::mind::<game_api::Command>(
+                                &self.state.components,
+                                custodian,
+                            )
+                        })
                         .and_then(|m| m.relationships.get(&actor))
                         .map_or(0, |r| r.trust),
                     reserve: Quantity(
@@ -537,7 +544,12 @@ impl Simulation {
                         .state
                         .decisions
                         .as_mut()
-                        .and_then(|_| self.state.components.mind_mut(recipient))
+                        .and_then(|_| {
+                            game_characters::decisions::mind_mut::<game_api::Command>(
+                                &mut self.state.components,
+                                recipient,
+                            )
+                        })
                         .and_then(|m| m.knowledge.get_mut(&inventory))
                     {
                         fact.accessible = allowed;
@@ -662,12 +674,12 @@ impl Simulation {
                     target,
                     trust,
                 } => {
-                    if let Some(mind) = self
-                        .state
-                        .decisions
-                        .as_mut()
-                        .and_then(|_| self.state.components.mind_mut(observer))
-                    {
+                    if let Some(mind) = self.state.decisions.as_mut().and_then(|_| {
+                        game_characters::decisions::mind_mut::<game_api::Command>(
+                            &mut self.state.components,
+                            observer,
+                        )
+                    }) {
                         let relationship =
                             mind.relationships
                                 .entry(target)
@@ -1050,12 +1062,9 @@ impl Simulation {
         if !world.acquisition_eligible(actor_facts) {
             return Vec::new();
         }
-        let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
-        else {
+        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        }) else {
             return Vec::new();
         };
         let mut destinations = BTreeMap::<Good, InventoryId>::new();
@@ -1126,7 +1135,12 @@ impl Simulation {
                 .state
                 .decisions
                 .as_ref()
-                .and_then(|_| self.state.components.mind(actor))
+                .and_then(|_| {
+                    game_characters::decisions::mind::<game_api::Command>(
+                        &self.state.components,
+                        actor,
+                    )
+                })
                 .is_some_and(|m| {
                     m.child_signals.values().any(|signal| {
                         signal.location == Location::AtArea(area) && signal.urgency >= 1_000
@@ -1250,12 +1264,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     for (actor, id) in &world.pending {
         let incident = &world.incidents[id];
-        let body = state.components.body(*actor).ok_or_else(fail)?;
+        let body = game_physiology::body(&state.components, *actor).ok_or_else(fail)?;
         if !body.vitals.alive
             || people.get(actor).is_none_or(|person| {
-                *state
-                    .components
-                    .location(person.id)
+                *game_spatial::location(&state.components, game_ecs::StableId((person.id).0))
                     .expect("location exists")
                     != Location::AtArea(incident.area)
             })
@@ -1271,10 +1283,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     for (sender, report) in &world.reports {
         if !known_sender(&report.snapshot)
-            || [*sender, report.recipient].iter().any(|actor| people.get(actor).is_none_or(|person| *state.components.location(person.id).expect("location exists") != Location::AtArea(report.area)))
-            || !state.components.body(report.recipient).is_some_and(|body| body.vitals.alive)
+            || [*sender, report.recipient].iter().any(|actor| people.get(actor).is_none_or(|person| *game_spatial::location(&state.components,game_ecs::StableId((person.id).0)).expect("location exists") != Location::AtArea(report.area)))
+            || !game_physiology::body(&state.components,report.recipient).is_some_and(|body| body.vitals.alive)
             || !state.components.activity(report.recipient).is_some_and(|activity| matches!(activity, Activity::Idle | Activity::Rest))
-            || !state.components.body(*sender).is_some_and(|body| body.vitals.alive)
+            || !game_physiology::body(&state.components,*sender).is_some_and(|body| body.vitals.alive)
             || !state.components.activity(*sender).is_some_and(|activity| matches!(*activity, Activity::ReportIncident { recipient, incident, completes }
                 if recipient == report.recipient && incident == report.snapshot.incident.id && completes == report.completes))
             || !state.due.get(&report.completes).is_some_and(|due| due.iter().any(|event| matches!(event, Due::Physical(id) if id == sender)))

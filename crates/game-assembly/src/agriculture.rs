@@ -62,28 +62,37 @@ impl Simulation {
         rules.meal_relief = day;
         rules.fatigue_limit = 16 * 3_600_000;
         rules.max_health = 2 * day;
-        let actors: Vec<_> = sim
-            .state
-            .components
-            .bodies()
+        let actors: Vec<_> = game_physiology::bodies(&sim.state.components)
             .map(|(actor, _)| actor)
             .collect();
         for actor in actors {
-            sim.state.components.body_mut(actor).unwrap().vitals.health = 2 * day;
+            game_physiology::body_mut(&mut sim.state.components, actor)
+                .unwrap()
+                .vitals
+                .health = 2 * day;
         }
         // Authoring an initial shared field is fixture data, not a government mode.
         // Remove the earlier timber-to-food recipe from this seasonal scenario.
         for actor in sim.state.people.iter().map(|p| p.id).collect::<Vec<_>>() {
             sim.interrupt_actor_activity(actor);
-            sim.state.components.set_job(actor, None)?;
+            game_workshop::remove_job(&mut sim.state.components, actor).map(|_| ())?;
         }
-        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        let sites: Vec<_> = game_workshop::sites(&sim.state.components)
+            .map(|(id, _)| id)
+            .collect();
         for site in sites {
-            sim.state.components.remove_site(site)?;
+            game_workshop::remove_site(&mut sim.state.components, site)?;
         }
-        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        let actors: Vec<_> =
+            game_characters::decisions::minds::<game_api::Command>(&sim.state.components)
+                .map(|(id, _)| id)
+                .collect();
         for actor in actors {
-            let mind = sim.state.components.mind_mut(actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap();
             mind.sites.clear();
             mind.plan = None;
             mind.retry_after = sim.state.time;
@@ -120,10 +129,11 @@ impl Simulation {
         let farm = sim.state.areas[1].id;
         // This resident starts physically at the farm; later workers must travel.
         let farmer = sim.state.people[3].id;
-        *sim.state
-            .components
-            .location_mut(sim.state.people[sim.person_index[&farmer]].id)
-            .expect("location exists") = Location::AtArea(farm);
+        *game_spatial::location_mut(
+            &mut sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&farmer]].id).0),
+        )
+        .expect("location exists") = Location::AtArea(farm);
         let people = sim
             .state
             .people
@@ -266,7 +276,11 @@ impl Simulation {
         let Some(world) = &self.state.agriculture else {
             return Ok(None);
         };
-        if day.is_none() && self.state.components.cultivations().next().is_none() {
+        if day.is_none()
+            && game_agriculture::cultivations(&self.state.components)
+                .next()
+                .is_none()
+        {
             return Ok(None);
         }
         let day = day.map(|day| game_agriculture::LocalWeatherDay {
@@ -332,26 +346,25 @@ impl Simulation {
             .field(&self.state.components, field)
             .ok_or(Error::Unavailable)?;
         let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
-        let body = self
-            .state
-            .components
-            .body(actor)
-            .ok_or(Error::Unavailable)?;
+        let body =
+            game_physiology::body(&self.state.components, actor).ok_or(Error::Unavailable)?;
         let environment = self.state.environment.as_ref();
-        let area = match *self
-            .state
-            .components
-            .location(
-                self.state.people[*self.person_index.get(&actor).ok_or(Error::Unavailable)?].id,
-            )
-            .expect("location exists")
+        let area = match *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId(
+                (self.state.people[*self.person_index.get(&actor).ok_or(Error::Unavailable)?].id).0,
+            ),
+        )
+        .expect("location exists")
         {
             Location::AtArea(area) => area,
             _ => return Err(Error::Unavailable),
         };
         let mature = self.state.development.as_ref().is_none_or(|_| {
             matches!(
-                self.state.components.life(actor).unwrap().stage,
+                game_lifecycle::life(&self.state.components, actor)
+                    .unwrap()
+                    .stage,
                 LifeStage::Adult | LifeStage::Elder
             )
         });
@@ -387,10 +400,7 @@ impl Simulation {
                 && mature,
             tool_available: available(land.tool, Good::Tool).is_some_and(|q| q.0 >= 1_000)
                 && self.tool_available_for_planning(actor, land.tool, resources),
-            field_available: !self
-                .state
-                .components
-                .cultivations()
+            field_available: !game_agriculture::cultivations(&self.state.components)
                 .any(|(person, job)| person != actor && job.field == field),
             seed_available: available(land.seed, Good::Seed).unwrap_or(Quantity(0)),
             water_available: available(land.water, Good::Water).unwrap_or(Quantity(0)),
@@ -495,10 +505,7 @@ impl Simulation {
         }) else {
             return;
         };
-        let valid = self
-            .state
-            .components
-            .body(actor)
+        let valid = game_physiology::body(&self.state.components, actor)
             .expect("body exists")
             .vitals
             .alive;
@@ -582,16 +589,15 @@ impl Simulation {
 
     pub(crate) fn agriculture_view(&self, actor: PersonId) -> Option<AgricultureView> {
         let world = self.state.agriculture.as_ref()?;
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive {
             return None;
         }
-        let Location::AtArea(area) = *self
-            .state
-            .components
-            .location(self.state.people[self.person_index[&actor]].id)
-            .expect("location exists")
-        else {
+        let Location::AtArea(area) = *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[self.person_index[&actor]].id).0),
+        )
+        .expect("location exists") else {
             return None;
         };
         Some(AgricultureView {
@@ -674,7 +680,9 @@ impl Simulation {
         let Some(world) = &self.state.agriculture else {
             if self.state.components.iter::<Field>().next().is_some()
                 || self.state.components.iter::<Crop>().next().is_some()
-                || self.state.components.cultivations().next().is_some()
+                || game_agriculture::cultivations(&self.state.components)
+                    .next()
+                    .is_some()
             {
                 return Err(Error::InvalidSave(
                     "agricultural components have no runtime".into(),
@@ -701,7 +709,7 @@ impl Simulation {
                     .state
                     .physical
                     .as_ref()
-                    .is_none_or(|_| self.state.components.site(id).is_some())
+                    .is_none_or(|_| game_workshop::site(&self.state.components, id).is_some())
                 || !self.state.areas.iter().any(|a| a.id == field.area)
                 || field
                     .custodian
@@ -737,24 +745,24 @@ impl Simulation {
                 }
             }
         }
-        for (actor, job) in self.state.components.cultivations() {
+        for (actor, job) in game_agriculture::cultivations(&self.state.components) {
             let actor = &actor;
             let Some(field) = world.field(&self.state.components, job.field) else {
                 return Err(invalid());
             };
             if !self.person_index.contains_key(actor)
                 || job.completes <= self.state.time
-                || *self
-                    .state
-                    .components
-                    .location(self.state.people[self.person_index[actor]].id)
-                    .expect("location exists")
+                || *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[actor]].id).0),
+                )
+                .expect("location exists")
                     != Location::AtArea(field.area)
                 || self
                     .state
                     .physical
                     .as_ref()
-                    .and_then(|_| self.state.components.body(*actor))
+                    .and_then(|_| game_physiology::body(&self.state.components, *actor))
                     .is_none_or(|body| !body.vitals.alive)
                 || self.state.components.activity(*actor)
                     != Some(&Activity::Cultivate {

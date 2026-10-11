@@ -350,7 +350,7 @@ fn main() {
                 let resource_jobs = state.ecology.as_ref().map(|ecology| view.ecology.resources.iter()
                     .filter(|source| matches!(view.location, game_api::Location::AtArea(area) if source.area == area))
                     .map(|source| (source.id, ecology.resource(&sim.canonical_state().components, source.id).expect("resource exists").workers,
-                        state.components.gatherings().filter(|(_, job)| job.resource == source.id)
+                        game_ecology::gatherings(&state.components).filter(|(_, job)| job.resource == source.id)
                             .map(|(actor, job)| (actor, job.quantity, job.completes)).collect::<Vec<_>>()))
                     .collect::<Vec<_>>());
                 eprintln!(
@@ -400,14 +400,10 @@ fn main() {
         if policy && day > reported_day {
             reported_day = day;
             let state = sim.canonical_state();
-            let living = state
-                .components
-                .bodies()
+            let living = game_physiology::bodies(&state.components)
                 .filter(|(_, body)| body.vitals.alive)
                 .count();
-            let player_alive = state
-                .components
-                .body(state.ruler)
+            let player_alive = game_physiology::body(&state.components, state.ruler)
                 .expect("body exists")
                 .vitals
                 .alive;
@@ -446,10 +442,7 @@ fn main() {
     .unwrap();
     let restore = start.elapsed();
     assert_eq!(sim.canonical_state(), loaded.canonical_state());
-    let alive = sim
-        .canonical_state()
-        .components
-        .bodies()
+    let alive = game_physiology::bodies(&sim.canonical_state().components)
         .filter(|(_, body)| body.vitals.alive)
         .count();
     let mut journeys = 0;
@@ -545,19 +538,19 @@ fn main() {
         );
     }
 
-    let player_alive = sim
-        .canonical_state()
-        .components
-        .body(sim.canonical_state().ruler)
-        .expect("body exists")
-        .vitals
-        .alive;
+    let player_alive = game_physiology::body(
+        &sim.canonical_state().components,
+        sim.canonical_state().ruler,
+    )
+    .expect("body exists")
+    .vitals
+    .alive;
     if alive < population * 9 / 10 || !player_alive {
         let state = sim.canonical_state();
-        for (actor, body) in state.components.bodies() {
+        for (actor, body) in game_physiology::bodies(&state.components) {
             let actor = &actor;
             if !body.vitals.alive {
-                let clinical = state.components.clinical(*actor).unwrap();
+                let clinical = game_health::clinical(&state.components, *actor).unwrap();
                 eprintln!(
                     "dead_body actor={} ruler={} hunger={} fatigue={} thirst={} cold={} illnesses={} age_ms={} activity={:?}",
                     actor.0,
@@ -567,9 +560,7 @@ fn main() {
                     clinical.thirst,
                     clinical.cold,
                     clinical.illnesses.len(),
-                    state
-                        .components
-                        .life(*actor)
+                    game_lifecycle::life(&state.components, *actor)
                         .unwrap()
                         .age_at(state.time)
                         .unwrap(),

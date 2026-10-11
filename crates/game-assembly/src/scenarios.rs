@@ -162,25 +162,23 @@ impl Simulation {
             .collect::<Vec<_>>()
         {
             self.interrupt_actor_activity(actor);
-            self.state.components.set_job(actor, None)?;
+            game_workshop::remove_job(&mut self.state.components, actor).map(|_| ())?;
         }
         self.state.development.as_mut().unwrap().rules = config.biology.clone();
         for person in &mut self.state.people {
-            *self
-                .state
-                .components
-                .location_mut(person.id)
-                .expect("location exists") = Location::AtArea(village);
+            *game_spatial::location_mut(
+                &mut self.state.components,
+                game_ecs::StableId((person.id).0),
+            )
+            .expect("location exists") = Location::AtArea(village);
             person.route.clear();
         }
-        for person in self
-            .state
-            .components
-            .lives()
+        for person in game_lifecycle::all_lives(&self.state.components)
             .map(|(id, _)| id)
             .collect::<Vec<_>>()
         {
-            let life = self.state.components.life_mut(person).expect("life exists");
+            let life =
+                game_lifecycle::life_mut(&mut self.state.components, person).expect("life exists");
             life.initial_age = initial_age;
             life.stage = LifeStage::Adult;
         }
@@ -203,7 +201,11 @@ impl Simulation {
         // The reports predate control; newborns acquire their own knowledge later.
         let reporter = self.state.people[3].id;
         for person in &self.state.people {
-            let mind = self.state.components.mind_mut(person.id).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                person.id,
+            )
+            .unwrap();
             mind.plan = None;
             mind.retry_after = self.state.time;
             for stock in self
@@ -232,7 +234,11 @@ impl Simulation {
         }
         let parents = [self.state.people[3].id, self.state.people[4].id];
         for (actor, partner) in [(parents[0], parents[1]), (parents[1], parents[0])] {
-            let mind = self.state.components.mind_mut(actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                actor,
+            )
+            .unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 900;
             mind.relationships.insert(
@@ -309,9 +315,7 @@ impl Simulation {
             .filter(|p| p.role == Role::Guardian)
             .map(|p| p.id)
         {
-            self.state
-                .components
-                .personal_skills_mut(actor)
+            game_skills::skills_mut(&mut self.state.components, actor)
                 .unwrap()
                 .records
                 .insert(
@@ -558,9 +562,9 @@ impl Simulation {
             let site = SiteId(allocate(&mut self.state)?);
             let rules = self.state.projects.as_ref().unwrap().rules.clone();
             let participants = BTreeSet::from([ruler, craftsperson]);
-            self.state
-                .components
-                .insert_site(physical::Site {
+            game_workshop::insert_site(
+                &mut self.state.components,
+                physical::Site {
                     id: site,
                     area,
                     input: timber,
@@ -571,8 +575,9 @@ impl Simulation {
                     duration: rules.recipe_time,
                     access: participants.clone(),
                     last_granted: None,
-                })
-                .expect("validated site insertion");
+                },
+            )
+            .expect("validated site insertion");
             self.state.projects.as_mut().unwrap().projects.insert(
                 project,
                 projects::Project {
@@ -674,9 +679,7 @@ impl Simulation {
             self.state.projects.as_mut().unwrap().last_event = self.state.next_event - 1;
             let level = 10.min(self.state.skills.as_ref().unwrap().rules.max_level);
             let practice = self.state.skills.as_ref().unwrap().rules.per_level.0 * u64::from(level);
-            self.state
-                .components
-                .personal_skills_mut(craftsperson)
+            game_skills::skills_mut(&mut self.state.components, craftsperson)
                 .unwrap()
                 .records
                 .insert(
@@ -706,9 +709,7 @@ impl Simulation {
                 )
             })
             .collect();
-            self.state
-                .components
-                .personal_skills_mut(ruler)
+            game_skills::skills_mut(&mut self.state.components, ruler)
                 .unwrap()
                 .records
                 .extend(experiences);
@@ -821,9 +822,7 @@ impl Simulation {
         let skill_rules = &self.state.skills.as_ref().unwrap().rules;
         let level = 10.min(skill_rules.max_level);
         let practice_ms = skill_rules.per_level.0 * u64::from(level);
-        self.state
-            .components
-            .personal_skills_mut(healer)
+        game_skills::skills_mut(&mut self.state.components, healer)
             .unwrap()
             .records
             .insert(
@@ -834,7 +833,11 @@ impl Simulation {
                     progress_ms: 0,
                 },
             );
-        let mind = self.state.components.mind_mut(healer).unwrap();
+        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut self.state.components,
+            healer,
+        )
+        .unwrap();
         mind.personality.empathy = 900;
         mind.personality.patience = 900;
         mind.dream = decisions::Aspiration::SupportOthers;
@@ -853,14 +856,14 @@ impl Simulation {
             SocialTopic::FamilyPlans,
         )?;
         for (actor, partner) in [(first, second), (second, first)] {
-            let relationship = self
-                .state
-                .components
-                .mind_mut(actor)
-                .unwrap()
-                .relationships
-                .get_mut(&partner)
-                .unwrap();
+            let relationship = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                actor,
+            )
+            .unwrap()
+            .relationships
+            .get_mut(&partner)
+            .unwrap();
             relationship.affection = (relationship.affection + effect.affection_gain).min(1_000);
             relationship.trust = (relationship.trust + effect.trust_gain).min(1_000);
         }
@@ -1033,10 +1036,7 @@ impl Simulation {
     fn author_child_opening(&mut self) -> Result<(), Error> {
         let mother = self.state.people[3].id;
         let father = self.state.people[4].id;
-        if !self
-            .state
-            .components
-            .pregnancies()
+        if !game_lifecycle::all_pregnancies(&self.state.components)
             .map(|(_, row)| row)
             .any(|pregnancy| {
                 pregnancy.gestator == mother
@@ -1049,10 +1049,7 @@ impl Simulation {
         {
             self.debug_actor_command(mother, Command::Conceive { partner: father })?;
         }
-        let pending_conception = self
-            .state
-            .components
-            .pregnancies()
+        let pending_conception = game_lifecycle::all_pregnancies(&self.state.components)
             .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 (pregnancy.gestator == mother)
@@ -1065,10 +1062,7 @@ impl Simulation {
         if let Some(completes) = pending_conception {
             self.advance(SimDuration(completes.0 - self.state.time.0))?;
         }
-        let birth = self
-            .state
-            .components
-            .pregnancies()
+        let birth = game_lifecycle::all_pregnancies(&self.state.components)
             .map(|(_, row)| row)
             .find_map(|pregnancy| {
                 (pregnancy.gestator == mother)
@@ -1091,47 +1085,38 @@ impl Simulation {
         // command or a promise that the simulation will create another birth.
         self.state.time = death_at;
         self.state.due.clear();
-        let actors: Vec<_> = self
-            .state
-            .components
-            .bodies()
+        let actors: Vec<_> = game_physiology::bodies(&self.state.components)
             .map(|(actor, _)| actor)
             .collect();
         for actor in actors {
             *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
-            self.state.components.set_job(actor, None)?;
-            let body = self.state.components.body_mut(actor).unwrap();
+            game_workshop::remove_job(&mut self.state.components, actor).map(|_| ())?;
+            let body = game_physiology::body_mut(&mut self.state.components, actor).unwrap();
             body.vitals.hunger = 0;
             body.vitals.fatigue = 0;
         }
         for person in &mut self.state.people {
             person.route.clear();
-            *self
-                .state
-                .components
-                .location_mut(person.id)
-                .expect("location exists") = Location::AtArea(self.state.areas[0].id);
+            *game_spatial::location_mut(
+                &mut self.state.components,
+                game_ecs::StableId((person.id).0),
+            )
+            .expect("location exists") = Location::AtArea(self.state.areas[0].id);
         }
         let lifespan = self.state.development.as_ref().unwrap().rules.lifespan.0;
         let elderhood = self.state.development.as_ref().unwrap().rules.elderhood.0;
-        let cultivators: Vec<_> = self
-            .state
-            .components
-            .cultivations()
+        let cultivators: Vec<_> = game_agriculture::cultivations(&self.state.components)
             .map(|(actor, _)| actor)
             .collect();
         for actor in cultivators {
-            self.state.components.remove_cultivation(actor)?;
+            game_agriculture::remove_cultivation(&mut self.state.components, actor)?;
         }
         self.state.projects.as_mut().unwrap().jobs.clear();
-        let gatherers: Vec<_> = self
-            .state
-            .components
-            .gatherings()
+        let gatherers: Vec<_> = game_ecology::gatherings(&self.state.components)
             .map(|(actor, _)| actor)
             .collect();
         for actor in gatherers {
-            self.state.components.remove_gathering(actor)?;
+            game_ecology::remove_gathering(&mut self.state.components, actor)?;
         }
         // This authored interval ends all previously active social tasks. Its
         // scheduler epoch begins at this snapshot, as do the rebuilt physical
@@ -1148,14 +1133,12 @@ impl Simulation {
             }
         }
 
-        for person in self
-            .state
-            .components
-            .lives()
+        for person in game_lifecycle::all_lives(&self.state.components)
             .map(|(id, _)| id)
             .collect::<Vec<_>>()
         {
-            let life = self.state.components.life_mut(person).expect("life exists");
+            let life =
+                game_lifecycle::life_mut(&mut self.state.components, person).expect("life exists");
             let age = life
                 .initial_age
                 .0
@@ -1279,9 +1262,7 @@ impl Simulation {
             .people
             .iter()
             .filter(|person| {
-                self.state
-                    .components
-                    .body(person.id)
+                game_physiology::body(&self.state.components, person.id)
                     .expect("body exists")
                     .vitals
                     .alive
@@ -1298,10 +1279,7 @@ impl Simulation {
             .map(|stock| stock.id)
             .collect();
         for observer in access.iter().copied() {
-            if self
-                .state
-                .components
-                .life(observer)
+            if game_lifecycle::life(&self.state.components, observer)
                 .expect("life exists")
                 .stage
                 == LifeStage::Infant
@@ -1358,11 +1336,11 @@ impl Simulation {
                 .iter()
                 .filter(|person| {
                     access.contains(&person.id)
-                        && *self
-                            .state
-                            .components
-                            .location(person.id)
-                            .expect("location exists")
+                        && *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((person.id).0),
+                        )
+                        .expect("location exists")
                             == Location::AtArea(area)
                 })
                 .take(capacity as usize)
@@ -1459,11 +1437,9 @@ mod tests {
             let sim = opening(id, 1);
             let world = sim.state.health.as_ref().unwrap();
             assert_eq!(world.rules, HealthRules::human());
-            assert_eq!(sim.state.components.shelters().count(), 2);
+            assert_eq!(game_health::shelters(&sim.state.components).count(), 2);
             assert!(
-                sim.state
-                    .components
-                    .shelters()
+                game_health::shelters(&sim.state.components)
                     .map(|(_, shelter)| shelter)
                     .all(|shelter| shelter.timber_used.0 > 0 && shelter.labor_ms > 0)
             );
@@ -1480,10 +1456,7 @@ mod tests {
                 .sum();
             assert!(
                 consumed
-                    >= sim
-                        .state
-                        .components
-                        .shelters()
+                    >= game_health::shelters(&sim.state.components)
                         .map(|(_, shelter)| shelter)
                         .map(|shelter| shelter.timber_used.0)
                         .sum::<u64>()
@@ -1498,9 +1471,7 @@ mod tests {
                 .unwrap()
                 .id;
             assert!(
-                sim.state
-                    .components
-                    .health_knowledge(healer)
+                game_health::knowledge(&sim.state.components, healer)
                     .expect("health knowledge exists")
                     .water[&water]
                     .purified
@@ -1512,12 +1483,10 @@ mod tests {
                     .any(|stock| stock.good == Good::Herb && stock.quantity.0 >= 20_000)
             );
             let ruler = sim.state.ruler;
-            assert!(sim.state.components.shelter_occupancy(ruler).is_some());
+            assert!(game_health::occupancy(&sim.state.components, ruler).is_some());
             if id == "child-successor" {
                 assert!(
-                    sim.state
-                        .components
-                        .health_knowledge(ruler)
+                    game_health::knowledge(&sim.state.components, ruler)
                         .is_none_or(|known| !known.water.contains_key(&water))
                 );
             }
@@ -1601,10 +1570,7 @@ mod tests {
         assert_eq!(lineage.incarnations.len(), 2);
         let previous = &lineage.incarnations[0];
         let current = &lineage.incarnations[1];
-        let born = sim
-            .state
-            .components
-            .life(current.person)
+        let born = game_lifecycle::life(&sim.state.components, current.person)
             .expect("life exists")
             .born;
         assert!(previous.died_at.unwrap() < born);

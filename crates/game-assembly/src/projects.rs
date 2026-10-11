@@ -40,14 +40,16 @@ impl Simulation {
         let farmer = sim.state.people[3].id;
         let supporter = sim.state.people[5].id;
         let area = AreaId(1);
-        *sim.state
-            .components
-            .location_mut(sim.state.people[sim.person_index[&farmer]].id)
-            .expect("location exists") = Location::AtArea(area);
-        *sim.state
-            .components
-            .location_mut(sim.state.people[sim.person_index[&supporter]].id)
-            .expect("location exists") = Location::AtArea(area);
+        *game_spatial::location_mut(
+            &mut sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&farmer]].id).0),
+        )
+        .expect("location exists") = Location::AtArea(area);
+        *game_spatial::location_mut(
+            &mut sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&supporter]].id).0),
+        )
+        .expect("location exists") = Location::AtArea(area);
         sim.debug_add_plot(area, Some(farmer), BTreeSet::from([farmer]), 900)?;
         for (good, quantity, capacity, custodian, access) in [
             (Good::Timber, 0, 50_000, farmer, BTreeSet::from([farmer])),
@@ -152,9 +154,7 @@ impl Simulation {
             .collect::<Vec<_>>();
         for person in &people {
             sim.debug_actor_command(*person, Command::Cancel)?;
-            sim.state
-                .components
-                .body_mut(*person)
+            game_physiology::body_mut(&mut sim.state.components, *person)
                 .unwrap()
                 .vitals
                 .health = 48 * hour;
@@ -165,13 +165,22 @@ impl Simulation {
             )?;
         }
         // The old continuous food fixture is not the workshop's recipe.
-        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        let sites: Vec<_> = game_workshop::sites(&sim.state.components)
+            .map(|(id, _)| id)
+            .collect();
         for site in sites {
-            sim.state.components.remove_site(site)?;
+            game_workshop::remove_site(&mut sim.state.components, site)?;
         }
-        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        let actors: Vec<_> =
+            game_characters::decisions::minds::<game_api::Command>(&sim.state.components)
+                .map(|(id, _)| id)
+                .collect();
         for actor in actors {
-            let mind = sim.state.components.mind_mut(actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap();
             mind.sites.clear();
             mind.plan = None;
         }
@@ -279,7 +288,11 @@ impl Simulation {
                 .filter(|stock| sim.inventory_area(stock) == Some(area))
                 .cloned()
                 .collect::<Vec<_>>();
-            let mind = sim.state.components.mind_mut(person).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                person,
+            )
+            .unwrap();
             for stock in inventories {
                 mind.knowledge.insert(
                     stock.id,
@@ -299,11 +312,11 @@ impl Simulation {
         Ok(sim)
     }
     fn project_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
-        match *self.state.components.location(actor)? {
+        match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))? {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -315,7 +328,9 @@ impl Simulation {
             && !self.care_index.contains_key(&actor)
             && self.state.development.as_ref().is_none_or(|_| {
                 matches!(
-                    self.state.components.life(actor).unwrap().stage,
+                    game_lifecycle::life(&self.state.components, actor)
+                        .unwrap()
+                        .stage,
                     LifeStage::Adult | LifeStage::Elder
                 )
             })
@@ -376,10 +391,7 @@ impl Simulation {
         let plan = world.projects.get(&project).ok_or(Error::Unavailable)?;
         let physical = self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let mut facts = self.project_actor_facts(actor, Some(project));
-        facts.capable &= self
-            .state
-            .components
-            .body(actor)
+        facts.capable &= game_physiology::body(&self.state.components, actor)
             .is_some_and(|body| body.vitals.fatigue < physical.rules.fatigue_limit);
         Ok(game_projects::ConstructionFacts {
             actor: facts,
@@ -573,11 +585,9 @@ impl Simulation {
                     match asset {
                         AssetEffect::Workshop(_) => {
                             if site.0 != next_id
-                                || self
-                                    .state
-                                    .physical
-                                    .as_ref()
-                                    .is_none_or(|_| self.state.components.site(*site).is_some())
+                                || self.state.physical.as_ref().is_none_or(|_| {
+                                    game_workshop::site(&self.state.components, *site).is_some()
+                                })
                             {
                                 return Err(Error::Unavailable);
                             }
@@ -709,9 +719,9 @@ impl Simulation {
                 } => {
                     match asset {
                         AssetEffect::Workshop(asset) => {
-                            self.state
-                                .components
-                                .insert_site(physical::Site {
+                            game_workshop::insert_site(
+                                &mut self.state.components,
+                                physical::Site {
                                     id: site,
                                     area: asset.area,
                                     input: asset.input,
@@ -722,8 +732,9 @@ impl Simulation {
                                     duration: asset.duration,
                                     access: asset.access,
                                     last_granted: None,
-                                })
-                                .expect("validated site insertion");
+                                },
+                            )
+                            .expect("validated site insertion");
                         }
                         AssetEffect::Farm {
                             plot,
@@ -819,7 +830,7 @@ impl Simulation {
             .physical
             .as_ref()
             .into_iter()
-            .flat_map(|_| self.state.components.bodies())
+            .flat_map(|_| game_physiology::bodies(&self.state.components))
             .filter_map(|(actor, body)| {
                 if let Activity::Work { site } | Activity::Cultivate { field: site, .. } =
                     self.state.components.activity(actor)?
@@ -1110,10 +1121,10 @@ impl Simulation {
         let enterprise_facts=world.enterprises.values().map(|asset| {
             let (active,crop_failed,output_room,required_input,required_output)=match asset.kind {
                 ProjectKind::Farm {..}=>{
-                    (self.state.components.cultivations().any(|(_,j)|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crop(&self.state.components, asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
+                    (game_agriculture::cultivations(&self.state.components).any(|(_,j)|j.field==asset.site),self.state.agriculture.as_ref().unwrap().crop(&self.state.components, asset.site).expect("component exists").phase==agriculture::CropPhase::Failed,Quantity(0),Quantity(0),Quantity(0))
                 }
                 ProjectKind::Workshop=>{
-                    let site=&self.state.components.site(asset.site).expect("site exists");
+                    let site=&game_workshop::site(&self.state.components,asset.site).expect("site exists");
                     let output=&self.state.inventories[&site.output];
                     (self.state.components.activities().any(|(_,activity)|matches!(activity,Activity::Work {site:id} if *id==site.id)),false,
                         Quantity(output.capacity.0.saturating_sub(output.quantity.0)),site.input_quantity,site.output_quantity)
@@ -1123,7 +1134,7 @@ impl Simulation {
                 let (land_accessible,tool_available,materials_available)=match asset.kind {
                     ProjectKind::Farm {..}=>(self.state.agriculture.as_ref().unwrap().field(&self.state.components, asset.site).expect("component exists").access.contains(actor),false,Quantity(0)),
                     ProjectKind::Workshop=>{
-                        let site=&self.state.components.site(asset.site).expect("site exists");
+                        let site=&game_workshop::site(&self.state.components,asset.site).expect("site exists");
                         (true,self.project_usable(*actor,site.tool,Good::Tool,1_000),if self.project_usable(*actor,site.input,Good::Timber,0) {Quantity(self.unreserved_stock(site.input,*actor))} else {Quantity(0)})
                     }
                 };
@@ -1201,7 +1212,11 @@ impl Simulation {
             {
                 continue;
             }
-            let mind = &self.state.components.mind(actor).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                actor,
+            )
+            .unwrap();
             if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
             {
                 continue;
@@ -1339,7 +1354,11 @@ impl Simulation {
                 continue;
             }
             let actor = plan.sponsor;
-            let mind = &self.state.components.mind(actor).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                actor,
+            )
+            .unwrap();
             if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
             {
                 continue;
@@ -1563,12 +1582,9 @@ impl Simulation {
         if !self.project_able(actor) {
             return Vec::new();
         }
-        let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
-        else {
+        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        }) else {
             return Vec::new();
         };
         let mut opportunities = Vec::new();
@@ -1602,11 +1618,8 @@ impl Simulation {
                 }
                 continue;
             }
-            let site = &self
-                .state
-                .components
-                .site(workshop.site)
-                .expect("site exists");
+            let site =
+                &game_workshop::site(&self.state.components, workshop.site).expect("site exists");
             if self.project_usable_for_planning(
                 actor,
                 site.input,
@@ -1676,10 +1689,7 @@ impl Simulation {
             .ecology
             .as_ref()
             .and_then(|_| {
-                self.state
-                    .components
-                    .ecology_knowledge(actor)
-                    .map(|row| &row.known_plots)
+                game_ecology::knowledge(&self.state.components, actor).map(|row| &row.known_plots)
             })
             .and_then(|k| k.values().find(|p| p.area == area && p.accessible))
         {
@@ -1774,12 +1784,9 @@ impl Simulation {
         let Some(world) = &self.state.projects else {
             return 0;
         };
-        let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
-        else {
+        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+        }) else {
             return 0;
         };
         if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600 {
@@ -2038,8 +2045,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     for (actor, job) in &world.jobs {
         let plan = world.projects.get(&job.project).ok_or_else(fail)?;
         if !people.contains_key(actor)
-            || *state.components.location(*actor).ok_or_else(fail)? != Location::AtArea(plan.area)
-            || state.components.body(*actor).is_none_or(|body| {
+            || *game_spatial::location(&state.components, game_ecs::StableId(actor.0))
+                .ok_or_else(fail)?
+                != Location::AtArea(plan.area)
+            || game_physiology::body(&state.components, *actor).is_none_or(|body| {
                 !body.vitals.alive
                     || state.components.activity(*actor)
                         != Some(&Activity::Construct {
@@ -2106,7 +2115,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             }
             continue;
         }
-        let site = state.components.site(enterprise.site).ok_or_else(fail)?;
+        let site = game_workshop::site(&state.components, enterprise.site).ok_or_else(fail)?;
         if *id != enterprise.id
             || id.0 >= state.next_id
             || site.area != plan.area
@@ -2503,9 +2512,7 @@ mod farm_tests {
         // decisions and physical production continue at their configured rates.
         sim.advance(MINUTE).unwrap();
         assert!(
-            sim.state
-                .components
-                .body(farmer)
+            game_physiology::body(&sim.state.components, farmer)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -2658,10 +2665,7 @@ mod farm_tests {
         }
         let debtor = sim.state.ruler;
         let creditor = sim.state.people[5].id;
-        let site = sim
-            .state
-            .components
-            .sites()
+        let site = game_workshop::sites(&sim.state.components)
             .next()
             .map_or(SiteId(0), |(id, _)| id);
         // An authored existing productive asset; actual production events are the accrual trigger.
@@ -2706,9 +2710,9 @@ mod farm_tests {
         } else {
             site
         };
-        sim.state
-            .components
-            .insert_site(physical::Site {
+        game_workshop::insert_site(
+            &mut sim.state.components,
+            physical::Site {
                 id: site,
                 area: AreaId(1),
                 input,
@@ -2719,8 +2723,9 @@ mod farm_tests {
                 duration: MINUTE,
                 access: BTreeSet::from([debtor]),
                 last_granted: None,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         sim.debug_agreement_action(
             debtor,
             AgreementAction::Propose {

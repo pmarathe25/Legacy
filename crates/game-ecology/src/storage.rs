@@ -176,22 +176,20 @@ impl Runtime {
 
 impl Runtime {
     pub fn gathering<'a>(&self, store: &'a Store, actor: PersonId) -> Option<&'a Gathering> {
-        store.get(StableId(actor.0))
+        gathering(store, actor)
     }
     pub fn gathering_mut<'a>(
         &self,
         store: &'a mut Store,
         actor: PersonId,
     ) -> Option<&'a mut Gathering> {
-        store.get_mut(StableId(actor.0))
+        gathering_mut(store, actor)
     }
     pub fn gatherings<'a>(
         &self,
         store: &'a Store,
     ) -> impl Iterator<Item = (PersonId, &'a Gathering)> {
-        store
-            .iter::<Gathering>()
-            .map(|(id, row)| (PersonId(id.0), row))
+        gatherings(store)
     }
     pub fn insert_gathering(
         &self,
@@ -199,36 +197,30 @@ impl Runtime {
         actor: PersonId,
         row: Gathering,
     ) -> Result<(), Error> {
-        row.validate()?;
-        store.insert_or_spawn(StableId(actor.0), row)
+        insert_gathering(store, actor, row)
     }
     pub fn remove_gathering(
         &self,
         store: &mut Store,
         actor: PersonId,
     ) -> Result<Option<Gathering>, Error> {
-        if !store.contains(StableId(actor.0)) {
-            return Ok(None);
-        }
-        store.remove(StableId(actor.0))
+        remove_gathering(store, actor)
     }
     pub fn knowledge<'a>(&self, store: &'a Store, actor: PersonId) -> Option<&'a Knowledge> {
-        store.get(StableId(actor.0))
+        knowledge(store, actor)
     }
     pub fn knowledge_mut<'a>(
         &self,
         store: &'a mut Store,
         actor: PersonId,
     ) -> Option<&'a mut Knowledge> {
-        store.get_mut(StableId(actor.0))
+        knowledge_mut(store, actor)
     }
     pub fn all_knowledge<'a>(
         &self,
         store: &'a Store,
     ) -> impl Iterator<Item = (PersonId, &'a Knowledge)> {
-        store
-            .iter::<Knowledge>()
-            .map(|(id, row)| (PersonId(id.0), row))
+        all_knowledge(store)
     }
     pub fn insert_knowledge(
         &self,
@@ -236,36 +228,30 @@ impl Runtime {
         actor: PersonId,
         row: Knowledge,
     ) -> Result<(), Error> {
-        row.validate()?;
-        store.insert_or_spawn(StableId(actor.0), row)
+        insert_knowledge(store, actor, row)
     }
     pub fn remove_knowledge(
         &self,
         store: &mut Store,
         actor: PersonId,
     ) -> Result<Option<Knowledge>, Error> {
-        if !store.contains(StableId(actor.0)) {
-            return Ok(None);
-        }
-        store.remove(StableId(actor.0))
+        remove_knowledge(store, actor)
     }
     pub fn requests<'a>(&self, store: &'a Store, actor: PersonId) -> Option<&'a Requests> {
-        store.get(StableId(actor.0))
+        requests(store, actor)
     }
     pub fn requests_mut<'a>(
         &self,
         store: &'a mut Store,
         actor: PersonId,
     ) -> Option<&'a mut Requests> {
-        store.get_mut(StableId(actor.0))
+        requests_mut(store, actor)
     }
     pub fn all_requests<'a>(
         &self,
         store: &'a Store,
     ) -> impl Iterator<Item = (PersonId, &'a Requests)> {
-        store
-            .iter::<Requests>()
-            .map(|(id, row)| (PersonId(id.0), row))
+        all_requests(store)
     }
     pub fn insert_requests(
         &self,
@@ -273,17 +259,105 @@ impl Runtime {
         actor: PersonId,
         row: Requests,
     ) -> Result<(), Error> {
-        row.validate()?;
-        store.insert_or_spawn(StableId(actor.0), row)
+        insert_requests(store, actor, row)
     }
     pub fn remove_requests(
         &self,
         store: &mut Store,
         actor: PersonId,
     ) -> Result<Option<Requests>, Error> {
-        if !store.contains(StableId(actor.0)) {
-            return Ok(None);
-        }
-        store.remove(StableId(actor.0))
+        remove_requests(store, actor)
     }
+}
+
+pub fn gathering(store: &Store, actor: PersonId) -> Option<&Gathering> {
+    store.get(StableId(actor.0))
+}
+
+pub fn gathering_mut(store: &mut Store, actor: PersonId) -> Option<&mut Gathering> {
+    store.get_mut(StableId(actor.0))
+}
+
+pub fn gatherings(store: &Store) -> impl Iterator<Item = (PersonId, &Gathering)> {
+    store
+        .iter::<Gathering>()
+        .map(|(id, row)| (PersonId(id.0), row))
+}
+
+pub fn insert_gathering(store: &mut Store, actor: PersonId, row: Gathering) -> Result<(), Error> {
+    row.validate()?;
+    store.insert_or_spawn(StableId(actor.0), row)
+}
+
+pub fn remove_gathering(store: &mut Store, actor: PersonId) -> Result<Option<Gathering>, Error> {
+    if !store.contains(StableId(actor.0)) {
+        return Ok(None);
+    }
+    store.remove(StableId(actor.0))
+}
+
+pub fn knowledge(store: &Store, actor: PersonId) -> Option<&Knowledge> {
+    store.get(StableId(actor.0))
+}
+
+pub fn knowledge_mut(store: &mut Store, actor: PersonId) -> Option<&mut Knowledge> {
+    store.get_mut(StableId(actor.0))
+}
+
+pub fn all_knowledge(store: &Store) -> impl Iterator<Item = (PersonId, &Knowledge)> {
+    store
+        .iter::<Knowledge>()
+        .map(|(id, row)| (PersonId(id.0), row))
+}
+
+pub fn insert_knowledge(store: &mut Store, actor: PersonId, row: Knowledge) -> Result<(), Error> {
+    row.validate()?;
+    store.insert_or_spawn(StableId(actor.0), row)
+}
+
+pub fn remove_knowledge(store: &mut Store, actor: PersonId) -> Result<Option<Knowledge>, Error> {
+    if !store.contains(StableId(actor.0)) {
+        return Ok(None);
+    }
+    store.remove(StableId(actor.0))
+}
+
+pub fn requests(store: &Store, actor: PersonId) -> Option<&Requests> {
+    store.get(StableId(actor.0))
+}
+
+pub fn requests_mut(store: &mut Store, actor: PersonId) -> Option<&mut Requests> {
+    store.get_mut(StableId(actor.0))
+}
+
+pub fn all_requests(store: &Store) -> impl Iterator<Item = (PersonId, &Requests)> {
+    store
+        .iter::<Requests>()
+        .map(|(id, row)| (PersonId(id.0), row))
+}
+
+pub fn insert_requests(store: &mut Store, actor: PersonId, row: Requests) -> Result<(), Error> {
+    row.validate()?;
+    store.insert_or_spawn(StableId(actor.0), row)
+}
+
+pub fn remove_requests(store: &mut Store, actor: PersonId) -> Result<Option<Requests>, Error> {
+    if !store.contains(StableId(actor.0)) {
+        return Ok(None);
+    }
+    store.remove(StableId(actor.0))
+}
+
+pub fn ensure_knowledge(store: &mut Store, actor: PersonId) -> Result<&mut Knowledge, Error> {
+    if knowledge(store, actor).is_none() {
+        insert_knowledge(store, actor, Knowledge::default())?;
+    }
+    knowledge_mut(store, actor).ok_or(Error::Unavailable)
+}
+
+pub fn ensure_requests(store: &mut Store, actor: PersonId) -> Result<&mut Requests, Error> {
+    if requests(store, actor).is_none() {
+        insert_requests(store, actor, Requests::default())?;
+    }
+    requests_mut(store, actor).ok_or(Error::Unavailable)
 }

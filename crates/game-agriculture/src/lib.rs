@@ -7,6 +7,9 @@ mod advancing;
 mod storage;
 pub use advancing::{GrowthInput, GrowthOutput, PreparedAdvance};
 pub use storage::{Queries, register_components};
+pub use storage::{
+    cultivation, cultivation_mut, cultivations, insert_cultivation, remove_cultivation,
+};
 /// Facts supplied by a local weather provider; no climate runtime is required.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WeatherFacts {
@@ -724,3 +727,6 @@ pub fn projected_food_share(
         .map(|scaled| scaled / u128::from(denominator) / 1_000)
         .ok_or(Error::Overflow)
 }
+
+#[cfg(test)]
+mod free_port_tests;

@@ -11,6 +11,11 @@ pub use opportunities::{AutonomousOptions, GatherOpportunity};
 mod storage;
 pub use advancing::{PlotInput, PreparedAdvance, ResourceInput};
 pub use storage::{Queries, register_components};
+pub use storage::{
+    all_knowledge, all_requests, ensure_knowledge, ensure_requests, gathering, gathering_mut,
+    gatherings, insert_gathering, insert_knowledge, insert_requests, knowledge, knowledge_mut,
+    remove_gathering, remove_knowledge, remove_requests, requests, requests_mut,
+};
 
 /// Daily forcing for one local cell, independent of its weather provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -553,3 +558,6 @@ pub fn prepare_collection(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod free_port_tests;

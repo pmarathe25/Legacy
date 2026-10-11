@@ -12,10 +12,7 @@ impl Simulation {
             .find(|s| s.id == "lineage-fixture")
             .ok_or_else(|| Error::InvalidFixture("lineage fixture is not registered".into()))?;
         let ruler = sim.state.ruler;
-        let location = sim
-            .state
-            .components
-            .location(ruler)
+        let location = game_spatial::location(&sim.state.components, game_ecs::StableId((ruler).0))
             .expect("location exists")
             .clone();
         sim.state.lineage = Some(World {
@@ -60,7 +57,11 @@ impl Simulation {
         let Some(current) = self.state.lineage.as_ref().and_then(World::current) else {
             return;
         };
-        if self.state.components.body(current).unwrap().vitals.alive {
+        if game_physiology::body(&self.state.components, current)
+            .unwrap()
+            .vitals
+            .alive
+        {
             return;
         }
         let constraints: BTreeMap<_, _> = self
@@ -97,7 +98,7 @@ impl Simulation {
             .state
             .development
             .as_ref()
-            .and_then(|_| self.state.components.life(child))
+            .and_then(|_| game_lifecycle::life(&self.state.components, child))
         else {
             return;
         };
@@ -106,11 +107,11 @@ impl Simulation {
             born: life.born,
             initial_age: life.initial_age,
             parent_count: life.parents.len(),
-            alive: self.state.components.body(child).unwrap().vitals.alive,
-            location: self
-                .state
-                .components
-                .location(child)
+            alive: game_physiology::body(&self.state.components, child)
+                .unwrap()
+                .vitals
+                .alive,
+            location: game_spatial::location(&self.state.components, game_ecs::StableId((child).0))
                 .expect("location exists")
                 .clone(),
         };
@@ -150,7 +151,11 @@ impl Simulation {
                 .combat
                 .as_ref()
                 .is_some_and(|w| w.captivity.contains_key(&id)),
-            self.state.components.body(id).unwrap().vitals.health == 0,
+            game_physiology::body(&self.state.components, id)
+                .unwrap()
+                .vitals
+                .health
+                == 0,
             self.combat_restricts(id),
         )
     }
@@ -176,10 +181,7 @@ impl Simulation {
             return;
         }
         let area = departure.or_else(|| {
-            match *self
-                .state
-                .components
-                .location(actor)
+            match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                 .expect("location exists")
             {
                 Location::AtArea(area) => Some(area),
@@ -198,24 +200,25 @@ impl Simulation {
             .keys()
             .copied()
             .filter(|id| {
-                *self
-                    .state
-                    .components
-                    .location(*id)
+                *game_spatial::location(&self.state.components, game_ecs::StableId(id.0))
                     .expect("location exists")
                     == Location::AtArea(area)
-                    && self.state.components.body(*id).unwrap().vitals.health > 0
+                    && game_physiology::body(&self.state.components, *id)
+                        .unwrap()
+                        .vitals
+                        .health
+                        > 0
             })
             .collect();
         for guardian in observers {
-            let known_distress = self
-                .state
-                .components
-                .mind(guardian)
-                .expect("mind exists")
-                .child_signals
-                .get(&current)
-                .is_some_and(|signal| signal.urgency > 0);
+            let known_distress = game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                guardian,
+            )
+            .expect("mind exists")
+            .child_signals
+            .get(&current)
+            .is_some_and(|signal| signal.urgency > 0);
             let conduct = match kind {
                 EventKind::Practiced { gain, .. } => Conduct::Practice { gain: *gain },
                 EventKind::Ate { .. } => Conduct::Meal,
@@ -227,19 +230,16 @@ impl Simulation {
                 EventKind::LessonCompleted { gain, .. } => Conduct::Lesson { gain: *gain },
                 _ => continue,
             };
-            let stage = self
-                .state
-                .components
-                .life(current)
+            let stage = game_lifecycle::life(&self.state.components, current)
                 .expect("life exists")
                 .stage;
-            let personality = self
-                .state
-                .components
-                .mind(guardian)
-                .expect("mind exists")
-                .personality
-                .clone();
+            let personality = game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                guardian,
+            )
+            .expect("mind exists")
+            .personality
+            .clone();
             let assessment = self
                 .state
                 .lineage
@@ -284,22 +284,18 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        let student_location = self
-            .state
-            .components
-            .location(student)
-            .expect("location exists");
-        let teacher_location = self
-            .state
-            .components
-            .location(teacher)
-            .expect("location exists");
+        let student_location =
+            game_spatial::location(&self.state.components, game_ecs::StableId((student).0))
+                .expect("location exists");
+        let teacher_location =
+            game_spatial::location(&self.state.components, game_ecs::StableId((teacher).0))
+                .expect("location exists");
         if student_location != teacher_location || !matches!(student_location, Location::AtArea(_))
         {
             return Err(Error::Unavailable);
         }
         if [student, teacher].into_iter().any(|id| {
-            let body = self.state.components.body(id).unwrap();
+            let body = game_physiology::body(&self.state.components, id).unwrap();
             !body.vitals.alive
                 || body.vitals.health == 0
                 || !matches!(
@@ -309,7 +305,9 @@ impl Simulation {
         }) {
             return Err(Error::Unavailable);
         }
-        let teacher_mind = &self.state.components.mind(teacher).expect("mind exists");
+        let teacher_mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, teacher)
+                .expect("mind exists");
         let knows = match topic {
             LessonTopic::Invocation => world.guardians[&teacher].knows_invocation,
             LessonTopic::Craft => {
@@ -396,13 +394,11 @@ impl Simulation {
         {
             return Vec::new();
         }
-        let body = self.state.components.body(student).unwrap();
+        let body = game_physiology::body(&self.state.components, student).unwrap();
         let activity = self.state.components.activity(student).unwrap();
-        let location = self
-            .state
-            .components
-            .location(student)
-            .expect("location exists");
+        let location =
+            game_spatial::location(&self.state.components, game_ecs::StableId((student).0))
+                .expect("location exists");
         if !body.vitals.alive
             || body.vitals.health == 0
             || !matches!(*activity, Activity::Idle | Activity::Rest)
@@ -413,10 +409,7 @@ impl Simulation {
         let mut commands = Vec::new();
         for (teacher, guard) in &world.guardians {
             let teacher_activity = self.state.components.activity(*teacher).unwrap();
-            if self
-                .state
-                .components
-                .location(*teacher)
+            if game_spatial::location(&self.state.components, game_ecs::StableId(teacher.0))
                 .expect("location exists")
                 != location
                 || self.in_combat(*teacher)
@@ -426,7 +419,11 @@ impl Simulation {
             {
                 continue;
             }
-            let mind = &self.state.components.mind(*teacher).expect("mind exists");
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                *teacher,
+            )
+            .expect("mind exists");
             if !mind
                 .child_signals
                 .get(&student)
@@ -464,13 +461,13 @@ impl Simulation {
                 k.good == Good::Food
                     && k.accessible
                     && k.quantity.0 >= 1_000
-                    && self
-                        .state
-                        .components
-                        .mind(student)
-                        .expect("mind exists")
-                        .knowledge
-                        .contains_key(&k.inventory)
+                    && game_characters::decisions::mind::<game_api::Command>(
+                        &self.state.components,
+                        student,
+                    )
+                    .expect("mind exists")
+                    .knowledge
+                    .contains_key(&k.inventory)
             }) {
                 commands.push(Command::RequestGuardian {
                     guardian: *teacher,
@@ -560,19 +557,16 @@ impl Simulation {
             == *self.state.components.activity(student).unwrap();
         if !paired
             || completes != self.state.time
-            || *self
-                .state
-                .components
-                .location(teacher)
+            || *game_spatial::location(&self.state.components, game_ecs::StableId((teacher).0))
                 .expect("location exists")
-                != *self
-                    .state
-                    .components
-                    .location(student)
+                != *game_spatial::location(&self.state.components, game_ecs::StableId((student).0))
                     .expect("location exists")
-            || [teacher, student]
-                .into_iter()
-                .any(|id| !self.state.components.body(id).unwrap().vitals.alive)
+            || [teacher, student].into_iter().any(|id| {
+                !game_physiology::body(&self.state.components, id)
+                    .unwrap()
+                    .vitals
+                    .alive
+            })
         {
             self.interrupt_lesson(actor);
             return;
@@ -593,37 +587,43 @@ impl Simulation {
                 gain
             }
             LessonTopic::Craft => {
-                let knowledge = self
-                    .state
-                    .components
-                    .mind(teacher)
-                    .expect("mind exists")
-                    .interests
-                    .get(&ChildhoodInterest::Craft)
-                    .copied()
-                    .unwrap_or(0)
-                    .max(u64::from(self.own_skill_level(teacher, Skill::Craft)) * 10);
-                let learning = self
-                    .state
-                    .components
-                    .mind_mut(student)
-                    .unwrap()
-                    .interests
-                    .entry(ChildhoodInterest::Craft)
-                    .or_default();
+                let knowledge = game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    teacher,
+                )
+                .expect("mind exists")
+                .interests
+                .get(&ChildhoodInterest::Craft)
+                .copied()
+                .unwrap_or(0)
+                .max(u64::from(self.own_skill_level(teacher, Skill::Craft)) * 10);
+                let learning = game_characters::decisions::mind_mut::<game_api::Command>(
+                    &mut self.state.components,
+                    student,
+                )
+                .unwrap()
+                .interests
+                .entry(ChildhoodInterest::Craft)
+                .or_default();
                 let gain = lesson_gain.min(knowledge.saturating_sub(*learning));
                 *learning += gain;
                 gain
             }
             LessonTopic::Travel => {
-                let known = self
-                    .state
-                    .components
-                    .mind(teacher)
-                    .expect("mind exists")
-                    .routes
-                    .clone();
-                let student_routes = &mut self.state.components.mind_mut(student).unwrap().routes;
+                let known = game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    teacher,
+                )
+                .expect("mind exists")
+                .routes
+                .clone();
+                let student_routes =
+                    &mut game_characters::decisions::mind_mut::<game_api::Command>(
+                        &mut self.state.components,
+                        student,
+                    )
+                    .unwrap()
+                    .routes;
                 let mut new_links = 0_u64;
                 for (area, links) in known {
                     let own = student_routes.entry(area).or_default();
@@ -670,22 +670,16 @@ impl Simulation {
                 *self.state.components.activity(requester).unwrap(),
                 Activity::Idle | Activity::Rest
             )
-            || !self.state.components.body(requester).unwrap().vitals.alive
-            || *self
-                .state
-                .components
-                .location(requester)
+            || !game_physiology::body(&self.state.components, requester)
+                .unwrap()
+                .vitals
+                .alive
+            || *game_spatial::location(&self.state.components, game_ecs::StableId((requester).0))
                 .expect("location exists")
-                != *self
-                    .state
-                    .components
-                    .location(guardian)
+                != *game_spatial::location(&self.state.components, game_ecs::StableId((guardian).0))
                     .expect("location exists")
             || !matches!(
-                *self
-                    .state
-                    .components
-                    .location(requester)
+                *game_spatial::location(&self.state.components, game_ecs::StableId((requester).0))
                     .expect("location exists"),
                 Location::AtArea(_)
             )
@@ -708,14 +702,14 @@ impl Simulation {
                 in_combat: self.in_combat(guardian),
                 physical_duty_pending: !matches!(*activity, Activity::Idle | Activity::Rest),
                 ready,
-                known_distress: self
-                    .state
-                    .components
-                    .mind(guardian)
-                    .expect("mind exists")
-                    .child_signals
-                    .get(&requester)
-                    .is_some_and(|s| s.urgency > 0),
+                known_distress: game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    guardian,
+                )
+                .expect("mind exists")
+                .child_signals
+                .get(&requester)
+                .is_some_and(|s| s.urgency > 0),
             },
         )
         .err()
@@ -787,29 +781,36 @@ impl Simulation {
         let guardians: Vec<_> = world.guardians.keys().copied().collect();
         for id in guardians {
             if let Some(person) = current {
-                let same_place = *self.state.components.location(id).expect("location exists")
-                    == *self
-                        .state
-                        .components
-                        .location(person)
+                let same_place =
+                    *game_spatial::location(&self.state.components, game_ecs::StableId((id).0))
                         .expect("location exists")
-                    && matches!(
-                        *self.state.components.location(id).expect("location exists"),
-                        Location::AtArea(_)
-                    )
-                    && self.state.components.body(id).unwrap().vitals.health > 0;
+                        == *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((person).0),
+                        )
+                        .expect("location exists")
+                        && matches!(
+                            *game_spatial::location(
+                                &self.state.components,
+                                game_ecs::StableId((id).0)
+                            )
+                            .expect("location exists"),
+                            Location::AtArea(_)
+                        )
+                        && game_physiology::body(&self.state.components, id)
+                            .unwrap()
+                            .vitals
+                            .health
+                            > 0;
                 if same_place {
-                    let personality = self
-                        .state
-                        .components
-                        .mind(id)
-                        .expect("mind exists")
-                        .personality
-                        .clone();
-                    let stage = self
-                        .state
-                        .components
-                        .life(person)
+                    let personality = game_characters::decisions::mind::<game_api::Command>(
+                        &self.state.components,
+                        id,
+                    )
+                    .expect("mind exists")
+                    .personality
+                    .clone();
+                    let stage = game_lifecycle::life(&self.state.components, person)
                         .expect("life exists")
                         .stage;
                     let assessment = self
@@ -837,7 +838,7 @@ impl Simulation {
                 continue;
             }
             let sensed = current.map(|person| self.resolved_location(person));
-            let body = self.state.components.body(id).unwrap();
+            let body = game_physiology::body(&self.state.components, id).unwrap();
             let activity = self.state.components.activity(id).unwrap();
             let own_location = self.resolved_location(id);
             let pending = self.state.lineage.as_ref().unwrap().guardians[&id]
@@ -960,7 +961,11 @@ impl Simulation {
                 Some(command),
             );
         }
-        let mind = &self.state.components.mind(guardian).expect("mind exists");
+        let mind = &game_characters::decisions::mind::<game_api::Command>(
+            &self.state.components,
+            guardian,
+        )
+        .expect("mind exists");
         let mut need = mind
             .child_signals
             .get(&target)
@@ -983,9 +988,7 @@ impl Simulation {
         let together = self.transport_same_place(guardian, target);
         let applicable = self.dependent_signal_visible(guardian, target).then(|| {
             self.state.development.as_ref().is_some_and(|_| {
-                self.state
-                    .components
-                    .life(target)
+                game_lifecycle::life(&self.state.components, target)
                     .is_some_and(|life| matches!(life.stage, LifeStage::Infant | LifeStage::Child))
             })
         });
@@ -1100,10 +1103,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         || world.rules.lesson_duration.0 == 0
         || !(1..=1_000).contains(&world.rules.lesson_gain)
         || !(1..=1_000).contains(&world.rules.invocation_access_threshold)
-        || world
-            .invocation_learning
-            .iter()
-            .any(|(id, value)| state.components.body(*id).is_none() || *value > 1_000)
+        || world.invocation_learning.iter().any(|(id, value)| {
+            game_physiology::body(&state.components, *id).is_none() || *value > 1_000
+        })
     {
         return Err(fail());
     }
@@ -1117,23 +1119,18 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         {
             if ![actor, teacher, student]
                 .into_iter()
-                .all(|id| state.components.body(id).is_some())
+                .all(|id| game_physiology::body(&state.components, id).is_some())
                 || ![teacher, student].contains(&actor)
                 || teacher == student
                 || !world.guardians.contains_key(&teacher)
                 || world.current() != Some(student)
                 || *state.components.activity(teacher).unwrap()
                     != *state.components.activity(student).unwrap()
-                || state
-                    .people
-                    .iter()
-                    .find(|p| p.id == teacher)
-                    .and_then(|p| state.components.location(p.id))
-                    != state
-                        .people
-                        .iter()
-                        .find(|p| p.id == student)
-                        .and_then(|p| state.components.location(p.id))
+                || state.people.iter().find(|p| p.id == teacher).and_then(|p| {
+                    game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
+                }) != state.people.iter().find(|p| p.id == student).and_then(|p| {
+                    game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
+                })
             {
                 return Err(fail());
             }
@@ -1141,7 +1138,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 .0
                 .checked_sub(world.rules.lesson_duration.0)
                 .ok_or_else(fail)?;
-            let life = state.components.life(student).ok_or_else(fail)?;
+            let life = game_lifecycle::life(&state.components, student).ok_or_else(fail)?;
             let age = started
                 .checked_sub(life.born.0)
                 .and_then(|v| v.checked_add(life.initial_age.0))
@@ -1163,8 +1160,8 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     let mut seen = BTreeSet::new();
     for (i, incarnation) in world.incarnations.iter().enumerate() {
-        let life = state.components.life(incarnation.person).ok_or_else(fail)?;
-        let body = state.components.body(incarnation.person).ok_or_else(fail)?;
+        let life = game_lifecycle::life(&state.components, incarnation.person).ok_or_else(fail)?;
+        let body = game_physiology::body(&state.components, incarnation.person).ok_or_else(fail)?;
         if !seen.insert(incarnation.person)
             || incarnation.bound_at > state.time
             || incarnation
@@ -1183,9 +1180,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         }
         if i > 0 {
             let previous_death = world.incarnations[i - 1].died_at.ok_or_else(fail)?;
-            let first_eligible = state
-                .components
-                .lives()
+            let first_eligible = game_lifecycle::all_lives(&state.components)
                 .map(|(_, life)| life)
                 .filter(|candidate| {
                     candidate.born > previous_death
@@ -1299,7 +1294,9 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     GuardianRequest::Move { destination } => {
                         !state.areas.iter().any(|a| a.id == destination)
                     }
-                    GuardianRequest::Work { site } => state.components.site(site).is_none(),
+                    GuardianRequest::Work { site } => {
+                        game_workshop::site(&state.components, site).is_none()
+                    }
                     GuardianRequest::Rest => false,
                     GuardianRequest::Supply {
                         source, quantity, ..

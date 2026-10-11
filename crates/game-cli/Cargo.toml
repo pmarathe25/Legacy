@@ -10,3 +10,8 @@ game-session.workspace = true
 game-assembly.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+game-ecs.workspace = true
+game-lifecycle.workspace = true
+game-spatial.workspace = true
+

@@ -40,7 +40,7 @@ fn site_exists(state: &CanonicalState, site: SiteId) -> bool {
     state
         .physical
         .as_ref()
-        .is_some_and(|_| state.components.site(site).is_some())
+        .is_some_and(|_| game_workshop::site(&state.components, site).is_some())
         || state
             .agriculture
             .as_ref()
@@ -93,7 +93,7 @@ fn output_source(state: &CanonicalState, site: SiteId, good: Good) -> Option<Inv
             state
                 .physical
                 .as_ref()
-                .and_then(|_| state.components.site(site))
+                .and_then(|_| game_workshop::site(&state.components, site))
                 .and_then(|s| (state.inventories[&s.output].good == good).then_some(s.output))
         })
 }
@@ -571,10 +571,7 @@ impl Simulation {
             .iter()
             .find(|p| {
                 p.role == Role::Citizen
-                    && *sim
-                        .state
-                        .components
-                        .location(p.id)
+                    && *game_spatial::location(&sim.state.components, game_ecs::StableId((p.id).0))
                         .expect("location exists")
                         == Location::AtArea(local)
             })
@@ -812,12 +809,12 @@ impl Simulation {
             .entry(actor)
             .or_default()
             .insert(view.id, view);
-        if let Some(mind) = self
-            .state
-            .decisions
-            .as_mut()
-            .and_then(|_| self.state.components.mind_mut(actor))
-        {
+        if let Some(mind) = self.state.decisions.as_mut().and_then(|_| {
+            game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                actor,
+            )
+        }) {
             for debtor in failures {
                 let loss = i32::from(mind.personality.honesty) / 100;
                 let relationship =
@@ -954,17 +951,11 @@ impl Simulation {
             .map(|(actor, _)| *actor)
             .collect();
         for actor in actors {
-            if !self
-                .state
-                .components
-                .body(actor)
+            if !game_physiology::body(&self.state.components, actor)
                 .expect("body exists")
                 .vitals
                 .alive
-                || self
-                    .state
-                    .components
-                    .body(actor)
+                || game_physiology::body(&self.state.components, actor)
                     .expect("body exists")
                     .vitals
                     .health
@@ -1044,16 +1035,11 @@ impl Simulation {
                     .then_some(*actor)
             })
             .filter(|actor| {
-                self.state
-                    .components
-                    .body(*actor)
+                game_physiology::body(&self.state.components, *actor)
                     .expect("body exists")
                     .vitals
                     .alive
-                    && self
-                        .state
-                        .components
-                        .body(*actor)
+                    && game_physiology::body(&self.state.components, *actor)
                         .expect("body exists")
                         .vitals
                         .health
@@ -1661,7 +1647,7 @@ impl Simulation {
             .physical
             .as_ref()
             .into_iter()
-            .flat_map(|_| self.state.components.bodies())
+            .flat_map(|_| game_physiology::bodies(&self.state.components))
             .filter_map(|(actor, body)| {
                 let actor = &actor;
                 let activity = self
@@ -1716,9 +1702,7 @@ impl Simulation {
             .map(|i| &self.state.people[*i])
             .ok_or(Error::Unavailable)?;
         let alive = self.state.physical.as_ref().is_some_and(|_| {
-            self.state
-                .components
-                .body(actor)
+            game_physiology::body(&self.state.components, actor)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -1726,10 +1710,7 @@ impl Simulation {
         if !alive
             || !self.independent(actor)
             || self.in_combat(actor)
-            || self
-                .state
-                .components
-                .body(actor)
+            || game_physiology::body(&self.state.components, actor)
                 .expect("body exists")
                 .vitals
                 .health
@@ -1737,10 +1718,7 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        match *self
-            .state
-            .components
-            .location(p.id)
+        match *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
             .ok_or(Error::Unavailable)?
         {
             Location::AtArea(area) => Ok(area),
@@ -2249,7 +2227,11 @@ impl Simulation {
                         continue;
                     }
                     let revised = game_agreements::amended_terms(a, m)?;
-                    let mind = &self.state.components.mind(*actor).unwrap();
+                    let mind = &game_characters::decisions::mind::<game_api::Command>(
+                        &self.state.components,
+                        *actor,
+                    )
+                    .unwrap();
                     let support = game_agreements::amendment_support(
                         self.agreement_offer_score(*actor, &a.terms)?,
                         self.agreement_offer_score(*actor, &revised)?,
@@ -2278,11 +2260,9 @@ impl Simulation {
         actor: PersonId,
         terms: &[AgreementTerm],
     ) -> Result<i64, Error> {
-        let mind = self
-            .state
-            .components
-            .mind(actor)
-            .ok_or(Error::Unavailable)?;
+        let mind =
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .ok_or(Error::Unavailable)?;
         let mut shares = BTreeMap::new();
         for term in terms {
             if let AgreementTerm::OutputShare {
@@ -2292,10 +2272,7 @@ impl Simulation {
                 ..
             } = *term
             {
-                let fertility = self
-                    .state
-                    .components
-                    .ecology_knowledge(actor)
+                let fertility = game_ecology::knowledge(&self.state.components, actor)
                     .and_then(|known| known.known_plots.get(&site))
                     .map(|plot| plot.soil_fertility);
                 let remembered_plan = self
@@ -2330,8 +2307,10 @@ impl Simulation {
                         world
                             .field(&self.state.components, site)
                             .is_some_and(|field| {
-                                self.state.components.location(actor)
-                                    == Some(&Location::AtArea(field.area))
+                                game_spatial::location(
+                                    &self.state.components,
+                                    game_ecs::StableId((actor).0),
+                                ) == Some(&Location::AtArea(field.area))
                             })
                     });
                 let prospect = match planned {
@@ -2381,10 +2360,7 @@ impl Simulation {
         let facts = game_agreements::OfferActorFacts {
             actor,
             now: self.state.time,
-            hunger: self
-                .state
-                .components
-                .body(actor)
+            hunger: game_physiology::body(&self.state.components, actor)
                 .ok_or(Error::Unavailable)?
                 .vitals
                 .hunger,
@@ -2410,7 +2386,9 @@ impl Simulation {
     fn seek_local_exchange(&mut self) -> Result<(), Error> {
         let world = self.state.agreements.as_ref().unwrap();
         let mut proposals = Vec::new();
-        for (actor, mind) in self.state.components.minds() {
+        for (actor, mind) in
+            game_characters::decisions::minds::<game_api::Command>(&self.state.components)
+        {
             let sites: Vec<_> = mind
                 .sites
                 .values()
@@ -2424,10 +2402,7 @@ impl Simulation {
                 actor,
                 autonomous: actor != self.state.ruler,
                 area: self.agreement_actor_area(actor).ok(),
-                hunger: self
-                    .state
-                    .components
-                    .body(actor)
+                hunger: game_physiology::body(&self.state.components, actor)
                     .ok_or(Error::Unavailable)?
                     .vitals
                     .hunger,
@@ -2495,8 +2470,12 @@ impl Simulation {
             let Ok(area) = self.agreement_actor_area(debtor) else {
                 continue;
             };
-            let body = &self.state.components.body(debtor).expect("body exists");
-            let mind = &self.state.components.mind(debtor).unwrap();
+            let body = &game_physiology::body(&self.state.components, debtor).expect("body exists");
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                debtor,
+            )
+            .unwrap();
             let rules = &self.state.physical.as_ref().unwrap().rules;
             if !matches!(
                 *self

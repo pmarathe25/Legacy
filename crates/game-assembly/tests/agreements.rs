@@ -49,10 +49,7 @@ fn food(sim: &Simulation) -> InventoryId {
         .id
 }
 fn labor(sim: &Simulation, millis: u64) -> AgreementTerm {
-    let site = sim
-        .canonical_state()
-        .components
-        .sites()
+    let site = game_workshop::sites(&sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
@@ -315,10 +312,7 @@ fn amendment_authority_comes_from_the_procedure_people_accepted() {
 fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade() {
     let mut sim = fixture(1);
     let npc = citizen(&sim);
-    let site = sim
-        .canonical_state()
-        .components
-        .sites()
+    let site = game_workshop::sites(&sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()

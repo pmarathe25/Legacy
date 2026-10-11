@@ -60,10 +60,7 @@ impl Simulation {
         actor: PersonId,
     ) -> Result<game_physiology::traits::Development, Error> {
         let world = self.state.development.as_ref().ok_or(Error::Unavailable)?;
-        let maturity = self
-            .state
-            .components
-            .life(actor)
+        let maturity = game_lifecycle::life(&self.state.components, actor)
             .ok_or(Error::Unavailable)?
             .maturity_milli(&world.rules, self.state.time)?;
         let levels: Vec<_> = Skill::ALL
@@ -87,10 +84,18 @@ impl Simulation {
             || self.state.development.is_none()
             || self.state.decisions.is_none()
             || self.state.physical.is_none()
-            || self.state.components.person_genomes().next().is_some()
-            || self.state.components.inheritances().next().is_some()
-            || self.state.components.trait_developments().next().is_some()
-            || self.state.components.person_temperaments().next().is_some()
+            || game_genetics::all_person_genomes(&self.state.components)
+                .next()
+                .is_some()
+            || game_genetics::all_inheritances(&self.state.components)
+                .next()
+                .is_some()
+            || game_physiology::traits::all_developments(&self.state.components)
+                .next()
+                .is_some()
+            || game_characters::temperament::all_person_temperaments(&self.state.components)
+                .next()
+                .is_some()
         {
             return Err(Error::InvalidConfiguration(
                 "trait composition requires fresh human domains".into(),
@@ -124,7 +129,8 @@ impl Simulation {
         // Stage plain new rows; no founder is visible until the whole batch is valid.
         let mut batch = game_ecs::Batch::new();
         for person in &self.state.people {
-            let life = &self.state.components.life(person.id).expect("life exists");
+            let life =
+                &game_lifecycle::life(&self.state.components, person.id).expect("life exists");
             let founder = genes.prepare_founder(
                 self.state.seed,
                 person.id,
@@ -146,12 +152,12 @@ impl Simulation {
             let development = self.trait_development(&traits, person.id)?;
             development.validate()?;
             let record = game_characters::temperament::PersonTemperament {
-                baseline: (&self
-                    .state
-                    .components
-                    .mind(person.id)
-                    .expect("mind exists")
-                    .personality)
+                baseline: (&game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    person.id,
+                )
+                .expect("mind exists")
+                .personality)
                     .into(),
                 learned_offsets: [0; 4],
             };
@@ -182,10 +188,7 @@ impl Simulation {
             return Ok(());
         };
         let parents = {
-            let conceived = self
-                .state
-                .components
-                .pregnancy(pregnancy)
+            let conceived = game_lifecycle::pregnancy(&self.state.components, pregnancy)
                 .expect("pregnancy exists");
             [conceived.gestator, conceived.partner]
         };
@@ -217,7 +220,9 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .interpret_genes(child, &genes.allele_source(&self.state.components))?;
-        self.state.components.life_mut(child).unwrap().reproduction = role;
+        game_lifecycle::life_mut(&mut self.state.components, child)
+            .unwrap()
+            .reproduction = role;
         self.state.physical_traits.as_mut().unwrap().register(
             &mut self.state.components,
             child,
@@ -232,7 +237,12 @@ impl Simulation {
             .as_mut()
             .unwrap()
             .register_newborn(&mut self.state.components, child)?;
-        self.state.components.mind_mut(child).unwrap().personality = personality;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut self.state.components,
+            child,
+        )
+        .unwrap()
+        .personality = personality;
         self.apply_trait_temperament(child);
         self.apply_genetic_body_change(child, 1_000, self.genetic_health_milli(child));
         Ok(())
@@ -334,10 +344,7 @@ impl Simulation {
             return Ok(());
         }
         let genes = self.state.genetics.as_ref().ok_or(Error::Unavailable)?;
-        let pending = self
-            .state
-            .components
-            .trait_developments()
+        let pending = game_physiology::traits::all_developments(&self.state.components)
             .map(|(actor, _)| actor)
             .map(|actor| {
                 self.trait_development(traits, actor)
@@ -432,10 +439,18 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         return if state.physical_traits.is_none()
             && state.temperament.is_none()
             && state.heredity.is_none()
-            && state.components.person_genomes().next().is_none()
-            && state.components.inheritances().next().is_none()
-            && state.components.trait_developments().next().is_none()
-            && state.components.person_temperaments().next().is_none()
+            && game_genetics::all_person_genomes(&state.components)
+                .next()
+                .is_none()
+            && game_genetics::all_inheritances(&state.components)
+                .next()
+                .is_none()
+            && game_physiology::traits::all_developments(&state.components)
+                .next()
+                .is_none()
+            && game_characters::temperament::all_person_temperaments(&state.components)
+                .next()
+                .is_none()
         {
             Ok(())
         } else {
@@ -474,21 +489,15 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     check(state, "heredity", heredity)?;
     state.development.as_ref().ok_or_else(fail)?;
     let people: BTreeSet<_> = state.people.iter().map(|person| person.id).collect();
-    if state
-        .components
-        .person_genomes()
+    if game_genetics::all_person_genomes(&state.components)
         .map(|(id, _)| id)
         .collect::<BTreeSet<_>>()
         != people
-        || state
-            .components
-            .trait_developments()
+        || game_physiology::traits::all_developments(&state.components)
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>()
             != people
-        || state
-            .components
-            .person_temperaments()
+        || game_characters::temperament::all_person_temperaments(&state.components)
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>()
             != people
@@ -505,7 +514,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     {
         return Err(fail());
     }
-    for (actor, life) in state.components.lives() {
+    for (actor, life) in game_lifecycle::all_lives(&state.components) {
         let role = heredity
             .interpret_genes(actor, &genes.allele_source(&state.components))
             .map_err(|_| fail())?;
@@ -527,8 +536,8 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             )
             .map_err(|_| fail())?;
     }
-    for (id, inheritance) in state.components.inheritances() {
-        let pregnancy = state.components.pregnancy(id).ok_or_else(fail)?;
+    for (id, inheritance) in game_genetics::all_inheritances(&state.components) {
+        let pregnancy = game_lifecycle::pregnancy(&state.components, id).ok_or_else(fail)?;
         if inheritance.parents != [pregnancy.gestator, pregnancy.partner] {
             return Err(fail());
         }
@@ -542,11 +551,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             _ => return Err(fail()),
         }
     }
-    for (id, pregnancy) in state.components.pregnancies() {
+    for (id, pregnancy) in game_lifecycle::all_pregnancies(&state.components) {
         if !matches!(
             pregnancy.state,
             development::PregnancyState::Conceiving { .. } | development::PregnancyState::Ended
-        ) && state.components.inheritance(id).is_none()
+        ) && game_genetics::inheritance(&state.components, id).is_none()
         {
             return Err(fail());
         }
@@ -735,10 +744,7 @@ mod tests {
         .unwrap();
         sim.debug_actor_command(player, Command::Conceive { partner: mother })
             .unwrap();
-        let pregnancy = sim
-            .state
-            .components
-            .pregnancies()
+        let pregnancy = game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(id, _)| id)
             .last()
             .unwrap();
@@ -750,7 +756,11 @@ mod tests {
         let mut sim = fixture(1);
         let player = sim.state.ruler;
         let (mother, pregnancy) = conceive_with_player(&mut sim);
-        assert!(sim.state.components.inheritances().next().is_none());
+        assert!(
+            game_genetics::all_inheritances(&sim.state.components)
+                .next()
+                .is_none()
+        );
         sim.advance(SimDuration(30_000)).unwrap();
         let before = sim.save().unwrap();
         let mut restored = Simulation::load(
@@ -764,16 +774,15 @@ mod tests {
         sim.advance(SimDuration(30_000)).unwrap();
         restored.advance(SimDuration(30_000)).unwrap();
         assert_eq!(sim.state, restored.state);
-        let frozen = sim
-            .state
-            .components
-            .inheritance(pregnancy)
+        let frozen = game_genetics::inheritance(&sim.state.components, pregnancy)
             .unwrap()
             .genome
             .clone()
             .unwrap();
         assert_eq!(
-            sim.state.components.inheritance(pregnancy).unwrap().parents,
+            game_genetics::inheritance(&sim.state.components, pregnancy)
+                .unwrap()
+                .parents,
             [mother, player]
         );
         sim.debug_injure(player, sim.body_rules(player).max_health)
@@ -803,21 +812,18 @@ mod tests {
         let b = restored.advance(SimDuration(180_000)).unwrap();
         assert_eq!(a.reason, b.reason);
         assert_eq!(sim.state, restored.state);
-        let child = sim
-            .state
-            .components
-            .inheritance(pregnancy)
+        let child = game_genetics::inheritance(&sim.state.components, pregnancy)
             .unwrap()
             .born
             .unwrap();
         assert_eq!(
-            sim.state.components.person_genome(child).unwrap().genome,
+            game_genetics::person_genome(&sim.state.components, child)
+                .unwrap()
+                .genome,
             frozen
         );
         assert_eq!(
-            sim.state
-                .components
-                .life(child)
+            game_lifecycle::life(&sim.state.components, child)
                 .expect("life exists")
                 .parents,
             [mother, player]
@@ -828,15 +834,15 @@ mod tests {
                 .all(|skill| skill.practice_ms == 0)
         );
         assert!(
-            sim.state
-                .components
-                .mind(child)
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, child)
                 .expect("mind exists")
                 .knowledge
                 .values()
                 .all(|fact| fact.source == KnowledgeSource::Observed(child)
                     && fact.observed_at
-                        >= sim.state.components.life(child).expect("life exists").born)
+                        >= game_lifecycle::life(&sim.state.components, child)
+                            .expect("life exists")
+                            .born)
         );
         assert_eq!(
             sim.state.inventories[&sim.state.people[sim.person_index[&child]].inventory]
@@ -845,18 +851,14 @@ mod tests {
             0
         );
         assert_eq!(
-            sim.state
-                .components
-                .mind(child)
+            game_characters::decisions::mind::<game_api::Command>(&sim.state.components, child)
                 .expect("mind exists")
                 .personality
                 .honesty,
             500
         );
         assert_eq!(
-            sim.state
-                .components
-                .body(child)
+            game_physiology::body(&sim.state.components, child)
                 .expect("body exists")
                 .vitals
                 .health,
@@ -883,10 +885,7 @@ mod tests {
         let sliced = run(4, true);
         assert_eq!(whole.state, sliced.state);
         assert!(
-            whole
-                .state
-                .components
-                .inheritances()
+            game_genetics::all_inheritances(&whole.state.components)
                 .any(|(_, pregnancy)| pregnancy.born.is_some())
         );
     }
@@ -960,10 +959,7 @@ mod tests {
             )
             .unwrap();
         strong.debug_actor_command(actor, Command::Cancel).unwrap();
-        let site = weak
-            .state
-            .components
-            .sites()
+        let site = game_workshop::sites(&weak.state.components)
             .map(|(_, site)| site)
             .find(|site| site.area == weak.state.areas[0].id)
             .unwrap()
@@ -973,8 +969,8 @@ mod tests {
         strong
             .debug_actor_command(actor, Command::Work { site })
             .unwrap();
-        let weak_job = weak.state.components.job(actor).unwrap();
-        let strong_job = strong.state.components.job(actor).unwrap();
+        let weak_job = game_workshop::job(&weak.state.components, actor).unwrap();
+        let strong_job = game_workshop::job(&strong.state.components, actor).unwrap();
         let weak_duration = skills::work_duration(weak_job.remaining, weak_job.rate, 0).unwrap();
         let strong_duration =
             skills::work_duration(strong_job.remaining, strong_job.rate, 0).unwrap();

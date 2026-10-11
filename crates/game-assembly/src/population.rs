@@ -97,7 +97,11 @@ impl Simulation {
             let a = settlement.residents[3];
             let b = settlement.residents[4];
             for (actor, partner) in [(a, b), (b, a)] {
-                let mind = sim.state.components.mind_mut(actor).unwrap();
+                let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                    &mut sim.state.components,
+                    actor,
+                )
+                .unwrap();
                 mind.dream = decisions::Aspiration::Parenthood;
                 mind.relationships.insert(
                     partner,
@@ -264,9 +268,7 @@ impl Simulation {
             self.seed_water_safety(*actor, water)?;
         }
         let levels = 10.min(config.skills.max_level);
-        self.state
-            .components
-            .personal_skills_mut(healer)
+        game_skills::skills_mut(&mut self.state.components, healer)
             .unwrap()
             .records
             .insert(
@@ -277,14 +279,19 @@ impl Simulation {
                     progress_ms: 0,
                 },
             );
-        self.state
-            .components
-            .mind_mut(healer)
-            .unwrap()
-            .personality
-            .empathy = 900;
-        self.state.components.mind_mut(healer).unwrap().dream =
-            decisions::Aspiration::SupportOthers;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut self.state.components,
+            healer,
+        )
+        .unwrap()
+        .personality
+        .empathy = 900;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut self.state.components,
+            healer,
+        )
+        .unwrap()
+        .dream = decisions::Aspiration::SupportOthers;
         let timber = lots
             .iter()
             .find(|id| {
@@ -318,18 +325,21 @@ impl Simulation {
             .insert(output, steward);
         let site = SiteId(allocate(&mut self.state)?);
         let rules = self.state.projects.as_ref().unwrap().rules.clone();
-        self.state.components.insert_site(physical::Site {
-            id: site,
-            area: settlement.center,
-            input: timber,
-            input_quantity: rules.recipe_timber,
-            tool,
-            output,
-            output_quantity: rules.recipe_tools,
-            duration: rules.recipe_time,
-            access: access.clone(),
-            last_granted: None,
-        })?;
+        game_workshop::insert_site(
+            &mut self.state.components,
+            physical::Site {
+                id: site,
+                area: settlement.center,
+                input: timber,
+                input_quantity: rules.recipe_timber,
+                tool,
+                output,
+                output_quantity: rules.recipe_tools,
+                duration: rules.recipe_time,
+                access: access.clone(),
+                last_granted: None,
+            },
+        )?;
         let project = ProjectId(allocate(&mut self.state)?);
         let enterprise = EnterpriseId(allocate(&mut self.state)?);
         let participants: BTreeSet<_> = settlement.residents[3..11].iter().copied().collect();
@@ -399,11 +409,11 @@ impl Simulation {
                 .iter()
                 .copied()
                 .filter(|id| {
-                    *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[id]].id)
-                        .expect("location exists")
+                    *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[id]].id).0),
+                    )
+                    .expect("location exists")
                         == Location::AtArea(area)
                 })
                 .collect();
@@ -440,7 +450,11 @@ impl Simulation {
         }
         let reported:Vec<_>=self.state.inventories.values().filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
         for actor in &settlement.residents {
-            let mind = self.state.components.mind_mut(*actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                *actor,
+            )
+            .unwrap();
             for stock in &reported {
                 let InventoryLocation::Area(area) = stock.location else {
                     unreachable!()
@@ -614,10 +628,11 @@ impl Simulation {
                 .collect::<BTreeMap<_, _>>();
             for (local, actor) in settlement.residents.iter().copied().enumerate() {
                 let p = &mut sim.state.people[sim.person_index[&actor]];
-                *sim.state
-                    .components
-                    .location_mut(p.id)
-                    .expect("location exists") =
+                *game_spatial::location_mut(
+                    &mut sim.state.components,
+                    game_ecs::StableId((p.id).0),
+                )
+                .expect("location exists") =
                     Location::AtArea(if mixed && local % 4 == 1 && p.role == Role::Citizen {
                         settlement.fields
                     } else {
@@ -859,7 +874,11 @@ impl Simulation {
             let reporter = settlement.residents[3];
             let visible:Vec<_>=sim.state.inventories.values().filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
             for actor in &settlement.residents {
-                let mind = sim.state.components.mind_mut(*actor).unwrap();
+                let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                    &mut sim.state.components,
+                    *actor,
+                )
+                .unwrap();
                 for stock in &visible {
                     let InventoryLocation::Area(area) = stock.location else {
                         unreachable!()
@@ -890,11 +909,9 @@ impl Simulation {
         }
         sim.dependent_index.clear();
         for person in sim.state.people.clone() {
-            if let Location::AtArea(area) = *sim
-                .state
-                .components
-                .location(person.id)
-                .expect("location exists")
+            if let Location::AtArea(area) =
+                *game_spatial::location(&sim.state.components, game_ecs::StableId((person.id).0))
+                    .expect("location exists")
             {
                 sim.index_dependent(person.id, area);
             }
@@ -947,31 +964,35 @@ mod tests {
         let sim = world(1);
         assert_eq!(sim.state.people.len(), 45);
         assert_eq!(sim.state.areas.len(), 9);
-        assert_eq!(sim.state.components.bodies().count(), 45);
-        assert_eq!(sim.state.components.lives().count(), 45);
-        assert_eq!(sim.state.components.minds().count(), 45);
+        assert_eq!(game_physiology::bodies(&sim.state.components).count(), 45);
+        assert_eq!(game_lifecycle::all_lives(&sim.state.components).count(), 45);
+        assert_eq!(
+            game_characters::decisions::minds::<game_api::Command>(&sim.state.components).count(),
+            45
+        );
         assert!(sim.state.armies.is_some() && sim.state.realm.is_some());
         assert!(
-            sim.state
-                .components
-                .pregnancies()
+            game_lifecycle::all_pregnancies(&sim.state.components)
                 .map(|(_, row)| row)
                 .all(|p| matches!(p.state, development::PregnancyState::Conceiving { .. }))
         );
-        for mind in sim.state.components.minds().map(|(_, mind)| mind) {
+        for mind in game_characters::decisions::minds::<game_api::Command>(&sim.state.components)
+            .map(|(_, mind)| mind)
+        {
             assert!(mind.routes.len() <= 3);
         }
         assert_eq!(
-            sim.state.components.occupancies().count()
+            game_health::occupancies(&sim.state.components).count()
                 + sim
                     .state
                     .people
                     .iter()
                     .filter(|p| matches!(
-                        *sim.state
-                            .components
-                            .location(p.id)
-                            .expect("location exists"),
+                        *game_spatial::location(
+                            &sim.state.components,
+                            game_ecs::StableId((p.id).0)
+                        )
+                        .expect("location exists"),
                         Location::InTransit { .. }
                     ))
                     .count(),
@@ -999,12 +1020,7 @@ mod tests {
                     | EventKind::Consumed { .. }
                     | EventKind::Departed { .. }
             )));
-        assert!(
-            one.state
-                .components
-                .bodies()
-                .all(|(_, body)| body.vitals.alive)
-        );
+        assert!(game_physiology::bodies(&one.state.components).all(|(_, body)| body.vitals.alive));
         let loaded = Simulation::load(&one.save().unwrap(), Execution::default()).unwrap();
         assert_eq!(one.canonical_state(), loaded.canonical_state());
     }
@@ -1077,9 +1093,7 @@ mod tests {
                         .contains_key(child)
                 );
                 assert_eq!(
-                    one.state
-                        .components
-                        .life(*child)
+                    game_lifecycle::life(&one.state.components, *child)
                         .expect("life exists")
                         .parents,
                     *parents
@@ -1123,9 +1137,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            sim.state
-                .components
-                .lives()
+            game_lifecycle::all_lives(&sim.state.components)
                 .map(|(_, row)| row)
                 .all(|life| matches!(life.stage, LifeStage::Child | LifeStage::Adult))
         );

@@ -518,6 +518,7 @@ name = "game-cargo"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "serde",
  "serde_json",
 ]
@@ -540,7 +541,10 @@ version = "0.1.0"
 dependencies = [
  "game-api",
  "game-assembly",
+ "game-ecs",
+ "game-lifecycle",
  "game-session",
+ "game-spatial",
  "serde_json",
 ]
 

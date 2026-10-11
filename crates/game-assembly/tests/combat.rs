@@ -35,9 +35,7 @@ fn turn(
     })
 }
 fn hp(sim: &Simulation, actor: PersonId) -> u64 {
-    sim.canonical_state()
-        .components
-        .body(actor)
+    game_physiology::body(&sim.canonical_state().components, actor)
         .expect("body exists")
         .vitals
         .health

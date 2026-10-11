@@ -280,7 +280,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|_| self.state.components.body(actor))
+            .and_then(|_| game_physiology::body(&self.state.components, actor))
             .ok_or(Error::Unavailable)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return Err(Error::Unavailable);
@@ -932,7 +932,9 @@ impl Simulation {
         let w = self.state.combat.as_ref()?;
         let e = w.encounters.get(&encounter)?;
         let map = w.map(e.map)?;
-        let routes = &self.state.components.mind(actor)?.routes;
+        let routes =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?
+                .routes;
         map.exits
             .iter()
             .filter(|(to, p)| {
@@ -948,11 +950,11 @@ impl Simulation {
         encounter: EncounterId,
     ) -> Result<(), Error> {
         let area = self.army_area(actor)?;
-        if *self
-            .state
-            .components
-            .location(self.state.people[self.person_index[&actor]].id)
-            .expect("location exists")
+        if *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[self.person_index[&actor]].id).0),
+        )
+        .expect("location exists")
             != Location::AtArea(area)
             || self.army_actor_talking(actor)
             || self
@@ -1042,19 +1044,16 @@ impl Simulation {
             || e.fighters.contains_key(&a.actor)
             || self.army_area(a.actor).ok() != Some(a.area)
             || !self.can_fight(a.actor)
-            || self
-                .state
-                .components
-                .body(a.actor)
+            || game_physiology::body(&self.state.components, a.actor)
                 .expect("body exists")
                 .vitals
                 .fatigue
                 >= self.body_rules(a.actor).fatigue_limit
-            || *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[&a.actor]].id)
-                .expect("location exists")
+            || *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[&a.actor]].id).0),
+            )
+            .expect("location exists")
                 != Location::AtArea(a.area)
             || (army.commander != a.actor
                 && !self.mission_force_willing(a.actor, a.mission, a.target))
@@ -1066,10 +1065,7 @@ impl Simulation {
             || e.fighters
                 .get(&a.target)
                 .is_none_or(|f| f.withdrawn || f.surrendered)
-            || !self
-                .state
-                .components
-                .body(a.target)
+            || !game_physiology::body(&self.state.components, a.target)
                 .expect("body exists")
                 .vitals
                 .alive

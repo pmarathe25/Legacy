@@ -780,8 +780,11 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
     let mut sim = Simulation::new("invocation-fixture", 9, execution.clone()).unwrap();
     let actor = sim.observe().ruler;
     let world = sim.canonical_state().development.as_ref().unwrap();
-    let childhood =
-        sim.canonical_state().components.life(actor).unwrap().born.0 + world.rules.infancy.0;
+    let childhood = game_lifecycle::life(&sim.canonical_state().components, actor)
+        .unwrap()
+        .born
+        .0
+        + world.rules.infancy.0;
     let delta = childhood - sim.time().0;
     game_cli::execute(&mut sim, &format!("run {delta}ms"), &execution).unwrap();
     let teacher = *sim
@@ -797,10 +800,11 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
         let mut completed = false;
         for _ in 0..12 {
             if matches!(
-                sim.canonical_state()
-                    .components
-                    .location(teacher)
-                    .expect("location exists"),
+                game_spatial::location(
+                    &sim.canonical_state().components,
+                    game_ecs::StableId(teacher.0),
+                )
+                .expect("location exists"),
                 Location::AtArea(_)
             ) {
                 sim.debug_actor_command(teacher, Command::Rest).unwrap();

@@ -47,11 +47,11 @@ fn personality_changes_autonomous_choices_with_the_same_physical_opportunities()
             .expect("body exists"),
         Activity::Rest
     );
-    let mind = &sim
-        .canonical_state()
-        .components
-        .mind(worker)
-        .expect("mind exists");
+    let mind = &game_characters::decisions::mind::<game_api::Command>(
+        &sim.canonical_state().components,
+        worker,
+    )
+    .expect("mind exists");
     assert_eq!(mind.goal, decisions::Goal::Practice);
     assert!(mind.explanation.benefit > 0);
     sim.advance(MINUTE).unwrap();
@@ -69,10 +69,7 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
     let mut reference = sim(1);
     peaceful(&mut reference);
     let actor = reference.canonical_state().people[3].id;
-    let site = reference
-        .canonical_state()
-        .components
-        .sites()
+    let site = game_workshop::sites(&reference.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()
@@ -85,12 +82,12 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
     }
     let world = reference.canonical_state().decisions.as_ref().unwrap();
     assert_eq!(
-        reference
-            .canonical_state()
-            .components
-            .mind(actor)
-            .expect("mind exists")
-            .values[&world.work_concept]
+        game_characters::decisions::mind::<game_api::Command>(
+            &reference.canonical_state().components,
+            actor
+        )
+        .expect("mind exists")
+        .values[&world.work_concept]
             .experiences,
         3
     );
@@ -103,16 +100,8 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
         without_learning.canonical_state().physical
     );
     assert_eq!(
-        reference
-            .canonical_state()
-            .components
-            .bodies()
-            .collect::<Vec<_>>(),
-        without_learning
-            .canonical_state()
-            .components
-            .bodies()
-            .collect::<Vec<_>>()
+        game_physiology::bodies(&reference.canonical_state().components).collect::<Vec<_>>(),
+        game_physiology::bodies(&without_learning.canonical_state().components).collect::<Vec<_>>()
     );
     assert_eq!(
         reference
@@ -127,28 +116,12 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
             .collect::<Vec<_>>()
     );
     assert_eq!(
-        reference
-            .canonical_state()
-            .components
-            .jobs()
-            .collect::<Vec<_>>(),
-        without_learning
-            .canonical_state()
-            .components
-            .jobs()
-            .collect::<Vec<_>>()
+        game_workshop::jobs(&reference.canonical_state().components).collect::<Vec<_>>(),
+        game_workshop::jobs(&without_learning.canonical_state().components).collect::<Vec<_>>()
     );
     assert_eq!(
-        reference
-            .canonical_state()
-            .components
-            .sites()
-            .collect::<Vec<_>>(),
-        without_learning
-            .canonical_state()
-            .components
-            .sites()
-            .collect::<Vec<_>>()
+        game_workshop::sites(&reference.canonical_state().components).collect::<Vec<_>>(),
+        game_workshop::sites(&without_learning.canonical_state().components).collect::<Vec<_>>()
     );
     assert_eq!(
         reference.canonical_state().inventories,
@@ -245,11 +218,12 @@ fn distant_facts_require_a_timed_report_and_keep_their_original_age() {
     assert_eq!(fact.source, KnowledgeSource::Reported(sender));
     assert!(!fact.accessible);
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .mind(receiver)
-            .expect("mind exists")
-            .relationships[&sender]
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            receiver
+        )
+        .expect("mind exists")
+        .relationships[&sender]
             .trust,
         10
     );
@@ -323,11 +297,12 @@ fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() 
     })
     .unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .mind(ruler)
-            .expect("mind exists")
-            .knowledge[&source]
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            ruler
+        )
+        .expect("mind exists")
+        .knowledge[&source]
             .quantity,
         Quantity(0)
     );
@@ -401,10 +376,11 @@ fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplie
         .position(|p| p.id == actor)
         .unwrap();
     assert!(matches!(
-        *sim.canonical_state()
-            .components
-            .location(sim.canonical_state().people[index].id)
-            .expect("location exists"),
+        *game_spatial::location(
+            &sim.canonical_state().components,
+            game_ecs::StableId((sim.canonical_state().people[index].id).0)
+        )
+        .expect("location exists"),
         Location::InTransit {
             arrives: SimTime(480_000),
             ..
@@ -412,10 +388,11 @@ fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplie
     ));
     sim.advance(SimDuration(240_000)).unwrap();
     assert_eq!(
-        *sim.canonical_state()
-            .components
-            .location(sim.canonical_state().people[index].id)
-            .expect("location exists"),
+        *game_spatial::location(
+            &sim.canonical_state().components,
+            game_ecs::StableId((sim.canonical_state().people[index].id).0)
+        )
+        .expect("location exists"),
         Location::AtArea(AreaId(3))
     );
     assert_eq!(sim.canonical_state().people[index].work_units, 0);
@@ -435,11 +412,12 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .mind(actor)
-            .expect("mind exists")
-            .knowledge[&source]
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            actor
+        )
+        .expect("mind exists")
+        .knowledge[&source]
             .quantity,
         Quantity(1_000)
     );
@@ -454,11 +432,11 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
     sim.advance(SimDuration(60_001)).unwrap();
     loaded.advance(SimDuration(60_001)).unwrap();
     assert_eq!(sim.canonical_state(), loaded.canonical_state());
-    let mind = &sim
-        .canonical_state()
-        .components
-        .mind(actor)
-        .expect("mind exists");
+    let mind = &game_characters::decisions::mind::<game_api::Command>(
+        &sim.canonical_state().components,
+        actor,
+    )
+    .expect("mind exists");
     assert_eq!(mind.knowledge[&source].quantity, Quantity(0));
     assert_eq!(mind.last_failure, Some((SimTime(480_000), source)));
     assert_eq!(

@@ -46,9 +46,7 @@ fn food(sim: &Simulation) -> InventoryId {
         .id
 }
 fn site(sim: &Simulation) -> SiteId {
-    sim.canonical_state()
-        .components
-        .sites()
+    game_workshop::sites(&sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
         .unwrap()

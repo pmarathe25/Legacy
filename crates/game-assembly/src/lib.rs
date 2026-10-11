@@ -517,9 +517,11 @@ impl Simulation {
                 route: Vec::new(),
                 hunger_exempt: role == Role::Guardian,
             });
-            state
-                .components
-                .set_location(id, Location::AtArea(village))?;
+            game_spatial::set_location(
+                &mut state.components,
+                game_ecs::StableId((id).0),
+                Location::AtArea(village),
+            )?;
             state.inventories.insert(
                 inventory,
                 Inventory {
@@ -577,9 +579,7 @@ impl Simulation {
                 .push(i.id);
         }
         let pregnancy_index = state.development.as_ref().map_or_else(BTreeMap::new, |_| {
-            state
-                .components
-                .pregnancies()
+            game_lifecycle::all_pregnancies(&state.components)
                 .map(|(_, row)| row)
                 .filter(|p| {
                     matches!(
@@ -606,14 +606,13 @@ impl Simulation {
         if state.development.is_some() {
             for p in &state.people {
                 if let Location::AtArea(area) =
-                    *state.components.location(p.id).expect("location exists")
+                    *game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
+                        .expect("location exists")
                     && matches!(
-                        state.components.life(p.id).unwrap().stage,
+                        game_lifecycle::life(&state.components, p.id).unwrap().stage,
                         LifeStage::Infant | LifeStage::Child
                     )
-                    && state
-                        .components
-                        .body(p.id)
+                    && game_physiology::body(&state.components, p.id)
                         .expect("body exists")
                         .vitals
                         .alive
@@ -675,11 +674,11 @@ impl Simulation {
             Location::StoppedOnRoad { from, .. } => from,
             Location::Carried { .. } => unreachable!("resolved carrier position"),
         };
-        let known_routes = self
-            .state
-            .decisions
-            .as_ref()
-            .map(|_| &self.state.components.mind(ruler.id).unwrap().routes);
+        let known_routes = self.state.decisions.as_ref().map(|_| {
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, ruler.id)
+                .unwrap()
+                .routes
+        });
         let known_area = |id: AreaId| {
             known_routes.is_none_or(|routes| {
                 routes.contains_key(&id) || routes.values().any(|links| links.contains_key(&id))
@@ -692,11 +691,11 @@ impl Simulation {
             .filter(|a| {
                 a.id != origin
                     || matches!(
-                        *self
-                            .state
-                            .components
-                            .location(ruler.id)
-                            .expect("location exists"),
+                        *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((ruler.id).0)
+                        )
+                        .expect("location exists"),
                         Location::InTransit { .. }
                     ) && !ruler.route.is_empty()
             })
@@ -709,7 +708,8 @@ impl Simulation {
             .map(|a| Command::Move { destination: a.id })
             .collect();
         if let Some(world) = &self.state.physical {
-            let actor = &self.state.components.body(ruler.id).expect("body exists");
+            let actor =
+                &game_physiology::body(&self.state.components, ruler.id).expect("body exists");
             if !actor.vitals.alive || actor.vitals.health == 0 {
                 available_commands.clear();
             } else if matches!(
@@ -736,11 +736,12 @@ impl Simulation {
                         );
                     }
                     if self.state.development.is_some() {
-                        let children = self.state.components.lives().filter_map(|(id, life)| {
-                            (self.dependent_signal_visible(ruler.id, id)
-                                && matches!(life.stage, LifeStage::Infant | LifeStage::Child))
-                            .then_some(id)
-                        });
+                        let children = game_lifecycle::all_lives(&self.state.components)
+                            .filter_map(|(id, life)| {
+                                (self.dependent_signal_visible(ruler.id, id)
+                                    && matches!(life.stage, LifeStage::Infant | LifeStage::Child))
+                                .then_some(id)
+                            });
                         for child in children {
                             if child != ruler.id {
                                 available_commands.push(Command::Comfort { child });
@@ -761,13 +762,12 @@ impl Simulation {
             }
         }
         if self.state.development.is_some() {
-            let stage = self.state.components.life(ruler.id).unwrap().stage;
+            let stage = game_lifecycle::life(&self.state.components, ruler.id)
+                .unwrap()
+                .stage;
             if stage == LifeStage::Infant {
                 available_commands.clear();
-                if self
-                    .state
-                    .components
-                    .body(ruler.id)
+                if game_physiology::body(&self.state.components, ruler.id)
                     .expect("body exists")
                     .vitals
                     .alive
@@ -778,17 +778,11 @@ impl Simulation {
                 available_commands.retain(|c| !matches!(c, Command::Work { .. }));
             }
             if matches!(stage, LifeStage::Infant | LifeStage::Child)
-                && self
-                    .state
-                    .components
-                    .body(ruler.id)
+                && game_physiology::body(&self.state.components, ruler.id)
                     .expect("body exists")
                     .vitals
                     .alive
-                && self
-                    .state
-                    .components
-                    .body(ruler.id)
+                && game_physiology::body(&self.state.components, ruler.id)
                     .expect("body exists")
                     .vitals
                     .health
@@ -815,10 +809,7 @@ impl Simulation {
             }
         }
         if !matches!(
-            *self
-                .state
-                .components
-                .location(ruler.id)
+            *game_spatial::location(&self.state.components, game_ecs::StableId((ruler.id).0))
                 .expect("location exists"),
             Location::AtArea(_) | Location::InTransit { .. }
         ) {
@@ -937,11 +928,11 @@ impl Simulation {
             revision: self.revision,
             time: self.state.time,
             ruler: ruler.id,
-            location: (*self
-                .state
-                .components
-                .location(ruler.id)
-                .expect("location exists"))
+            location: (*game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((ruler.id).0),
+            )
+            .expect("location exists"))
             .clone(),
             known_areas: self
                 .state
@@ -957,45 +948,52 @@ impl Simulation {
             quantity_opportunities,
             physical: self.physical_view(),
             known_stocks: self.state.decisions.as_ref().map_or_else(Vec::new, |_| {
-                self.state
-                    .components
-                    .mind(ruler.id)
-                    .unwrap()
-                    .knowledge
-                    .values()
-                    .cloned()
-                    .collect()
+                game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    ruler.id,
+                )
+                .unwrap()
+                .knowledge
+                .values()
+                .cloned()
+                .collect()
             }),
             combat: self.tactical_view(),
-            life_stage: self
-                .state
-                .development
-                .as_ref()
-                .map(|_| self.state.components.life(ruler.id).unwrap().stage),
+            life_stage: self.state.development.as_ref().map(|_| {
+                game_lifecycle::life(&self.state.components, ruler.id)
+                    .unwrap()
+                    .stage
+            }),
             preference: self.state.development.as_ref().and_then(|_| {
-                self.state
-                    .components
-                    .life(ruler.id)
+                game_lifecycle::life(&self.state.components, ruler.id)
                     .unwrap()
                     .preference
                     .filter(|(_, until)| *until >= self.state.time)
                     .map(|(p, _)| p)
             }),
             interests: self.state.decisions.as_ref().map_or_else(Vec::new, |_| {
-                self.state
-                    .components
-                    .mind(ruler.id)
-                    .unwrap()
-                    .interests
-                    .iter()
-                    .map(|(i, p)| (*i, *p))
-                    .collect()
+                game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    ruler.id,
+                )
+                .unwrap()
+                .interests
+                .iter()
+                .map(|(i, p)| (*i, *p))
+                .collect()
             }),
             nearby_people: self.nearby_people(0, 64),
             nearby_life_stages: self.state.development.as_ref().map_or_else(Vec::new, |_| {
                 self.nearby_people(0, 64)
                     .into_iter()
-                    .map(|(id, _)| (id, self.state.components.life(id).unwrap().stage))
+                    .map(|(id, _)| {
+                        (
+                            id,
+                            game_lifecycle::life(&self.state.components, id)
+                                .unwrap()
+                                .stage,
+                        )
+                    })
                     .collect()
             }),
         }
@@ -1035,11 +1033,11 @@ impl Simulation {
                         ),
                     explanation: guardian.explanation.clone(),
                     guardian: *id,
-                    location: (*self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[id]].id)
-                        .expect("location exists"))
+                    location: (*game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[id]].id).0),
+                    )
+                    .expect("location exists"))
                     .clone(),
                     target: guardian.target,
                     goal: match guardian.goal {
@@ -1057,17 +1055,14 @@ impl Simulation {
     pub fn nearby_people(&self, offset: usize, limit: usize) -> Vec<(PersonId, Role)> {
         let ruler = &self.state.people[self.person_index[&self.state.ruler]];
         if self.state.physical.as_ref().is_some_and(|_| {
-            !self
-                .state
-                .components
-                .body(ruler.id)
+            !game_physiology::body(&self.state.components, ruler.id)
                 .expect("body exists")
                 .vitals
                 .alive
         }) {
             return Vec::new();
         }
-        self.state.people.iter().filter(|p| p.id != ruler.id && matches!((self.state.components.location(p.id).expect("location exists"), self.state.components.location(ruler.id).expect("location exists")), (Location::AtArea(a), Location::AtArea(b)) if a == b))
+        self.state.people.iter().filter(|p| p.id != ruler.id && matches!((game_spatial::location(&self.state.components,game_ecs::StableId((p.id).0)).expect("location exists"), game_spatial::location(&self.state.components,game_ecs::StableId((ruler.id).0)).expect("location exists")), (Location::AtArea(a), Location::AtArea(b)) if a == b))
             .skip(offset).take(limit.min(100)).map(|p| (p.id, p.role)).collect()
     }
 
@@ -1129,25 +1124,16 @@ impl Simulation {
         }
         if !self.independent(actor)
             || self.state.physical.as_ref().is_some_and(|w| {
-                !self
-                    .state
-                    .components
-                    .body(actor)
+                !game_physiology::body(&self.state.components, actor)
                     .expect("body exists")
                     .vitals
                     .alive
-                    || self
-                        .state
-                        .components
-                        .body(actor)
+                    || game_physiology::body(&self.state.components, actor)
                         .expect("body exists")
                         .vitals
                         .health
                         == 0
-                    || self
-                        .state
-                        .components
-                        .body(actor)
+                    || game_physiology::body(&self.state.components, actor)
                         .expect("body exists")
                         .vitals
                         .fatigue
@@ -1159,11 +1145,11 @@ impl Simulation {
         if !self.state.areas.iter().any(|a| a.id == destination) {
             return Err(Error::UnknownArea);
         }
-        let origin = match *self
-            .state
-            .components
-            .location(self.state.people[index].id)
-            .expect("location exists")
+        let origin = match *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[index].id).0),
+        )
+        .expect("location exists")
         {
             Location::AtArea(a) => a,
             Location::InTransit { to, .. } => to,
@@ -1175,7 +1161,12 @@ impl Simulation {
             decisions::known_path(&routes, origin, destination)?.0
         } else if self.state.decisions.is_some() {
             decisions::known_path(
-                &self.state.components.mind(actor).unwrap().routes,
+                &game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    actor,
+                )
+                .unwrap()
+                .routes,
                 origin,
                 destination,
             )?
@@ -1185,22 +1176,22 @@ impl Simulation {
         };
         if path.is_empty()
             && (matches!(
-                *self
-                    .state
-                    .components
-                    .location(self.state.people[index].id)
-                    .expect("location exists"),
+                *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[index].id).0)
+                )
+                .expect("location exists"),
                 Location::AtArea(_)
             ) || self.state.people[index].route.is_empty())
         {
             return Err(Error::AlreadyThere);
         }
         let departure = if matches!(
-            *self
-                .state
-                .components
-                .location(self.state.people[index].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[index].id).0)
+            )
+            .expect("location exists"),
             Location::AtArea(_)
         ) {
             Some(self.departure(origin, path[0])?)
@@ -1275,11 +1266,11 @@ impl Simulation {
             people.remove(&actor);
         }
         self.state.people[index].route.remove(0);
-        *self
-            .state
-            .components
-            .location_mut(self.state.people[index].id)
-            .expect("location exists") = Location::InTransit {
+        *game_spatial::location_mut(
+            &mut self.state.components,
+            game_ecs::StableId((self.state.people[index].id).0),
+        )
+        .expect("location exists") = Location::InTransit {
             from,
             to,
             departed: self.state.time,
@@ -1386,10 +1377,7 @@ impl Simulation {
                 units: p.work_units,
                 remainder: p.work_remainder,
                 units_per_minute: if matches!(
-                    *self
-                        .state
-                        .components
-                        .location(p.id)
+                    *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
                         .expect("location exists"),
                     Location::AtArea(_)
                 ) && self.physically_working(p.id)
@@ -1446,12 +1434,11 @@ impl Simulation {
                 Due::Arrive(id) => {
                     let p = &self.state.people[self.person_index[id]];
                     if let Some(to) = p.route.first() {
-                        let Location::InTransit { to: from, .. } = *self
-                            .state
-                            .components
-                            .location(p.id)
-                            .expect("location exists")
-                        else {
+                        let Location::InTransit { to: from, .. } = *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((p.id).0),
+                        )
+                        .expect("location exists") else {
                             return Err(Error::InvalidSave("arrival outside transit".into()));
                         };
                         let duration = self
@@ -1633,8 +1620,11 @@ impl Simulation {
         {
             world.prepare_refresh_time(next)?;
             if self.state.development.is_some() {
-                for (actor, _) in self.state.components.trait_developments() {
-                    self.state.components.life(actor).unwrap().age_at(next)?;
+                for (actor, _) in game_physiology::traits::all_developments(&self.state.components)
+                {
+                    game_lifecycle::life(&self.state.components, actor)
+                        .unwrap()
+                        .age_at(next)?;
                 }
             }
         }
@@ -1764,17 +1754,17 @@ impl Simulation {
                         continue;
                     }
                     let index = self.person_index[&id];
-                    if let Location::InTransit { to, .. } = *self
-                        .state
-                        .components
-                        .location(self.state.people[index].id)
-                        .expect("location exists")
+                    if let Location::InTransit { to, .. } = *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[index].id).0),
+                    )
+                    .expect("location exists")
                     {
-                        *self
-                            .state
-                            .components
-                            .location_mut(self.state.people[index].id)
-                            .expect("location exists") = Location::AtArea(to);
+                        *game_spatial::location_mut(
+                            &mut self.state.components,
+                            game_ecs::StableId((self.state.people[index].id).0),
+                        )
+                        .expect("location exists") = Location::AtArea(to);
                         self.index_dependent(id, to);
                         self.emit(EventKind::Arrived {
                             actor: id,
@@ -1893,7 +1883,8 @@ impl Simulation {
         // or incapacity at that same timestamp has been committed.
         for (actor, origin, destination) in continued_journeys {
             let ready = self.state.physical.as_ref().is_none_or(|world| {
-                let body = &self.state.components.body(actor).expect("body exists");
+                let body =
+                    &game_physiology::body(&self.state.components, actor).expect("body exists");
                 body.vitals.alive
                     && body.vitals.health > 0
                     && body.vitals.fatigue < world.rules.fatigue_limit
@@ -1902,11 +1893,11 @@ impl Simulation {
                 && self.transport_can_depart(actor);
             let index = self.person_index[&actor];
             if ready
-                && *self
-                    .state
-                    .components
-                    .location(self.state.people[index].id)
-                    .expect("location exists")
+                && *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[index].id).0),
+                )
+                .expect("location exists")
                     == Location::AtArea(origin)
                 && self.state.people[index].route.first() == Some(&destination)
             {
@@ -2009,7 +2000,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|_| self.state.components.body(intent.actor));
+            .and_then(|_| game_physiology::body(&self.state.components, intent.actor));
         game_cargo::ClosingFacts {
             alive: self.state.physical.is_none() || body.is_some_and(|body| body.vitals.alive),
             health: if self.state.physical.is_none() {

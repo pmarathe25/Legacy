@@ -98,10 +98,11 @@ impl Simulation {
             sim.interrupt_actor_activity(actor);
         }
         for actor in [b, bv] {
-            *sim.state
-                .components
-                .location_mut(sim.state.people[sim.person_index[&actor]].id)
-                .expect("location exists") = Location::AtArea(AreaId(3));
+            *game_spatial::location_mut(
+                &mut sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0),
+            )
+            .expect("location exists") = Location::AtArea(AreaId(3));
         }
         let food_a = sim.debug_add_inventory(
             Good::Food,
@@ -226,7 +227,7 @@ impl Simulation {
         Ok(())
     }
     fn realm_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -249,7 +250,9 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|_| self.state.components.mind(actor))
+            .and_then(|_| {
+                game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+            })
             .ok_or(Error::Unavailable)?;
         let cached = self.institution_view(actor);
         let mut facts = ProposalFacts {
@@ -449,7 +452,7 @@ impl Simulation {
                     .values()
                     .flat_map(|r| r.proposal.value.participants.keys().copied())
                     .collect::<BTreeSet<_>>();
-                let stocks=self.state.components.mind(actor).unwrap().knowledge.values()
+                let stocks=game_characters::decisions::mind::<game_api::Command>(&self.state.components,actor).unwrap().knowledge.values()
                     .filter(|k|report.snapshot.revisions.values().any(|r|r.proposal.value.terms.iter().any(|term|match term {
                         Term::Delivery {term:AgreementTerm::Delivery {source,destination,..},..}=>k.inventory==*source || k.inventory==*destination,
                         Term::Protection {patrol,..}=>patrol.supplies.iter().any(|s|s.source==k.inventory)
@@ -576,7 +579,11 @@ impl Simulation {
                         memory.institutions.insert(snapshot.id, snapshot);
                     }
                 }
-                let mind = self.state.components.mind_mut(talk.recipient).unwrap();
+                let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                    &mut self.state.components,
+                    talk.recipient,
+                )
+                .unwrap();
                 for mut fact in talk.stocks {
                     if mind
                         .knowledge
@@ -976,7 +983,9 @@ impl Simulation {
             return -10_000;
         };
         let proposal = &known.proposal.value;
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         let affiliations = self
             .institution_view(actor)
             .iter()
@@ -1035,10 +1044,7 @@ impl Simulation {
         let rules = self.body_rules(actor);
         let context = Context {
             affiliations: &affiliations,
-            hunger: self
-                .state
-                .components
-                .body(actor)
+            hunger: game_physiology::body(&self.state.components, actor)
                 .expect("body exists")
                 .vitals
                 .hunger,

@@ -41,7 +41,7 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|_| self.state.components.body(recipient))
+            .and_then(|_| game_physiology::body(&self.state.components, recipient))
             .is_some_and(|body| body.vitals.alive);
         if !self.person_index.contains_key(&recipient) {
             return Err(Error::Unavailable);
@@ -134,7 +134,7 @@ impl Simulation {
     ) -> Result<game_cargo::ToolAllocations, Error> {
         self.state.physical.as_ref().ok_or(Error::Unavailable)?;
         let mut uses = Vec::new();
-        for (actor, body) in self.state.components.bodies() {
+        for (actor, body) in game_physiology::bodies(&self.state.components) {
             let actor = &actor;
             let activity = self
                 .state
@@ -145,12 +145,11 @@ impl Simulation {
                 continue;
             }
             let selected = match *activity {
-                Activity::Work { site } => self.state.components.job(*actor).and_then(|job| {
-                    self.state
-                        .components
-                        .site(site)
-                        .map(|site| job.tool.unwrap_or(site.tool))
-                }),
+                Activity::Work { site } => game_workshop::job(&self.state.components, *actor)
+                    .and_then(|job| {
+                        game_workshop::site(&self.state.components, site)
+                            .map(|site| job.tool.unwrap_or(site.tool))
+                    }),
                 Activity::Cultivate { field, .. } => self
                     .state
                     .agriculture
@@ -176,11 +175,11 @@ impl Simulation {
                 && let Some(stock) = self.state.inventories.get(&tool)
                 && stock.good == Good::Tool
                 && let Some(area) = self.inventory_area(stock)
-                && *self
-                    .state
-                    .components
-                    .location(self.state.people[self.person_index[actor]].id)
-                    .expect("location exists")
+                && *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[actor]].id).0),
+                )
+                .expect("location exists")
                     == Location::AtArea(area)
             {
                 uses.push(game_cargo::ToolUse {
@@ -275,17 +274,16 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|_| self.state.components.body(actor))
+            .and_then(|_| game_physiology::body(&self.state.components, actor))
             .is_some_and(|body| body.vitals.alive && body.vitals.health > 0)
         {
             return false;
         }
-        let Location::AtArea(area) = *self
-            .state
-            .components
-            .location(self.state.people[*index].id)
-            .expect("location exists")
-        else {
+        let Location::AtArea(area) = *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[*index].id).0),
+        )
+        .expect("location exists") else {
             return false;
         };
         if stock.good != Good::Tool
@@ -303,27 +301,23 @@ impl Simulation {
 
     pub(crate) fn select_work_tool(&self, actor: PersonId, site: SiteId) -> Option<InventoryId> {
         self.state.physical.as_ref()?;
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
-        let site = self.state.components.site(site)?;
-        let Location::AtArea(area) = *self
-            .state
-            .components
-            .location(self.state.people[*self.person_index.get(&actor)?].id)
-            .expect("location exists")
-        else {
+        let site = game_workshop::site(&self.state.components, site)?;
+        let Location::AtArea(area) = *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[*self.person_index.get(&actor)?].id).0),
+        )
+        .expect("location exists") else {
             return None;
         };
         if area != site.area {
             return None;
         }
-        let resumed = self
-            .state
-            .components
-            .job(actor)
-            .filter(|job| job.site == site.id);
+        let resumed =
+            game_workshop::job(&self.state.components, actor).filter(|job| job.site == site.id);
         let allocations = self.prepare_tool_allocations(None).ok()?;
         let mut candidates = Vec::new();
         if let Some(tool) = resumed.and_then(|job| job.tool) {
@@ -379,16 +373,16 @@ impl Simulation {
         let Some(_) = &self.state.physical else {
             return false;
         };
-        if self.state.components.body(actor).is_none() {
+        if game_physiology::body(&self.state.components, actor).is_none() {
             return false;
         }
         let Some(Activity::Work { site }) = self.state.components.activity(actor) else {
             return false;
         };
-        let Some(job) = self.state.components.job(actor) else {
+        let Some(job) = game_workshop::job(&self.state.components, actor) else {
             return false;
         };
-        let Some(site) = self.state.components.site(*site) else {
+        let Some(site) = game_workshop::site(&self.state.components, *site) else {
             return false;
         };
         self.tool_available_for(actor, job.tool.unwrap_or(site.tool))
@@ -398,7 +392,7 @@ impl Simulation {
         let Some(_) = &self.state.physical else {
             return false;
         };
-        if self.state.components.body(actor).is_none() {
+        if game_physiology::body(&self.state.components, actor).is_none() {
             return false;
         }
         let Some(Activity::Cultivate { field, .. }) = self.state.components.activity(actor) else {
@@ -435,9 +429,7 @@ mod tests {
     }
 
     fn local_site(sim: &Simulation) -> SiteId {
-        sim.state
-            .components
-            .sites()
+        game_workshop::sites(&sim.state.components)
             .map(|(_, site)| site)
             .find(|site| site.area == AreaId(1))
             .unwrap()
@@ -445,15 +437,12 @@ mod tests {
     }
 
     fn duplicate_site(sim: &mut Simulation, original: SiteId) -> SiteId {
-        let mut site = sim
-            .state
-            .components
-            .site(original)
+        let mut site = game_workshop::site(&sim.state.components, original)
             .expect("site exists")
             .clone();
         let id = SiteId(allocate(&mut sim.state).unwrap());
         site.id = id;
-        sim.state.components.insert_site(site).unwrap();
+        game_workshop::insert_site(&mut sim.state.components, site).unwrap();
         id
     }
 
@@ -593,15 +582,16 @@ mod tests {
                 },
             ),
         ] {
-            sim.state
-                .components
-                .insert_health_job(game_health::Job {
+            game_health::insert_job(
+                &mut sim.state.components,
+                game_health::Job {
                     actor,
                     area: AreaId(1),
                     completes,
                     work,
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
         }
         let care = sim.care_dose(Good::Water).unwrap().0;
         let resources = sim.prepare_ranking_resources().unwrap();
@@ -650,7 +640,9 @@ mod tests {
             sim.interrupt_actor_activity(actor);
         }
         let site = local_site(&sim);
-        let tool = sim.state.components.site(site).expect("site exists").tool;
+        let tool = game_workshop::site(&sim.state.components, site)
+            .expect("site exists")
+            .tool;
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         compare_resource_queries(&sim);
@@ -665,10 +657,7 @@ mod tests {
         dead.debug_injure(worker, dead.body_rules(worker).max_health)
             .unwrap();
         assert!(
-            !dead
-                .state
-                .components
-                .body(worker)
+            !game_physiology::body(&dead.state.components, worker)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -762,7 +751,9 @@ mod tests {
         let carrier = sim.state.people[4].id;
         let site = local_site(&sim);
         let other = duplicate_site(&mut sim, site);
-        let tool = sim.state.components.site(site).expect("site exists").tool;
+        let tool = game_workshop::site(&sim.state.components, site)
+            .expect("site exists")
+            .tool;
         sim.state.inventories.get_mut(&tool).unwrap().quantity = Quantity(2_000);
         sim.debug_actor_command(first, Command::Work { site })
             .unwrap();
@@ -786,7 +777,12 @@ mod tests {
                 .expect("activity exists"),
             Activity::Idle
         );
-        assert_eq!(sim.state.components.job(second).unwrap().remaining, 0);
+        assert_eq!(
+            game_workshop::job(&sim.state.components, second)
+                .unwrap()
+                .remaining,
+            0
+        );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
 
@@ -824,11 +820,11 @@ mod tests {
         )
         .unwrap();
         for actor in [farmer, worker] {
-            if *sim
-                .state
-                .components
-                .location(sim.state.people[sim.person_index[&actor]].id)
-                .expect("location exists")
+            if *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0),
+            )
+            .expect("location exists")
                 != Location::AtArea(field.area)
             {
                 sim.debug_move_actor(actor, field.area).unwrap();
@@ -864,9 +860,9 @@ mod tests {
             )
             .unwrap();
         let site = SiteId(allocate(&mut sim.state).unwrap());
-        sim.state
-            .components
-            .insert_site(physical::Site {
+        game_workshop::insert_site(
+            &mut sim.state.components,
+            physical::Site {
                 id: site,
                 area: field.area,
                 input,
@@ -877,8 +873,9 @@ mod tests {
                 duration: MINUTE,
                 access: BTreeSet::from([farmer, worker]),
                 last_granted: None,
-            })
-            .expect("validated site insertion");
+            },
+        )
+        .expect("validated site insertion");
         sim.debug_actor_command(
             farmer,
             Command::Cultivate {
@@ -936,7 +933,10 @@ mod tests {
         );
         assert_eq!(sim.state.inventories[&output].quantity, Quantity(0));
         assert_eq!(
-            sim.state.components.job(worker).as_ref().unwrap().remaining,
+            game_workshop::job(&sim.state.components, worker)
+                .as_ref()
+                .unwrap()
+                .remaining,
             0
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -949,10 +949,7 @@ mod tests {
         let worker = sim.state.ruler;
         let carrier = sim.state.people[3].id;
         let site = local_site(&sim);
-        let recipe = sim
-            .state
-            .components
-            .site(site)
+        let recipe = game_workshop::site(&sim.state.components, site)
             .expect("site exists")
             .clone();
         let alternate = sim
@@ -967,7 +964,10 @@ mod tests {
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         assert_eq!(
-            sim.state.components.job(worker).as_ref().unwrap().tool,
+            game_workshop::job(&sim.state.components, worker)
+                .as_ref()
+                .unwrap()
+                .tool,
             Some(recipe.tool)
         );
         let input_after_start = sim.state.inventories[&recipe.input].quantity;
@@ -981,12 +981,20 @@ mod tests {
                 .expect("activity exists"),
             Activity::Idle
         );
-        assert_eq!(sim.state.components.job(worker).unwrap().remaining, 30_000);
+        assert_eq!(
+            game_workshop::job(&sim.state.components, worker)
+                .unwrap()
+                .remaining,
+            30_000
+        );
         assert_eq!(sim.state.inventories[&recipe.tool].quantity, Quantity(0));
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         assert_eq!(
-            sim.state.components.job(worker).as_ref().unwrap().tool,
+            game_workshop::job(&sim.state.components, worker)
+                .as_ref()
+                .unwrap()
+                .tool,
             Some(alternate)
         );
         assert_eq!(
@@ -1013,7 +1021,9 @@ mod tests {
         let worker = sim.state.ruler;
         let carrier = sim.state.people[3].id;
         let site = local_site(&sim);
-        let tool = sim.state.components.site(site).expect("site exists").tool;
+        let tool = game_workshop::site(&sim.state.components, site)
+            .expect("site exists")
+            .tool;
         sim.debug_actor_command(worker, Command::Work { site })
             .unwrap();
         sim.carry_good(carrier, tool, Quantity(1_000)).unwrap();
@@ -1025,7 +1035,12 @@ mod tests {
                 .expect("activity exists"),
             Activity::Idle
         );
-        assert_eq!(sim.state.components.job(worker).unwrap().remaining, 0);
+        assert_eq!(
+            game_workshop::job(&sim.state.components, worker)
+                .unwrap()
+                .remaining,
+            0
+        );
         assert!(!sim.state.events.iter().any(
             |event| matches!(event.kind, EventKind::Produced { actor, .. } if actor == worker)
         ));
@@ -1037,7 +1052,9 @@ mod tests {
         let mut sim = sim();
         let actor = sim.state.ruler;
         let site = local_site(&sim);
-        let tool = sim.state.components.site(site).expect("site exists").tool;
+        let tool = game_workshop::site(&sim.state.components, site)
+            .expect("site exists")
+            .tool;
         sim.debug_actor_command(actor, Command::Work { site })
             .unwrap();
         sim.state
@@ -1061,10 +1078,7 @@ mod tests {
     fn generic_carry_has_atomic_validation_and_one_shared_capacity_for_all_goods() {
         let mut sim = sim();
         let actor = sim.state.ruler;
-        let tools = sim
-            .state
-            .components
-            .site(local_site(&sim))
+        let tools = game_workshop::site(&sim.state.components, local_site(&sim))
             .expect("site exists")
             .tool;
         let opening = sim.state.clone();
@@ -1214,10 +1228,7 @@ mod tests {
     fn native_carry_and_unload_conserve_goods_and_replay_pending_allocation_once() {
         let mut sim = sim();
         let actor = sim.state.ruler;
-        let source = sim
-            .state
-            .components
-            .site(local_site(&sim))
+        let source = game_workshop::site(&sim.state.components, local_site(&sim))
             .expect("site exists")
             .tool;
         let opening = sim.state.inventories[&source].quantity;
@@ -1308,7 +1319,7 @@ mod tests {
         sim.collected_water_quality(source, Quantity(2000), 600);
         // The clean stock intentionally has no water-lot entry yet. Its real
         // existing volume must be observed by the first receipt's metadata hook.
-        assert!(sim.state.components.water_lot(mixed).is_none());
+        assert!(game_health::water_lot(&sim.state.components, mixed).is_none());
         sim.debug_schedule_transfers(
             SimTime(MINUTE.0),
             vec![
@@ -1342,34 +1353,26 @@ mod tests {
         for inventory in [source, mixed, destination] {
             assert_eq!(sim.state.inventories[&inventory].quantity, Quantity(1000));
             assert_eq!(
-                sim.state
-                    .components
-                    .water_lot(inventory)
+                game_health::water_lot(&sim.state.components, inventory)
                     .expect("water lot exists")
                     .quantity(),
                 1000
             );
         }
         assert_eq!(
-            sim.state
-                .components
-                .water_lot(source)
+            game_health::water_lot(&sim.state.components, source)
                 .expect("water lot exists")
                 .load(),
             600000
         );
         assert_eq!(
-            sim.state
-                .components
-                .water_lot(mixed)
+            game_health::water_lot(&sim.state.components, mixed)
                 .expect("water lot exists")
                 .load(),
             300000
         );
         assert_eq!(
-            sim.state
-                .components
-                .water_lot(destination)
+            game_health::water_lot(&sim.state.components, destination)
                 .expect("water lot exists")
                 .load(),
             300000
@@ -1377,10 +1380,7 @@ mod tests {
         assert_eq!(
             [source, mixed, destination]
                 .iter()
-                .map(|id| sim
-                    .state
-                    .components
-                    .water_lot(*id)
+                .map(|id| game_health::water_lot(&sim.state.components, *id)
                     .expect("water lot exists")
                     .load())
                 .sum::<u128>(),

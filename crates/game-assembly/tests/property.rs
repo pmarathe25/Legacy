@@ -539,32 +539,34 @@ fn observers_can_interpret_the_same_taking_differently() {
         },
     )
     .unwrap();
-    let before = sim
-        .canonical_state()
-        .components
-        .mind(owner)
-        .expect("mind exists")
-        .relationships
-        .get(&ruler)
-        .map(|r| r.trust)
-        .unwrap_or(0);
+    let before = game_characters::decisions::mind::<game_api::Command>(
+        &sim.canonical_state().components,
+        owner,
+    )
+    .expect("mind exists")
+    .relationships
+    .get(&ruler)
+    .map(|r| r.trust)
+    .unwrap_or(0);
     take(&mut sim, 1_000);
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .mind(owner)
-            .expect("mind exists")
-            .relationships[&ruler]
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            owner
+        )
+        .expect("mind exists")
+        .relationships[&ruler]
             .trust,
         before - 100
     );
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .mind(supportive)
-            .expect("mind exists")
-            .relationships[&ruler]
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            supportive
+        )
+        .expect("mind exists")
+        .relationships[&ruler]
             .trust,
         10
     );
@@ -679,10 +681,7 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
     sim.advance(MINUTE).unwrap();
     assert_eq!(sim.canonical_state().inventories[&inventory].quantity.0, 0);
     assert!(sim.canonical_state().property.as_ref().unwrap().portions[&inventory].is_empty());
-    let site = sim
-        .canonical_state()
-        .components
-        .sites()
+    let site = game_workshop::sites(&sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()
@@ -769,11 +768,12 @@ fn permission_granted_during_loading_does_not_stop_the_physical_transfer() {
     )
     .unwrap();
     assert!(
-        sim.canonical_state()
-            .components
-            .mind(ruler)
-            .expect("mind exists")
-            .knowledge[&stock]
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            ruler
+        )
+        .expect("mind exists")
+        .knowledge[&stock]
             .accessible
     );
     sim.advance(SimDuration(30_000)).unwrap();
@@ -788,14 +788,15 @@ fn permission_granted_during_loading_does_not_stop_the_physical_transfer() {
         IncidentOutcome::Taken
     );
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .mind(owner)
-            .expect("mind exists")
-            .relationships
-            .get(&ruler)
-            .map(|relationship| relationship.trust)
-            .unwrap_or(0),
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            owner
+        )
+        .expect("mind exists")
+        .relationships
+        .get(&ruler)
+        .map(|relationship| relationship.trust)
+        .unwrap_or(0),
         0
     );
 }

@@ -19,12 +19,11 @@ fn role(sim: &Simulation) -> PersonId {
 }
 fn travel(sim: &mut Simulation, who: PersonId, destination: AreaId) {
     sim.debug_move_actor(who, destination).unwrap();
-    let Location::InTransit { arrives, .. } = *sim
-        .canonical_state()
-        .components
-        .location(who)
-        .expect("location exists")
-    else {
+    let Location::InTransit { arrives, .. } = *game_spatial::location(
+        &sim.canonical_state().components,
+        game_ecs::StableId((who).0),
+    )
+    .expect("location exists") else {
         panic!("traveler did not depart")
     };
     sim.advance(SimDuration(arrives.0 - sim.canonical_state().time.0))
@@ -448,10 +447,11 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
             .is_empty()
     );
     assert_eq!(
-        *sim.canonical_state()
-            .components
-            .location(officer)
-            .expect("location exists"),
+        *game_spatial::location(
+            &sim.canonical_state().components,
+            game_ecs::StableId((officer).0)
+        )
+        .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
     sim.advance(MINUTE).unwrap();
@@ -492,12 +492,12 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
         sim.advance(MINUTE).unwrap();
     }
     for _ in 0..15 {
-        let location = sim
-            .canonical_state()
-            .components
-            .location(officer)
-            .expect("location exists")
-            .clone();
+        let location = game_spatial::location(
+            &sim.canonical_state().components,
+            game_ecs::StableId((officer).0),
+        )
+        .expect("location exists")
+        .clone();
         if let Location::InTransit {
             to: AreaId(3),
             arrives,
@@ -508,9 +508,7 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
                 .unwrap();
             sim.debug_injure(target, 120_000).unwrap();
             assert!(
-                sim.canonical_state()
-                    .components
-                    .body(target)
+                game_physiology::body(&sim.canonical_state().components, target)
                     .expect("body exists")
                     .vitals
                     .health

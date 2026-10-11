@@ -66,18 +66,13 @@ impl Simulation {
         if !self.independent(actor)
             || self.combat_restricts(actor)
             || !self.state.physical.as_ref().is_some_and(|_| {
-                self.state
-                    .components
-                    .body(actor)
+                game_physiology::body(&self.state.components, actor)
                     .is_some_and(|body| body.vitals.alive)
             })
         {
             return Err(Error::Unavailable);
         }
-        match *self
-            .state
-            .components
-            .location(p.id)
+        match *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
             .ok_or(Error::Unavailable)?
         {
             Location::AtArea(area) => Ok(area),
@@ -315,11 +310,13 @@ impl Simulation {
                         term,
                         AgreementTerm::Labor { .. } | AgreementTerm::Delivery { .. }
                     ) && matches!(
-                        *self
-                            .state
-                            .components
-                            .location(self.state.people[self.person_index[&term.parties()[0]]].id)
-                            .expect("location exists"),
+                        *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId(
+                                (self.state.people[self.person_index[&term.parties()[0]]].id).0
+                            )
+                        )
+                        .expect("location exists"),
                         Location::AtArea(_)
                     ))
                     .then_some(CaseReceipt::Ledger)
@@ -395,7 +392,7 @@ impl Simulation {
                     self.state
                         .physical
                         .as_ref()
-                        .and_then(|_| self.state.components.body(*id))
+                        .and_then(|_| game_physiology::body(&self.state.components, *id))
                         .is_some_and(|body| body.vitals.alive)
                 })
                 .collect(),
@@ -540,7 +537,7 @@ impl Simulation {
                     self.state
                         .physical
                         .as_ref()
-                        .and_then(|_| self.state.components.site(*id))
+                        .and_then(|_| game_workshop::site(&self.state.components, *id))
                         .map(|site| (*id, site.area))
                 })
                 .collect(),
@@ -583,7 +580,7 @@ impl Simulation {
                     self.state
                         .physical
                         .as_ref()
-                        .and_then(|_| self.state.components.body(**id))
+                        .and_then(|_| game_physiology::body(&self.state.components, **id))
                         .is_some_and(|body| body.vitals.alive)
                 })
                 .copied()
@@ -856,14 +853,16 @@ impl Simulation {
                         subject: actor,
                         subject_local: self.social_area(actor).ok()
                             == Some(institution.charter.jurisdiction),
-                        own_hunger: self
-                            .state
-                            .components
-                            .body(office.holder)
+                        own_hunger: game_physiology::body(&self.state.components, office.holder)
                             .expect("body exists")
                             .vitals
                             .hunger,
-                        known_stocks: &self.state.components.mind(office.holder).unwrap().knowledge,
+                        known_stocks: &game_characters::decisions::mind::<game_api::Command>(
+                            &self.state.components,
+                            office.holder,
+                        )
+                        .unwrap()
+                        .knowledge,
                     };
                     let Some(intent) = self.state.institutions.as_ref().unwrap().rule_intent(
                         &institution,
@@ -928,17 +927,11 @@ impl Simulation {
             .people
             .iter()
             .filter(|p| {
-                *self
-                    .state
-                    .components
-                    .location(p.id)
+                *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
                     .expect("location exists")
                     == Location::AtArea(case.area)
                     && self.independent(p.id)
-                    && self
-                        .state
-                        .components
-                        .body(p.id)
+                    && game_physiology::body(&self.state.components, p.id)
                         .expect("body exists")
                         .vitals
                         .alive
@@ -953,12 +946,13 @@ impl Simulation {
             .map(|observer| {
                 (
                     observer,
-                    self.state
-                        .components
-                        .mind(observer)
-                        .unwrap()
-                        .personality
-                        .empathy,
+                    game_characters::decisions::mind::<game_api::Command>(
+                        &self.state.components,
+                        observer,
+                    )
+                    .unwrap()
+                    .personality
+                    .empathy,
                 )
             })
             .collect::<BTreeMap<_, _>>();
@@ -975,10 +969,7 @@ impl Simulation {
     }
 
     fn case_need_band(&self, actor: PersonId) -> u8 {
-        let hunger = self
-            .state
-            .components
-            .body(actor)
+        let hunger = game_physiology::body(&self.state.components, actor)
             .expect("body exists")
             .vitals
             .hunger;
@@ -1100,7 +1091,8 @@ impl Simulation {
                         self.state.agreements.as_ref().unwrap().obligations[&obligation].clone();
                     let (area, good, inventory) = match o.term {
                         AgreementTerm::Labor { site, .. } => {
-                            let site = &self.state.components.site(site).expect("site exists");
+                            let site = &game_workshop::site(&self.state.components, site)
+                                .expect("site exists");
                             (
                                 site.area,
                                 self.state.inventories[&site.output].good,
@@ -1140,7 +1132,8 @@ impl Simulation {
                     output,
                     ..
                 } if !attributable.contains(&(actor, site)) => {
-                    let site = &self.state.components.site(site).expect("site exists");
+                    let site =
+                        &game_workshop::site(&self.state.components, site).expect("site exists");
                     let counterpart = self
                         .state
                         .agreements
@@ -1181,9 +1174,10 @@ impl Simulation {
                             .people
                             .get(self.person_index[&actor])
                             .and_then(|p| {
-                                if let Some(Location::AtArea(area)) =
-                                    self.state.components.location(p.id)
-                                {
+                                if let Some(Location::AtArea(area)) = game_spatial::location(
+                                    &self.state.components,
+                                    game_ecs::StableId((p.id).0),
+                                ) {
                                     Some(*area)
                                 } else {
                                     None
@@ -1194,9 +1188,7 @@ impl Simulation {
                     };
                     let inventory = match o.term {
                         AgreementTerm::Labor { site, .. } => {
-                            self.state
-                                .components
-                                .site(site)
+                            game_workshop::site(&self.state.components, site)
                                 .expect("site exists")
                                 .output
                         }
@@ -1250,7 +1242,9 @@ impl Simulation {
     fn observe_exclusions(&mut self) -> Result<(), Error> {
         let mut requests = Vec::new();
         let w = self.state.institutions.as_ref().unwrap();
-        for (actor, mind) in self.state.components.minds() {
+        for (actor, mind) in
+            game_characters::decisions::minds::<game_api::Command>(&self.state.components)
+        {
             let actor = &actor;
             let Ok(area) = self.social_area(*actor) else {
                 continue;
@@ -1374,7 +1368,9 @@ impl Simulation {
         charter: &InstitutionCharter,
         rule: &InstitutionalRule,
     ) -> i64 {
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         let recipient = rule.subjects.members
             || rule.subjects.named.contains(&actor)
             || rule.subjects.offices.iter().any(|slot| {
@@ -1447,7 +1443,9 @@ impl Simulation {
             .iter()
             .map(|rule| self.rule_vote_score(actor, charter, rule))
             .sum();
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         for office in &charter.offices {
             score += i64::from(
                 mind.relationships
@@ -1490,13 +1488,14 @@ impl Simulation {
                 -self.rule_vote_score(actor, &i.charter, &i.charter.rules[*index as usize])
             }
             InstitutionChange::Appoint { holder, .. } => i64::from(
-                self.state
-                    .components
-                    .mind(actor)
-                    .unwrap()
-                    .relationships
-                    .get(holder)
-                    .map_or(0, |r| r.trust),
+                game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    actor,
+                )
+                .unwrap()
+                .relationships
+                .get(holder)
+                .map_or(0, |r| r.trust),
             ),
             InstitutionChange::Procedure(_) | InstitutionChange::Invite(_) => 0,
             InstitutionChange::Dissolve => -self.charter_vote_score(actor, &i.charter),
@@ -1538,12 +1537,13 @@ impl Simulation {
                     }
                     let score = i64::from(c.need_band) * 100
                         + i64::from(
-                            self.state
-                                .components
-                                .mind(office.holder)
-                                .unwrap()
-                                .personality
-                                .empathy,
+                            game_characters::decisions::mind::<game_api::Command>(
+                                &self.state.components,
+                                office.holder,
+                            )
+                            .unwrap()
+                            .personality
+                            .empathy,
                         )
                         - 800
                         + self.precedent_score(office.holder, c);
@@ -1667,8 +1667,13 @@ impl Simulation {
                 let Ok(area) = self.social_area(debtor) else {
                     continue;
                 };
-                let mind = &self.state.components.mind(debtor).unwrap();
-                let body = self.state.components.body(debtor).expect("body exists");
+                let mind = &game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    debtor,
+                )
+                .unwrap();
+                let body =
+                    game_physiology::body(&self.state.components, debtor).expect("body exists");
                 let rules = &self.state.physical.as_ref().unwrap().rules;
                 if !matches!(
                     *self
@@ -1800,7 +1805,11 @@ impl Simulation {
             if owner == self.state.ruler || self.social_area(owner).ok() != Some(area) {
                 continue;
             }
-            let mind = &self.state.components.mind(actor).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                actor,
+            )
+            .unwrap();
             let Some(site) = mind
                 .sites
                 .values()
@@ -1816,11 +1825,11 @@ impl Simulation {
                     .iter()
                     .filter(|p| {
                         p.role == Role::Citizen
-                            && *self
-                                .state
-                                .components
-                                .location(p.id)
-                                .expect("location exists")
+                            && *game_spatial::location(
+                                &self.state.components,
+                                game_ecs::StableId((p.id).0),
+                            )
+                            .expect("location exists")
                                 == Location::AtArea(area)
                             && p.id != self.state.ruler
                             && self.social_area(p.id).is_ok()
@@ -2081,7 +2090,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 beneficiary: b,
                 due_after,
             } => {
-                s.components.site(*site).is_some()
+                game_workshop::site(&s.components, *site).is_some()
                     && *millis > 0
                     && due_after.0 >= *millis
                     && beneficiary(b)
@@ -2152,7 +2161,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 || office
                     .sites
                     .iter()
-                    .any(|id| s.components.site(*id).is_none())
+                    .any(|id| game_workshop::site(&s.components, *id).is_none())
             {
                 return Err(fail());
             }

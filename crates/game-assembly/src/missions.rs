@@ -106,11 +106,8 @@ impl Simulation {
     fn mission_area(&self, actor: PersonId) -> Result<AreaId, Error> {
         let index = self.person_index.get(&actor).ok_or(Error::Unavailable)?;
         self.state.physical.as_ref().ok_or(Error::Unavailable)?;
-        let body = self
-            .state
-            .components
-            .body(actor)
-            .ok_or(Error::Unavailable)?;
+        let body =
+            game_physiology::body(&self.state.components, actor).ok_or(Error::Unavailable)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -120,11 +117,11 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        match *self
-            .state
-            .components
-            .location(self.state.people[*index].id)
-            .expect("location exists")
+        match *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[*index].id).0),
+        )
+        .expect("location exists")
         {
             Location::AtArea(area) => Ok(area),
             _ => Err(Error::Unavailable),
@@ -250,14 +247,14 @@ impl Simulation {
                     offer.compensation.clone()
                 };
                 if self.guardian_mission_duty(actor, mission.id)
-                    || self
-                        .state
-                        .components
-                        .mind(actor)
-                        .unwrap()
-                        .child_signals
-                        .values()
-                        .any(|signal| signal.urgency >= 20_000)
+                    || game_characters::decisions::mind::<game_api::Command>(
+                        &self.state.components,
+                        actor,
+                    )
+                    .unwrap()
+                    .child_signals
+                    .values()
+                    .any(|signal| signal.urgency >= 20_000)
                 {
                     duties.insert(actor);
                 }
@@ -284,10 +281,7 @@ impl Simulation {
                 .people
                 .iter()
                 .filter(|p| {
-                    *self
-                        .state
-                        .components
-                        .location(p.id)
+                    *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
                         .expect("location exists")
                         == Location::AtArea(area)
                 })
@@ -436,17 +430,17 @@ impl Simulation {
         prepared.commit(self.state.missions.as_mut().ok_or(Error::Unavailable)?)?;
         self.publish_mission_effects(events, notices);
         for effect in trust {
-            let relationship = self
-                .state
-                .components
-                .mind_mut(effect.observer)
-                .unwrap()
-                .relationships
-                .entry(effect.leader)
-                .or_insert(decisions::Relationship {
-                    trust: 0,
-                    affection: 0,
-                });
+            let relationship = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                effect.observer,
+            )
+            .unwrap()
+            .relationships
+            .entry(effect.leader)
+            .or_insert(decisions::Relationship {
+                trust: 0,
+                affection: 0,
+            });
             relationship.trust = (relationship.trust + effect.delta).clamp(-1000, 1000);
         }
         Ok(())
@@ -461,16 +455,13 @@ impl Simulation {
         if self.guardian_mission_duty(actor, id) {
             return false;
         }
-        let body = &self.state.components.body(actor).expect("body exists");
+        let body = &game_physiology::body(&self.state.components, actor).expect("body exists");
         body.vitals.alive
             && body.vitals.health > self.state.physical.as_ref().unwrap().rules.max_health / 2
             && body.vitals.hunger < self.state.physical.as_ref().unwrap().rules.meal_relief
             && body.vitals.fatigue < self.state.physical.as_ref().unwrap().rules.fatigue_limit
             && !self.combat_restricts(actor)
-            && !self
-                .state
-                .components
-                .mind(actor)
+            && !game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
                 .unwrap()
                 .child_signals
                 .values()
@@ -631,11 +622,11 @@ impl Simulation {
             .map(|p| {
                 (
                     *p,
-                    (*self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[p]].id)
-                        .expect("location exists"))
+                    (*game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[p]].id).0),
+                    )
+                    .expect("location exists"))
                     .clone(),
                 )
             })
@@ -689,8 +680,10 @@ impl Simulation {
         }
     }
     fn recruitment_input(&self, actor: PersonId, m: &Mission) -> game_missions::RecruitmentInput {
-        let mind = &self.state.components.mind(actor).unwrap();
-        let body = &self.state.components.body(actor).expect("body exists");
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
+        let body = &game_physiology::body(&self.state.components, actor).expect("body exists");
         let social_disruption = if self
             .mission_area(actor)
             .ok()
@@ -760,9 +753,11 @@ impl Simulation {
             );
             return;
         }
-        let body = &self.state.components.body(actor).expect("body exists");
+        let body = &game_physiology::body(&self.state.components, actor).expect("body exists");
         let rules = &self.state.physical.as_ref().unwrap().rules;
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         if self.army_actor_talking(actor) || self.realm_actor_busy(actor) {
             return;
         }
@@ -930,20 +925,21 @@ impl Simulation {
             if destination != area {
                 if let MissionObjective::Rescue { person, return_to } = member.directive
                     && destination == return_to
-                    && *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[&person]].id)
-                        .expect("location exists")
+                    && *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[&person]].id).0),
+                    )
+                    .expect("location exists")
                         == Location::AtArea(area)
                     && self.mission_area(person).is_ok()
                     && person != self.state.ruler
                 {
-                    let released = &self.state.components.mind(person).unwrap();
-                    let v = &self
-                        .state
-                        .components
-                        .body(person)
+                    let released = &game_characters::decisions::mind::<game_api::Command>(
+                        &self.state.components,
+                        person,
+                    )
+                    .unwrap();
+                    let v = &game_physiology::body(&self.state.components, person)
                         .expect("body exists")
                         .vitals;
                     let trusts = released.relationships.get(&actor).map_or(0, |r| r.trust) >= 0;
@@ -965,16 +961,13 @@ impl Simulation {
             }
             match member.directive {
                 MissionObjective::Defeat { person } => {
-                    if *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[&person]].id)
-                        .expect("location exists")
+                    if *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[&person]].id).0),
+                    )
+                    .expect("location exists")
                         == Location::AtArea(area)
-                        && self
-                            .state
-                            .components
-                            .body(person)
+                        && game_physiology::body(&self.state.components, person)
                             .expect("body exists")
                             .vitals
                             .alive
@@ -984,11 +977,11 @@ impl Simulation {
                     }
                 }
                 MissionObjective::Confine { person, until } => {
-                    if *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[&person]].id)
-                        .expect("location exists")
+                    if *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[&person]].id).0),
+                    )
+                    .expect("location exists")
                         != Location::AtArea(area)
                     {
                         return;
@@ -1010,10 +1003,7 @@ impl Simulation {
                             }
                         }
                     } else if self.state.time < until
-                        && self
-                            .state
-                            .components
-                            .body(person)
+                        && game_physiology::body(&self.state.components, person)
                             .expect("body exists")
                             .vitals
                             .alive
@@ -1024,11 +1014,11 @@ impl Simulation {
                     }
                 }
                 MissionObjective::Rescue { person, .. } => {
-                    if *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[&person]].id)
-                        .expect("location exists")
+                    if *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[&person]].id).0),
+                    )
+                    .expect("location exists")
                         == Location::AtArea(area)
                         && self
                             .state
@@ -1116,7 +1106,7 @@ impl Simulation {
         let Location::AtArea(area) = self.resolved_location(target) else {
             return None;
         };
-        let body = &self.state.components.body(target).expect("body exists");
+        let body = &game_physiology::body(&self.state.components, target).expect("body exists");
         let captivity = self
             .state
             .combat
@@ -1142,7 +1132,9 @@ impl Simulation {
         actor: PersonId,
         objective: &MissionObjective,
     ) -> game_missions::ObjectiveKnowledge {
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         let stocks = if let MissionObjective::Deliver {
             source,
             destination,
@@ -1175,11 +1167,11 @@ impl Simulation {
         )
     }
     fn start_mission_encounter(&mut self, id: MissionId, actor: PersonId, target: PersonId) {
-        let area = match *self
-            .state
-            .components
-            .location(self.state.people[self.person_index[&actor]].id)
-            .expect("location exists")
+        let area = match *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[self.person_index[&actor]].id).0),
+        )
+        .expect("location exists")
         {
             Location::AtArea(area) => area,
             _ => return,
@@ -1209,11 +1201,13 @@ impl Simulation {
             .filter(|(mission, member)| {
                 member.person != self.state.ruler
                     && member.status == CompanionStatus::Accepted
-                    && *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[&member.person]].id)
-                        .expect("location exists")
+                    && *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId(
+                            (self.state.people[self.person_index[&member.person]].id).0,
+                        ),
+                    )
+                    .expect("location exists")
                         == Location::AtArea(area)
                     && self.can_fight(member.person)
                     && !self.in_combat(member.person)
@@ -1396,11 +1390,9 @@ impl Simulation {
             .collect::<Vec<_>>();
         let mut local: BTreeMap<AreaId, BTreeSet<PersonId>> = BTreeMap::new();
         for person in &self.state.people {
-            if let Location::AtArea(area) = *self
-                .state
-                .components
-                .location(person.id)
-                .expect("location exists")
+            if let Location::AtArea(area) =
+                *game_spatial::location(&self.state.components, game_ecs::StableId((person.id).0))
+                    .expect("location exists")
             {
                 local.entry(area).or_default().insert(person.id);
             }
@@ -1615,7 +1607,7 @@ impl Simulation {
             .members
             .keys()
             .map(|p| {
-                let body = &self.state.components.body(*p).expect("body exists");
+                let body = &game_physiology::body(&self.state.components, *p).expect("body exists");
                 (
                     *p,
                     game_missions::MemberBody {
@@ -1697,15 +1689,15 @@ impl Simulation {
             let input = self.recruitment_input(offer.person, &m);
             let area = self.mission_area(offer.person).unwrap();
             let inventory = self.state.people[self.person_index[&offer.person]].inventory;
-            let known = self
-                .state
-                .components
-                .mind(offer.person)
-                .unwrap()
-                .knowledge
-                .values()
-                .cloned()
-                .collect::<Vec<_>>();
+            let known = game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                offer.person,
+            )
+            .unwrap()
+            .knowledge
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
             let Some(action) = self
                 .state
                 .missions
@@ -1824,14 +1816,14 @@ impl Simulation {
                     if !offer.countered
                         && view.status == MissionStatus::Preparing
                         && !self.guardian_mission_duty(actor, m.id)
-                        && !self
-                            .state
-                            .components
-                            .mind(actor)
-                            .unwrap()
-                            .child_signals
-                            .values()
-                            .any(|signal| signal.urgency >= 20_000)
+                        && !game_characters::decisions::mind::<game_api::Command>(
+                            &self.state.components,
+                            actor,
+                        )
+                        .unwrap()
+                        .child_signals
+                        .values()
+                        .any(|signal| signal.urgency >= 20_000)
                     {
                         actions.push(MissionAction::Accept {
                             recruitment: offer.id,
@@ -1876,11 +1868,11 @@ impl Simulation {
                 .iter()
                 .filter(|p| {
                     p.id != actor
-                        && *self
-                            .state
-                            .components
-                            .location(p.id)
-                            .expect("location exists")
+                        && *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((p.id).0),
+                        )
+                        .expect("location exists")
                             == Location::AtArea(area)
                 })
                 .map(|p| p.id)
@@ -1907,7 +1899,9 @@ impl Simulation {
         id: MissionId,
     ) -> game_missions::ServiceMotives {
         let m = &self.state.missions.as_ref().unwrap().missions[&id];
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         let agreement = self.state.missions.as_ref().unwrap().recruitments
             [&m.members[&actor].recruitment]
             .agreement;
@@ -1945,7 +1939,9 @@ impl Simulation {
             return;
         };
         let map = w.map(e.map).unwrap();
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         let opponents = f
             .known
             .keys()
@@ -2030,8 +2026,10 @@ impl Simulation {
         let e = w.encounters.get(&encounter)?;
         let f = e.fighters.get(&actor)?;
         let map = w.map(e.map)?;
-        let mind = &self.state.components.mind(actor).unwrap();
-        let body = &self.state.components.body(actor).expect("body exists");
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
+        let body = &game_physiology::body(&self.state.components, actor).expect("body exists");
         let known_status = self
             .state
             .missions
@@ -2500,7 +2498,8 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             || ![talk.speaker, talk.listener].iter().all(|actor| {
                 s.people.iter().any(|p| {
                     p.id == *actor
-                        && *s.components.location(p.id).expect("location exists")
+                        && *game_spatial::location(&s.components, game_ecs::StableId((p.id).0))
+                            .expect("location exists")
                             == Location::AtArea(talk.area)
                 })
             })
@@ -2578,10 +2577,7 @@ impl Simulation {
         };
         let m = &self.state.missions.as_ref().unwrap().missions[&id];
         lineage.current() != Some(m.sponsor)
-            || self
-                .state
-                .components
-                .mind(actor)
+            || game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
                 .unwrap()
                 .child_signals
                 .get(&m.sponsor)
@@ -2697,10 +2693,11 @@ mod tests {
         sim.advance(MINUTE).unwrap();
         assert_eq!(sim.state.inventories[&carried].quantity, Quantity(2_000));
         assert!(matches!(
-            *sim.state
-                .components
-                .location(sim.state.people[sim.person_index[&leader]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&leader]].id).0)
+            )
+            .expect("location exists"),
             Location::InTransit { .. }
         ));
         sim.advance(SimDuration(600_000)).unwrap();
@@ -2780,10 +2777,11 @@ mod tests {
             [&source];
         assert_eq!(tags.values().sum::<u64>(), 2000);
         assert!(matches!(
-            *sim.state
-                .components
-                .location(sim.state.people[sim.person_index[&actor]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0)
+            )
+            .expect("location exists"),
             Location::InTransit { .. }
         ));
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -2872,7 +2870,12 @@ mod tests {
         let recruit = sim.state.people[5].id;
         let enemy = sim.state.people[6].id;
         {
-            let traits = &mut sim.state.components.mind_mut(recruit).unwrap().personality;
+            let traits = &mut game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                recruit,
+            )
+            .unwrap()
+            .personality;
             traits.ambition = 0;
             traits.sociability = 400;
         }
@@ -2971,10 +2974,11 @@ mod tests {
         );
         sim.advance(SimDuration(420_000)).unwrap();
         assert_eq!(
-            *sim.state
-                .components
-                .location(sim.state.people[sim.person_index[&leader]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&leader]].id).0)
+            )
+            .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
         // A cached account can be reported to a bystander who never joined the party.
@@ -3013,12 +3017,13 @@ mod tests {
             destination: intermediary,
             duration: MINUTE,
         });
-        sim.state
-            .components
-            .mind_mut(leader)
-            .unwrap()
-            .routes
-            .clear();
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            leader,
+        )
+        .unwrap()
+        .routes
+        .clear();
         let id = propose(
             &mut sim,
             leader,
@@ -3030,10 +3035,11 @@ mod tests {
         accept(&mut sim, id, leader);
         sim.advance(SimDuration(180_000)).unwrap();
         assert_eq!(
-            *sim.state
-                .components
-                .location(sim.state.people[sim.person_index[&leader]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&leader]].id).0)
+            )
+            .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
         assert!(
@@ -3208,7 +3214,11 @@ mod tests {
             .unwrap();
         accept(&mut sim, id, leader);
         accept(&mut sim, id, actor);
-        let mind = sim.state.components.mind_mut(actor).unwrap();
+        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            actor,
+        )
+        .unwrap();
         mind.personality.honesty = 100;
         mind.relationships.insert(
             leader,
@@ -3252,10 +3262,11 @@ mod tests {
             CompanionStatus::Defected
         );
         assert_eq!(
-            *sim.state
-                .components
-                .location(sim.state.people[sim.person_index[&actor]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0)
+            )
+            .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
     }
@@ -3295,7 +3306,12 @@ mod tests {
         let ruler = sim.state.ruler;
         let farm = sim.state.areas[1].id;
         {
-            let traits = &mut sim.state.components.mind_mut(leader).unwrap().personality;
+            let traits = &mut game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                leader,
+            )
+            .unwrap()
+            .personality;
             traits.ambition = 900;
             traits.sociability = 900;
             traits.risk_tolerance = 900;
@@ -3392,20 +3408,22 @@ mod tests {
         accept(&mut sim, id, leader);
         sim.mission_command(ruler, &MissionAction::Depart { mission: id })
             .unwrap();
-        let body = sim.state.components.body_mut(leader).unwrap();
+        let body = game_physiology::body_mut(&mut sim.state.components, leader).unwrap();
         body.vitals.health = 70_000;
-        sim.state
-            .components
-            .mind_mut(leader)
-            .unwrap()
-            .personality
-            .risk_tolerance = 10;
-        sim.state
-            .components
-            .mind_mut(leader)
-            .unwrap()
-            .routes
-            .clear();
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            leader,
+        )
+        .unwrap()
+        .personality
+        .risk_tolerance = 10;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            leader,
+        )
+        .unwrap()
+        .routes
+        .clear();
         sim.state
             .combat
             .as_mut()
@@ -3439,10 +3457,11 @@ mod tests {
                 .contains_key(&leader)
         );
         assert_eq!(
-            *sim.state
-                .components
-                .location(sim.state.people[sim.person_index[&leader]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&leader]].id).0)
+            )
+            .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
         assert_eq!(
@@ -3587,10 +3606,11 @@ mod tests {
         let target = sim.state.people[3].id;
         let home = sim.state.areas[0].id;
         sim.interrupt_actor_activity(target);
-        *sim.state
-            .components
-            .location_mut(sim.state.people[sim.person_index[&target]].id)
-            .expect("location exists") = Location::AtArea(home);
+        *game_spatial::location_mut(
+            &mut sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&target]].id).0),
+        )
+        .expect("location exists") = Location::AtArea(home);
         for stock in sim
             .state
             .inventories
@@ -3654,11 +3674,11 @@ mod tests {
             MissionObjective::Defeat { person: target },
             vec![],
         );
-        let actual = (*sim
-            .state
-            .components
-            .location(sim.state.people[sim.person_index[&target]].id)
-            .expect("location exists"))
+        let actual = (*game_spatial::location(
+            &sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&target]].id).0),
+        )
+        .expect("location exists"))
         .clone();
         sim.seed_mission_target_report(id, actor, target, reported_area, SimTime(0))
             .unwrap();
@@ -3667,10 +3687,11 @@ mod tests {
             reported_area
         );
         assert_eq!(
-            *sim.state
-                .components
-                .location(sim.state.people[sim.person_index[&target]].id)
-                .expect("location exists"),
+            *game_spatial::location(
+                &sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&target]].id).0)
+            )
+            .expect("location exists"),
             actual
         );
         let before = sim.state.clone();
@@ -3688,14 +3709,16 @@ mod tests {
         let home = sim.state.areas[0].id;
         sim.interrupt_actor_activity(leader);
         sim.interrupt_actor_activity(target);
-        *sim.state
-            .components
-            .location_mut(sim.state.people[sim.person_index[&leader]].id)
-            .expect("location exists") = Location::AtArea(home);
-        *sim.state
-            .components
-            .location_mut(sim.state.people[sim.person_index[&target]].id)
-            .expect("location exists") = Location::AtArea(home);
+        *game_spatial::location_mut(
+            &mut sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&leader]].id).0),
+        )
+        .expect("location exists") = Location::AtArea(home);
+        *game_spatial::location_mut(
+            &mut sim.state.components,
+            game_ecs::StableId((sim.state.people[sim.person_index[&target]].id).0),
+        )
+        .expect("location exists") = Location::AtArea(home);
         sim.debug_add_inventory(
             Good::Binding,
             InventoryLocation::Carried(leader),
@@ -3728,10 +3751,7 @@ mod tests {
             .unwrap()
             .obstacles
             .clear();
-        let current = sim
-            .state
-            .components
-            .body(target)
+        let current = game_physiology::body(&sim.state.components, target)
             .expect("body exists")
             .vitals
             .health;

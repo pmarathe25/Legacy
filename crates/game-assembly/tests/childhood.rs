@@ -58,18 +58,14 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
     );
     sim.advance(SimDuration(5_999)).unwrap();
     assert!(
-        sim.canonical_state()
-            .components
-            .life(ruler)
+        game_lifecycle::life(&sim.canonical_state().components, ruler)
             .expect("life exists")
             .preference
             .is_none()
     );
     sim.advance(SimDuration(1)).unwrap();
     assert!(
-        sim.canonical_state()
-            .components
-            .life(ruler)
+        game_lifecycle::life(&sim.canonical_state().components, ruler)
             .expect("life exists")
             .preference
             .is_some()
@@ -77,17 +73,13 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
     sim.advance(SimDuration(174_000)).unwrap();
     assert!(sim.canonical_state().events.iter().any(|e| matches!(e.kind, EventKind::Cared { child, quantity: Quantity(1_000), .. } if child == ruler)));
     assert!(
-        !sim.canonical_state()
-            .components
-            .life(ruler)
+        !game_lifecycle::life(&sim.canonical_state().components, ruler)
             .expect("life exists")
             .caregivers
             .is_empty()
     );
     assert!(
-        sim.canonical_state()
-            .components
-            .life(ruler)
+        game_lifecycle::life(&sim.canonical_state().components, ruler)
             .expect("life exists")
             .preference
             .is_none()
@@ -106,12 +98,13 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
             .any(|e| matches!(e.kind, EventKind::Comforted { child, .. } if child == ruler))
     );
     assert!(
-        !sim.canonical_state()
-            .components
-            .mind(ruler)
-            .expect("mind exists")
-            .relationships
-            .is_empty()
+        !game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            ruler
+        )
+        .expect("mind exists")
+        .relationships
+        .is_empty()
     );
 }
 
@@ -127,9 +120,7 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
     sim.advance(SimDuration(300_000)).unwrap();
     let ruler = sim.observe().ruler;
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .life(ruler)
+        game_lifecycle::life(&sim.canonical_state().components, ruler)
             .expect("life exists")
             .stage,
         LifeStage::Child
@@ -290,20 +281,20 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
         .map(|p| p.id)
         .collect();
     for id in citizens {
-        let mut personality = sim
-            .canonical_state()
-            .components
-            .mind(id)
-            .expect("mind exists")
-            .personality
-            .clone();
+        let mut personality = game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            id,
+        )
+        .expect("mind exists")
+        .personality
+        .clone();
         personality.empathy = 0;
-        let dream = sim
-            .canonical_state()
-            .components
-            .mind(id)
-            .expect("mind exists")
-            .dream;
+        let dream = game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            id,
+        )
+        .expect("mind exists")
+        .dream;
         sim.debug_set_personality(id, personality, dream).unwrap();
         let ruler = sim.observe().ruler;
         sim.debug_set_relationship(

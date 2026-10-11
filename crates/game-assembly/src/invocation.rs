@@ -50,7 +50,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                 .iter()
                 .any(|life| life.person == *id && life.died_at == Some(past.died_at))
             || past.died_at > s.time
-            || s.components.body(*id).unwrap().vitals.alive
+            || game_physiology::body(&s.components, *id)
+                .unwrap()
+                .vitals
+                .alive
             || past
                 .mind
                 .knowledge
@@ -212,7 +215,10 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             || !people.contains(actor)
             || !areas.contains(&action.area)
             || action.completes <= s.time
-            || !s.components.body(*actor).unwrap().vitals.alive
+            || !game_physiology::body(&s.components, *actor)
+                .unwrap()
+                .vitals
+                .alive
         {
             return Err(fail());
         }
@@ -356,10 +362,7 @@ impl Simulation {
         let old = sim.state.ruler;
         sim.debug_move_actor(old, AreaId(3))?;
         sim.advance(SimDuration(180_000))?;
-        let site = sim
-            .state
-            .components
-            .sites()
+        let site = game_workshop::sites(&sim.state.components)
             .map(|(_, site)| site)
             .find(|s| s.area == AreaId(3))
             .unwrap()
@@ -408,12 +411,12 @@ impl Simulation {
             let snapshot = PastLife {
                 person,
                 died_at,
-                mind: self
-                    .state
-                    .components
-                    .mind(person)
-                    .expect("mind exists")
-                    .clone(),
+                mind: game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    person,
+                )
+                .expect("mind exists")
+                .clone(),
                 skills: self.own_skill_view(person),
                 institutions: self.institution_view(person),
                 cases: self.social_case_view(person),
@@ -435,7 +438,12 @@ impl Simulation {
             .keys()
             .copied()
             .chain(self.invocation_control_actor())
-            .filter(|p| !self.state.components.body(*p).unwrap().vitals.alive)
+            .filter(|p| {
+                !game_physiology::body(&self.state.components, *p)
+                    .unwrap()
+                    .vitals
+                    .alive
+            })
             .collect();
         let prepared = self
             .state
@@ -457,7 +465,7 @@ impl Simulation {
     }
     fn invocation_admission(&self, actor: PersonId) -> game_invocation::AdmissionFacts {
         let lineage = self.state.lineage.as_ref().unwrap();
-        let body = self.state.components.body(actor).unwrap();
+        let body = game_physiology::body(&self.state.components, actor).unwrap();
         game_invocation::AdmissionFacts {
             actor,
             now: self.state.time,
@@ -490,7 +498,7 @@ impl Simulation {
             .as_ref()
             .is_some_and(|lineage| lineage.current() == Some(actor))
             && self.state.physical.is_some()
-            && self.state.components.body(actor).is_some()
+            && game_physiology::body(&self.state.components, actor).is_some()
             && self
                 .state
                 .invocation
@@ -505,10 +513,7 @@ impl Simulation {
             .and_then(|w| w.control.active.as_ref())
             .and_then(|a| a.episode.as_ref());
         let alive = self.state.physical.is_some()
-            && self
-                .state
-                .components
-                .body(actor)
+            && game_physiology::body(&self.state.components, actor)
                 .is_some_and(|body| body.vitals.alive);
         game_invocation::controls_actor(episode, actor, self.state.time, alive)
     }
@@ -553,7 +558,7 @@ impl Simulation {
         };
         if let Some(action) = control {
             let w = self.state.invocation.as_ref().ok_or(Error::Unavailable)?;
-            if !self.state.components.body(actor).is_some() {
+            if !game_physiology::body(&self.state.components, actor).is_some() {
                 return Err(Error::Unavailable);
             }
             let facts = self.invocation_admission(actor);
@@ -566,10 +571,7 @@ impl Simulation {
             self.apply_invocation_control(prepared)
         } else {
             if self.past_life_controls_actor(actor)
-                || !self
-                    .state
-                    .components
-                    .body(actor)
+                || !game_physiology::body(&self.state.components, actor)
                     .is_some_and(|b| b.vitals.alive && b.vitals.health > 0)
             {
                 return Err(Error::Unavailable);
@@ -634,17 +636,17 @@ impl Simulation {
         )?;
         for effect in &prepared.effects {
             if let ControlEffect::DeathCleanup { actor } = effect
-                && self.state.components.body(*actor).unwrap().vitals.alive
+                && game_physiology::body(&self.state.components, *actor)
+                    .unwrap()
+                    .vitals
+                    .alive
             {
                 return Err(Error::Unavailable);
             }
         }
         for effect in &prepared.effects {
             if let ControlEffect::FatigueCharge { actor, quantity } = effect {
-                let body = self
-                    .state
-                    .components
-                    .body(*actor)
+                let body = game_physiology::body(&self.state.components, *actor)
                     .ok_or(Error::Unavailable)?;
                 if body
                     .vitals
@@ -671,9 +673,7 @@ impl Simulation {
                     self.emit(EventKind::InvocationCostAccepted { warning, actor })
                 }
                 ControlEffect::FatigueCharge { actor, quantity } => {
-                    self.state
-                        .components
-                        .body_mut(actor)
+                    game_physiology::body_mut(&mut self.state.components, actor)
                         .unwrap()
                         .vitals
                         .fatigue += quantity
@@ -721,7 +721,11 @@ impl Simulation {
                 } => {
                     // The lifespan owner may already have ended this body.
                     // Death preempts a controller handoff, without undoing costs.
-                    if self.state.components.body(actor).unwrap().vitals.alive {
+                    if game_physiology::body(&self.state.components, actor)
+                        .unwrap()
+                        .vitals
+                        .alive
+                    {
                         self.emit(EventKind::InvocationControlChanged {
                             actor,
                             controlled,
@@ -738,10 +742,12 @@ impl Simulation {
         if lost_control {
             self.review_invocation()?;
         }
-        if self
-            .invocation_control_actor()
-            .is_some_and(|actor| !self.state.components.body(actor).unwrap().vitals.alive)
-        {
+        if self.invocation_control_actor().is_some_and(|actor| {
+            !game_physiology::body(&self.state.components, actor)
+                .unwrap()
+                .vitals
+                .alive
+        }) {
             self.observe_invocation_deaths()?;
         }
         Ok(())
@@ -750,7 +756,7 @@ impl Simulation {
         let Some(development) = &self.state.development else {
             return;
         };
-        let life = self.state.components.life(actor).expect("life exists");
+        let life = game_lifecycle::life(&self.state.components, actor).expect("life exists");
         let lifespan = development
             .rules
             .lifespan
@@ -794,7 +800,10 @@ impl Simulation {
             .as_ref()
             .filter(|a| a.actor == actor)
             .map(Self::cost_input);
-        let alive = self.state.components.body(actor).unwrap().vitals.alive;
+        let alive = game_physiology::body(&self.state.components, actor)
+            .unwrap()
+            .vitals
+            .alive;
         let rates = game_invocation::body_rates(
             &w.control.rules,
             &before,
@@ -820,7 +829,11 @@ impl Simulation {
         };
         let mut updates = Vec::new();
         for (actor, before) in &w.control.people {
-            if !self.state.components.body(*actor).unwrap().vitals.alive {
+            if !game_physiology::body(&self.state.components, *actor)
+                .unwrap()
+                .vitals
+                .alive
+            {
                 continue;
             }
             let active = w
@@ -931,7 +944,12 @@ impl Simulation {
             .people
             .keys()
             .copied()
-            .filter(|p| self.state.components.body(*p).unwrap().vitals.alive)
+            .filter(|p| {
+                game_physiology::body(&self.state.components, *p)
+                    .unwrap()
+                    .vitals
+                    .alive
+            })
             .collect();
         let mut next = w.control.boundary(self.state.time, limit, &alive);
         for action in w.actions.values() {
@@ -1033,7 +1051,10 @@ impl Simulation {
     ) -> Option<BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>> {
         let w = self.state.invocation.as_ref()?;
         let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
-        let mut routes = self.state.components.mind(actor)?.routes.clone();
+        let mut routes =
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)?
+                .routes
+                .clone();
         for id in &a.lives {
             for (from, links) in &w.history[id].mind.routes {
                 for (to, duration) in links {
@@ -1052,22 +1073,20 @@ impl Simulation {
         let Some(destination) = person.route.last().copied() else {
             return;
         };
-        let origin = match *self
-            .state
-            .components
-            .location(person.id)
-            .expect("location exists")
+        let origin = match *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((person.id).0),
+        )
+        .expect("location exists")
         {
             Location::AtArea(area) => area,
             Location::InTransit { to, .. } => to,
             Location::StoppedOnRoad { .. } | Location::Carried { .. } => return,
         };
-        let owned = &self
-            .state
-            .components
-            .mind(actor)
-            .expect("mind exists")
-            .routes;
+        let owned =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .expect("mind exists")
+                .routes;
         let route = decisions::known_path(owned, origin, destination)
             .map_or_else(|_| Vec::new(), |(path, _)| path);
         self.state.people[self.person_index[&actor]].route = route;
@@ -1112,7 +1131,10 @@ impl Simulation {
         else {
             return Ok(());
         };
-        let alive = self.state.components.body(actor).unwrap().vitals.alive;
+        let alive = game_physiology::body(&self.state.components, actor)
+            .unwrap()
+            .vitals
+            .alive;
         let Some(prepared) = self
             .state
             .invocation
@@ -1152,10 +1174,7 @@ impl Simulation {
             return Ok(());
         }
         if !matches!(
-            *self
-                .state
-                .components
-                .location(person.id)
+            *game_spatial::location(&self.state.components, game_ecs::StableId((person.id).0))
                 .expect("location exists"),
             Location::AtArea(_)
         ) {
@@ -1164,7 +1183,7 @@ impl Simulation {
             }
             return Ok(());
         }
-        let body = self.state.components.body(a.actor).unwrap();
+        let body = game_physiology::body(&self.state.components, a.actor).unwrap();
         let traits = self.invocation_personality(a.actor).unwrap();
         if !changed
             && matches!(
@@ -1182,17 +1201,17 @@ impl Simulation {
         {
             return Ok(());
         }
-        let area = if let Location::AtArea(area) = *self
-            .state
-            .components
-            .location(person.id)
-            .expect("location exists")
+        let area = if let Location::AtArea(area) =
+            *game_spatial::location(&self.state.components, game_ecs::StableId((person.id).0))
+                .expect("location exists")
         {
             area
         } else {
             unreachable!()
         };
-        let current = &self.state.components.mind(a.actor).expect("mind exists");
+        let current =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, a.actor)
+                .expect("mind exists");
         let mut knowledge = mind.knowledge.clone();
         knowledge.extend(
             current
@@ -1246,13 +1265,16 @@ impl Simulation {
                 .iter()
                 .filter(|p| {
                     p.id != a.actor
-                        && *self
-                            .state
-                            .components
-                            .location(p.id)
-                            .expect("location exists")
+                        && *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((p.id).0),
+                        )
+                        .expect("location exists")
                             == Location::AtArea(area)
-                        && self.state.components.body(p.id).unwrap().vitals.alive
+                        && game_physiology::body(&self.state.components, p.id)
+                            .unwrap()
+                            .vitals
+                            .alive
                 })
                 .filter(|p| mind.relationships.get(&p.id).is_some_and(|r| r.trust < 0))
                 .take(64)
@@ -1407,7 +1429,7 @@ impl Simulation {
                 }
             })
             .collect();
-        let records=w.records.values().filter_map(|record|{let inventory=self.state.inventories.get(&record.inventory)?;let local=self.state.components.location(actor).expect("location exists");let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
+        let records=w.records.values().filter_map(|record|{let inventory=self.state.inventories.get(&record.inventory)?;let local=game_spatial::location(&self.state.components,game_ecs::StableId((actor).0)).expect("location exists");let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
         let preview_lives = w
             .control
             .activation
@@ -1437,7 +1459,10 @@ impl Simulation {
             permanent_identity: b.permanent_identity,
             lifespan_loss: SimDuration(b.lifespan_loss),
             player_control: !self.past_life_controls_actor(actor)
-                && self.state.components.body(actor).unwrap().vitals.alive,
+                && game_physiology::body(&self.state.components, actor)
+                    .unwrap()
+                    .vitals
+                    .alive,
             loss_ends: active.and_then(|a| a.episode.as_ref()).map(|e| e.ends),
             warning: w.control.warning.as_ref().map(|p| p.view.clone()),
             preview,
@@ -1494,10 +1519,7 @@ impl Simulation {
         if !self.independent(actor) || self.in_combat(actor) || self.combat_restricts(actor) {
             return Err(Error::Unavailable);
         }
-        match *self
-            .state
-            .components
-            .location(actor)
+        match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
             .expect("location exists")
         {
             Location::AtArea(area) => Ok(area),
@@ -1559,9 +1581,7 @@ impl Simulation {
         let Some(stock) = self.state.inventories.get(&record.inventory) else {
             return false;
         };
-        self.state
-            .components
-            .body(actor)
+        game_physiology::body(&self.state.components, actor)
             .is_some_and(|a| a.vitals.alive && a.vitals.health > 0)
             && self
                 .memory_area(actor)
@@ -1723,7 +1743,10 @@ impl Simulation {
                 let content = self.recalled_stock(actor, *life, *inventory)?;
                 if *recipient == actor
                     || self.memory_area(*recipient).ok() != Some(area)
-                    || !self.state.components.body(*recipient).unwrap().vitals.alive
+                    || !game_physiology::body(&self.state.components, *recipient)
+                        .unwrap()
+                        .vitals
+                        .alive
                     || !matches!(
                         *self.state.components.activity(*recipient).unwrap(),
                         Activity::Idle | Activity::Rest
@@ -1731,13 +1754,14 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                let mind = &self.state.components.mind(*recipient).expect("mind exists");
+                let mind = &game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    *recipient,
+                )
+                .expect("mind exists");
                 let trust = mind.relationships.get(&actor).map_or(0, |r| r.trust);
                 if i64::from(mind.personality.sociability) + i64::from(trust) < 200
-                    || self
-                        .state
-                        .components
-                        .body(*recipient)
+                    || game_physiology::body(&self.state.components, *recipient)
                         .unwrap()
                         .vitals
                         .hunger
@@ -1857,7 +1881,11 @@ impl Simulation {
         content: &RecordedMemory,
         source: KnowledgeSource,
     ) {
-        let mind = self.state.components.mind_mut(actor).unwrap();
+        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut self.state.components,
+            actor,
+        )
+        .unwrap();
         match content {
             RecordedMemory::Stock { fact, .. } => {
                 if mind
@@ -1909,7 +1937,10 @@ impl Simulation {
         for action in actions {
             let actor = action.actor;
             if self.memory_area(actor).ok() != Some(action.area)
-                || !self.state.components.body(actor).unwrap().vitals.alive
+                || !game_physiology::body(&self.state.components, actor)
+                    .unwrap()
+                    .vitals
+                    .alive
             {
                 self.cancel_invocation_action(actor);
                 continue;
@@ -2196,10 +2227,7 @@ mod tests {
         )
         .unwrap();
         let actor = sim.state.ruler;
-        let child = sim
-            .state
-            .components
-            .life(actor)
+        let child = game_lifecycle::life(&sim.state.components, actor)
             .expect("life exists")
             .born
             .0
@@ -2218,9 +2246,7 @@ mod tests {
             let mut learned = false;
             for _ in 0..12 {
                 if matches!(
-                    *sim.state
-                        .components
-                        .location(teacher)
+                    *game_spatial::location(&sim.state.components, game_ecs::StableId((teacher).0))
                         .expect("location exists"),
                     Location::AtArea(_)
                 ) {
@@ -2246,10 +2272,7 @@ mod tests {
             );
         }
         assert!(sim.invocation_ready(actor));
-        let adult = sim
-            .state
-            .components
-            .life(actor)
+        let adult = game_lifecycle::life(&sim.state.components, actor)
             .expect("life exists")
             .born
             .0
@@ -2267,24 +2290,22 @@ mod tests {
         {
             inventory.access.insert(actor);
         }
-        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        let sites: Vec<_> = game_workshop::sites(&sim.state.components)
+            .map(|(id, _)| id)
+            .collect();
         for id in sites {
-            sim.state
-                .components
-                .site_mut(id)
+            game_workshop::site_mut(&mut sim.state.components, id)
                 .unwrap()
                 .access
                 .insert(actor);
         }
-        let area = match *sim
-            .state
-            .components
-            .location(actor)
-            .expect("location exists")
-        {
-            Location::AtArea(area) => area,
-            _ => panic!("pupil stayed local"),
-        };
+        let area =
+            match *game_spatial::location(&sim.state.components, game_ecs::StableId((actor).0))
+                .expect("location exists")
+            {
+                Location::AtArea(area) => area,
+                _ => panic!("pupil stayed local"),
+            };
         sim.debug_add_inventory(
             Good::Food,
             InventoryLocation::Area(area),
@@ -2374,7 +2395,10 @@ mod tests {
         let mut sim = ready(1);
         let actor = sim.state.ruler;
         let life = past(&sim);
-        let fatigue = sim.state.components.body(actor).unwrap().vitals.fatigue;
+        let fatigue = game_physiology::body(&sim.state.components, actor)
+            .unwrap()
+            .vitals
+            .fatigue;
         act(
             &mut sim,
             InvocationAction::Activate {
@@ -2414,7 +2438,10 @@ mod tests {
         assert!(sim.borrowed_skill_level(actor, Skill::Craft) > 0);
         let burden = sim.state.invocation.as_ref().unwrap().control.people[&actor].burden;
         assert_eq!(
-            sim.state.components.body(actor).unwrap().vitals.fatigue,
+            game_physiology::body(&sim.state.components, actor)
+                .unwrap()
+                .vitals
+                .fatigue,
             fatigue + warning.instant_fatigue
         );
         act(&mut sim, InvocationAction::Dismiss).unwrap();
@@ -2428,10 +2455,7 @@ mod tests {
         let mut borrowed = ready(1);
         let actor = borrowed.state.ruler;
         let life = past(&borrowed);
-        let site = borrowed
-            .state
-            .components
-            .sites()
+        let site = game_workshop::sites(&borrowed.state.components)
             .map(|(_, site)| site)
             .find(|s| s.area == AreaId(1))
             .unwrap()
@@ -2457,8 +2481,12 @@ mod tests {
             submit(sim, Command::Work { site }).unwrap();
             sim.advance(SimDuration(30_000)).unwrap();
         }
-        let a = borrowed.state.components.job(actor).unwrap().remaining;
-        let b = baseline.state.components.job(actor).unwrap().remaining;
+        let a = game_workshop::job(&borrowed.state.components, actor)
+            .unwrap()
+            .remaining;
+        let b = game_workshop::job(&baseline.state.components, actor)
+            .unwrap()
+            .remaining;
         assert!(a < b);
         assert_eq!(
             borrowed.own_skill_level(actor, Skill::Craft),
@@ -2467,7 +2495,9 @@ mod tests {
         act(&mut borrowed, InvocationAction::Dismiss).unwrap();
         borrowed.advance(SimDuration(10_000)).unwrap();
         assert_eq!(
-            borrowed.state.components.job(actor).unwrap().remaining,
+            game_workshop::job(&borrowed.state.components, actor)
+                .unwrap()
+                .remaining,
             a - 10_000
         );
     }
@@ -2538,9 +2568,7 @@ mod tests {
             .unwrap()
             .inventory;
         assert!(
-            !sim.state
-                .components
-                .mind(actor)
+            !game_characters::decisions::mind::<game_api::Command>(&sim.state.components, actor)
                 .expect("mind exists")
                 .knowledge
                 .contains_key(&remote)
@@ -2593,9 +2621,7 @@ mod tests {
         act(&mut sim, InvocationAction::Dismiss).unwrap();
         assert!(sim.invocation_view().unwrap().memories.is_empty());
         assert!(
-            !sim.state
-                .components
-                .mind(actor)
+            !game_characters::decisions::mind::<game_api::Command>(&sim.state.components, actor)
                 .expect("mind exists")
                 .knowledge
                 .contains_key(&remote)
@@ -2603,12 +2629,10 @@ mod tests {
         act(&mut sim, InvocationAction::ReadRecord { record }).unwrap();
         sim.advance(MINUTE).unwrap();
         assert!(
-            matches!(sim.state.components.mind(actor).expect("mind exists").knowledge[&remote].source,KnowledgeSource::Recorded(id)if id==record)
+            matches!(game_characters::decisions::mind::<game_api::Command>(&sim.state.components,actor).expect("mind exists").knowledge[&remote].source,KnowledgeSource::Recorded(id)if id==record)
         );
         assert!(
-            !sim.state
-                .components
-                .mind(actor)
+            !game_characters::decisions::mind::<game_api::Command>(&sim.state.components, actor)
                 .expect("mind exists")
                 .knowledge[&remote]
                 .accessible
@@ -2685,7 +2709,12 @@ mod tests {
                 .active
                 .is_none()
         );
-        assert!(!sim.state.components.body(actor).unwrap().vitals.alive);
+        assert!(
+            !game_physiology::body(&sim.state.components, actor)
+                .unwrap()
+                .vitals
+                .alive
+        );
         let before = sim.state.time;
         for _ in 0..20 {
             sim.advance(MINUTE).unwrap();

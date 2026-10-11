@@ -213,7 +213,7 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
     let plan = propose(&mut sim, SimTime(1_800_000), BTreeSet::from([maker]));
     supply(&mut sim, 5_000);
     let (materials, _, _) = maker_assets(&sim);
-    let sites = sim.canonical_state().components.sites().count();
+    let sites = game_workshop::sites(&sim.canonical_state().components).count();
     sim.debug_project_action(maker, ProjectAction::Work { project: plan })
         .unwrap();
     assert_eq!(sim.canonical_state().inventories[&materials].quantity.0, 0);
@@ -223,7 +223,10 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
         sim.canonical_state().projects.as_ref().unwrap().projects[&plan].progress_ms,
         120_000
     );
-    assert_eq!(sim.canonical_state().components.sites().count(), sites);
+    assert_eq!(
+        game_workshop::sites(&sim.canonical_state().components).count(),
+        sites
+    );
     sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     sim.debug_project_action(maker, ProjectAction::Work { project: plan })
         .unwrap();
@@ -232,7 +235,10 @@ fn consumed_construction_material_and_labor_survive_interruption_without_a_prema
         sim.canonical_state().projects.as_ref().unwrap().projects[&plan].status,
         ProjectStatus::Completed
     );
-    assert_eq!(sim.canonical_state().components.sites().count(), sites + 1);
+    assert_eq!(
+        game_workshop::sites(&sim.canonical_state().components).count(),
+        sites + 1
+    );
     assert_eq!(sim.canonical_state().inventories[&materials].quantity.0, 0);
 }
 #[test]

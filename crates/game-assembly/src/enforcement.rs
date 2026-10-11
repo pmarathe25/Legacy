@@ -74,31 +74,39 @@ impl Simulation {
         }
         // This opening supplies a court and watch rather than the autonomy
         // fixture's recipe jobs. Old private plans must not pull witnesses away.
-        let sites: Vec<_> = sim.state.components.sites().map(|(id, _)| id).collect();
+        let sites: Vec<_> = game_workshop::sites(&sim.state.components)
+            .map(|(id, _)| id)
+            .collect();
         for site in sites {
-            sim.state.components.remove_site(site)?;
+            game_workshop::remove_site(&mut sim.state.components, site)?;
         }
-        let workers: Vec<_> = sim
-            .state
-            .components
-            .jobs()
+        let workers: Vec<_> = game_workshop::jobs(&sim.state.components)
             .map(|(actor, _)| actor)
             .collect();
         for actor in workers {
-            sim.state.components.set_job(actor, None)?;
+            game_workshop::remove_job(&mut sim.state.components, actor).map(|_| ())?;
         }
-        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        let actors: Vec<_> =
+            game_characters::decisions::minds::<game_api::Command>(&sim.state.components)
+                .map(|(id, _)| id)
+                .collect();
         for actor in actors {
-            let mind = sim.state.components.mind_mut(actor).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                actor,
+            )
+            .unwrap();
             mind.sites.clear();
             mind.plan = None;
         }
         if let Some(world) = &mut sim.state.development {
             world.rules = development::Rules::human();
             let adulthood = world.rules.adulthood;
-            let actors: Vec<_> = sim.state.components.lives().map(|(id, _)| id).collect();
+            let actors: Vec<_> = game_lifecycle::all_lives(&sim.state.components)
+                .map(|(id, _)| id)
+                .collect();
             for actor in actors {
-                let life = sim.state.components.life_mut(actor).unwrap();
+                let life = game_lifecycle::life_mut(&mut sim.state.components, actor).unwrap();
                 life.initial_age = adulthood;
                 life.stage = LifeStage::Adult;
             }
@@ -114,10 +122,11 @@ impl Simulation {
         rules.meal_relief = 86_400_000;
         rules.fatigue_limit = 16 * 3_600_000;
         for actor in [judge, filer, officer, target] {
-            *sim.state
-                .components
-                .location_mut(sim.state.people[sim.person_index[&actor]].id)
-                .expect("location exists") = Location::AtArea(court);
+            *game_spatial::location_mut(
+                &mut sim.state.components,
+                game_ecs::StableId((sim.state.people[sim.person_index[&actor]].id).0),
+            )
+            .expect("location exists") = Location::AtArea(court);
         }
         sim.state.missions = Some(missions::World {
             missions: BTreeMap::new(),
@@ -335,7 +344,7 @@ impl Simulation {
     }
     fn enforcement_area(&self, actor: PersonId) -> Option<AreaId> {
         let person = self.state.people.get(*self.person_index.get(&actor)?)?;
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive
             || body.vitals.health == 0
             || !self.independent(actor)
@@ -343,10 +352,7 @@ impl Simulation {
         {
             return None;
         }
-        match *self
-            .state
-            .components
-            .location(person.id)
+        match *game_spatial::location(&self.state.components, game_ecs::StableId((person.id).0))
             .expect("location exists")
         {
             Location::AtArea(area) => Some(area),
@@ -1265,23 +1271,15 @@ impl Simulation {
             .iter()
             .filter(|(_, index)| {
                 let p = &self.state.people[**index];
-                *self
-                    .state
-                    .components
-                    .location(p.id)
+                *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
                     .expect("location exists")
                     == Location::AtArea(area)
                     && self.state.physical.as_ref().is_some_and(|_| {
-                        self.state
-                            .components
-                            .body(p.id)
+                        game_physiology::body(&self.state.components, p.id)
                             .expect("body exists")
                             .vitals
                             .alive
-                            && self
-                                .state
-                                .components
-                                .body(p.id)
+                            && game_physiology::body(&self.state.components, p.id)
                                 .expect("body exists")
                                 .vitals
                                 .health
@@ -1514,22 +1512,15 @@ impl Simulation {
         self.state.enforcement.as_mut().unwrap().last_event = self.state.next_event - 1;
         let mut by_area = BTreeMap::<AreaId, Vec<PersonId>>::new();
         for person in &self.state.people {
-            if let Location::AtArea(area) = *self
-                .state
-                .components
-                .location(person.id)
-                .expect("location exists")
+            if let Location::AtArea(area) =
+                *game_spatial::location(&self.state.components, game_ecs::StableId((person.id).0))
+                    .expect("location exists")
                 && self.state.physical.as_ref().is_some_and(|_| {
-                    self.state
-                        .components
-                        .body(person.id)
+                    game_physiology::body(&self.state.components, person.id)
                         .expect("body exists")
                         .vitals
                         .alive
-                        && self
-                            .state
-                            .components
-                            .body(person.id)
+                        && game_physiology::body(&self.state.components, person.id)
                             .expect("body exists")
                             .vitals
                             .health
@@ -1923,7 +1914,12 @@ impl Simulation {
                 continue;
             }
             let commands = self.available_enforcement_commands(actor);
-            let personality = &self.state.components.mind(actor).unwrap().personality;
+            let personality = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                actor,
+            )
+            .unwrap()
+            .personality;
             let chosen = commands.into_iter().find(|command| match command {
                 Command::Enforcement {
                     action: EnforcementAction::File { .. },
@@ -2227,7 +2223,11 @@ impl Simulation {
                 else {
                     continue;
                 };
-                let mind = &self.state.components.mind(actor).unwrap();
+                let mind = &game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    actor,
+                )
+                .unwrap();
                 let remedy = match &case.evidence {
                     EnforcementEvidence::Default(old)
                         if policy.remedies.contains(&RemedyKind::Settlement) =>
@@ -2324,13 +2324,13 @@ impl Simulation {
                 .map(|o| o.term.parties()[0])
                 .collect::<BTreeSet<_>>();
             if unpaid.is_empty()
-                || self
-                    .state
-                    .components
-                    .mind(actor)
-                    .unwrap()
-                    .personality
-                    .honesty
+                || game_characters::decisions::mind::<game_api::Command>(
+                    &self.state.components,
+                    actor,
+                )
+                .unwrap()
+                .personality
+                .honesty
                     < 500
             {
                 continue;
@@ -2585,7 +2585,9 @@ impl Simulation {
         _i: &institutions::Institution,
         change: &InstitutionChange,
     ) -> i64 {
-        let mind = &self.state.components.mind(actor).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
+                .unwrap();
         match change {
             InstitutionChange::EnforcementPolicy {
                 policy: Some(policy),
@@ -2668,12 +2670,11 @@ mod atomic_tests {
     }
     fn travel(sim: &mut Simulation, who: PersonId, destination: AreaId) {
         sim.debug_move_actor(who, destination).unwrap();
-        let Location::InTransit { arrives, .. } = *sim
-            .canonical_state()
-            .components
-            .location(who)
-            .expect("location exists")
-        else {
+        let Location::InTransit { arrives, .. } = *game_spatial::location(
+            &sim.canonical_state().components,
+            game_ecs::StableId((who).0),
+        )
+        .expect("location exists") else {
             panic!("traveler did not depart")
         };
         sim.advance(SimDuration(arrives.0 - sim.canonical_state().time.0))

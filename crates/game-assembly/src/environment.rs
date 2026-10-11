@@ -71,7 +71,7 @@ impl Simulation {
     }
     pub(crate) fn environment_view(&self, actor: PersonId) -> Option<EnvironmentView> {
         let world = self.state.environment.as_ref()?;
-        let body = self.state.components.body(actor)?;
+        let body = game_physiology::body(&self.state.components, actor)?;
         if !body.vitals.alive {
             return None;
         }

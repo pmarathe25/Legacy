@@ -46,7 +46,7 @@ impl Simulation {
         };
         let equipment = self.equipment_availability();
         let mut pending = Vec::new();
-        for (actor, body) in self.state.components.bodies() {
+        for (actor, body) in game_physiology::bodies(&self.state.components) {
             let actor = &actor;
             let activity = self
                 .state
@@ -57,11 +57,11 @@ impl Simulation {
                 || !body.vitals.alive
                 || body.vitals.health == 0
                 || !matches!(
-                    *self
-                        .state
-                        .components
-                        .location(self.state.people[self.person_index[actor]].id)
-                        .expect("location exists"),
+                    *game_spatial::location(
+                        &self.state.components,
+                        game_ecs::StableId((self.state.people[self.person_index[actor]].id).0)
+                    )
+                    .expect("location exists"),
                     Location::AtArea(_)
                 )
             {
@@ -307,9 +307,7 @@ mod tests {
     }
 
     fn local_site(sim: &Simulation) -> SiteId {
-        sim.state
-            .components
-            .sites()
+        game_workshop::sites(&sim.state.components)
             .map(|(_, site)| site)
             .find(|site| site.area == AreaId(1))
             .unwrap()

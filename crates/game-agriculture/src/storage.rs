@@ -46,22 +46,20 @@ impl Cultivation {
 }
 impl Runtime {
     pub fn cultivation<'a>(&self, store: &'a Store, actor: PersonId) -> Option<&'a Cultivation> {
-        store.get(StableId(actor.0))
+        cultivation(store, actor)
     }
     pub fn cultivation_mut<'a>(
         &self,
         store: &'a mut Store,
         actor: PersonId,
     ) -> Option<&'a mut Cultivation> {
-        store.get_mut(StableId(actor.0))
+        cultivation_mut(store, actor)
     }
     pub fn cultivations<'a>(
         &self,
         store: &'a Store,
     ) -> impl Iterator<Item = (PersonId, &'a Cultivation)> {
-        store
-            .iter::<Cultivation>()
-            .map(|(id, row)| (PersonId(id.0), row))
+        cultivations(store)
     }
     pub fn insert_cultivation(
         &self,
@@ -69,18 +67,14 @@ impl Runtime {
         actor: PersonId,
         job: Cultivation,
     ) -> Result<(), Error> {
-        job.validate()?;
-        store.insert_or_spawn(StableId(actor.0), job)
+        insert_cultivation(store, actor, job)
     }
     pub fn remove_cultivation(
         &self,
         store: &mut Store,
         actor: PersonId,
     ) -> Result<Option<Cultivation>, Error> {
-        if !store.contains(StableId(actor.0)) {
-            return Ok(None);
-        }
-        store.remove(StableId(actor.0))
+        remove_cultivation(store, actor)
     }
 }
 /// Cached metadata for the host's store; neither serialized nor authoritative.
@@ -170,4 +164,37 @@ impl Runtime {
     pub fn remove_soil(&self, store: &mut Store, id: SiteId) -> Result<Option<Soil>, Error> {
         game_land::remove_soil(store, id)
     }
+}
+
+pub fn cultivation(store: &Store, actor: PersonId) -> Option<&Cultivation> {
+    store.get(StableId(actor.0))
+}
+
+pub fn cultivation_mut(store: &mut Store, actor: PersonId) -> Option<&mut Cultivation> {
+    store.get_mut(StableId(actor.0))
+}
+
+pub fn cultivations(store: &Store) -> impl Iterator<Item = (PersonId, &Cultivation)> {
+    store
+        .iter::<Cultivation>()
+        .map(|(id, row)| (PersonId(id.0), row))
+}
+
+pub fn insert_cultivation(
+    store: &mut Store,
+    actor: PersonId,
+    job: Cultivation,
+) -> Result<(), Error> {
+    job.validate()?;
+    store.insert_or_spawn(StableId(actor.0), job)
+}
+
+pub fn remove_cultivation(
+    store: &mut Store,
+    actor: PersonId,
+) -> Result<Option<Cultivation>, Error> {
+    if !store.contains(StableId(actor.0)) {
+        return Ok(None);
+    }
+    store.remove(StableId(actor.0))
 }

@@ -18,8 +18,12 @@ impl Simulation {
         {
             return Err(Error::InvalidConfiguration("invalid initial lives".into()));
         }
-        if self.state.components.lives().next().is_some()
-            || self.state.components.pregnancies().next().is_some()
+        if game_lifecycle::all_lives(&self.state.components)
+            .next()
+            .is_some()
+            || game_lifecycle::all_pregnancies(&self.state.components)
+                .next()
+                .is_some()
         {
             return Err(Error::InvalidConfiguration(
                 "initial lifecycle rows already exist".into(),
@@ -86,7 +90,11 @@ impl Simulation {
         let first = sim.state.people[3].id;
         let second = sim.state.people[4].id;
         for (id, partner) in [(first, second), (second, first)] {
-            let mind = sim.state.components.mind_mut(id).unwrap();
+            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut sim.state.components,
+                id,
+            )
+            .unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 900;
             mind.relationships.insert(
@@ -108,10 +116,7 @@ impl Simulation {
             sim.state.physical.as_ref().unwrap().rules.max_health,
         )?;
         sim.advance(SimDuration(300_000))?;
-        let child = sim
-            .state
-            .components
-            .lives()
+        let child = game_lifecycle::all_lives(&sim.state.components)
             .map(|(_, life)| life)
             .find(|l| l.born == SimTime(300_000) && !l.parents.is_empty())
             .ok_or_else(|| Error::InvalidFixture("fixture did not produce its child".into()))?
@@ -127,9 +132,7 @@ impl Simulation {
 
     pub(crate) fn independent(&self, id: PersonId) -> bool {
         self.state.development.as_ref().is_none_or(|_| {
-            self.state
-                .components
-                .life(id)
+            game_lifecycle::life(&self.state.components, id)
                 .is_some_and(|l| !matches!(l.stage, LifeStage::Infant))
         })
     }
@@ -138,20 +141,17 @@ impl Simulation {
         if !self.social_family_intent(id, partner) {
             return false;
         }
-        let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind(id))
-        else {
+        let Some(mind) = self.state.decisions.as_ref().and_then(|_| {
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, id)
+        }) else {
             return false;
         };
-        let body = &self.state.components.body(id).expect("body exists");
+        let body = &game_physiology::body(&self.state.components, id).expect("body exists");
         let Some(life) = self
             .state
             .development
             .as_ref()
-            .and_then(|_| self.state.components.life(id))
+            .and_then(|_| game_lifecycle::life(&self.state.components, id))
         else {
             return false;
         };
@@ -186,18 +186,18 @@ impl Simulation {
             .state
             .physical
             .as_ref()
-            .and_then(|_| self.state.components.body(actor))
+            .and_then(|_| game_physiology::body(&self.state.components, actor))
             .ok_or(Error::Unavailable)?;
         Ok(BodyFacts {
             actor,
             alive: body.vitals.alive,
             health: body.vitals.health,
-            position: self
-                .state
-                .components
-                .location(person.id)
-                .ok_or(Error::Unavailable)?
-                .clone(),
+            position: game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((person.id).0),
+            )
+            .ok_or(Error::Unavailable)?
+            .clone(),
             action_restricted: self.combat_restricts(actor),
             attempt: match *self
                 .state
@@ -287,13 +287,12 @@ impl Simulation {
             return Ok(());
         };
         let mut pairs = BTreeSet::new();
-        for (id, _) in self
-            .state
-            .components
-            .lives()
+        for (id, _) in game_lifecycle::all_lives(&self.state.components)
             .filter(|(id, _)| *id != self.state.ruler)
         {
-            let mind = &self.state.components.mind(id).expect("mind exists");
+            let mind =
+                &game_characters::decisions::mind::<game_api::Command>(&self.state.components, id)
+                    .expect("mind exists");
             if mind.dream != decisions::Aspiration::Parenthood {
                 continue;
             }
@@ -319,7 +318,7 @@ impl Simulation {
     }
 
     pub(crate) fn complete_conception(&mut self, id: PregnancyId) {
-        let pregnancy = &self.state.components.pregnancy(id).unwrap();
+        let pregnancy = &game_lifecycle::pregnancy(&self.state.components, id).unwrap();
         let pair = [pregnancy.gestator, pregnancy.partner];
         let bodies = [
             self.lifecycle_body(pair[0]).unwrap(),
@@ -408,10 +407,7 @@ impl Simulation {
     pub(crate) fn complete_development(&mut self, due: Due) {
         match due {
             Due::Age(id) => {
-                let alive = self
-                    .state
-                    .components
-                    .body(id)
+                let alive = game_physiology::body(&self.state.components, id)
                     .expect("body exists")
                     .vitals
                     .alive;
@@ -466,7 +462,9 @@ impl Simulation {
     }
 
     fn birth(&mut self, id: PregnancyId) {
-        let pregnancy = self.state.components.pregnancy(id).unwrap().clone();
+        let pregnancy = game_lifecycle::pregnancy(&self.state.components, id)
+            .unwrap()
+            .clone();
         let body = self
             .lifecycle_body(pregnancy.gestator)
             .expect("existing biological gestator body");
@@ -536,10 +534,12 @@ impl Simulation {
             route: Vec::new(),
             hunger_exempt: false,
         });
-        self.state
-            .components
-            .set_location(child, location.clone())
-            .expect("validated birth location");
+        game_spatial::set_location(
+            &mut self.state.components,
+            game_ecs::StableId((child).0),
+            location.clone(),
+        )
+        .expect("validated birth location");
         if let Location::InTransit { arrives, .. } = location {
             self.state
                 .due
@@ -591,12 +591,12 @@ impl Simulation {
             .components
             .set_activity(child, Activity::Idle)
             .expect("newborn entity exists");
-        let mut mind = self
-            .state
-            .components
-            .mind(pregnancy.gestator)
-            .expect("mind exists")
-            .clone();
+        let mut mind = game_characters::decisions::mind::<game_api::Command>(
+            &self.state.components,
+            pregnancy.gestator,
+        )
+        .expect("mind exists")
+        .clone();
         mind.interests.clear();
         mind.routes.clear();
         mind.last_failure = None;
@@ -617,27 +617,33 @@ impl Simulation {
             total: 0,
             blocker: None,
         };
-        self.state
-            .components
-            .insert_mind(child, mind)
-            .expect("validated newborn mind");
+        game_characters::decisions::insert_mind::<game_api::Command>(
+            &mut self.state.components,
+            child,
+            mind,
+        )
+        .expect("validated newborn mind");
         // Kinship changes a directed initial relationship. It grants no assets,
         // permissions, office, compulsory care, or legal guardianship.
         for parent in parents {
-            if *self
-                .state
-                .components
-                .location(self.state.people[self.person_index[&parent]].id)
+            if *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((self.state.people[self.person_index[&parent]].id).0),
+            )
+            .expect("location exists")
+                != *game_spatial::location(
+                    &self.state.components,
+                    game_ecs::StableId((self.state.people[self.person_index[&child]].id).0),
+                )
                 .expect("location exists")
-                != *self
-                    .state
-                    .components
-                    .location(self.state.people[self.person_index[&child]].id)
-                    .expect("location exists")
             {
                 continue;
             }
-            let parent_mind = self.state.components.mind_mut(parent).unwrap();
+            let parent_mind = game_characters::decisions::mind_mut::<game_api::Command>(
+                &mut self.state.components,
+                parent,
+            )
+            .unwrap();
             parent_mind.relationships.insert(
                 child,
                 decisions::Relationship {
@@ -646,11 +652,11 @@ impl Simulation {
                 },
             );
         }
-        if let Location::AtArea(area) = *self
-            .state
-            .components
-            .location(self.state.people[self.person_index[&child]].id)
-            .expect("location exists")
+        if let Location::AtArea(area) = *game_spatial::location(
+            &self.state.components,
+            game_ecs::StableId((self.state.people[self.person_index[&child]].id).0),
+        )
+        .expect("location exists")
         {
             self.index_dependent(child, area);
         }
@@ -673,7 +679,9 @@ impl Simulation {
     pub(crate) fn index_dependent(&mut self, id: PersonId, area: AreaId) {
         if self.state.development.as_ref().is_some_and(|_| {
             matches!(
-                self.state.components.life(id).unwrap().stage,
+                game_lifecycle::life(&self.state.components, id)
+                    .unwrap()
+                    .stage,
                 LifeStage::Infant | LifeStage::Child
             )
         }) {
@@ -683,10 +691,7 @@ impl Simulation {
 
     pub(crate) fn schedule_age(&mut self, id: PersonId) {
         if self.state.people[self.person_index[&id]].role == Role::Guardian
-            || !self
-                .state
-                .components
-                .body(id)
+            || !game_physiology::body(&self.state.components, id)
                 .expect("body exists")
                 .vitals
                 .alive
@@ -694,10 +699,7 @@ impl Simulation {
             return;
         }
         let world = self.state.development.as_ref().unwrap();
-        if let Some(at) = self
-            .state
-            .components
-            .life(id)
+        if let Some(at) = game_lifecycle::life(&self.state.components, id)
             .unwrap()
             .next_age_deadline(
                 &world.rules,
@@ -712,15 +714,14 @@ impl Simulation {
     }
 
     pub(crate) fn end_life(&mut self, id: PersonId) {
-        let a = self.state.components.body_mut(id).unwrap();
+        let a = game_physiology::body_mut(&mut self.state.components, id).unwrap();
         if !a.vitals.alive {
             return;
         }
         a.vitals.alive = false;
         a.vitals.health = 0;
-        self.state
-            .components
-            .set_job(id, None)
+        game_workshop::remove_job(&mut self.state.components, id)
+            .map(|_| ())
             .expect("actor exists");
         self.transport_death(id);
         self.interrupt_actor_activity(id);
@@ -805,7 +806,12 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|_| self.state.components.mind_mut(actor))
+            .and_then(|_| {
+                game_characters::decisions::mind_mut::<game_api::Command>(
+                    &mut self.state.components,
+                    actor,
+                )
+            })
             .ok_or(Error::Unavailable)?;
         mind.relationships.insert(other, relationship);
         Ok(())
@@ -814,8 +820,12 @@ impl Simulation {
 
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let Some(world) = &state.development else {
-        if state.components.lives().next().is_some()
-            || state.components.pregnancies().next().is_some()
+        if game_lifecycle::all_lives(&state.components)
+            .next()
+            .is_some()
+            || game_lifecycle::all_pregnancies(&state.components)
+                .next()
+                .is_some()
         {
             return Err(Error::InvalidSave(
                 "lifecycle components require lifecycle runtime".into(),
@@ -827,7 +837,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     state.physical.as_ref().ok_or_else(fail)?;
     let mut bodies = BTreeMap::new();
     for person in &state.people {
-        let body = state.components.body(person.id).ok_or_else(fail)?;
+        let body = game_physiology::body(&state.components, person.id).ok_or_else(fail)?;
         let attempt = match *state
             .components
             .activity(person.id)
@@ -849,10 +859,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     actor: person.id,
                     alive: body.vitals.alive,
                     health: body.vitals.health,
-                    position: (*state
-                        .components
-                        .location(person.id)
-                        .expect("location exists"))
+                    position: (*game_spatial::location(
+                        &state.components,
+                        game_ecs::StableId((person.id).0),
+                    )
+                    .expect("location exists"))
                     .clone(),
                     action_restricted: false,
                     attempt,

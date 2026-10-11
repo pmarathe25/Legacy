@@ -55,10 +55,7 @@ impl Simulation {
         let anchor = |mut actor: PersonId| {
             let mut visited = BTreeSet::new();
             while visited.insert(actor) {
-                match *self
-                    .state
-                    .components
-                    .location(actor)
+                match *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                     .expect("location exists")
                 {
                     Location::Carried { carrier } => actor = carrier,
@@ -94,10 +91,7 @@ impl Simulation {
     }
     pub(crate) fn transport_exerting(&self, actor: PersonId) -> bool {
         matches!(
-            *self
-                .state
-                .components
-                .location(actor)
+            *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                 .expect("location exists"),
             Location::InTransit { .. }
         ) || self.state.physical.as_ref().is_some_and(|_| {
@@ -124,16 +118,17 @@ impl Simulation {
         people
             .map(|person| {
                 self.state.physical.as_ref().ok_or(Error::Unavailable)?;
-                let body = self
-                    .state
-                    .components
-                    .body(person.id)
+                let body = game_physiology::body(&self.state.components, person.id)
                     .ok_or(Error::Unavailable)?;
                 let limits = self.body_rules(person.id);
                 let mass = if let Some(w) = &self.state.development {
                     game_transport::body_mass(
                         rules,
-                        SimDuration(self.state.components.life(person.id).unwrap().age_at(now)?),
+                        SimDuration(
+                            game_lifecycle::life(&self.state.components, person.id)
+                                .unwrap()
+                                .age_at(now)?,
+                        ),
                         w.rules.adulthood,
                     )
                 } else {
@@ -154,11 +149,11 @@ impl Simulation {
                     && self.independent(person.id)
                     && !self.combat_restricts(person.id)
                     && !matches!(
-                        *self
-                            .state
-                            .components
-                            .location(person.id)
-                            .expect("location exists"),
+                        *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((person.id).0)
+                        )
+                        .expect("location exists"),
                         Location::Carried { .. }
                     );
                 let can_bear = can_walk
@@ -290,12 +285,10 @@ impl Simulation {
             return;
         };
         let members = w.component(actor);
-        let location = self
-            .state
-            .components
-            .location(actor)
-            .expect("location exists")
-            .clone();
+        let location =
+            game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
+                .expect("location exists")
+                .clone();
         let Location::InTransit {
             from, to, arrives, ..
         } = location
@@ -319,11 +312,11 @@ impl Simulation {
                 dependents.remove(&member);
             }
             let person = &mut self.state.people[self.person_index[&member]];
-            *self
-                .state
-                .components
-                .location_mut(member)
-                .expect("location exists") = location.clone();
+            *game_spatial::location_mut(
+                &mut self.state.components,
+                game_ecs::StableId((member).0),
+            )
+            .expect("location exists") = location.clone();
             person.route.clear();
             let deadline = approach.as_ref().map_or(arrives, |a| a.completes);
             if let Some(approach) = &approach {
@@ -362,12 +355,10 @@ impl Simulation {
         let positions: Vec<_> = members
             .iter()
             .filter_map(|id| {
-                let location = self
-                    .state
-                    .components
-                    .location(*id)
-                    .expect("location exists")
-                    .clone();
+                let location =
+                    game_spatial::location(&self.state.components, game_ecs::StableId(id.0))
+                        .expect("location exists")
+                        .clone();
                 if matches!(location, Location::InTransit { .. }) {
                     location_position(&location, self.state.time)
                         .ok()
@@ -379,11 +370,11 @@ impl Simulation {
             .collect();
         for (member, position) in positions {
             self.clear_transport_arrival(member);
-            let destination = match *self
-                .state
-                .components
-                .location(member)
-                .expect("location exists")
+            let destination = match *game_spatial::location(
+                &self.state.components,
+                game_ecs::StableId((member).0),
+            )
+            .expect("location exists")
             {
                 Location::InTransit { to, .. } => Some(to),
                 _ => None,
@@ -396,11 +387,11 @@ impl Simulation {
                     w.paused_approaches.insert(member, approach.target);
                 }
             }
-            *self
-                .state
-                .components
-                .location_mut(member)
-                .expect("location exists") = position_location(position);
+            *game_spatial::location_mut(
+                &mut self.state.components,
+                game_ecs::StableId((member).0),
+            )
+            .expect("location exists") = position_location(position);
             self.state.people[self.person_index[&member]].route.clear();
             self.emit(EventKind::Interrupted { actor: member });
         }
@@ -408,10 +399,7 @@ impl Simulation {
     pub(crate) fn transport_death(&mut self, actor: PersonId) {
         self.interrupt_transport_lift(actor);
         if !matches!(
-            *self
-                .state
-                .components
-                .location(actor)
+            *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                 .expect("location exists"),
             Location::Carried { .. }
         ) {
@@ -481,18 +469,15 @@ impl Simulation {
                 world.paused_approaches.remove(&member);
                 world.approaches.remove(&member);
                 if !matches!(
-                    *self
-                        .state
-                        .components
-                        .location(member)
+                    *game_spatial::location(&self.state.components, game_ecs::StableId((member).0))
                         .expect("location exists"),
                     Location::Carried { .. }
                 ) {
-                    *self
-                        .state
-                        .components
-                        .location_mut(member)
-                        .expect("location exists") = Location::AtArea(destination);
+                    *game_spatial::location_mut(
+                        &mut self.state.components,
+                        game_ecs::StableId((member).0),
+                    )
+                    .expect("location exists") = Location::AtArea(destination);
                     self.emit(EventKind::Arrived {
                         actor: member,
                         area: destination,
@@ -501,10 +486,7 @@ impl Simulation {
             }
             return Ok(());
         };
-        *self
-            .state
-            .components
-            .location_mut(actor)
+        *game_spatial::location_mut(&mut self.state.components, game_ecs::StableId((actor).0))
             .expect("location exists") = Location::InTransit {
             from: leg.from,
             to: leg.to,
@@ -548,10 +530,7 @@ impl Simulation {
             .unwrap()
             .groups
             .remove(&target);
-        *self
-            .state
-            .components
-            .location_mut(target)
+        *game_spatial::location_mut(&mut self.state.components, game_ecs::StableId((target).0))
             .expect("location exists") = position_location(position);
         if let Position::Area(area) = position {
             self.index_dependent(target, area);
@@ -575,10 +554,7 @@ impl Simulation {
             .attach_newborn(child, gestator, self.state.time, &bodies)
             .expect("newborn colocated with actual gestator");
         self.clear_transport_arrival(child);
-        *self
-            .state
-            .components
-            .location_mut(child)
+        *game_spatial::location_mut(&mut self.state.components, game_ecs::StableId((child).0))
             .expect("location exists") = Location::Carried {
             carrier: group.anchor,
         };
@@ -600,7 +576,7 @@ impl Simulation {
             return None;
         }
         self.state.physical.as_ref()?;
-        let body = self.state.components.body(guardian)?;
+        let body = game_physiology::body(&self.state.components, guardian)?;
         let activity = self.state.components.activity(guardian)?;
         if !matches!(activity, Activity::Idle | Activity::Rest) || self.combat_restricts(guardian) {
             return None;
@@ -609,7 +585,11 @@ impl Simulation {
             self.resolved_location(guardian),
             Location::StoppedOnRoad { .. }
         ) {
-            let mind = &self.state.components.mind(guardian).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                guardian,
+            )
+            .unwrap();
             if let Some(signal) = mind.child_signals.get(&target).filter(|s| {
                 s.location == self.resolved_location(guardian) && s.observed_at == self.state.time
             }) {
@@ -649,7 +629,11 @@ impl Simulation {
             }
         }
         if !self.independent(target)
-            || self.state.components.body(target).unwrap().vitals.health == 0
+            || game_physiology::body(&self.state.components, target)
+                .unwrap()
+                .vitals
+                .health
+                == 0
         {
             let bodies = self.transport_bodies().ok()?;
             let needs_support = world.groups.get(&target).is_none_or(|group| {
@@ -686,10 +670,7 @@ impl Simulation {
         for (id, body) in &bodies {
             if (!body.can_walk || body.cargo > body.capacity)
                 && matches!(
-                    *self
-                        .state
-                        .components
-                        .location(*id)
+                    *game_spatial::location(&self.state.components, game_ecs::StableId(id.0))
                         .expect("location exists"),
                     Location::InTransit { .. }
                 )
@@ -711,10 +692,7 @@ impl Simulation {
             .iter()
             .filter(|p| {
                 matches!(
-                    *self
-                        .state
-                        .components
-                        .location(p.id)
+                    *game_spatial::location(&self.state.components, game_ecs::StableId((p.id).0))
                         .expect("location exists"),
                     Location::StoppedOnRoad { .. }
                 )
@@ -742,9 +720,7 @@ impl Simulation {
             .keys()
             .filter_map(|id| {
                 if let Location::AtArea(area) = self.resolved_location(*id) {
-                    self.state
-                        .components
-                        .body(*id)
+                    game_physiology::body(&self.state.components, *id)
                         .unwrap()
                         .vitals
                         .alive
@@ -764,7 +740,7 @@ impl Simulation {
         bearers: &BTreeSet<PersonId>,
         accepted: bool,
     ) -> Permission {
-        let body = self.state.components.body(passenger).unwrap();
+        let body = game_physiology::body(&self.state.components, passenger).unwrap();
         let incapacitated = !body.vitals.alive
             || body.vitals.health == 0
             || self
@@ -876,11 +852,11 @@ impl Simulation {
                 for dependents in self.dependent_index.values_mut() {
                     dependents.remove(&group.passenger);
                 }
-                *self
-                    .state
-                    .components
-                    .location_mut(group.passenger)
-                    .expect("location exists") = Location::Carried {
+                *game_spatial::location_mut(
+                    &mut self.state.components,
+                    game_ecs::StableId((group.passenger).0),
+                )
+                .expect("location exists") = Location::Carried {
                     carrier: group.anchor,
                 };
                 self.state.people[self.person_index[&group.passenger]]
@@ -928,10 +904,7 @@ impl Simulation {
             .approaches
             .remove(&actor);
         let position = Position::Road(approach.target);
-        *self
-            .state
-            .components
-            .location_mut(actor)
+        *game_spatial::location_mut(&mut self.state.components, game_ecs::StableId((actor).0))
             .expect("location exists") = position_location(position);
         self.state.people[self.person_index[&actor]].route.clear();
         self.emit(EventKind::Interrupted { actor });
@@ -976,9 +949,7 @@ impl Simulation {
         let (leg, approach) =
             game_transport::approach_from(start, target, forward, reverse, self.state.time)?;
         if !self.state.decisions.as_ref().is_none_or(|_| {
-            self.state
-                .components
-                .mind(actor)
+            game_characters::decisions::mind::<game_api::Command>(&self.state.components, actor)
                 .unwrap()
                 .routes
                 .get(&leg.from)
@@ -997,10 +968,7 @@ impl Simulation {
             .remove(&actor);
         self.leave_shelter_on_movement(actor);
         let p = &mut self.state.people[self.person_index[&actor]];
-        *self
-            .state
-            .components
-            .location_mut(actor)
+        *game_spatial::location_mut(&mut self.state.components, game_ecs::StableId((actor).0))
             .expect("location exists") = Location::InTransit {
             from: leg.from,
             to: leg.to,
@@ -1076,7 +1044,10 @@ impl Simulation {
                 let set: BTreeSet<_> = bearers.iter().copied().collect();
                 if set.len() != bearers.len()
                     || !self.independent(actor)
-                    || !self.state.components.body(actor).unwrap().vitals.alive
+                    || !game_physiology::body(&self.state.components, actor)
+                        .unwrap()
+                        .vitals
+                        .alive
                     || self.combat_restricts(actor)
                 {
                     return Err(Error::Unavailable);
@@ -1176,11 +1147,11 @@ impl Simulation {
                     .as_mut()
                     .unwrap()
                     .remove_group(*passenger);
-                *self
-                    .state
-                    .components
-                    .location_mut(*passenger)
-                    .expect("location exists") = position_location(position);
+                *game_spatial::location_mut(
+                    &mut self.state.components,
+                    game_ecs::StableId(passenger.0),
+                )
+                .expect("location exists") = position_location(position);
                 if let Position::Area(area) = position {
                     self.index_dependent(*passenger, area);
                 }
@@ -1188,13 +1159,16 @@ impl Simulation {
             }
             Action::Stop => {
                 if !self.independent(actor)
-                    || !self.state.components.body(actor).unwrap().vitals.alive
+                    || !game_physiology::body(&self.state.components, actor)
+                        .unwrap()
+                        .vitals
+                        .alive
                     || !matches!(
-                        *self
-                            .state
-                            .components
-                            .location(actor)
-                            .expect("location exists"),
+                        *game_spatial::location(
+                            &self.state.components,
+                            game_ecs::StableId((actor).0)
+                        )
+                        .expect("location exists"),
                         Location::InTransit { .. }
                     )
                 {
@@ -1225,10 +1199,7 @@ impl Simulation {
                     to,
                     progress,
                     duration,
-                } = *self
-                    .state
-                    .components
-                    .location(actor)
+                } = *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                     .expect("location exists")
                 else {
                     return Err(Error::Unavailable);
@@ -1264,11 +1235,11 @@ impl Simulation {
                 )?;
                 self.ensure_event_capacity(self.state.people.len() + 1)?;
                 self.interrupt_actor_activity(actor);
-                *self
-                    .state
-                    .components
-                    .location_mut(actor)
-                    .expect("location exists") = Location::InTransit {
+                *game_spatial::location_mut(
+                    &mut self.state.components,
+                    game_ecs::StableId((actor).0),
+                )
+                .expect("location exists") = Location::InTransit {
                     from: leg.from,
                     to: leg.to,
                     departed: leg.departed,
@@ -1384,7 +1355,10 @@ impl Simulation {
         for passenger in recipients {
             if passenger == self.state.ruler
                 || !self.independent(passenger)
-                || !self.state.components.body(passenger).unwrap().vitals.alive
+                || !game_physiology::body(&self.state.components, passenger)
+                    .unwrap()
+                    .vitals
+                    .alive
                 || self.combat_restricts(passenger)
                 || self.state.transport.as_ref().unwrap().busy(passenger)
             {
@@ -1422,7 +1396,11 @@ impl Simulation {
                     &bodies,
                 )
                 .is_ok();
-            let mind = &self.state.components.mind(passenger).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                passenger,
+            )
+            .unwrap();
             let relation = mind
                 .relationships
                 .get(&offers[0].bearer)
@@ -1431,7 +1409,7 @@ impl Simulation {
                     trust: 0,
                     affection: 0,
                 });
-            let body = self.state.components.body(passenger).unwrap();
+            let body = game_physiology::body(&self.state.components, passenger).unwrap();
             let rules = self.body_rules(passenger);
             let (kind, reason) = game_transport::judge_offer(game_transport::OfferChoice {
                 need_help: body.vitals.health < rules.max_health
@@ -1534,8 +1512,12 @@ impl Simulation {
             {
                 continue;
             }
-            let mind = &self.state.components.mind(actor).unwrap();
-            let body = self.state.components.body(actor).unwrap();
+            let mind = &game_characters::decisions::mind::<game_api::Command>(
+                &self.state.components,
+                actor,
+            )
+            .unwrap();
+            let body = game_physiology::body(&self.state.components, actor).unwrap();
             let rules = self.body_rules(actor);
             let relation = mind
                 .relationships
@@ -1590,10 +1572,7 @@ impl Simulation {
             actions.push(Action::Stop);
         } else {
             if matches!(
-                *self
-                    .state
-                    .components
-                    .location(actor)
+                *game_spatial::location(&self.state.components, game_ecs::StableId((actor).0))
                     .expect("location exists"),
                 Location::StoppedOnRoad { .. }
             ) && self.transport_can_depart(actor)
@@ -1708,14 +1687,12 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     let mut bodies = BTreeMap::new();
     for p in &state.people {
-        let body = state.components.body(p.id).ok_or_else(fail)?;
+        let body = game_physiology::body(&state.components, p.id).ok_or_else(fail)?;
         let mass = if let Some(lives) = &state.development {
             game_transport::body_mass(
                 &w.rules,
                 SimDuration(
-                    state
-                        .components
-                        .life(p.id)
+                    game_lifecycle::life(&state.components, p.id)
                         .ok_or_else(fail)?
                         .age_at(state.time)?,
                 ),
@@ -1726,7 +1703,10 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         };
         let cargo = cargo_by_actor.get(&p.id).copied().unwrap_or(0);
         let position = location_position(&resolved[&p.id], state.time).map_err(|_| fail())?;
-        if let Location::Carried { carrier } = *state.components.location(p.id).ok_or_else(fail)? {
+        if let Location::Carried { carrier } =
+            *game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
+                .ok_or_else(fail)?
+        {
             if !w.groups.get(&p.id).is_some_and(|g| g.anchor == carrier) || !p.route.is_empty() {
                 return Err(fail());
             }
@@ -1783,9 +1763,8 @@ pub(crate) fn resolved_locations_for(
     state: &CanonicalState,
 ) -> Result<BTreeMap<PersonId, Location>, Error> {
     let locations = game_spatial::resolve_locations(
-        state
-            .components
-            .locations()
+        game_spatial::locations(&state.components)
+            .map(|(id, location)| (game_core::PersonId(id.0), location))
             .map(|(id, location)| (game_ecs::StableId(id.0), location)),
     )?;
     Ok(locations
@@ -1803,9 +1782,7 @@ mod connected_tests {
         let mut sim = Simulation::transport_fixture(1, Execution::default()).unwrap();
         let actor = sim.state.ruler;
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
-        *sim.state
-            .components
-            .location_mut(actor)
+        *game_spatial::location_mut(&mut sim.state.components, game_ecs::StableId((actor).0))
             .expect("location exists") = Location::StoppedOnRoad {
             from: AreaId(1),
             to: AreaId(3),
@@ -1841,10 +1818,11 @@ mod connected_tests {
         let holder = sim.state.people[3].id;
         for person in [actor, holder] {
             sim.debug_actor_command(person, Command::Cancel).unwrap();
-            *sim.state
-                .components
-                .location_mut(person)
-                .expect("location exists") = Location::StoppedOnRoad {
+            *game_spatial::location_mut(
+                &mut sim.state.components,
+                game_ecs::StableId((person).0),
+            )
+            .expect("location exists") = Location::StoppedOnRoad {
                 from: AreaId(1),
                 to: AreaId(3),
                 progress: SimDuration(90_000),
@@ -1909,10 +1887,7 @@ mod connected_tests {
         .unwrap();
         sim.state.physical.as_mut().unwrap().rules.fatigue_limit = 2_000_000;
         sim.advance(SimDuration(120_000)).unwrap();
-        let gestator = sim
-            .state
-            .components
-            .pregnancies()
+        let gestator = game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(_, row)| row)
             .find(|p| matches!(p.state, development::PregnancyState::Gestating { .. }))
             .unwrap()
@@ -1936,7 +1911,12 @@ mod connected_tests {
                 )
             })
             .collect();
-        sim.state.components.mind_mut(gestator).unwrap().routes = routes;
+        game_characters::decisions::mind_mut::<game_api::Command>(
+            &mut sim.state.components,
+            gestator,
+        )
+        .unwrap()
+        .routes = routes;
         sim.debug_move_actor(gestator, AreaId(3)).unwrap();
         sim.debug_move_actor(gestator, AreaId(2)).unwrap();
         sim.advance(SimDuration(60_000)).unwrap();
@@ -1977,9 +1957,7 @@ mod connected_tests {
     fn actual_newborn_follows_the_carrier_on_later_legs_without_own_arrival() {
         let (mut sim, mother, child) = traveling_birth(1);
         assert_eq!(
-            *sim.state
-                .components
-                .location(child)
+            *game_spatial::location(&sim.state.components, game_ecs::StableId((child).0))
                 .expect("location exists"),
             Location::Carried { carrier: mother }
         );
@@ -1996,7 +1974,13 @@ mod connected_tests {
                 .flatten()
                 .all(|d| !matches!(d,Due::Arrive(id) if *id==child))
         );
-        assert_eq!(sim.state.components.body(child).unwrap().vitals.fatigue, 0);
+        assert_eq!(
+            game_physiology::body(&sim.state.components, child)
+                .unwrap()
+                .vitals
+                .fatigue,
+            0
+        );
         sim.advance(SimDuration(150_000)).unwrap();
         assert!(matches!(
             sim.resolved_location(child),
@@ -2007,7 +1991,13 @@ mod connected_tests {
                 ..
             }
         ));
-        assert_eq!(sim.state.components.body(child).unwrap().vitals.fatigue, 0);
+        assert_eq!(
+            game_physiology::body(&sim.state.components, child)
+                .unwrap()
+                .vitals
+                .fatigue,
+            0
+        );
         let loaded = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         assert_eq!(loaded.state, sim.state);
     }
@@ -2024,11 +2014,16 @@ mod connected_tests {
             )
             .unwrap();
         let hunger_harm = sim.body_rules(mother).hunger_harm;
-        let body = sim.state.components.body_mut(mother).unwrap();
+        let body = game_physiology::body_mut(&mut sim.state.components, mother).unwrap();
         body.vitals.hunger = hunger_harm;
         body.vitals.health = 10_000;
         sim.advance(SimDuration(10_000)).unwrap();
-        assert!(!sim.state.components.body(mother).unwrap().vitals.alive);
+        assert!(
+            !game_physiology::body(&sim.state.components, mother)
+                .unwrap()
+                .vitals
+                .alive
+        );
         let stopped = Location::StoppedOnRoad {
             from: AreaId(1),
             to: AreaId(3),
@@ -2036,9 +2031,7 @@ mod connected_tests {
             duration: SimDuration(180_000),
         };
         assert_eq!(
-            *sim.state
-                .components
-                .location(mother)
+            *game_spatial::location(&sim.state.components, game_ecs::StableId((mother).0))
                 .expect("location exists"),
             stopped
         );
@@ -2081,9 +2074,7 @@ mod connected_tests {
         assert!(sim.state.transport.as_ref().unwrap().groups.is_empty());
         sim.advance(SimDuration(1)).unwrap();
         assert_eq!(
-            *sim.state
-                .components
-                .location(passenger)
+            *game_spatial::location(&sim.state.components, game_ecs::StableId((passenger).0))
                 .expect("location exists"),
             Location::Carried { carrier }
         );
@@ -2094,9 +2085,7 @@ mod connected_tests {
         sim.transport_command(passenger, &Action::PutDown { passenger })
             .unwrap();
         assert_eq!(
-            *sim.state
-                .components
-                .location(passenger)
+            *game_spatial::location(&sim.state.components, game_ecs::StableId((passenger).0))
                 .expect("location exists"),
             Location::AtArea(AreaId(1))
         );
@@ -2167,7 +2156,13 @@ mod connected_tests {
             .unwrap();
         sim.advance(SimDuration(60_000)).unwrap();
         assert_eq!(sim.state.inventories[&source].quantity, Quantity(1_000));
-        assert_eq!(sim.state.components.body(child).unwrap().vitals.hunger, 0);
+        assert_eq!(
+            game_physiology::body(&sim.state.components, child)
+                .unwrap()
+                .vitals
+                .hunger,
+            0
+        );
         assert!(matches!(
             sim.resolved_location(child),
             Location::StoppedOnRoad { .. }
@@ -2286,9 +2281,14 @@ mod connected_tests {
         traits.empathy = 900;
         sim.debug_set_personality(mother, traits, decisions::Aspiration::Comfort)
             .unwrap();
-        sim.state.components.body_mut(mother).unwrap().vitals.hunger = 0;
+        game_physiology::body_mut(&mut sim.state.components, mother)
+            .unwrap()
+            .vitals
+            .hunger = 0;
         sim.review_decisions().unwrap();
-        let mind = &sim.state.components.mind(mother).unwrap();
+        let mind =
+            &game_characters::decisions::mind::<game_api::Command>(&sim.state.components, mother)
+                .unwrap();
         assert!(!mind.knowledge.contains_key(&endpoint));
         assert_eq!(mind.knowledge[&carried].quantity, Quantity(2_000));
         assert!(matches!(
@@ -2306,14 +2306,15 @@ mod connected_tests {
     fn a_carried_child_in_battle_requires_the_anchors_actual_tactical_reach() {
         let (mut sim, mother, child) = traveling_birth(1);
         sim.state.people[sim.person_index[&mother]].route.clear();
-        sim.state.components.body_mut(mother).unwrap().vitals.hunger = 0;
+        game_physiology::body_mut(&mut sim.state.components, mother)
+            .unwrap()
+            .vitals
+            .hunger = 0;
         sim.advance(SimDuration(120_000)).unwrap();
         let enemy = sim.state.people[8].id;
         let outsider = sim.state.people[9].id;
         for actor in [enemy, outsider] {
-            *sim.state
-                .components
-                .location_mut(actor)
+            *game_spatial::location_mut(&mut sim.state.components, game_ecs::StableId((actor).0))
                 .expect("location exists") = Location::AtArea(AreaId(3));
         }
         sim.debug_start_encounter(vec![(mother, 0), (enemy, 1)])
@@ -2341,10 +2342,7 @@ mod connected_tests {
         let mut sim = Simulation::transport_fixture(1, Execution::default()).unwrap();
         sim.state.physical.as_mut().unwrap().rules.fatigue_limit = 2_000_000;
         sim.advance(SimDuration(120_000)).unwrap();
-        let mother = sim
-            .state
-            .components
-            .pregnancies()
+        let mother = game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(_, row)| row)
             .find(|p| matches!(p.state, development::PregnancyState::Gestating { .. }))
             .unwrap()
@@ -2363,10 +2361,7 @@ mod connected_tests {
         sim.advance(SimDuration(120_000)).unwrap();
         sim.debug_move_actor(bearer, AreaId(3)).unwrap();
         sim.advance(SimDuration(60_000)).unwrap();
-        let child = sim
-            .state
-            .components
-            .pregnancies()
+        let child = game_lifecycle::all_pregnancies(&sim.state.components)
             .map(|(_, row)| row)
             .find_map(|p| {
                 if let development::PregnancyState::Born(child) = p.state {
@@ -2377,9 +2372,7 @@ mod connected_tests {
             })
             .unwrap();
         assert_eq!(
-            *sim.state
-                .components
-                .location(child)
+            *game_spatial::location(&sim.state.components, game_ecs::StableId((child).0))
                 .expect("location exists"),
             Location::Carried { carrier: bearer }
         );
@@ -2393,7 +2386,12 @@ mod connected_tests {
                 .bearers
                 .contains(&mother)
         );
-        assert_eq!(sim.state.components.life(child).unwrap().parents[0], mother);
+        assert_eq!(
+            game_lifecycle::life(&sim.state.components, child)
+                .unwrap()
+                .parents[0],
+            mother
+        );
     }
     #[test]
     fn unknown_public_transport_and_yield_targets_are_inert() {
@@ -2501,9 +2499,7 @@ mod connected_tests {
         assert!(sim.state.transport.as_ref().unwrap().groups.is_empty());
         sim.advance(SimDuration(1)).unwrap();
         assert_eq!(
-            *sim.state
-                .components
-                .location(passenger)
+            *game_spatial::location(&sim.state.components, game_ecs::StableId((passenger).0))
                 .expect("location exists"),
             Location::Carried { carrier: ruler }
         );

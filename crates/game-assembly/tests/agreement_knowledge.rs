@@ -272,14 +272,14 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(known(&sim, debtor, id).obligations[0].defaulted);
     assert!(!known(&sim, creditor, id).obligations[0].defaulted);
-    let before = sim
-        .canonical_state()
-        .components
-        .mind(creditor)
-        .expect("mind exists")
-        .relationships
-        .get(&debtor)
-        .map_or(0, |r| r.trust);
+    let before = game_characters::decisions::mind::<game_api::Command>(
+        &sim.canonical_state().components,
+        creditor,
+    )
+    .expect("mind exists")
+    .relationships
+    .get(&debtor)
+    .map_or(0, |r| r.trust);
     sim.debug_move_actor(creditor, AreaId(1)).unwrap();
     sim.advance(SimDuration(120_000)).unwrap();
     sim.debug_agreement_action(
@@ -292,12 +292,12 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert!(known(&sim, creditor, id).obligations[0].defaulted);
-    let after = sim
-        .canonical_state()
-        .components
-        .mind(creditor)
-        .expect("mind exists")
-        .relationships[&debtor]
+    let after = game_characters::decisions::mind::<game_api::Command>(
+        &sim.canonical_state().components,
+        creditor,
+    )
+    .expect("mind exists")
+    .relationships[&debtor]
         .trust;
     assert!(after < before);
     let carrying = cargo(&sim, debtor);
@@ -308,11 +308,12 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     assert!(view.obligations[0].defaulted);
     assert_eq!(view.obligations[0].performed, 1_000);
     assert_eq!(
-        sim.canonical_state()
-            .components
-            .mind(creditor)
-            .expect("mind exists")
-            .relationships[&debtor]
+        game_characters::decisions::mind::<game_api::Command>(
+            &sim.canonical_state().components,
+            creditor
+        )
+        .expect("mind exists")
+        .relationships[&debtor]
             .trust,
         after
     );
@@ -537,10 +538,7 @@ fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
     })
     .unwrap();
     sim.advance(SimDuration(6_000)).unwrap();
-    let site = sim
-        .canonical_state()
-        .components
-        .sites()
+    let site = game_workshop::sites(&sim.canonical_state().components)
         .map(|(_, site)| site)
         .find(|site| site.area == AreaId(1))
         .unwrap()

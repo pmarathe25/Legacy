@@ -203,12 +203,11 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
             .iter()
             .filter(|p| people.contains(&p.id))
             .all(|p| {
-                *state.components.location(p.id).expect("location exists")
+                *game_spatial::location(&state.components, game_ecs::StableId((p.id).0))
+                    .expect("location exists")
                     == Location::AtArea(forest)
             })
-            && *state
-                .components
-                .location(state.ruler)
+            && *game_spatial::location(&state.components, game_ecs::StableId((state.ruler).0))
                 .expect("location exists")
                 == Location::AtArea(forest)
     });
@@ -402,9 +401,7 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
     });
     let state = sim.canonical_state();
     assert!(
-        !state
-            .components
-            .body(lost)
+        !game_physiology::body(&state.components, lost)
             .expect("body exists")
             .vitals
             .alive
