@@ -66,6 +66,120 @@ fn after() -> Development {
 }
 
 #[test]
+fn inherited_genome_and_physical_development_compose_without_the_game_assembly() {
+    let physical = Runtime::new(definitions(), SimTime(0)).unwrap();
+    let mut genes = game_genetics::Runtime::new(
+        game_genetics::Rules {
+            mutation_chance: 0,
+            crossover_chance: 1_000,
+        },
+        physical.definitions.loci(),
+    )
+    .unwrap();
+    let mut store = Store::with_schema(schema());
+    for (parent, value) in [(PersonId(1), 0), (PersonId(2), 1_000)] {
+        genes.seed_person(&mut store, 7, parent).unwrap();
+        for definition in &physical.definitions.traits {
+            genes
+                .set_alleles(
+                    &mut store,
+                    parent,
+                    &game_genetics::LocusId(definition.inheritance.locus.clone()),
+                    [value; 2],
+                )
+                .unwrap();
+        }
+        physical
+            .register(
+                &mut store,
+                parent,
+                Development {
+                    maturity_milli: 1_000,
+                    physical_training_milli: 0,
+                },
+            )
+            .unwrap();
+    }
+    let pregnancy = game_core::PregnancyId(3);
+    let child = PersonId(4);
+    genes
+        .conceive(
+            &mut store,
+            7,
+            pregnancy,
+            [PersonId(1), PersonId(2)],
+            SimTime(10),
+        )
+        .unwrap();
+    genes
+        .born(&mut store, pregnancy, child, SimTime(20))
+        .unwrap();
+    physical
+        .register(
+            &mut store,
+            child,
+            Development {
+                maturity_milli: 0,
+                physical_training_milli: 0,
+            },
+        )
+        .unwrap();
+    for definition in &physical.definitions.traits {
+        assert_eq!(
+            genes
+                .alleles_named(&store, child, &definition.inheritance.locus)
+                .unwrap(),
+            [0, 1_000]
+        );
+    }
+    let newborn = physical
+        .phenotype_from_genes(&store, child, &genes.allele_source(&store))
+        .unwrap();
+    assert_eq!(
+        (newborn.strength_milli, newborn.max_health_milli),
+        (500, 800)
+    );
+    let genome = game_genetics::person_genome(&store, child).unwrap().clone();
+    physical.develop(&mut store, child, 1_000, 0).unwrap();
+    let grown = physical
+        .phenotype_from_genes(&store, child, &genes.allele_source(&store))
+        .unwrap();
+    assert_eq!(
+        (grown.strength_milli, grown.max_health_milli),
+        (1_000, 1_000)
+    );
+    for parent in [PersonId(1), PersonId(2)] {
+        let phenotype = physical
+            .phenotype_from_genes(&store, parent, &genes.allele_source(&store))
+            .unwrap();
+        assert_ne!(phenotype.strength_milli, grown.strength_milli);
+        assert_eq!(phenotype.strength_milli.abs_diff(grown.strength_milli), 200);
+    }
+    physical.develop(&mut store, child, 1_000, 100).unwrap();
+    let trained = physical
+        .phenotype_from_genes(&store, child, &genes.allele_source(&store))
+        .unwrap();
+    assert_eq!(trained.strength_milli, 1_100);
+    assert_eq!(game_genetics::person_genome(&store, child), Some(&genome));
+
+    let restored = Store::restore(schema(), store.snapshot().unwrap()).unwrap();
+    game_genetics::validate(&genes, &restored, SimTime(20)).unwrap();
+    physical.validate(&restored, SimTime(0)).unwrap();
+    assert_eq!(
+        physical
+            .phenotype_from_genes(&restored, child, &genes.allele_source(&restored))
+            .unwrap(),
+        trained
+    );
+    assert_eq!(
+        game_genetics::inheritance(&restored, pregnancy)
+            .unwrap()
+            .born,
+        Some(child)
+    );
+}
+
+#[test]
 fn development_selects_existing_physical_skills_and_rate_scaling_preserves_exact_fractions() {
     let (runtime, _) = fixture();
     assert_eq!(
