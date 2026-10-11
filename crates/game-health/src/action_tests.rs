@@ -121,9 +121,7 @@ fn drinking_is_timed_and_closing_permission_and_quantity_are_revalidated() {
 fn unsafe_intake_prepares_physical_consumption_and_one_actual_infection_dose() {
     let (mut world, mut store) = world();
     let water = stock(20, Good::Water, 1_000);
-    world
-        .water
-        .insert(water.id, WaterLot::new(1_000, 1_000_000));
+    insert_water_lot(&mut store, water.id, WaterLot::new(1_000, 1_000_000)).unwrap();
     world
         .prepare_action(
             &store,
@@ -164,7 +162,7 @@ fn unsafe_intake_prepares_physical_consumption_and_one_actual_infection_dose() {
             .contains_key(&IllnessKind::Enteric)
     );
     // Quantity/lot removal belongs to the stock event port, not a second debit here.
-    assert_eq!(world.water[&water.id].quantity(), 1_000);
+    assert_eq!(water_lot(&store, water.id).unwrap().quantity(), 1_000);
 }
 #[test]
 fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_time() {
@@ -287,8 +285,8 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
     let (mut world, mut store) = world();
     let herbs = stock(21, Good::Herb, 1_000);
     let water = stock(20, Good::Water, 1_000);
-    world.offers.insert(
-        (PersonId(1), PersonId(2)),
+    insert_offer(
+        &mut store,
         Offer {
             caregiver: PersonId(1),
             patient: PersonId(2),
@@ -297,7 +295,8 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
             expires: SimTime(180_000),
             accepted: true,
         },
-    );
+    )
+    .unwrap();
     world
         .prepare_action(
             &store,
@@ -319,8 +318,8 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
         .unwrap();
     // Starting consumes this acceptance. A later explicit offer can be refused;
     // refusal also withdraws that patient's participation in a running course.
-    world.offers.insert(
-        (PersonId(1), PersonId(2)),
+    insert_offer(
+        &mut store,
         Offer {
             caregiver: PersonId(1),
             patient: PersonId(2),
@@ -329,7 +328,8 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
             expires: SimTime(180_000),
             accepted: true,
         },
-    );
+    )
+    .unwrap();
     let effects = world
         .prepare_action(
             &store,
@@ -456,7 +456,10 @@ fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
         .unwrap()
         .commit(&mut world, &mut store)
         .unwrap();
-    assert_eq!(world.occupancy[&PersonId(1)], ShelterId(30));
+    assert_eq!(
+        occupancy(&store, PersonId(1)).unwrap().shelter,
+        ShelterId(30)
+    );
 }
 #[test]
 fn stale_water_and_owned_state_or_numeric_overflow_fail_without_partial_transition() {
@@ -488,7 +491,7 @@ fn stale_water_and_owned_state_or_numeric_overflow_fail_without_partial_transiti
             },
         )
         .unwrap();
-    world.water.insert(water.id, WaterLot::new(1_000, 10));
+    insert_water_lot(&mut store, water.id, WaterLot::new(1_000, 10)).unwrap();
     let before = (world.clone(), store.snapshot().unwrap());
     assert!(prepared.commit(&mut world, &mut store).is_err());
     assert_eq!((world.clone(), store.snapshot().unwrap()), before);

@@ -265,7 +265,14 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
         Quantity(500),
     );
     sim.advance(MINUTE).unwrap();
-    assert!(sim.canonical_state().health.as_ref().unwrap().water[&bulk].load() > 0);
+    assert!(
+        sim.canonical_state()
+            .components
+            .water_lot(bulk)
+            .expect("water lot exists")
+            .load()
+            > 0
+    );
     add(
         &mut sim,
         Good::Timber,
@@ -325,7 +332,11 @@ fn offered_water_portions_compose_with_actual_pickup_boiling_and_drinking_and_re
     }
     assert_eq!(sim.canonical_state(), replay.canonical_state());
     assert_eq!(
-        sim.canonical_state().health.as_ref().unwrap().water[&water].load(),
+        sim.canonical_state()
+            .components
+            .water_lot(water)
+            .expect("water lot exists")
+            .load(),
         0
     );
     assert!(sim.canonical_state().inventories[&fuel].quantity.0 <= before_fuel - 1000);

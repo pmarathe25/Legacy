@@ -6,13 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Runtime {
-    pub water: BTreeMap<InventoryId, WaterLot>,
     pub rules: Rules,
-    pub shelters: BTreeMap<ShelterId, Shelter>,
-    pub occupancy: BTreeMap<PersonId, ShelterId>,
-    #[serde(with = "offer_rows")]
-    pub offers: BTreeMap<(PersonId, PersonId), Offer>,
-    pub known: BTreeMap<PersonId, Knowledge>,
     pub last_review: SimTime,
 }
 pub type Rules = HealthRules;
@@ -46,6 +40,7 @@ pub struct Clinical {
     pub last_drink: Option<(InventoryId, SimTime)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Shelter {
     pub id: ShelterId,
     pub area: AreaId,
@@ -58,6 +53,7 @@ pub struct Shelter {
     pub labor_ms: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Offer {
     pub caregiver: PersonId,
     pub patient: PersonId,
@@ -99,6 +95,7 @@ pub struct Job {
     pub work: Work,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Knowledge {
     /// Actual local searches, never inferred from another person's report.
     pub people: BTreeMap<PersonId, SymptomsView>,
@@ -106,27 +103,15 @@ pub struct Knowledge {
     pub water: BTreeMap<InventoryId, WaterSafetyView>,
 }
 
-mod offer_rows {
-    use super::*;
-    pub fn serialize<S: serde::Serializer>(
-        offers: &BTreeMap<(PersonId, PersonId), Offer>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        offers.values().collect::<Vec<_>>().serialize(serializer)
-    }
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<BTreeMap<(PersonId, PersonId), Offer>, D::Error> {
-        let rows = Vec::<Offer>::deserialize(deserializer)?;
-        let mut result = BTreeMap::new();
-        for offer in rows {
-            if result
-                .insert((offer.caregiver, offer.patient), offer)
-                .is_some()
-            {
-                return Err(serde::de::Error::custom("duplicate treatment offer"));
-            }
-        }
-        Ok(result)
-    }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Occupancy {
+    pub shelter: ShelterId,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Offers {
+    pub caregiver: PersonId,
+    pub patients: BTreeMap<PersonId, Offer>,
 }

@@ -213,7 +213,15 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         whole.canonical_state().inventories[&water].quantity,
         Quantity(1_000)
     );
-    assert!(whole.canonical_state().health.as_ref().unwrap().water[&water].load() > 0);
+    assert!(
+        whole
+            .canonical_state()
+            .components
+            .water_lot(water)
+            .expect("water lot exists")
+            .load()
+            > 0
+    );
     let before = whole.canonical_state().clone();
     let command=whole.observe().available_commands.into_iter().find(|command|matches!(command,Command::Health {action:HealthAction::Boil {source,..}} if *source==water)).expect("known collected serving must expose native boiling");
     for _ in 0..20 {
@@ -256,7 +264,15 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         whole.canonical_state().inventories[&water].quantity,
         Quantity(1_000)
     );
-    assert!(whole.canonical_state().health.as_ref().unwrap().water[&water].load() > 0);
+    assert!(
+        whole
+            .canonical_state()
+            .components
+            .water_lot(water)
+            .expect("water lot exists")
+            .load()
+            > 0
+    );
     let mut restored = Simulation::load(
         &whole.save().unwrap(),
         Execution {
@@ -280,7 +296,12 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         .unwrap();
     assert_eq!(whole.canonical_state(), restored.canonical_state());
     assert_eq!(
-        whole.canonical_state().health.as_ref().unwrap().water[&water].load(),
+        whole
+            .canonical_state()
+            .components
+            .water_lot(water)
+            .expect("water lot exists")
+            .load(),
         0
     );
     assert_eq!(

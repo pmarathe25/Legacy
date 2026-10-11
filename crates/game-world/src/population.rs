@@ -999,7 +999,7 @@ mod tests {
             assert!(mind.routes.len() <= 3);
         }
         assert_eq!(
-            sim.state.health.as_ref().unwrap().occupancy.len()
+            sim.state.components.occupancies().count()
                 + sim
                     .state
                     .people

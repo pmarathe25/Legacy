@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 34;
+const SAVE_VERSION: u32 = 35;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -235,8 +235,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
-    if let Some(world) = &s.health {
-        for id in world.shelters.keys() {
+    if s.health.is_some() {
+        for (id, _) in s.components.shelters() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
@@ -855,7 +855,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .health
                         .as_ref()
-                        .is_some_and(|w| w.shelters.contains_key(&shelter))
+                        .is_some_and(|_| s.components.shelter(shelter).is_some())
                 {
                     return Err(fail());
                 }
@@ -871,7 +871,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .health
                         .as_ref()
-                        .is_some_and(|w| w.shelters.contains_key(&shelter))
+                        .is_some_and(|_| s.components.shelter(shelter).is_some())
                 {
                     return Err(fail());
                 }

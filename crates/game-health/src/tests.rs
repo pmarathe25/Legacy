@@ -336,9 +336,9 @@ fn real_medical_work_has_explicit_progress_and_borrowed_level_duration() {
 }
 #[test]
 fn owned_state_roundtrips_current_semantic_data() {
-    let mut world = Runtime::default();
-    world.water.insert(InventoryId(7), WaterLot::new(10, 2));
+    let world = Runtime::default();
     let mut store = component_store();
+    insert_water_lot(&mut store, InventoryId(7), WaterLot::new(10, 2)).unwrap();
     insert_clinical(
         &mut store,
         PersonId(1),
@@ -350,8 +350,8 @@ fn owned_state_roundtrips_current_semantic_data() {
         },
     )
     .unwrap();
-    world.offers.insert(
-        (PersonId(1), PersonId(2)),
+    insert_offer(
+        &mut store,
         Offer {
             caregiver: PersonId(1),
             patient: PersonId(2),
@@ -360,9 +360,10 @@ fn owned_state_roundtrips_current_semantic_data() {
             expires: SimTime(90),
             accepted: false,
         },
-    );
+    )
+    .unwrap();
     let json = serde_json::to_value(&world).unwrap();
-    assert!(json["offers"].is_array());
+    assert!(json.get("offers").is_none());
     assert!(json.get("clinical").is_none());
     assert!(json.get("jobs").is_none());
     assert_eq!(serde_json::from_value::<Runtime>(json).unwrap(), world);

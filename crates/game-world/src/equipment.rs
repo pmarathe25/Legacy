@@ -1308,14 +1308,7 @@ mod tests {
         sim.collected_water_quality(source, Quantity(2000), 600);
         // The clean stock intentionally has no water-lot entry yet. Its real
         // existing volume must be observed by the first receipt's metadata hook.
-        assert!(
-            !sim.state
-                .health
-                .as_ref()
-                .unwrap()
-                .water
-                .contains_key(&mixed)
-        );
+        assert!(sim.state.components.water_lot(mixed).is_none());
         sim.debug_schedule_transfers(
             SimTime(MINUTE.0),
             vec![
@@ -1346,18 +1339,50 @@ mod tests {
         saved.advance(SimDuration(17000)).unwrap();
         saved.advance(SimDuration(43000)).unwrap();
         assert_eq!(sim.state, saved.state);
-        let health = sim.state.health.as_ref().unwrap();
         for inventory in [source, mixed, destination] {
             assert_eq!(sim.state.inventories[&inventory].quantity, Quantity(1000));
-            assert_eq!(health.water[&inventory].quantity(), 1000);
+            assert_eq!(
+                sim.state
+                    .components
+                    .water_lot(inventory)
+                    .expect("water lot exists")
+                    .quantity(),
+                1000
+            );
         }
-        assert_eq!(health.water[&source].load(), 600000);
-        assert_eq!(health.water[&mixed].load(), 300000);
-        assert_eq!(health.water[&destination].load(), 300000);
+        assert_eq!(
+            sim.state
+                .components
+                .water_lot(source)
+                .expect("water lot exists")
+                .load(),
+            600000
+        );
+        assert_eq!(
+            sim.state
+                .components
+                .water_lot(mixed)
+                .expect("water lot exists")
+                .load(),
+            300000
+        );
+        assert_eq!(
+            sim.state
+                .components
+                .water_lot(destination)
+                .expect("water lot exists")
+                .load(),
+            300000
+        );
         assert_eq!(
             [source, mixed, destination]
                 .iter()
-                .map(|id| health.water[id].load())
+                .map(|id| sim
+                    .state
+                    .components
+                    .water_lot(*id)
+                    .expect("water lot exists")
+                    .load())
                 .sum::<u128>(),
             1200000
         );

@@ -153,19 +153,43 @@ fn related_jobs(store: &Store, actor: PersonId) -> BTreeMap<PersonId, Job> {
         .collect()
 }
 
+type OfferMembership = BTreeMap<(PersonId, PersonId), Offer>;
+
+fn related_offers(store: &Store, actor: PersonId) -> OfferMembership {
+    all_offers(store)
+        .filter(|(giver, patient, _)| *giver == actor || *patient == actor)
+        .map(|(giver, patient, offer)| ((giver, patient), offer.clone()))
+        .collect()
+}
+fn expired_offers(store: &Store, now: SimTime) -> OfferMembership {
+    all_offers(store)
+        .filter(|(_, _, offer)| offer.expires <= now)
+        .map(|(giver, patient, offer)| ((giver, patient), offer.clone()))
+        .collect()
+}
+fn shelter_members(store: &Store, shelter: ShelterId) -> BTreeMap<PersonId, Occupancy> {
+    occupancies(store)
+        .filter(|(_, row)| row.shelter == shelter)
+        .map(|(actor, row)| (actor, row.clone()))
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedHealth {
     rules: Rules,
     jobs: BTreeMap<PersonId, (Option<Job>, Option<Job>)>,
-    offers: BTreeMap<(PersonId, PersonId), (Option<Offer>, Option<Offer>)>,
+    offers: BTreeMap<PersonId, (Option<Offers>, Option<Offers>)>,
     clinical: BTreeMap<PersonId, (Option<Clinical>, Option<Clinical>)>,
     water: BTreeMap<InventoryId, (Option<WaterLot>, Option<WaterLot>)>,
     water_reads: BTreeMap<InventoryId, Option<WaterLot>>,
     shelters: BTreeMap<ShelterId, (Option<Shelter>, Option<Shelter>)>,
-    occupancy: BTreeMap<PersonId, (Option<ShelterId>, Option<ShelterId>)>,
+    occupancy: BTreeMap<PersonId, (Option<Occupancy>, Option<Occupancy>)>,
     water_knowledge: BTreeMap<PersonId, (Option<Knowledge>, Knowledge)>,
     job_reads: BTreeMap<PersonId, BTreeMap<PersonId, Job>>,
-    occupancy_catalog: Option<BTreeMap<PersonId, ShelterId>>,
+    occupancy_reads: BTreeMap<ShelterId, BTreeMap<PersonId, Occupancy>>,
+    shelter_reads: BTreeMap<ShelterId, Option<Shelter>>,
+    offer_reads: BTreeMap<PersonId, OfferMembership>,
+    expired_reads: Option<(SimTime, OfferMembership)>,
     effects: Vec<HealthEffect>,
 }
 impl PreparedHealth {
@@ -181,7 +205,10 @@ impl PreparedHealth {
             occupancy: BTreeMap::new(),
             water_knowledge: BTreeMap::new(),
             job_reads: BTreeMap::new(),
-            occupancy_catalog: None,
+            occupancy_reads: BTreeMap::new(),
+            shelter_reads: BTreeMap::new(),
+            offer_reads: BTreeMap::new(),
+            expired_reads: None,
             effects: Vec::new(),
         }
     }
@@ -191,16 +218,28 @@ impl PreparedHealth {
     fn set_job(&mut self, store: &Store, id: PersonId, after: Option<Job>) {
         self.jobs.insert(id, (job(store, id).cloned(), after));
     }
-    fn set_offer(&mut self, world: &Runtime, key: (PersonId, PersonId), after: Option<Offer>) {
-        self.offers
-            .insert(key, (world.offers.get(&key).cloned(), after));
+    fn set_offer(&mut self, store: &Store, key: (PersonId, PersonId), after: Option<Offer>) {
+        let patch = self.offers.entry(key.0).or_insert_with(|| {
+            let before = offers(store, key.0).cloned();
+            (before.clone(), before)
+        });
+        let mut row = patch.1.take().unwrap_or_else(|| Offers {
+            caregiver: key.0,
+            patients: BTreeMap::new(),
+        });
+        if let Some(offer) = after {
+            row.patients.insert(key.1, offer);
+        } else {
+            row.patients.remove(&key.1);
+        }
+        patch.1 = (!row.patients.is_empty()).then_some(row);
     }
     fn observe_jobs(&mut self, store: &Store, actor: PersonId) {
         self.job_reads
             .entry(actor)
             .or_insert_with(|| related_jobs(store, actor));
     }
-    fn cancel(&mut self, world: &Runtime, store: &Store, actor: PersonId) {
+    fn cancel(&mut self, _world: &Runtime, store: &Store, actor: PersonId) {
         let related = related_jobs(store, actor);
         self.job_reads
             .entry(actor)
@@ -212,12 +251,12 @@ impl PreparedHealth {
                 completes: job.completes,
             });
         }
-        for key in world
-            .offers
-            .keys()
-            .filter(|(giver, patient)| *giver == actor || *patient == actor)
-        {
-            self.set_offer(world, *key, None);
+        let related = related_offers(store, actor);
+        self.offer_reads
+            .entry(actor)
+            .or_insert_with(|| related.clone());
+        for key in related.keys() {
+            self.set_offer(store, *key, None);
         }
     }
     fn start(
@@ -261,13 +300,11 @@ impl PreparedHealth {
     ) -> Result<(), Error> {
         let (source, quantity) = intake;
         let before = clinical(store, patient).cloned().unwrap_or_default();
-        let lot = world
-            .water
-            .get(&source.id)
+        let lot = water_lot(store, source.id)
             .cloned()
             .unwrap_or_else(|| WaterLot::new(source.quantity.0, 0));
         self.water_reads
-            .insert(source.id, world.water.get(&source.id).cloned());
+            .insert(source.id, water_lot(store, source.id).cloned());
         let dose = consume_water(&lot, quantity.0)?.consumed_load;
         let after = receive_water(
             &before,
@@ -282,12 +319,13 @@ impl PreparedHealth {
             .insert(patient, (clinical(store, patient).cloned(), Some(after)));
         Ok(())
     }
-    fn leave(&mut self, world: &Runtime, actors: &[PersonId]) {
+    fn leave(&mut self, store: &Store, actors: &[PersonId]) {
         for actor in actors {
-            if let Some(shelter) = world.occupancy.get(actor) {
-                self.occupancy.insert(*actor, (Some(*shelter), None));
+            if let Some(occupancy) = occupancy(store, *actor) {
+                self.occupancy
+                    .insert(*actor, (Some(occupancy.clone()), None));
                 self.effects.push(HealthEffect::ShelterLeft {
-                    shelter: *shelter,
+                    shelter: occupancy.shelter,
                     actor: *actor,
                 });
             }
@@ -300,9 +338,21 @@ impl PreparedHealth {
                 .iter()
                 .any(|(actor, before)| *before != related_jobs(store, *actor))
             || self
-                .occupancy_catalog
+                .occupancy_reads
+                .iter()
+                .any(|(shelter, before)| *before != shelter_members(store, *shelter))
+            || self
+                .shelter_reads
+                .iter()
+                .any(|(id, before)| crate::shelter(store, *id) != before.as_ref())
+            || self
+                .offer_reads
+                .iter()
+                .any(|(actor, before)| *before != related_offers(store, *actor))
+            || self
+                .expired_reads
                 .as_ref()
-                .is_some_and(|before| before != &world.occupancy)
+                .is_some_and(|(now, before)| *before != expired_offers(store, *now))
             || self
                 .jobs
                 .iter()
@@ -310,7 +360,7 @@ impl PreparedHealth {
             || self
                 .offers
                 .iter()
-                .any(|(id, (before, _))| world.offers.get(id) != before.as_ref())
+                .any(|(id, (before, _))| offers(store, *id) != before.as_ref())
             || self
                 .clinical
                 .iter()
@@ -318,23 +368,23 @@ impl PreparedHealth {
             || self
                 .water
                 .iter()
-                .any(|(id, (before, _))| world.water.get(id) != before.as_ref())
+                .any(|(id, (before, _))| water_lot(store, *id) != before.as_ref())
             || self
                 .water_reads
                 .iter()
-                .any(|(id, before)| world.water.get(id) != before.as_ref())
+                .any(|(id, before)| water_lot(store, *id) != before.as_ref())
             || self
                 .shelters
                 .iter()
-                .any(|(id, (before, _))| world.shelters.get(id) != before.as_ref())
+                .any(|(id, (before, _))| shelter(store, *id) != before.as_ref())
             || self
                 .occupancy
                 .iter()
-                .any(|(id, (before, _))| world.occupancy.get(id) != before.as_ref())
+                .any(|(id, (before, _))| occupancy(store, *id) != before.as_ref())
             || self
                 .water_knowledge
                 .iter()
-                .any(|(id, (before, _))| world.known.get(id) != before.as_ref())
+                .any(|(id, (before, _))| knowledge(store, *id) != before.as_ref())
         {
             return Err(Error::Unavailable);
         }
@@ -363,25 +413,27 @@ impl PreparedHealth {
                 batch.remove::<Clinical>(StableId(id.0));
             }
         }
-        store.apply_batch(batch)?;
-        macro_rules! install {
-            ($patch:expr,$target:expr) => {
-                for (id, (_, after)) in $patch {
+        macro_rules! apply_rows {
+            ($field:ident, $row:ty, $validate:path) => {
+                for (id, (_, after)) in &self.$field {
                     if let Some(value) = after {
-                        $target.insert(id, value);
+                        $validate(value)?;
+                        batch.insert(StableId(id.0), value.clone());
                     } else {
-                        $target.remove(&id);
+                        batch.remove::<$row>(StableId(id.0));
                     }
                 }
             };
         }
-        install!(self.offers, world.offers);
-        install!(self.water, world.water);
-        install!(self.shelters, world.shelters);
-        install!(self.occupancy, world.occupancy);
+        apply_rows!(offers, Offers, Offers::validate);
+        apply_rows!(water, WaterLot, WaterLot::validate_fields);
+        apply_rows!(shelters, Shelter, Shelter::validate);
+        apply_rows!(occupancy, Occupancy, Occupancy::validate);
         for (id, (_, after)) in self.water_knowledge {
-            world.known.insert(id, after);
+            after.validate()?;
+            batch.insert(StableId(id.0), after);
         }
+        store.apply_batch(batch)?;
         Ok(self.effects)
     }
 }
@@ -391,9 +443,9 @@ impl Runtime {
         change.cancel(self, store, actor);
         change
     }
-    pub fn prepare_leave(&self, _store: &Store, actors: &[PersonId]) -> PreparedHealth {
+    pub fn prepare_leave(&self, store: &Store, actors: &[PersonId]) -> PreparedHealth {
         let mut change = PreparedHealth::new(self);
-        change.leave(self, actors);
+        change.leave(store, actors);
         change
     }
     pub fn patient_busy(&self, store: &Store, actor: PersonId) -> bool {
@@ -545,7 +597,7 @@ impl Runtime {
                 },
                 ActionFacts::ShelterAccess { recipient_exists },
             ) => {
-                let s = self.shelters.get(shelter).ok_or(Error::Unavailable)?;
+                let s = crate::shelter(store, *shelter).ok_or(Error::Unavailable)?;
                 if s.custodian != actor.actor
                     || s.area != area
                     || !recipient_exists
@@ -570,25 +622,26 @@ impl Runtime {
                 });
             }
             (HealthAction::EnterShelter { shelter }, ActionFacts::ShelterOccupancy { leaving }) => {
-                let s = self.shelters.get(shelter).ok_or(Error::Unavailable)?;
+                let s = crate::shelter(store, *shelter).ok_or(Error::Unavailable)?;
                 if s.area != area
                     || !s.access.contains(&actor.actor)
-                    || self
-                        .occupancy
-                        .values()
-                        .filter(|id| **id == *shelter)
-                        .count()
-                        >= s.capacity as usize
-                    || self.occupancy.get(&actor.actor) == Some(shelter)
+                    || shelter_members(store, *shelter).len() >= s.capacity as usize
+                    || occupancy(store, actor.actor).is_some_and(|row| row.shelter == *shelter)
                 {
                     return Err(Error::Unavailable);
                 }
-                change.occupancy_catalog = Some(self.occupancy.clone());
-                change.leave(self, &leaving);
+                change
+                    .occupancy_reads
+                    .insert(*shelter, shelter_members(store, *shelter));
+                change.shelter_reads.insert(*shelter, Some(s.clone()));
+                change.leave(store, &leaving);
                 change.cancel(self, store, actor.actor);
                 change.occupancy.insert(
                     actor.actor,
-                    (self.occupancy.get(&actor.actor).copied(), Some(*shelter)),
+                    (
+                        occupancy(store, actor.actor).cloned(),
+                        Some(Occupancy { shelter: *shelter }),
+                    ),
                 );
                 change
                     .effects
@@ -602,10 +655,10 @@ impl Runtime {
                 });
             }
             (HealthAction::LeaveShelter, ActionFacts::ShelterOccupancy { leaving }) => {
-                if !self.occupancy.contains_key(&actor.actor) {
+                if occupancy(store, actor.actor).is_none() {
                     return Err(Error::Unavailable);
                 }
-                change.leave(self, &leaving);
+                change.leave(store, &leaving);
             }
             (
                 HealthAction::RequestTreatment { caregiver },
@@ -676,7 +729,7 @@ impl Runtime {
                         .ok_or(Error::Overflow)?,
                 );
                 change.set_offer(
-                    self,
+                    store,
                     (actor.actor, *patient),
                     Some(Offer {
                         caregiver: actor.actor,
@@ -699,16 +752,13 @@ impl Runtime {
                     contact,
                 },
             ) => {
-                let offer = self
-                    .offers
-                    .get(&(*caregiver, actor.actor))
-                    .ok_or(Error::Unavailable)?;
+                let offer = offer(store, *caregiver, actor.actor).ok_or(Error::Unavailable)?;
                 if offer.accepted || offer.expires <= actor.now || !giver_present || !contact {
                     return Err(Error::Unavailable);
                 }
                 change.cancel(self, store, actor.actor);
                 change.set_offer(
-                    self,
+                    store,
                     (*caregiver, actor.actor),
                     Some(Offer {
                         accepted: true,
@@ -727,7 +777,7 @@ impl Runtime {
                 });
             }
             (HealthAction::RefuseTreatment { caregiver }, ActionFacts::RefuseCare) => {
-                if !self.offers.contains_key(&(*caregiver, actor.actor)) {
+                if offer(store, *caregiver, actor.actor).is_none() {
                     return Err(Error::Unavailable);
                 }
                 change.cancel(self, store, actor.actor);
@@ -758,7 +808,7 @@ impl Runtime {
                     || !stock.permits(*water, Good::Water, r.treatment_water)
                     || *patient != actor.actor
                         && (!target.resting
-                            || !self.offers.get(&(actor.actor, *patient)).is_some_and(|o| {
+                            || !offer(store, actor.actor, *patient).is_some_and(|o| {
                                 o.accepted
                                     && o.herbs == *herbs
                                     && o.water == *water
@@ -921,18 +971,16 @@ impl Runtime {
                 if !water.permits(*source, Good::Water, *quantity) {
                     return Ok(change);
                 }
-                let lot = self
-                    .water
-                    .get(source)
+                let lot = water_lot(store, *source)
                     .cloned()
                     .unwrap_or_else(|| WaterLot::new(water.quantity.0, 0));
                 let result = purify_water(&lot, quantity.0)?;
                 let load = result.remaining.load();
                 change.water.insert(
                     *source,
-                    (self.water.get(source).cloned(), Some(result.remaining)),
+                    (water_lot(store, *source).cloned(), Some(result.remaining)),
                 );
-                let mut knowledge = self.known.get(&actor).cloned().unwrap_or_default();
+                let mut knowledge = crate::knowledge(store, actor).cloned().unwrap_or_default();
                 knowledge.water.insert(
                     *source,
                     WaterSafetyView {
@@ -944,7 +992,7 @@ impl Runtime {
                 );
                 change
                     .water_knowledge
-                    .insert(actor, (self.known.get(&actor).cloned(), knowledge));
+                    .insert(actor, (crate::knowledge(store, actor).cloned(), knowledge));
                 change.effects.push(HealthEffect::Purified {
                     actor,
                     source: *source,
@@ -960,7 +1008,7 @@ impl Runtime {
                 },
                 FinishFacts::Shelter { id },
             ) => {
-                if id.0 == 0 || self.shelters.contains_key(&id) {
+                if id.0 == 0 || shelter(store, id).is_some() {
                     return Err(Error::Unavailable);
                 }
                 let shelter = Shelter {
@@ -1009,12 +1057,12 @@ impl Runtime {
         }
         Ok(change)
     }
-    pub fn prepare_expire_offers(&self, now: SimTime) -> PreparedHealth {
+    pub fn prepare_expire_offers(&self, store: &Store, now: SimTime) -> PreparedHealth {
         let mut change = PreparedHealth::new(self);
-        for (key, offer) in &self.offers {
-            if offer.expires <= now {
-                change.set_offer(self, *key, None);
-            }
+        let expired = expired_offers(store, now);
+        change.expired_reads = Some((now, expired.clone()));
+        for key in expired.keys() {
+            change.set_offer(store, *key, None);
         }
         change
     }

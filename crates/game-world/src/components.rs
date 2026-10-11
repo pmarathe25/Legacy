@@ -118,6 +118,136 @@ impl Components {
     > {
         game_characters::temperament::all_person_temperaments(&self.0)
     }
+    pub fn water_lot(&self, id: game_api::InventoryId) -> Option<&game_health::WaterLot> {
+        game_health::water_lot(&self.0, id)
+    }
+    pub fn water_lot_mut(
+        &mut self,
+        id: game_api::InventoryId,
+    ) -> Option<&mut game_health::WaterLot> {
+        game_health::water_lot_mut(&mut self.0, id)
+    }
+    pub fn water_lots(
+        &self,
+    ) -> impl Iterator<Item = (game_api::InventoryId, &game_health::WaterLot)> {
+        game_health::water_lots(&self.0)
+    }
+    pub fn insert_water_lot(
+        &mut self,
+        id: game_api::InventoryId,
+        row: game_health::WaterLot,
+    ) -> Result<(), Error> {
+        game_health::insert_water_lot(&mut self.0, id, row)
+    }
+    pub fn remove_water_lot(
+        &mut self,
+        id: game_api::InventoryId,
+    ) -> Result<Option<game_health::WaterLot>, Error> {
+        game_health::remove_water_lot(&mut self.0, id)
+    }
+    pub fn shelter_occupancy(&self, id: game_api::PersonId) -> Option<&game_health::Occupancy> {
+        game_health::occupancy(&self.0, id)
+    }
+    pub fn shelter_occupancy_mut(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Option<&mut game_health::Occupancy> {
+        game_health::occupancy_mut(&mut self.0, id)
+    }
+    pub fn occupancies(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_health::Occupancy)> {
+        game_health::occupancies(&self.0)
+    }
+    pub fn insert_shelter_occupancy(
+        &mut self,
+        id: game_api::PersonId,
+        row: game_health::Occupancy,
+    ) -> Result<(), Error> {
+        game_health::insert_occupancy(&mut self.0, id, row)
+    }
+    pub fn remove_shelter_occupancy(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Result<Option<game_health::Occupancy>, Error> {
+        game_health::remove_occupancy(&mut self.0, id)
+    }
+    pub fn health_knowledge(&self, id: game_api::PersonId) -> Option<&game_health::Knowledge> {
+        game_health::knowledge(&self.0, id)
+    }
+    pub fn health_knowledge_mut(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Option<&mut game_health::Knowledge> {
+        game_health::knowledge_mut(&mut self.0, id)
+    }
+    pub fn knowledges(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, &game_health::Knowledge)> {
+        game_health::knowledges(&self.0)
+    }
+    pub fn insert_health_knowledge(
+        &mut self,
+        id: game_api::PersonId,
+        row: game_health::Knowledge,
+    ) -> Result<(), Error> {
+        game_health::insert_knowledge(&mut self.0, id, row)
+    }
+    pub fn remove_health_knowledge(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Result<Option<game_health::Knowledge>, Error> {
+        game_health::remove_knowledge(&mut self.0, id)
+    }
+    pub fn ensure_health_knowledge(
+        &mut self,
+        id: game_api::PersonId,
+    ) -> Result<&mut game_health::Knowledge, Error> {
+        if self.health_knowledge(id).is_none() {
+            self.insert_health_knowledge(id, game_health::Knowledge::default())?;
+        }
+        self.health_knowledge_mut(id).ok_or(Error::Unavailable)
+    }
+    pub fn shelter(&self, id: game_api::ShelterId) -> Option<&game_health::Shelter> {
+        game_health::shelter(&self.0, id)
+    }
+    pub fn shelter_mut(&mut self, id: game_api::ShelterId) -> Option<&mut game_health::Shelter> {
+        game_health::shelter_mut(&mut self.0, id)
+    }
+    pub fn shelters(&self) -> impl Iterator<Item = (game_api::ShelterId, &game_health::Shelter)> {
+        game_health::shelters(&self.0)
+    }
+    pub fn insert_shelter(&mut self, row: game_health::Shelter) -> Result<(), Error> {
+        game_health::insert_shelter(&mut self.0, row)
+    }
+    pub fn remove_shelter(
+        &mut self,
+        id: game_api::ShelterId,
+    ) -> Result<Option<game_health::Shelter>, Error> {
+        game_health::remove_shelter(&mut self.0, id)
+    }
+    pub fn health_offer(
+        &self,
+        giver: game_api::PersonId,
+        patient: game_api::PersonId,
+    ) -> Option<&game_health::Offer> {
+        game_health::offer(&self.0, giver, patient)
+    }
+    pub fn health_offer_mut(
+        &mut self,
+        giver: game_api::PersonId,
+        patient: game_api::PersonId,
+    ) -> Option<&mut game_health::Offer> {
+        game_health::offer_mut(&mut self.0, giver, patient)
+    }
+    pub fn health_offers(
+        &self,
+    ) -> impl Iterator<Item = (game_api::PersonId, game_api::PersonId, &game_health::Offer)> {
+        game_health::all_offers(&self.0)
+    }
+    pub fn insert_health_offer(&mut self, offer: game_health::Offer) -> Result<(), Error> {
+        game_health::insert_offer(&mut self.0, offer)
+    }
     pub fn clinical(&self, actor: game_api::PersonId) -> Option<&game_health::Clinical> {
         game_health::clinical(&self.0, actor)
     }
@@ -499,12 +629,115 @@ mod tests {
     }
 
     #[test]
+    fn pending_npc_death_refreshes_queries_after_occupancy_removal() {
+        let mut sim = Simulation::combat_fixture(89, Execution::default()).unwrap();
+        sim.initialize_health(game_health::Rules::fixture())
+            .unwrap();
+        let ruler = sim.state.ruler;
+        let enemy = sim.state.people[3].id;
+        let area = sim
+            .state
+            .components
+            .location(ruler)
+            .unwrap()
+            .cell()
+            .unwrap();
+        let timber = sim
+            .debug_add_inventory(
+                game_api::Good::Timber,
+                crate::InventoryLocation::Area(area),
+                game_api::Quantity(10_000),
+                game_api::Quantity(10_000),
+                std::collections::BTreeSet::from([ruler]),
+            )
+            .unwrap();
+        let shelter = sim
+            .seed_shelter(
+                area,
+                ruler,
+                std::collections::BTreeSet::from([ruler]),
+                1,
+                650,
+                timber,
+                game_api::Quantity(10_000),
+                SimTime(0),
+            )
+            .unwrap();
+        sim.set_initial_shelter_occupancy(ruler, shelter).unwrap();
+        let encounter = sim
+            .debug_start_encounter(vec![(ruler, 0), (enemy, 1)])
+            .unwrap();
+        for stock in sim.state.inventories.values_mut() {
+            if stock.good == game_api::Good::Binding
+                && stock.location == crate::InventoryLocation::Carried(enemy)
+            {
+                stock.quantity = game_api::Quantity(0);
+            }
+        }
+        let damage = sim.body_rules(ruler).max_health - 1;
+        sim.debug_injure(ruler, damage).unwrap();
+        let combat = sim.state.combat.as_mut().unwrap();
+        let map = combat.encounters[&encounter].map;
+        combat.map_mut(map).unwrap().obstacles.clear();
+        let battle = combat.encounters.get_mut(&encounter).unwrap();
+        battle.fighters.get_mut(&ruler).unwrap().position = game_api::Point { x: 5_000, y: 5_000 };
+        battle.fighters.get_mut(&enemy).unwrap().position = game_api::Point { x: 6_000, y: 5_000 };
+        // An authored pending NPC turn runs through the normal advance path.
+        battle.order = vec![enemy, ruler];
+        battle.cursor = 0;
+        assert!(sim.state.components.shelter_occupancy(ruler).is_some());
+        let advanced = sim.advance(game_api::SimDuration(1)).unwrap();
+        assert_eq!(advanced.reached, SimTime(1));
+        assert!(sim.state.components.shelter_occupancy(ruler).is_none());
+        assert!(sim.state.events.iter().any(|event| matches!(event.kind,game_api::EventKind::Struck {actor,target,..} if actor == enemy && target == ruler)));
+        assert!(
+            sim.state.events.iter().any(
+                |event| matches!(event.kind,game_api::EventKind::Died {actor} if actor == ruler)
+            )
+        );
+    }
+
+    #[test]
+    fn health_knowledge_without_the_health_runtime_is_rejected() {
+        let mut sim = Simulation::survival_fixture(88, Execution::default()).unwrap();
+        assert!(sim.state.health.is_none());
+        sim.state
+            .components
+            .insert_health_knowledge(sim.state.ruler, game_health::Knowledge::default())
+            .unwrap();
+        assert!(
+            matches!(Simulation::load(&sim.save().unwrap(), Execution::default()),
+            Err(game_api::Error::InvalidSave(message)) if message == "health components require health runtime")
+        );
+    }
+
+    #[test]
     fn health_columns_are_authoritative_and_orphans_fail_restore() {
         let sim = Simulation::health_fixture(82, Execution::default()).unwrap();
         let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
         let header = saved["state"]["health"].as_object().unwrap();
-        assert!(!header.contains_key("clinical"));
-        assert!(!header.contains_key("jobs"));
+        for obsolete in [
+            "clinical",
+            "jobs",
+            "water",
+            "shelters",
+            "occupancy",
+            "known",
+            "offers",
+        ] {
+            assert!(!header.contains_key(obsolete));
+        }
+        for column in [
+            "health/clinical",
+            "health/job",
+            "health/water",
+            "health/shelter",
+            "health/occupancy",
+            "health/knowledge",
+            "health/offers",
+        ] {
+            assert!(saved["state"]["components"]["columns"][column].is_array());
+        }
         assert_eq!(
             saved["state"]["components"]["columns"]["health/clinical"]
                 .as_array()

@@ -81,8 +81,8 @@ pub fn validate_runtime(
 ) -> Result<(), Error> {
     validate_rules(&world.rules).map_err(|_| invalid("invalid rules"))?;
     catalog.past(world.last_review)?;
-    for (id, lot) in &world.water {
-        lot.validate(catalog.stock(*id, Good::Water)?.quantity.0)?;
+    for (id, lot) in water_lots(store) {
+        lot.validate(catalog.stock(id, Good::Water)?.quantity.0)?;
     }
     for (actor, clinical) in clinicals(store) {
         clinical.validate()?;
@@ -118,8 +118,9 @@ pub fn validate_runtime(
             catalog.past(at)?;
         }
     }
-    for (id, shelter) in &world.shelters {
-        if *id != shelter.id || shelter.timber_used.0 == 0 || shelter.labor_ms == 0 {
+    for (id, shelter) in shelters(store) {
+        shelter.validate()?;
+        if id != shelter.id || shelter.timber_used.0 == 0 || shelter.labor_ms == 0 {
             return Err(invalid("invalid shelter history"));
         }
         shelter_shape(shelter.capacity, shelter.insulation)?;
@@ -130,25 +131,31 @@ pub fn validate_runtime(
         }
         catalog.past(shelter.built_at)?;
     }
-    for (actor, shelter) in &world.occupancy {
-        let person = catalog.person(*actor)?;
-        let shelter = world
-            .shelters
-            .get(shelter)
-            .ok_or_else(|| invalid("unknown occupied shelter"))?;
+    for (actor, occupancy) in occupancies(store) {
+        occupancy.validate()?;
+        let person = catalog.person(actor)?;
+        let shelter =
+            shelter(store, occupancy.shelter).ok_or_else(|| invalid("unknown occupied shelter"))?;
         if !person.alive || person.location != Location::AtArea(shelter.area) {
             return Err(invalid("nonlocal or dead shelter occupant"));
         }
     }
-    for ((caregiver, patient), offer) in &world.offers {
-        if (*caregiver, *patient) != (offer.caregiver, offer.patient)
+    for (caregiver, row) in offer_rows(store) {
+        row.validate()?;
+        if caregiver != row.caregiver {
+            return Err(invalid("inconsistent caregiver entity"));
+        }
+        catalog.person(caregiver)?;
+    }
+    for (caregiver, patient, offer) in all_offers(store) {
+        if (caregiver, patient) != (offer.caregiver, offer.patient)
             || caregiver == patient
             || offer.expires <= catalog.now
         {
             return Err(invalid("invalid treatment offer"));
         }
-        catalog.person(*caregiver)?;
-        catalog.person(*patient)?;
+        catalog.person(caregiver)?;
+        catalog.person(patient)?;
         catalog.stock(offer.herbs, Good::Herb)?;
         catalog.stock(offer.water, Good::Water)?;
     }
@@ -230,8 +237,9 @@ pub fn validate_runtime(
             return Err(invalid("health activity without job"));
         }
     }
-    for (observer, knowledge) in &world.known {
-        catalog.person(*observer)?;
+    for (observer, knowledge) in knowledges(store) {
+        knowledge.validate()?;
+        catalog.person(observer)?;
         for (id, symptoms) in &knowledge.people {
             catalog.person(*id)?;
             if *id != symptoms.person {
@@ -240,7 +248,7 @@ pub fn validate_runtime(
             catalog.past(symptoms.observed_at)?;
         }
         for (id, shelter) in &knowledge.shelters {
-            if *id != shelter.id || !world.shelters.contains_key(id) {
+            if *id != shelter.id || crate::shelter(store, *id).is_none() {
                 return Err(invalid("unknown remembered shelter"));
             }
             shelter_shape(shelter.capacity, shelter.insulation)?;

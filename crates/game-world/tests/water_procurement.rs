@@ -63,10 +63,28 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         .collect();
     for id in water_ids {
         state["property"]["portions"][&id] = serde_json::json!({});
-        state["health"]["water"][&id] = serde_json::json!({
+        let entity = id.parse::<u64>().expect("inventory identity");
+        let value = serde_json::json!({
             "basis_quantity": 0, "basis_load": 0,
             "removed_quantity": 0, "removed_load": 0,
         });
+        let rows = state["components"]["columns"]["health/water"]
+            .as_array_mut()
+            .expect("actual registered water lot column");
+        if let Some(row) = rows
+            .iter_mut()
+            .find(|row| row["entity"].as_u64() == Some(entity))
+        {
+            row["value"] = value;
+        } else {
+            rows.push(serde_json::json!({"entity": entity, "value": value}));
+            rows.sort_by_key(|row| row["entity"].as_u64().unwrap());
+        }
+        let entities = state["components"]["entities"].as_array_mut().unwrap();
+        if !entities.iter().any(|id| id.as_u64() == Some(entity)) {
+            entities.push(entity.into());
+            entities.sort_by_key(|id| id.as_u64().unwrap());
+        }
     }
     for mind in state["decisions"]["minds"]
         .as_object_mut()

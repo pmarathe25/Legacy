@@ -144,16 +144,24 @@ fn native_consumer_rejects_distant_or_insufficient_water_and_remains_a_real_time
 }
 #[test]
 fn known_safe_supply_avoids_purification_without_granting_access_or_changing_water() {
-    let (mut world, store) = thirsty();
-    world.known.entry(PersonId(1)).or_default().water.insert(
-        InventoryId(10),
-        WaterSafetyView {
-            inventory: InventoryId(10),
-            suspected_unsafe: false,
-            purified: true,
-            observed_at: SimTime(0),
+    let (world, mut store) = thirsty();
+    insert_knowledge(
+        &mut store,
+        PersonId(1),
+        Knowledge {
+            water: std::collections::BTreeMap::from([(
+                InventoryId(10),
+                WaterSafetyView {
+                    inventory: InventoryId(10),
+                    suspected_unsafe: false,
+                    purified: true,
+                    observed_at: SimTime(0),
+                },
+            )]),
+            ..Knowledge::default()
         },
-    );
+    )
+    .unwrap();
     let stocks = [
         stock(10, Good::Water, 5_000, true, false),
         stock(11, Good::Timber, 1_000, true, false),

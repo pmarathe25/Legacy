@@ -61,7 +61,15 @@ fn shared_clinical_and_job_rows_roundtrip_and_preserve_other_components() {
     register_components(&mut schema).unwrap();
     assert_eq!(
         schema.keys().collect::<Vec<_>>(),
-        vec!["health/clinical", "health/job"]
+        vec![
+            "health/clinical",
+            "health/job",
+            "health/knowledge",
+            "health/occupancy",
+            "health/offers",
+            "health/shelter",
+            "health/water"
+        ]
     );
     schema
         .register::<ForeignTag>("fixture/tag", |_| Ok(()))
@@ -303,11 +311,14 @@ fn component_validator_rejection_keeps_jobs_clinical_runtime_and_effects_atomic(
     assert_eq!((runtime, store.snapshot().unwrap()), before);
 
     // Starting work withdraws an existing offer. A rejected job schema must
-    // leave that runtime effect and entity creation unpublished as well.
+    // leave the offer component and entity creation unpublished as well.
     for missing_schema in [false, true] {
         let mut schema = Schema::new();
         schema
             .register::<Clinical>("health/clinical", Clinical::validate)
+            .unwrap();
+        schema
+            .register::<Offers>("health/offers", Offers::validate)
             .unwrap();
         if !missing_schema {
             schema
@@ -319,8 +330,8 @@ fn component_validator_rejection_keeps_jobs_clinical_runtime_and_effects_atomic(
             rules: Rules::fixture(),
             ..Runtime::default()
         };
-        runtime.offers.insert(
-            (PersonId(1), PersonId(2)),
+        insert_offer(
+            &mut store,
             Offer {
                 caregiver: PersonId(1),
                 patient: PersonId(2),
@@ -329,7 +340,8 @@ fn component_validator_rejection_keeps_jobs_clinical_runtime_and_effects_atomic(
                 expires: SimTime(180_000),
                 accepted: true,
             },
-        );
+        )
+        .unwrap();
         let change = prepare_drink(&runtime, &store);
         let before = (runtime.clone(), store.snapshot().unwrap());
         assert!(change.commit(&mut runtime, &mut store).is_err());
@@ -375,7 +387,15 @@ fn stale_clinical_or_job_rows_reject_completion_without_clearing_work() {
 
 #[test]
 fn removed_runtime_maps_and_unknown_clinical_fields_are_rejected() {
-    for field in ["clinical", "jobs"] {
+    for field in [
+        "clinical",
+        "jobs",
+        "water",
+        "shelters",
+        "occupancy",
+        "offers",
+        "known",
+    ] {
         let mut runtime = serde_json::to_value(Runtime::default()).unwrap();
         runtime[field] = serde_json::json!({});
         assert!(serde_json::from_value::<Runtime>(runtime).is_err());

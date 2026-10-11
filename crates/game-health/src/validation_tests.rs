@@ -12,16 +12,14 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let mut store = component_store();
-        let mut world = Runtime {
+        let world = Runtime {
             rules: Rules::fixture(),
             ..Runtime::default()
         };
-        world
-            .water
-            .insert(InventoryId(10), WaterLot::new(1_000, 120));
+        insert_water_lot(&mut store, InventoryId(10), WaterLot::new(1_000, 120)).unwrap();
         insert_clinical(&mut store, PersonId(1), Clinical::default()).unwrap();
-        world.shelters.insert(
-            ShelterId(20),
+        insert_shelter(
+            &mut store,
             Shelter {
                 id: ShelterId(20),
                 area: AreaId(5),
@@ -33,9 +31,24 @@ impl Fixture {
                 timber_used: Quantity(1_000),
                 labor_ms: 30_000,
             },
-        );
-        world.occupancy.insert(PersonId(1), ShelterId(20));
-        world.occupancy.insert(PersonId(2), ShelterId(20));
+        )
+        .unwrap();
+        insert_occupancy(
+            &mut store,
+            PersonId(1),
+            Occupancy {
+                shelter: ShelterId(20),
+            },
+        )
+        .unwrap();
+        insert_occupancy(
+            &mut store,
+            PersonId(2),
+            Occupancy {
+                shelter: ShelterId(20),
+            },
+        )
+        .unwrap();
         insert_job(
             &mut store,
             Job {
@@ -50,8 +63,8 @@ impl Fixture {
             },
         )
         .unwrap();
-        world.offers.insert(
-            (PersonId(1), PersonId(2)),
+        insert_offer(
+            &mut store,
             Offer {
                 caregiver: PersonId(1),
                 patient: PersonId(2),
@@ -60,9 +73,11 @@ impl Fixture {
                 expires: SimTime(180_000),
                 accepted: true,
             },
-        );
+        )
+        .unwrap();
         // Deliberately stale facts remain valid beliefs.
-        world.known.insert(
+        insert_knowledge(
+            &mut store,
             PersonId(2),
             Knowledge {
                 people: BTreeMap::from([(
@@ -100,7 +115,8 @@ impl Fixture {
                     },
                 )]),
             },
-        );
+        )
+        .unwrap();
         Self {
             world,
             store,
@@ -230,34 +246,26 @@ fn corrupted_owned_references_and_numeric_invariants_are_rejected() {
                 );
         },
         |f| {
-            f.world
-                .water
-                .get_mut(&InventoryId(10))
+            water_lot_mut(&mut f.store, InventoryId(10))
                 .unwrap()
                 .removed_quantity = 2_000
         },
-        |f| f.world.shelters.get_mut(&ShelterId(20)).unwrap().capacity = 0,
-        |f| f.world.shelters.get_mut(&ShelterId(20)).unwrap().area = AreaId(999),
+        |f| shelter_mut(&mut f.store, ShelterId(20)).unwrap().capacity = 0,
+        |f| shelter_mut(&mut f.store, ShelterId(20)).unwrap().area = AreaId(999),
         |f| {
-            f.world
-                .shelters
-                .get_mut(&ShelterId(20))
+            shelter_mut(&mut f.store, ShelterId(20))
                 .unwrap()
                 .access
                 .insert(PersonId(999));
         },
         |f| f.people.get_mut(&PersonId(2)).unwrap().location = Location::AtArea(AreaId(999)),
         |f| {
-            f.world
-                .offers
-                .get_mut(&(PersonId(1), PersonId(2)))
+            offer_mut(&mut f.store, PersonId(1), PersonId(2))
                 .unwrap()
                 .patient = PersonId(1)
         },
         |f| {
-            f.world
-                .offers
-                .get_mut(&(PersonId(1), PersonId(2)))
+            offer_mut(&mut f.store, PersonId(1), PersonId(2))
                 .unwrap()
                 .herbs = InventoryId(10)
         },
@@ -265,9 +273,7 @@ fn corrupted_owned_references_and_numeric_invariants_are_rejected() {
         |f| f.world.rules.incubation = SimDuration(0),
         |f| f.world.last_review = SimTime(60_001),
         |f| {
-            f.world
-                .known
-                .get_mut(&PersonId(2))
+            knowledge_mut(&mut f.store, PersonId(2))
                 .unwrap()
                 .people
                 .get_mut(&PersonId(1))
@@ -275,9 +281,7 @@ fn corrupted_owned_references_and_numeric_invariants_are_rejected() {
                 .observed_at = SimTime(60_001)
         },
         |f| {
-            f.world
-                .known
-                .get_mut(&PersonId(2))
+            knowledge_mut(&mut f.store, PersonId(2))
                 .unwrap()
                 .shelters
                 .get_mut(&ShelterId(20))
@@ -286,9 +290,7 @@ fn corrupted_owned_references_and_numeric_invariants_are_rejected() {
                 .insert(PersonId(999));
         },
         |f| {
-            f.world
-                .known
-                .get_mut(&PersonId(2))
+            knowledge_mut(&mut f.store, PersonId(2))
                 .unwrap()
                 .water
                 .get_mut(&InventoryId(10))
@@ -309,7 +311,7 @@ fn corrupted_owned_references_and_numeric_invariants_are_rejected() {
 #[test]
 fn dead_clinical_history_can_remain_unreconciled() {
     let mut fixture = Fixture::new();
-    fixture.world.occupancy.remove(&PersonId(2));
+    remove_occupancy(&mut fixture.store, PersonId(2)).unwrap();
     fixture.people.get_mut(&PersonId(2)).unwrap().alive = false;
     insert_clinical(
         &mut fixture.store,
@@ -342,7 +344,7 @@ fn dead_clinical_history_can_remain_unreconciled() {
 fn stopped_road_work_is_valid_but_cannot_materialize_a_shelter_at_an_endpoint() {
     let mut fixture = Fixture::new();
     fixture.areas.insert(AreaId(6));
-    fixture.world.occupancy.remove(&PersonId(1));
+    remove_occupancy(&mut fixture.store, PersonId(1)).unwrap();
     fixture.people.get_mut(&PersonId(1)).unwrap().location = Location::StoppedOnRoad {
         from: AreaId(5),
         to: AreaId(6),

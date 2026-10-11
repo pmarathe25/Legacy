@@ -1458,11 +1458,12 @@ mod tests {
             let sim = opening(id, 1);
             let world = sim.state.health.as_ref().unwrap();
             assert_eq!(world.rules, HealthRules::human());
-            assert_eq!(world.shelters.len(), 2);
+            assert_eq!(sim.state.components.shelters().count(), 2);
             assert!(
-                world
-                    .shelters
-                    .values()
+                sim.state
+                    .components
+                    .shelters()
+                    .map(|(_, shelter)| shelter)
                     .all(|shelter| shelter.timber_used.0 > 0 && shelter.labor_ms > 0)
             );
             let consumed: u64 = sim
@@ -1478,9 +1479,11 @@ mod tests {
                 .sum();
             assert!(
                 consumed
-                    >= world
-                        .shelters
-                        .values()
+                    >= sim
+                        .state
+                        .components
+                        .shelters()
+                        .map(|(_, shelter)| shelter)
                         .map(|shelter| shelter.timber_used.0)
                         .sum::<u64>()
             );
@@ -1493,7 +1496,14 @@ mod tests {
                 .find(|stock| stock.good == Good::Water && stock.quantity.0 > 0)
                 .unwrap()
                 .id;
-            assert!(world.known[&healer].water[&water].purified);
+            assert!(
+                sim.state
+                    .components
+                    .health_knowledge(healer)
+                    .expect("health knowledge exists")
+                    .water[&water]
+                    .purified
+            );
             assert!(
                 sim.state
                     .inventories
@@ -1501,12 +1511,12 @@ mod tests {
                     .any(|stock| stock.good == Good::Herb && stock.quantity.0 >= 20_000)
             );
             let ruler = sim.state.ruler;
-            assert!(world.occupancy.contains_key(&ruler));
+            assert!(sim.state.components.shelter_occupancy(ruler).is_some());
             if id == "child-successor" {
                 assert!(
-                    world
-                        .known
-                        .get(&ruler)
+                    sim.state
+                        .components
+                        .health_knowledge(ruler)
                         .is_none_or(|known| !known.water.contains_key(&water))
                 );
             }

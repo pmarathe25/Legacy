@@ -63,13 +63,12 @@ impl Runtime {
     }
     fn water_requires_preparation(
         &self,
+        store: &Store,
         actor: PersonId,
         source: InventoryId,
         input: &HealthPlanning<'_>,
     ) -> bool {
-        let safety = self
-            .known
-            .get(&actor)
+        let safety = knowledge(store, actor)
             .and_then(|known| known.water.get(&source))
             .filter(|safety| safety.observed_at <= input.now);
         !safety.is_some_and(|safety| safety.purified)
@@ -130,7 +129,7 @@ impl Runtime {
                         && stock.fact.observed_at <= input.now
                         && stock.fact.learned_at <= input.now
                 })?;
-                if self.water_requires_preparation(actor, source, input) {
+                if self.water_requires_preparation(store, actor, source, input) {
                     if let Some(action) = self.boiling_action(store, actor, source, input) {
                         return Some(action);
                     }
@@ -174,7 +173,12 @@ impl Runtime {
                 })
                 .min_by_key(|stock| {
                     (
-                        self.water_requires_preparation(need.actor, stock.fact.inventory, input),
+                        self.water_requires_preparation(
+                            store,
+                            need.actor,
+                            stock.fact.inventory,
+                            input,
+                        ),
                         !stock.held,
                         stock.fact.inventory,
                     )
@@ -210,9 +214,7 @@ impl Runtime {
             && need.can_enter_shelter
             && input.stationary
         {
-            return self
-                .known
-                .get(&need.actor)
+            return knowledge(store, need.actor)
                 .into_iter()
                 .flat_map(|known| known.shelters.values())
                 .filter(|shelter| {

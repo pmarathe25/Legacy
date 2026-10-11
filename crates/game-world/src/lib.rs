@@ -1289,10 +1289,6 @@ impl Simulation {
                 .ok_or(Error::Overflow)?,
         );
         while self.state.time < requested {
-            self.agriculture_queries.refresh(&self.state.components)?;
-            self.physical_query.refresh(&self.state.components)?;
-            self.environment_queries.refresh(&self.state.components)?;
-            self.ecology_queries.refresh(&self.state.components)?;
             if let Some(warning) = self.required_invocation_input() {
                 return Ok(AdvanceResult {
                     requested,
@@ -1319,6 +1315,11 @@ impl Simulation {
                     reason: StopReason::CombatInput { encounter },
                 });
             }
+            // Autonomous turns may remove or attach components before the read phase.
+            self.agriculture_queries.refresh(&self.state.components)?;
+            self.physical_query.refresh(&self.state.components)?;
+            self.environment_queries.refresh(&self.state.components)?;
+            self.ecology_queries.refresh(&self.state.components)?;
             let next = self.engine.next_boundary(self, requested)?;
             let controlled = self.state.ruler;
             let prepared = self.prepare_world_step(next)?;

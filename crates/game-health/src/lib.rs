@@ -36,4 +36,6 @@ fn component_store() -> game_ecs::Store {
 #[cfg(test)]
 mod interval_tests;
 #[cfg(test)]
+mod owner_storage_tests;
+#[cfg(test)]
 mod storage_tests;

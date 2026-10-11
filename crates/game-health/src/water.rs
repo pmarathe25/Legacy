@@ -2,6 +2,7 @@ use game_core::Error;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WaterLot {
     pub basis_quantity: u64,
     pub basis_load: u128,
@@ -46,7 +47,7 @@ pub fn proportional(load: u128, quantity: u64, basis: u64) -> u128 {
 }
 
 impl WaterLot {
-    fn validate_fields(&self) -> Result<(), Error> {
+    pub fn validate_fields(&self) -> Result<(), Error> {
         let quantity = self
             .basis_quantity
             .checked_sub(self.removed_quantity)
