@@ -44,18 +44,19 @@ pub fn remove_soil(store: &mut Store, id: SiteId) -> Result<Option<Soil>, Error>
 
 /// Each soil parcel has exactly one land use. Consumers supply parcel IDs;
 /// this owner need not know whether a use is a field, plot, or another type.
-pub fn validate_uses(
-    store: &Store,
-    uses: impl IntoIterator<Item = SiteId>,
-) -> Result<(), Error> {
+pub fn validate_uses(store: &Store, uses: impl IntoIterator<Item = SiteId>) -> Result<(), Error> {
     let mut expected = std::collections::BTreeSet::new();
     for id in uses {
         if id.0 == 0 || !expected.insert(id) {
-            return Err(Error::InvalidSave("inconsistent shared soil ownership".into()));
+            return Err(Error::InvalidSave(
+                "inconsistent shared soil ownership".into(),
+            ));
         }
     }
     if soils(store).map(|(id, _)| id).ne(expected) {
-        return Err(Error::InvalidSave("inconsistent shared soil ownership".into()));
+        return Err(Error::InvalidSave(
+            "inconsistent shared soil ownership".into(),
+        ));
     }
     Ok(())
 }

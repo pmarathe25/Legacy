@@ -3,8 +3,8 @@ use game_core::*;
 use game_ecs::Store;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-mod storage;
 mod practice;
+mod storage;
 pub use practice::PreparedPractice;
 #[cfg(test)]
 mod practice_tests;
