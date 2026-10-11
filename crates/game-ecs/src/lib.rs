@@ -180,6 +180,11 @@ impl Store {
     pub fn remove<C: Component>(&mut self, id: StableId) -> Result<Option<C>, Error> {
         self.backend.remove(id)
     }
+    /// Admit the exact registered validators and structural guards without
+    /// publishing. Applying the batch repeats these guards against current state.
+    pub fn validate_batch(&self, batch: &Batch) -> Result<(), Error> {
+        self.backend.validate_batch(&batch.edits)
+    }
     /// Preflight all schemas, validators, identities, and the structural counter
     /// before applying sparse writes. Unrelated components remain in place.
     pub fn apply_batch(&mut self, batch: Batch) -> Result<(), Error> {
@@ -698,5 +703,33 @@ mod tests {
             ));
         }
         assert_eq!(live.snapshot().unwrap(), before);
+    }
+    #[test]
+    fn read_only_batch_admission_uses_exact_schema_callbacks_and_publishes_nothing() {
+        let mut schema = Schema::new();
+        schema
+            .register::<u64>("test/number", |value| {
+                if *value > 10 {
+                    return Err(Error::Unavailable);
+                }
+                Ok(())
+            })
+            .unwrap();
+        let mut store = Store::with_schema(schema);
+        store.insert_or_spawn(StableId(1), 5_u64).unwrap();
+        let before = store.clone();
+        let mut admitted = Batch::new();
+        admitted.insert(StableId(1), 10_u64);
+        assert_eq!(store.validate_batch(&admitted), Ok(()));
+        assert_eq!(store, before);
+        let mut rejected = Batch::new();
+        rejected.insert(StableId(1), 9_u64);
+        rejected.insert(StableId(2), 11_u64);
+        assert_eq!(store.validate_batch(&rejected), Err(Error::Unavailable));
+        assert_eq!(store, before);
+        assert_eq!(store.apply_batch(rejected), Err(Error::Unavailable));
+        assert_eq!(store, before);
+        store.apply_batch(admitted).unwrap();
+        assert_eq!(store.get::<u64>(StableId(1)), Some(&10));
     }
 }

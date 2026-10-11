@@ -186,10 +186,13 @@ impl Storage {
     pub(super) fn contains(&self, id: StableId) -> bool {
         self.entities.contains_key(&id)
     }
-    pub(super) fn apply_batch(&mut self, edits: Vec<Box<dyn Edit>>) -> Result<(), Error> {
+    pub(super) fn validate_batch(&self, edits: &[Box<dyn Edit>]) -> Result<(), Error> {
+        self.batch_revision(edits).map(|_| ())
+    }
+    fn batch_revision(&self, edits: &[Box<dyn Edit>]) -> Result<u64, Error> {
         let mut keys = std::collections::BTreeSet::new();
         let mut structural = false;
-        for edit in &edits {
+        for edit in edits {
             let key = edit.key();
             if key.0.0 == 0 || !keys.insert(key) {
                 return Err(Error::InvalidConfiguration(
@@ -205,6 +208,10 @@ impl Storage {
         } else {
             self.structural_revision
         };
+        Ok(revision)
+    }
+    pub(super) fn apply_batch(&mut self, edits: Vec<Box<dyn Edit>>) -> Result<(), Error> {
+        let revision = self.batch_revision(&edits)?;
         for edit in edits {
             edit.publish(self);
         }
