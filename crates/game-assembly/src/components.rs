@@ -31,27 +31,17 @@ impl Components {
         Ok(Self(Store::with_schema(schema()?)))
     }
     pub(crate) fn validate_land(&self) -> Result<(), Error> {
-        let fields = self
-            .0
-            .iter::<game_agriculture::Field>()
-            .map(|(id, _)| id)
-            .collect::<std::collections::BTreeSet<_>>();
-        let plots = self
-            .0
-            .iter::<game_ecology::Plot>()
-            .map(|(id, _)| id)
-            .collect::<std::collections::BTreeSet<_>>();
-        let soils = self
-            .0
-            .iter::<game_land::Soil>()
-            .map(|(id, _)| id)
-            .collect::<std::collections::BTreeSet<_>>();
-        if !fields.is_disjoint(&plots) || soils != fields.union(&plots).copied().collect() {
-            return Err(Error::InvalidSave(
-                "inconsistent shared soil ownership".into(),
-            ));
-        }
-        Ok(())
+        game_land::validate_uses(
+            &self.0,
+            self.0
+                .iter::<game_agriculture::Field>()
+                .map(|(id, _)| game_core::SiteId(id.0))
+                .chain(
+                    self.0
+                        .iter::<game_ecology::Plot>()
+                        .map(|(id, _)| game_core::SiteId(id.0)),
+                ),
+        )
     }
     pub fn person_genome(&self, id: game_api::PersonId) -> Option<&game_genetics::PersonGenome> {
         game_genetics::person_genome(&self.0, id)

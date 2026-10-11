@@ -584,65 +584,27 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn observe_ecology(&mut self) {
-        if self.state.ecology.is_none() {
+        let Some(runtime) = &self.state.ecology else {
             return;
-        }
-        let actors: Vec<_> = self.state.people.iter().map(|person| person.id).collect();
-        for actor in actors {
-            let Some(area) = self.ecology_area(actor) else {
-                continue;
-            };
-            let world = self.state.ecology.as_ref().unwrap();
-            let resources: Vec<_> = world
-                .resources(&self.state.components)
-                .filter(|(_, source)| source.area == area)
-                .map(|(_, source)| {
-                    (
-                        source.id,
-                        ResourceView {
-                            id: source.id,
-                            area,
-                            kind: source.kind,
-                            available: source.remaining,
-                            accessible: source.access.contains(&actor),
-                            custodian: source.custodian,
-                            contamination: source.contamination,
-                            observed_at: self.state.time,
-                        },
-                    )
-                })
-                .collect();
-            let plots: Vec<_> = world
-                .plots(&self.state.components)
-                .filter(|(_, plot)| plot.area == area)
-                .map(|(_, plot)| {
-                    let soil = game_land::soil(&self.state.components, plot.id)
-                        .expect("validated plot soil");
-                    (
-                        plot.id,
-                        PlotView {
-                            id: plot.id,
-                            area,
-                            soil_fertility: soil.fertility,
-                            soil_water: soil.water,
-                            accessible: plot.access.contains(&actor),
-                            custodian: plot.custodian,
-                            observed_at: self.state.time,
-                        },
-                    )
-                })
-                .collect();
-            world
-                .observe_area(&mut self.state.components, actor, area, self.state.time)
-                .expect("valid local observation");
-            let knowledge = self
-                .state
-                .components
-                .ecology_knowledge_mut(actor)
-                .expect("observed knowledge row");
-            knowledge.known_resources.extend(resources);
-            knowledge.known_plots.extend(plots);
-        }
+        };
+        let observers = self
+            .state
+            .people
+            .iter()
+            .filter_map(|person| {
+                self.ecology_area(person.id)
+                    .map(|area| game_ecology::ObserverArea {
+                        actor: person.id,
+                        area,
+                    })
+            })
+            .collect::<Vec<_>>();
+        let prepared = runtime
+            .prepare_local_observations(&self.state.components, self.state.time, &observers)
+            .expect("valid local ecological observations");
+        prepared
+            .commit(runtime, &mut self.state.components)
+            .expect("fresh local ecological observations");
     }
     pub(crate) fn ecology_view(&self, actor: PersonId) -> EcologyView {
         if self.state.ecology.is_none() {
@@ -698,26 +660,13 @@ impl Simulation {
         let Some(world) = &self.state.ecology else {
             return Vec::new();
         };
-        let mut commands = Vec::new();
-        for source in world
-            .resources(&self.state.components)
-            .map(|(_, value)| value)
-            .filter(|s| s.area == area)
-            .take(16)
-        {
-            if !source.access.contains(&actor)
-                && source
-                    .custodian
-                    .is_some_and(|c| c != actor && self.ecology_area(c) == Some(area))
-            {
-                commands.push(Command::Ecology {
-                    action: EcologyAction::RequestAccess {
-                        resource: source.id,
-                    },
-                });
-            }
-        }
-        commands
+        world
+            .local_access_actions(&self.state.components, actor, area, |custodian| {
+                self.ecology_area(custodian)
+            })
+            .into_iter()
+            .map(|action| Command::Ecology { action })
+            .collect()
     }
     pub(crate) fn ecology_quantity_opportunities(
         &self,
@@ -768,55 +717,26 @@ impl Simulation {
             ),
             tool: self.ecology_tool_for_planning(actor, resources),
         };
-        let mut opportunities = Vec::new();
-        for source in world
-            .resources(&self.state.components)
-            .map(|(_, value)| value)
-            .filter(|source| source.area == area)
-            .take(16)
-        {
-            let Ok(upper_bound) =
-                world.gather_upper_bound(&self.state.components, actor, source.id, facts)
-            else {
-                continue;
-            };
-            let unauthorized = !source.access.contains(&actor);
-            let suggested = self
-                .quantity_suggestions(
-                    actor,
-                    source.kind.good(),
-                    upper_bound,
-                    Quantity(1),
-                    None,
-                    None,
-                )
-                .into_iter()
-                .filter(|quantity| {
-                    world
-                        .prepare_gather(
-                            &self.state.components,
-                            actor,
-                            source.id,
-                            *quantity,
-                            unauthorized,
-                            facts,
-                        )
-                        .is_ok()
-                })
-                .collect::<Vec<_>>();
-            if !suggested.is_empty() {
-                opportunities.push(QuantityOpportunity {
-                    action: QuantityAction::Gather {
-                        resource: source.id,
-                        unauthorized,
-                    },
-                    upper_bound,
-                    increment: Quantity(1),
-                    suggested,
-                });
-            }
-        }
-        opportunities
+        world
+            .local_gather_opportunities(
+                &self.state.components,
+                actor,
+                facts,
+                |good, upper_bound| {
+                    self.quantity_suggestions(actor, good, upper_bound, Quantity(1), None, None)
+                },
+            )
+            .into_iter()
+            .map(|opportunity| QuantityOpportunity {
+                action: QuantityAction::Gather {
+                    resource: opportunity.resource,
+                    unauthorized: opportunity.unauthorized,
+                },
+                upper_bound: opportunity.upper_bound,
+                increment: Quantity(1),
+                suggested: opportunity.suggested,
+            })
+            .collect()
     }
     pub(crate) fn ecology_acquisition_offers(
         &self,
@@ -928,10 +848,10 @@ impl Simulation {
         actor: PersonId,
         resources: Option<&equipment::RankingResources>,
     ) -> Vec<Command> {
-        let Some(_) = &self.state.ecology else {
+        let Some(world) = &self.state.ecology else {
             return Vec::new();
         };
-        if !self.ecology_able(actor) || self.state.components.gathering(actor).is_some() {
+        if !self.ecology_able(actor) {
             return Vec::new();
         }
         let Some(mind) = self
@@ -945,41 +865,32 @@ impl Simulation {
         let Some(area) = self.ecology_area(actor) else {
             return Vec::new();
         };
-        let Some(known) = self
-            .state
-            .components
-            .ecology_knowledge(actor)
-            .map(|row| &row.known_resources)
-        else {
-            return Vec::new();
-        };
-        let mut commands = self
+        let local_actions = self
             .available_ecology_commands_for_planning(actor, resources)
             .into_iter()
-            .filter(|command| match command {
-                Command::Ecology {
-                    action:
-                        EcologyAction::Gather { resource, .. }
-                        | EcologyAction::RequestAccess { resource },
-                } => known.contains_key(resource),
-                _ => false,
+            .filter_map(|command| match command {
+                Command::Ecology { action } => Some(action),
+                _ => None,
             })
             .collect::<Vec<_>>();
-        let destinations = known
-            .values()
-            .filter(|source| {
-                source.available.0 > 0
-                    && source.area != area
-                    && decisions::known_path(&mind.routes, area, source.area).is_ok()
-            })
-            .map(|source| source.area)
-            .collect::<BTreeSet<_>>();
-        commands.extend(
-            destinations
-                .into_iter()
-                .map(|destination| Command::Move { destination }),
+        let options = world.autonomous_options(
+            &self.state.components,
+            actor,
+            area,
+            &local_actions,
+            |destination| decisions::known_path(&mind.routes, area, destination).is_ok(),
         );
-        commands
+        options
+            .actions
+            .into_iter()
+            .map(|action| Command::Ecology { action })
+            .chain(
+                options
+                    .destinations
+                    .into_iter()
+                    .map(|destination| Command::Move { destination }),
+            )
+            .collect()
     }
     pub(crate) fn validate_ecology(&self) -> Result<(), Error> {
         let Some(world) = &self.state.ecology else {

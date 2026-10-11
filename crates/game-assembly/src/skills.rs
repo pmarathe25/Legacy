@@ -119,36 +119,23 @@ impl Simulation {
         let Some(world) = &mut self.state.skills else {
             return;
         };
-        for delta in pending {
-            world
-                .apply_practice(&mut self.state.components, delta)
-                .expect("validated practice effect");
-        }
+        world
+            .prepare_practice(&self.state.components, pending)
+            .expect("validated practice effects")
+            .commit(world, &mut self.state.components)
+            .expect("validated practice batch");
     }
 
     pub(crate) fn skill_boundary(&self, limit: SimTime) -> Result<SimTime, Error> {
         let Some(world) = &self.state.skills else {
             return Ok(limit);
         };
-        let mut next = limit;
-        for delta in self.evaluate_skills(limit)? {
-            if let Some(remaining) = world.until_next_level(
-                &self.state.components,
-                delta.actor,
-                delta.skill,
-                delta.mastery_cap,
-            )? && remaining <= delta.milliseconds
-            {
-                next = next.min(SimTime(
-                    self.state
-                        .time
-                        .0
-                        .checked_add(remaining)
-                        .ok_or(Error::Overflow)?,
-                ));
-            }
-        }
-        Ok(next)
+        world.practice_boundary(
+            &self.state.components,
+            self.state.time,
+            limit,
+            &self.evaluate_skills(limit)?,
+        )
     }
 
     pub(crate) fn credit_skill(&mut self, actor: PersonId, skill: Skill, milliseconds: u64) {
