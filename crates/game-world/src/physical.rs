@@ -919,7 +919,7 @@ impl Simulation {
             .health
             .as_ref()
             .into_iter()
-            .flat_map(|world| world.jobs.values())
+            .flat_map(|_| self.state.components.health_jobs().map(|(_, job)| job))
             .filter_map(|job| {
                 let (inventory, quantity) = match job.work {
                     game_health::Work::Drink { source, quantity }

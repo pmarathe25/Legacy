@@ -576,7 +576,6 @@ mod tests {
             quantity: Quantity(277),
             completes,
         };
-        let health = sim.state.health.as_mut().unwrap();
         for (actor, work) in [
             (
                 actors[3],
@@ -594,15 +593,15 @@ mod tests {
                 },
             ),
         ] {
-            health.jobs.insert(
-                actor,
-                game_health::Job {
+            sim.state
+                .components
+                .insert_health_job(game_health::Job {
                     actor,
                     area: AreaId(1),
                     completes,
                     work,
-                },
-            );
+                })
+                .unwrap();
         }
         let care = sim.care_dose(Good::Water).unwrap().0;
         let resources = sim.prepare_ranking_resources().unwrap();

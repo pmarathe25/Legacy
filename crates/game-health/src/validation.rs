@@ -1,6 +1,7 @@
 //! Validation against explicit reference catalogs, without consulting a world.
 use crate::*;
 use game_core::*;
+use game_ecs::Store;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,14 +74,19 @@ fn shelter_shape(capacity: u32, insulation: u16) -> Result<(), Error> {
 /// symptoms, occupancy and water safety may be stale; they are not compared to
 /// current facts. Physical occupancy does not imply access and can exceed
 /// nominal capacity after an actual birth.
-pub fn validate_world(world: &World, catalog: ValidationCatalog<'_>) -> Result<(), Error> {
+pub fn validate_runtime(
+    world: &Runtime,
+    store: &Store,
+    catalog: ValidationCatalog<'_>,
+) -> Result<(), Error> {
     validate_rules(&world.rules).map_err(|_| invalid("invalid rules"))?;
     catalog.past(world.last_review)?;
     for (id, lot) in &world.water {
         lot.validate(catalog.stock(*id, Good::Water)?.quantity.0)?;
     }
-    for (actor, clinical) in &world.clinical {
-        let person = catalog.person(*actor)?;
+    for (actor, clinical) in clinicals(store) {
+        clinical.validate()?;
+        let person = catalog.person(actor)?;
         if clinical.cold_remainder >= 1_000 {
             return Err(invalid("invalid cold fraction"));
         }
@@ -146,8 +152,9 @@ pub fn validate_world(world: &World, catalog: ValidationCatalog<'_>) -> Result<(
         catalog.stock(offer.herbs, Good::Herb)?;
         catalog.stock(offer.water, Good::Water)?;
     }
-    for (actor, job) in &world.jobs {
-        let person = catalog.person(*actor)?;
+    for (actor, job) in jobs(store) {
+        job.validate()?;
+        let person = catalog.person(actor)?;
         catalog.area(job.area)?;
         let kind = match &job.work {
             Work::Drink { source, quantity } => {
@@ -205,7 +212,7 @@ pub fn validate_world(world: &World, catalog: ValidationCatalog<'_>) -> Result<(
             }
             _ => false,
         };
-        if *actor != job.actor
+        if actor != job.actor
             || !person.alive
             || job.completes <= catalog.now
             || !local
@@ -219,7 +226,7 @@ pub fn validate_world(world: &World, catalog: ValidationCatalog<'_>) -> Result<(
         }
     }
     for (actor, person) in catalog.people {
-        if person.health_work.is_some() && !world.jobs.contains_key(actor) {
+        if person.health_work.is_some() && job(store, *actor).is_none() {
             return Err(invalid("health activity without job"));
         }
     }

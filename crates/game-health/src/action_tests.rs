@@ -1,29 +1,26 @@
 use crate::*;
 use game_core::*;
-use std::collections::BTreeMap;
 
-fn world() -> World {
-    World {
+fn world() -> (Runtime, game_ecs::Store) {
+    let runtime = Runtime {
         rules: Rules::fixture(),
-        clinical: BTreeMap::from([
-            (
-                PersonId(1),
-                Clinical {
-                    thirst: 90_000,
-                    ..Clinical::default()
-                },
-            ),
-            (
-                PersonId(2),
-                Clinical {
-                    thirst: 90_000,
-                    ..Clinical::default()
-                },
-            ),
-        ]),
-        ..World::default()
+        ..Runtime::default()
+    };
+    let mut store = component_store();
+    for actor in [PersonId(1), PersonId(2)] {
+        insert_clinical(
+            &mut store,
+            actor,
+            Clinical {
+                thirst: 90_000,
+                ..Clinical::default()
+            },
+        )
+        .unwrap();
     }
+    (runtime, store)
 }
+
 fn actor(id: u64, now: u64) -> ActorFacts {
     ActorFacts {
         actor: PersonId(id),
@@ -46,10 +43,10 @@ fn stock(id: u64, good: Good, q: u64) -> StockFacts {
         tool_available: true,
     }
 }
-fn physiology(world: &World) -> ClinicalPhysiology {
+fn physiology(world: &Runtime) -> ClinicalPhysiology {
     clinical_physiology(&world.rules, 1_000, 0).unwrap()
 }
-fn patient(world: &World) -> PatientFacts {
+fn patient(world: &Runtime) -> PatientFacts {
     PatientFacts {
         id: PersonId(2),
         present: true,
@@ -61,10 +58,11 @@ fn patient(world: &World) -> PatientFacts {
 
 #[test]
 fn drinking_is_timed_and_closing_permission_and_quantity_are_revalidated() {
-    let mut world = world();
+    let (mut world, mut store) = world();
     let water = stock(20, Good::Water, 2_000);
     let change = world
         .prepare_action(
+            &store,
             actor(1, 0),
             &HealthAction::Drink { source: water.id },
             ActionFacts::Drink {
@@ -79,12 +77,13 @@ fn drinking_is_timed_and_closing_permission_and_quantity_are_revalidated() {
             .iter()
             .any(|e| matches!(e, HealthEffect::Consume { .. }))
     );
-    change.commit(&mut world).unwrap();
-    let end = world.jobs[&PersonId(1)].completes;
-    assert_eq!(world.clinical[&PersonId(1)].thirst, 90_000);
+    change.commit(&mut world, &mut store).unwrap();
+    let end = job(&store, PersonId(1)).unwrap().completes;
+    assert_eq!(clinical(&store, PersonId(1)).unwrap().thirst, 90_000);
     assert!(
         world
             .prepare_finish(
+                &store,
                 PersonId(1),
                 SimTime(end.0 - 1),
                 true,
@@ -97,6 +96,7 @@ fn drinking_is_timed_and_closing_permission_and_quantity_are_revalidated() {
     );
     let denied = world
         .prepare_finish(
+            &store,
             PersonId(1),
             end,
             true,
@@ -109,23 +109,24 @@ fn drinking_is_timed_and_closing_permission_and_quantity_are_revalidated() {
             },
         )
         .unwrap();
-    let effects = denied.commit(&mut world).unwrap();
+    let effects = denied.commit(&mut world, &mut store).unwrap();
     assert!(
         !effects
             .iter()
             .any(|e| matches!(e, HealthEffect::Consume { .. }))
     );
-    assert_eq!(world.clinical[&PersonId(1)].thirst, 90_000);
+    assert_eq!(clinical(&store, PersonId(1)).unwrap().thirst, 90_000);
 }
 #[test]
 fn unsafe_intake_prepares_physical_consumption_and_one_actual_infection_dose() {
-    let mut world = world();
+    let (mut world, mut store) = world();
     let water = stock(20, Good::Water, 1_000);
     world
         .water
         .insert(water.id, WaterLot::new(1_000, 1_000_000));
     world
         .prepare_action(
+            &store,
             actor(1, 0),
             &HealthAction::Drink { source: water.id },
             ActionFacts::Drink {
@@ -134,11 +135,12 @@ fn unsafe_intake_prepares_physical_consumption_and_one_actual_infection_dose() {
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
-    let end = world.jobs[&PersonId(1)].completes;
+    let end = job(&store, PersonId(1)).unwrap().completes;
     let effects = world
         .prepare_finish(
+            &store,
             PersonId(1),
             end,
             true,
@@ -148,7 +150,7 @@ fn unsafe_intake_prepares_physical_consumption_and_one_actual_infection_dose() {
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     assert!(effects.contains(&HealthEffect::Consume {
         actor: PersonId(1),
@@ -156,7 +158,8 @@ fn unsafe_intake_prepares_physical_consumption_and_one_actual_infection_dose() {
         quantity: world.rules.drink_quantity
     }));
     assert!(
-        world.clinical[&PersonId(1)]
+        clinical(&store, PersonId(1))
+            .unwrap()
             .illnesses
             .contains_key(&IllnessKind::Enteric)
     );
@@ -165,7 +168,7 @@ fn unsafe_intake_prepares_physical_consumption_and_one_actual_infection_dose() {
 }
 #[test]
 fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_time() {
-    let mut world = world();
+    let (mut world, mut store) = world();
     let herbs = stock(21, Good::Herb, 1_000);
     let water = stock(20, Good::Water, 1_000);
     let treatment = HealthAction::Treat {
@@ -176,6 +179,7 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
     assert!(
         world
             .prepare_action(
+                &store,
                 actor(1, 0),
                 &treatment,
                 ActionFacts::Treat {
@@ -189,6 +193,7 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
     );
     world
         .prepare_action(
+            &store,
             actor(1, 0),
             &HealthAction::OfferTreatment {
                 patient: PersonId(2),
@@ -203,10 +208,11 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     world
         .prepare_action(
+            &store,
             actor(2, 0),
             &HealthAction::AcceptTreatment {
                 caregiver: PersonId(1),
@@ -217,11 +223,12 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     assert!(
         world
             .prepare_action(
+                &store,
                 actor(1, 0),
                 &treatment,
                 ActionFacts::Treat {
@@ -238,6 +245,7 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
     );
     let effects = world
         .prepare_action(
+            &store,
             actor(1, 0),
             &treatment,
             ActionFacts::Treat {
@@ -248,7 +256,7 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     assert_eq!(
         effects
@@ -257,10 +265,11 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
             .count(),
         2
     );
-    assert!(world.clinical[&PersonId(2)].treatment.is_none());
-    let end = world.jobs[&PersonId(1)].completes;
+    assert!(clinical(&store, PersonId(2)).unwrap().treatment.is_none());
+    let end = job(&store, PersonId(1)).unwrap().completes;
     world
         .prepare_finish(
+            &store,
             PersonId(1),
             end,
             true,
@@ -269,13 +278,13 @@ fn treatment_requires_specific_willing_offer_acceptance_supplies_contact_and_tim
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
-    assert!(world.clinical[&PersonId(2)].treatment.is_some());
+    assert!(clinical(&store, PersonId(2)).unwrap().treatment.is_some());
 }
 #[test]
 fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
-    let mut world = world();
+    let (mut world, mut store) = world();
     let herbs = stock(21, Good::Herb, 1_000);
     let water = stock(20, Good::Water, 1_000);
     world.offers.insert(
@@ -291,6 +300,7 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
     );
     world
         .prepare_action(
+            &store,
             actor(1, 0),
             &HealthAction::Treat {
                 patient: PersonId(2),
@@ -305,7 +315,7 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     // Starting consumes this acceptance. A later explicit offer can be refused;
     // refusal also withdraws that patient's participation in a running course.
@@ -322,6 +332,7 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
     );
     let effects = world
         .prepare_action(
+            &store,
             actor(2, 1),
             &HealthAction::RefuseTreatment {
                 caregiver: PersonId(1),
@@ -329,10 +340,10 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
             ActionFacts::RefuseCare,
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
-    assert!(world.jobs.is_empty());
-    assert!(world.clinical[&PersonId(2)].treatment.is_none());
+    assert!(jobs(&store).next().is_none());
+    assert!(clinical(&store, PersonId(2)).unwrap().treatment.is_none());
     assert!(
         !effects
             .iter()
@@ -341,7 +352,7 @@ fn refusal_cancels_the_selected_course_without_refunds_or_fabricated_healing() {
 }
 #[test]
 fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
-    let mut world = world();
+    let (mut world, mut store) = world();
     let timber = stock(22, Good::Timber, 10_000);
     let tool = stock(23, Good::Tool, 1_000);
     let action = HealthAction::BuildShelter {
@@ -353,6 +364,7 @@ fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
     assert!(
         world
             .prepare_action(
+                &store,
                 ActorFacts {
                     tactical: true,
                     ..actor(1, 0)
@@ -364,26 +376,29 @@ fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
     );
     world
         .prepare_action(
+            &store,
             actor(1, 0),
             &action,
             ActionFacts::ShelterBuild { timber, tool },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
-    let end = world.jobs[&PersonId(1)].completes;
+    let end = job(&store, PersonId(1)).unwrap().completes;
     world
         .prepare_finish(
+            &store,
             PersonId(1),
             end,
             true,
             FinishFacts::Shelter { id: ShelterId(30) },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     world
         .prepare_action(
+            &store,
             actor(1, end.0),
             &HealthAction::EnterShelter {
                 shelter: ShelterId(30),
@@ -393,10 +408,11 @@ fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     world
         .prepare_action(
+            &store,
             actor(1, end.0),
             &HealthAction::ShelterAccess {
                 shelter: ShelterId(30),
@@ -408,11 +424,12 @@ fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     assert!(
         world
             .prepare_action(
+                &store,
                 actor(2, end.0),
                 &HealthAction::EnterShelter {
                     shelter: ShelterId(30)
@@ -425,6 +442,7 @@ fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
     );
     world
         .prepare_action(
+            &store,
             actor(1, end.0),
             &HealthAction::ShelterAccess {
                 shelter: ShelterId(30),
@@ -436,16 +454,17 @@ fn shelter_cost_time_access_capacity_and_occupancy_are_owned_decisions() {
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
     assert_eq!(world.occupancy[&PersonId(1)], ShelterId(30));
 }
 #[test]
 fn stale_water_and_owned_state_or_numeric_overflow_fail_without_partial_transition() {
-    let mut world = world();
+    let (mut world, mut store) = world();
     let water = stock(20, Good::Water, 1_000);
     world
         .prepare_action(
+            &store,
             actor(1, 0),
             &HealthAction::Drink { source: water.id },
             ActionFacts::Drink {
@@ -454,11 +473,12 @@ fn stale_water_and_owned_state_or_numeric_overflow_fail_without_partial_transiti
             },
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&mut world, &mut store)
         .unwrap();
-    let end = world.jobs[&PersonId(1)].completes;
+    let end = job(&store, PersonId(1)).unwrap().completes;
     let prepared = world
         .prepare_finish(
+            &store,
             PersonId(1),
             end,
             true,
@@ -469,12 +489,13 @@ fn stale_water_and_owned_state_or_numeric_overflow_fail_without_partial_transiti
         )
         .unwrap();
     world.water.insert(water.id, WaterLot::new(1_000, 10));
-    let before = world.clone();
-    assert!(prepared.commit(&mut world).is_err());
-    assert_eq!(world, before);
+    let before = (world.clone(), store.snapshot().unwrap());
+    assert!(prepared.commit(&mut world, &mut store).is_err());
+    assert_eq!((world.clone(), store.snapshot().unwrap()), before);
     assert!(
         world
             .prepare_action(
+                &store,
                 actor(1, u64::MAX),
                 &HealthAction::Drink { source: water.id },
                 ActionFacts::Drink {

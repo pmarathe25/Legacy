@@ -341,7 +341,12 @@ fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
         let command = Command::Care { child, source };
         let view = sim.observe();
         assert!(view.available_commands.contains(&command));
-        let before_thirst = sim.canonical_state().health.as_ref().unwrap().clinical[&child].thirst;
+        let before_thirst = sim
+            .canonical_state()
+            .components
+            .clinical(child)
+            .expect("clinical state exists")
+            .thirst;
         let before_hunger = sim
             .canonical_state()
             .components
@@ -382,7 +387,11 @@ fn public_water_care_uses_configured_drink_dose_and_replays_an_active_job() {
             Quantity(0)
         );
         assert_eq!(
-            sim.canonical_state().health.as_ref().unwrap().clinical[&child].thirst,
+            sim.canonical_state()
+                .components
+                .clinical(child)
+                .expect("clinical state exists")
+                .thirst,
             (before_thirst + duration.0).saturating_sub(relief)
         );
         assert_eq!(

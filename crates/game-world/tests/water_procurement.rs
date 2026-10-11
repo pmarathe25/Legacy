@@ -1,3 +1,4 @@
+mod support;
 use game_api::{
     AreaId, Command, EventKind, Good, HealthRules, Location, PersonId, Role, SimDuration,
 };
@@ -93,7 +94,7 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
             }
         }
     }
-    state["health"]["clinical"][child.0.to_string()]["thirst"] = (2 * HOUR).into();
+    support::component(&mut snapshot, "health/clinical", child)["thirst"] = (2 * HOUR).into();
     let mut sim = Simulation::load(
         &serde_json::to_vec(&snapshot).unwrap(),
         Execution::default(),
@@ -143,7 +144,14 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
             .vitals
             .alive
     );
-    assert!(sim.canonical_state().health.as_ref().unwrap().clinical[&child].thirst < 2 * HOUR);
+    assert!(
+        sim.canonical_state()
+            .components
+            .clinical(child)
+            .expect("clinical state exists")
+            .thirst
+            < 2 * HOUR
+    );
     Simulation::load(
         &sim.save().unwrap(),
         Execution {
@@ -267,7 +275,14 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
         *state.components.location(actor).expect("location exists"),
         Location::AtArea(AreaId(3))
     );
-    assert!(state.health.as_ref().unwrap().clinical[&actor].thirst < HOUR);
+    assert!(
+        state
+            .components
+            .clinical(actor)
+            .expect("clinical state exists")
+            .thirst
+            < HOUR
+    );
     assert!(state.ecology.as_ref().unwrap().observed_areas[&actor].contains_key(&AreaId(2)));
     let remaining = state
         .ecology
@@ -345,7 +360,14 @@ fn a_present_custodian_can_refuse_water_without_granting_access_or_forcing_a_the
     );
     assert!(!state.events.iter().any(|e| matches!(e.kind,
         EventKind::ResourceCollected {actor:a,..} if a==actor)));
-    assert!(state.health.as_ref().unwrap().clinical[&actor].thirst >= 2 * HOUR);
+    assert!(
+        state
+            .components
+            .clinical(actor)
+            .expect("clinical state exists")
+            .thirst
+            >= 2 * HOUR
+    );
     sim.save().unwrap();
 }
 

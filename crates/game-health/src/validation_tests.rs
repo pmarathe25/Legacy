@@ -3,21 +3,23 @@ use game_core::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 struct Fixture {
-    world: World,
+    world: Runtime,
+    store: game_ecs::Store,
     people: BTreeMap<PersonId, PersonCatalog>,
     areas: BTreeSet<AreaId>,
     inventories: BTreeMap<InventoryId, InventoryCatalog>,
 }
 impl Fixture {
     fn new() -> Self {
-        let mut world = World {
+        let mut store = component_store();
+        let mut world = Runtime {
             rules: Rules::fixture(),
-            ..World::default()
+            ..Runtime::default()
         };
         world
             .water
             .insert(InventoryId(10), WaterLot::new(1_000, 120));
-        world.clinical.insert(PersonId(1), Clinical::default());
+        insert_clinical(&mut store, PersonId(1), Clinical::default()).unwrap();
         world.shelters.insert(
             ShelterId(20),
             Shelter {
@@ -34,8 +36,8 @@ impl Fixture {
         );
         world.occupancy.insert(PersonId(1), ShelterId(20));
         world.occupancy.insert(PersonId(2), ShelterId(20));
-        world.jobs.insert(
-            PersonId(1),
+        insert_job(
+            &mut store,
             Job {
                 actor: PersonId(1),
                 area: AreaId(5),
@@ -46,7 +48,8 @@ impl Fixture {
                     tool: InventoryId(11),
                 },
             },
-        );
+        )
+        .unwrap();
         world.offers.insert(
             (PersonId(1), PersonId(2)),
             Offer {
@@ -100,6 +103,7 @@ impl Fixture {
         );
         Self {
             world,
+            store,
             people: BTreeMap::from([
                 (
                     PersonId(1),
@@ -148,8 +152,9 @@ impl Fixture {
         }
     }
     fn validate(&self) -> Result<(), Error> {
-        validate_world(
+        validate_runtime(
             &self.world,
+            &self.store,
             ValidationCatalog {
                 now: SimTime(60_000),
                 people: &self.people,
@@ -165,19 +170,22 @@ fn current_roundtrip_accepts_stale_beliefs_and_physical_newborn_occupancy() {
     let mut fixture = Fixture::new();
     fixture.validate().unwrap();
     let json = serde_json::to_vec(&fixture.world).unwrap();
-    let restored: World = serde_json::from_slice(&json).unwrap();
+    let restored: Runtime = serde_json::from_slice(&json).unwrap();
     assert_eq!(restored, fixture.world);
     fixture.world = restored;
+    let snapshot = serde_json::to_vec(&fixture.store.snapshot().unwrap()).unwrap();
+    fixture.store = game_ecs::Store::restore(
+        fixture.store.schema().clone(),
+        serde_json::from_slice(&snapshot).unwrap(),
+    )
+    .unwrap();
     fixture.validate().unwrap();
 }
 
 #[test]
 fn unknown_clinical_person_is_rejected_before_any_world_access() {
     let mut fixture = Fixture::new();
-    fixture
-        .world
-        .clinical
-        .insert(PersonId(999), Clinical::default());
+    insert_clinical(&mut fixture.store, PersonId(999), Clinical::default()).unwrap();
     assert!(matches!(fixture.validate(), Err(Error::InvalidSave(_))));
 }
 
@@ -194,7 +202,7 @@ fn pending_job_and_actual_activity_must_match_in_both_directions() {
         .kind = HealthWorkKind::Drink;
     assert!(fixture.validate().is_err());
     let mut fixture = Fixture::new();
-    fixture.world.jobs.clear();
+    remove_job(&mut fixture.store, PersonId(1)).unwrap();
     assert!(fixture.validate().is_err());
     let mut fixture = Fixture::new();
     fixture.people.get_mut(&PersonId(1)).unwrap().health_work = None;
@@ -205,16 +213,12 @@ fn pending_job_and_actual_activity_must_match_in_both_directions() {
 fn corrupted_owned_references_and_numeric_invariants_are_rejected() {
     let corruptions: &[fn(&mut Fixture)] = &[
         |f| {
-            f.world
-                .clinical
-                .get_mut(&PersonId(1))
+            clinical_mut(&mut f.store, PersonId(1))
                 .unwrap()
                 .cold_remainder = 1_000
         },
         |f| {
-            f.world
-                .clinical
-                .get_mut(&PersonId(1))
+            clinical_mut(&mut f.store, PersonId(1))
                 .unwrap()
                 .doses
                 .insert(
@@ -257,7 +261,7 @@ fn corrupted_owned_references_and_numeric_invariants_are_rejected() {
                 .unwrap()
                 .herbs = InventoryId(10)
         },
-        |f| f.world.jobs.get_mut(&PersonId(1)).unwrap().actor = PersonId(2),
+        |f| job_mut(&mut f.store, PersonId(1)).unwrap().actor = PersonId(2),
         |f| f.world.rules.incubation = SimDuration(0),
         |f| f.world.last_review = SimTime(60_001),
         |f| {
@@ -307,7 +311,8 @@ fn dead_clinical_history_can_remain_unreconciled() {
     let mut fixture = Fixture::new();
     fixture.world.occupancy.remove(&PersonId(2));
     fixture.people.get_mut(&PersonId(2)).unwrap().alive = false;
-    fixture.world.clinical.insert(
+    insert_clinical(
+        &mut fixture.store,
         PersonId(2),
         Clinical {
             illnesses: BTreeMap::from([(
@@ -326,7 +331,8 @@ fn dead_clinical_history_can_remain_unreconciled() {
             }),
             ..Clinical::default()
         },
-    );
+    )
+    .unwrap();
     fixture.validate().unwrap();
     fixture.people.get_mut(&PersonId(2)).unwrap().alive = true;
     assert!(fixture.validate().is_err());
@@ -344,7 +350,7 @@ fn stopped_road_work_is_valid_but_cannot_materialize_a_shelter_at_an_endpoint() 
         duration: SimDuration(100),
     };
     fixture.validate().unwrap(); // Boiling with the held toolkit is ordinary hand work.
-    fixture.world.jobs.get_mut(&PersonId(1)).unwrap().work = Work::Shelter {
+    job_mut(&mut fixture.store, PersonId(1)).unwrap().work = Work::Shelter {
         timber_used: Quantity(1_000),
         tool: InventoryId(11),
         capacity: 1,

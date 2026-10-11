@@ -10,6 +10,7 @@ fn schema() -> Result<Schema, Error> {
     game_physiology::register_components(&mut schema)?;
     game_workshop::register_components(&mut schema)?;
     game_skills::register_components(&mut schema)?;
+    game_health::register_components(&mut schema)?;
     game_spatial::register_components(&mut schema)?;
     game_environment::register_components(&mut schema)?;
     game_ecology::register_components(&mut schema)?;
@@ -46,6 +47,43 @@ impl Components {
             ));
         }
         Ok(())
+    }
+    pub fn clinical(&self, actor: game_api::PersonId) -> Option<&game_health::Clinical> {
+        game_health::clinical(&self.0, actor)
+    }
+    pub fn clinical_mut(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Option<&mut game_health::Clinical> {
+        game_health::clinical_mut(&mut self.0, actor)
+    }
+    pub fn clinicals(&self) -> impl Iterator<Item = (game_api::PersonId, &game_health::Clinical)> {
+        game_health::clinicals(&self.0)
+    }
+    pub fn insert_clinical(
+        &mut self,
+        actor: game_api::PersonId,
+        clinical: game_health::Clinical,
+    ) -> Result<(), Error> {
+        game_health::insert_clinical(&mut self.0, actor, clinical)
+    }
+    pub fn health_job(&self, actor: game_api::PersonId) -> Option<&game_health::Job> {
+        game_health::job(&self.0, actor)
+    }
+    pub fn health_job_mut(&mut self, actor: game_api::PersonId) -> Option<&mut game_health::Job> {
+        game_health::job_mut(&mut self.0, actor)
+    }
+    pub fn health_jobs(&self) -> impl Iterator<Item = (game_api::PersonId, &game_health::Job)> {
+        game_health::jobs(&self.0)
+    }
+    pub fn insert_health_job(&mut self, job: game_health::Job) -> Result<(), Error> {
+        game_health::insert_job(&mut self.0, job)
+    }
+    pub fn remove_health_job(
+        &mut self,
+        actor: game_api::PersonId,
+    ) -> Result<Option<game_health::Job>, Error> {
+        game_health::remove_job(&mut self.0, actor)
     }
     pub fn body(&self, actor: game_api::PersonId) -> Option<&game_physiology::Body> {
         game_physiology::body(&self.0, actor)
@@ -260,6 +298,80 @@ mod tests {
         assert!(
             Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()).is_err()
         );
+    }
+
+    #[test]
+    fn health_columns_are_authoritative_and_orphans_fail_restore() {
+        let sim = Simulation::health_fixture(82, Execution::default()).unwrap();
+        let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+        let header = saved["state"]["health"].as_object().unwrap();
+        assert!(!header.contains_key("clinical"));
+        assert!(!header.contains_key("jobs"));
+        assert_eq!(
+            saved["state"]["components"]["columns"]["health/clinical"]
+                .as_array()
+                .unwrap()
+                .len(),
+            sim.state.people.len()
+        );
+        let restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
+        saved["state"]["health"] = serde_json::Value::Null;
+        assert!(
+            Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()).is_err()
+        );
+    }
+
+    #[test]
+    fn stale_clinical_and_health_job_inputs_fail_before_publication() {
+        for change_job in [false, true] {
+            let mut sim = Simulation::health_fixture(83, Execution::default()).unwrap();
+            let actor = sim.state.ruler;
+            let area = sim
+                .state
+                .components
+                .location(actor)
+                .unwrap()
+                .cell()
+                .unwrap();
+            sim.state
+                .components
+                .insert_health_job(game_health::Job {
+                    actor,
+                    area,
+                    completes: SimTime(60_000),
+                    work: game_health::Work::Treat {
+                        patient: actor,
+                        skill_ms: 0,
+                        elapsed: 0,
+                    },
+                })
+                .unwrap();
+            sim.state
+                .components
+                .set_activity(
+                    actor,
+                    game_api::Activity::HealthWork {
+                        kind: game_api::HealthWorkKind::Treat,
+                        completes: SimTime(60_000),
+                    },
+                )
+                .unwrap();
+            sim.physical_query.refresh(&sim.state.components).unwrap();
+            let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
+            if change_job {
+                sim.state
+                    .components
+                    .health_job_mut(actor)
+                    .unwrap()
+                    .completes = SimTime(60_001);
+            } else {
+                sim.state.components.clinical_mut(actor).unwrap().thirst += 1;
+            }
+            let before = sim.canonical_state().clone();
+            assert!(sim.commit_prepared_step(prepared).is_err());
+            assert_eq!(&before, sim.canonical_state());
+        }
     }
 
     #[test]

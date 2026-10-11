@@ -133,8 +133,24 @@ fn pending_drinking_and_clinical_state_survive_current_save_restore_and_slice_ch
 fn malformed_clinical_actor_is_rejected_by_the_save_boundary() {
     let (sim, _) = fixture();
     let mut saved: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    saved["state"]["health"]["clinical"]["9999999"] =
-        serde_json::to_value(game_world::health::Clinical::default()).unwrap();
+    // Attach clinical data to an existing non-person entity, so the snapshot
+    // remains structurally valid and the health actor boundary rejects it.
+    let foreign = sim
+        .canonical_state()
+        .components
+        .sites()
+        .next()
+        .expect("fixture workshop")
+        .0
+        .0;
+    let rows = saved["state"]["components"]["columns"]["health/clinical"]
+        .as_array_mut()
+        .expect("actual clinical component column");
+    rows.push(serde_json::json!({
+        "entity": foreign,
+        "value": game_world::health::Clinical::default(),
+    }));
+    rows.sort_by_key(|row| row["entity"].as_u64().unwrap());
     assert!(matches!(
         Simulation::load(&serde_json::to_vec(&saved).unwrap(), Execution::default()),
         Err(Error::InvalidSave(_))
@@ -306,7 +322,11 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
         Quantity(original_fuel.0 - fuel_cost.0)
     );
     assert!(
-        !whole.canonical_state().health.as_ref().unwrap().clinical[&actor]
+        !whole
+            .canonical_state()
+            .components
+            .clinical(actor)
+            .expect("clinical state exists")
             .illnesses
             .contains_key(&IllnessKind::Enteric)
     );

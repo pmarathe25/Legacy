@@ -1,5 +1,6 @@
 use crate::*;
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug)]
@@ -145,6 +146,13 @@ pub enum HealthEffect {
         patient: PersonId,
     },
 }
+fn related_jobs(store: &Store, actor: PersonId) -> BTreeMap<PersonId, Job> {
+    jobs(store)
+        .filter(|(_, job)| job.actor == actor || job.patient() == Some(actor))
+        .map(|(id, job)| (id, job.clone()))
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedHealth {
     rules: Rules,
@@ -156,12 +164,12 @@ pub struct PreparedHealth {
     shelters: BTreeMap<ShelterId, (Option<Shelter>, Option<Shelter>)>,
     occupancy: BTreeMap<PersonId, (Option<ShelterId>, Option<ShelterId>)>,
     water_knowledge: BTreeMap<PersonId, (Option<Knowledge>, Knowledge)>,
-    job_catalog: Option<BTreeMap<PersonId, Job>>,
+    job_reads: BTreeMap<PersonId, BTreeMap<PersonId, Job>>,
     occupancy_catalog: Option<BTreeMap<PersonId, ShelterId>>,
     effects: Vec<HealthEffect>,
 }
 impl PreparedHealth {
-    fn new(world: &World) -> Self {
+    fn new(world: &Runtime) -> Self {
         Self {
             rules: world.rules.clone(),
             jobs: BTreeMap::new(),
@@ -172,7 +180,7 @@ impl PreparedHealth {
             shelters: BTreeMap::new(),
             occupancy: BTreeMap::new(),
             water_knowledge: BTreeMap::new(),
-            job_catalog: None,
+            job_reads: BTreeMap::new(),
             occupancy_catalog: None,
             effects: Vec::new(),
         }
@@ -180,19 +188,25 @@ impl PreparedHealth {
     pub fn effects(&self) -> &[HealthEffect] {
         &self.effects
     }
-    fn set_job(&mut self, world: &World, id: PersonId, after: Option<Job>) {
-        self.jobs.insert(id, (world.jobs.get(&id).cloned(), after));
+    fn set_job(&mut self, store: &Store, id: PersonId, after: Option<Job>) {
+        self.jobs.insert(id, (job(store, id).cloned(), after));
     }
-    fn set_offer(&mut self, world: &World, key: (PersonId, PersonId), after: Option<Offer>) {
+    fn set_offer(&mut self, world: &Runtime, key: (PersonId, PersonId), after: Option<Offer>) {
         self.offers
             .insert(key, (world.offers.get(&key).cloned(), after));
     }
-    fn cancel(&mut self, world: &World, actor: PersonId) {
-        self.job_catalog = Some(world.jobs.clone());
-        for job in world.jobs.values().filter(|j| {
-            j.actor == actor || matches!(j.work,Work::Treat {patient,..} if patient==actor)
-        }) {
-            self.set_job(world, job.actor, None);
+    fn observe_jobs(&mut self, store: &Store, actor: PersonId) {
+        self.job_reads
+            .entry(actor)
+            .or_insert_with(|| related_jobs(store, actor));
+    }
+    fn cancel(&mut self, world: &Runtime, store: &Store, actor: PersonId) {
+        let related = related_jobs(store, actor);
+        self.job_reads
+            .entry(actor)
+            .or_insert_with(|| related.clone());
+        for (id, job) in related {
+            self.set_job(store, id, None);
             self.effects.push(HealthEffect::ClearWork {
                 actor: job.actor,
                 completes: job.completes,
@@ -208,18 +222,19 @@ impl PreparedHealth {
     }
     fn start(
         &mut self,
-        world: &World,
+        world: &Runtime,
+        store: &Store,
         actor: ActorFacts,
         kind: HealthWorkKind,
         duration: SimDuration,
         work: Work,
     ) -> Result<(), Error> {
         let completes = SimTime(actor.now.0.checked_add(duration.0).ok_or(Error::Overflow)?);
-        self.cancel(world, actor.actor);
+        self.cancel(world, store, actor.actor);
         self.effects
             .push(HealthEffect::Interrupt { actor: actor.actor });
         self.set_job(
-            world,
+            store,
             actor.actor,
             Some(Job {
                 actor: actor.actor,
@@ -237,14 +252,15 @@ impl PreparedHealth {
     }
     fn receive(
         &mut self,
-        world: &World,
+        world: &Runtime,
+        store: &Store,
         patient: PersonId,
         physiology: ClinicalPhysiology,
         now: SimTime,
-        source: StockFacts,
-        quantity: Quantity,
+        intake: (StockFacts, Quantity),
     ) -> Result<(), Error> {
-        let before = world.clinical.get(&patient).cloned().unwrap_or_default();
+        let (source, quantity) = intake;
+        let before = clinical(store, patient).cloned().unwrap_or_default();
         let lot = world
             .water
             .get(&source.id)
@@ -262,13 +278,11 @@ impl PreparedHealth {
             quantity,
             dose,
         )?;
-        self.clinical.insert(
-            patient,
-            (world.clinical.get(&patient).cloned(), Some(after)),
-        );
+        self.clinical
+            .insert(patient, (clinical(store, patient).cloned(), Some(after)));
         Ok(())
     }
-    fn leave(&mut self, world: &World, actors: &[PersonId]) {
+    fn leave(&mut self, world: &Runtime, actors: &[PersonId]) {
         for actor in actors {
             if let Some(shelter) = world.occupancy.get(actor) {
                 self.occupancy.insert(*actor, (Some(*shelter), None));
@@ -279,12 +293,12 @@ impl PreparedHealth {
             }
         }
     }
-    pub fn commit(self, world: &mut World) -> Result<Vec<HealthEffect>, Error> {
+    pub fn validate(&self, world: &Runtime, store: &Store) -> Result<(), Error> {
         if world.rules != self.rules
             || self
-                .job_catalog
-                .as_ref()
-                .is_some_and(|before| before != &world.jobs)
+                .job_reads
+                .iter()
+                .any(|(actor, before)| *before != related_jobs(store, *actor))
             || self
                 .occupancy_catalog
                 .as_ref()
@@ -292,7 +306,7 @@ impl PreparedHealth {
             || self
                 .jobs
                 .iter()
-                .any(|(id, (before, _))| world.jobs.get(id) != before.as_ref())
+                .any(|(id, (before, _))| job(store, *id) != before.as_ref())
             || self
                 .offers
                 .iter()
@@ -300,7 +314,7 @@ impl PreparedHealth {
             || self
                 .clinical
                 .iter()
-                .any(|(id, (before, _))| world.clinical.get(id) != before.as_ref())
+                .any(|(id, (before, _))| clinical(store, *id) != before.as_ref())
             || self
                 .water
                 .iter()
@@ -324,6 +338,32 @@ impl PreparedHealth {
         {
             return Err(Error::Unavailable);
         }
+        Ok(())
+    }
+    pub fn commit(
+        self,
+        world: &mut Runtime,
+        store: &mut Store,
+    ) -> Result<Vec<HealthEffect>, Error> {
+        self.validate(world, store)?;
+        let mut batch = Batch::new();
+        for (id, (_, after)) in &self.jobs {
+            if let Some(value) = after {
+                value.validate()?;
+                batch.insert(StableId(id.0), value.clone());
+            } else {
+                batch.remove::<Job>(StableId(id.0));
+            }
+        }
+        for (id, (_, after)) in &self.clinical {
+            if let Some(value) = after {
+                value.validate()?;
+                batch.insert(StableId(id.0), value.clone());
+            } else {
+                batch.remove::<Clinical>(StableId(id.0));
+            }
+        }
+        store.apply_batch(batch)?;
         macro_rules! install {
             ($patch:expr,$target:expr) => {
                 for (id, (_, after)) in $patch {
@@ -335,9 +375,7 @@ impl PreparedHealth {
                 }
             };
         }
-        install!(self.jobs, world.jobs);
         install!(self.offers, world.offers);
-        install!(self.clinical, world.clinical);
         install!(self.water, world.water);
         install!(self.shelters, world.shelters);
         install!(self.occupancy, world.occupancy);
@@ -347,24 +385,23 @@ impl PreparedHealth {
         Ok(self.effects)
     }
 }
-impl World {
-    pub fn prepare_cancel(&self, actor: PersonId) -> PreparedHealth {
+impl Runtime {
+    pub fn prepare_cancel(&self, store: &Store, actor: PersonId) -> PreparedHealth {
         let mut change = PreparedHealth::new(self);
-        change.cancel(self, actor);
+        change.cancel(self, store, actor);
         change
     }
-    pub fn prepare_leave(&self, actors: &[PersonId]) -> PreparedHealth {
+    pub fn prepare_leave(&self, _store: &Store, actors: &[PersonId]) -> PreparedHealth {
         let mut change = PreparedHealth::new(self);
         change.leave(self, actors);
         change
     }
-    pub fn patient_busy(&self, actor: PersonId) -> bool {
-        self.jobs
-            .values()
-            .any(|job| matches!(job.work,Work::Treat {patient,..} if patient==actor))
+    pub fn patient_busy(&self, store: &Store, actor: PersonId) -> bool {
+        jobs(store).any(|(_, job)| matches!(job.work,Work::Treat {patient,..} if patient==actor))
     }
     pub fn prepare_action(
         &self,
+        store: &Store,
         actor: ActorFacts,
         action: &HealthAction,
         facts: ActionFacts,
@@ -412,6 +449,7 @@ impl World {
                 preflight_intake(r, actor.now)?;
                 change.start(
                     self,
+                    store,
                     actor,
                     HealthWorkKind::Drink,
                     r.drinking_time,
@@ -438,6 +476,7 @@ impl World {
                 }
                 change.start(
                     self,
+                    store,
                     actor,
                     HealthWorkKind::Boil,
                     r.boiling_time,
@@ -480,6 +519,7 @@ impl World {
                 );
                 change.start(
                     self,
+                    store,
                     actor,
                     HealthWorkKind::Shelter,
                     duration,
@@ -545,7 +585,7 @@ impl World {
                 }
                 change.occupancy_catalog = Some(self.occupancy.clone());
                 change.leave(self, &leaving);
-                change.cancel(self, actor.actor);
+                change.cancel(self, store, actor.actor);
                 change.occupancy.insert(
                     actor.actor,
                     (self.occupancy.get(&actor.actor).copied(), Some(*shelter)),
@@ -585,6 +625,7 @@ impl World {
                 }
                 if let Some((herbs, water)) = supplies {
                     return self.prepare_action(
+                        store,
                         giver,
                         &HealthAction::OfferTreatment {
                             patient: actor.actor,
@@ -665,7 +706,7 @@ impl World {
                 if offer.accepted || offer.expires <= actor.now || !giver_present || !contact {
                     return Err(Error::Unavailable);
                 }
-                change.cancel(self, actor.actor);
+                change.cancel(self, store, actor.actor);
                 change.set_offer(
                     self,
                     (*caregiver, actor.actor),
@@ -689,7 +730,7 @@ impl World {
                 if !self.offers.contains_key(&(*caregiver, actor.actor)) {
                     return Err(Error::Unavailable);
                 }
-                change.cancel(self, actor.actor);
+                change.cancel(self, store, actor.actor);
                 change.effects.push(HealthEffect::Refused {
                     caregiver: *caregiver,
                     patient: actor.actor,
@@ -712,7 +753,7 @@ impl World {
                     || !target.present
                     || !target.contact
                     || medicine == 0
-                    || self.patient_busy(*patient)
+                    || self.patient_busy(store, *patient)
                     || !plants.permits(*herbs, Good::Herb, r.treatment_herbs)
                     || !stock.permits(*water, Good::Water, r.treatment_water)
                     || *patient != actor.actor
@@ -733,8 +774,10 @@ impl World {
                     .and_then(|t| t.checked_add(r.treatment_duration.0))
                     .ok_or(Error::Overflow)?;
                 preflight_intake(r, actor.now)?;
+                change.observe_jobs(store, *patient);
                 change.start(
                     self,
+                    store,
                     actor,
                     HealthWorkKind::Treat,
                     r.treatment_time,
@@ -746,11 +789,11 @@ impl World {
                 )?;
                 change.receive(
                     self,
+                    store,
                     *patient,
                     target.physiology,
                     actor.now,
-                    stock,
-                    r.treatment_water,
+                    (stock, r.treatment_water),
                 )?;
                 change.effects.push(HealthEffect::Consume {
                     actor: actor.actor,
@@ -830,20 +873,21 @@ impl Job {
         }
     }
 }
-impl World {
+impl Runtime {
     pub fn prepare_finish(
         &self,
+        store: &Store,
         actor: PersonId,
         now: SimTime,
         valid: bool,
         facts: FinishFacts,
     ) -> Result<PreparedHealth, Error> {
-        let job = self.jobs.get(&actor).ok_or(Error::Unavailable)?;
+        let job = job(store, actor).ok_or(Error::Unavailable)?;
         if job.completes > now {
             return Err(Error::Unavailable);
         }
         let mut change = PreparedHealth::new(self);
-        change.set_job(self, actor, None);
+        change.set_job(store, actor, None);
         change.effects.push(HealthEffect::ClearWork {
             actor,
             completes: job.completes,
@@ -856,7 +900,7 @@ impl World {
                 if !water.permits(*source, Good::Water, *quantity) {
                     return Ok(change);
                 }
-                change.receive(self, actor, physiology, now, water, *quantity)?;
+                change.receive(self, store, actor, physiology, now, (water, *quantity))?;
                 change.effects.push(HealthEffect::Consume {
                     actor,
                     source: *source,
@@ -951,11 +995,11 @@ impl World {
                 {
                     return Ok(change);
                 }
-                let mut after = self.clinical.get(patient).cloned().unwrap_or_default();
+                let mut after = clinical(store, *patient).cloned().unwrap_or_default();
                 after.treatment = Some(treatment_course(&self.rules, now, *skill_ms, *elapsed)?);
                 change
                     .clinical
-                    .insert(*patient, (self.clinical.get(patient).cloned(), Some(after)));
+                    .insert(*patient, (clinical(store, *patient).cloned(), Some(after)));
                 change.effects.push(HealthEffect::Treated {
                     caregiver: actor,
                     patient: *patient,
@@ -974,11 +1018,10 @@ impl World {
         }
         change
     }
-    pub fn reserved_stock(&self, source: InventoryId, except: PersonId) -> u64 {
-        self.jobs
-            .values()
-            .filter(|j| j.actor != except)
-            .filter_map(|j| match j.work {
+    pub fn reserved_stock(&self, store: &Store, source: InventoryId, except: PersonId) -> u64 {
+        jobs(store)
+            .filter(|(_, job)| job.actor != except)
+            .filter_map(|(_, j)| match j.work {
                 Work::Drink {
                     source: id,
                     quantity,
@@ -992,10 +1035,9 @@ impl World {
             })
             .fold(0, u64::saturating_add)
     }
-    pub fn allocation_bound(&self, next: SimTime) -> u64 {
-        self.jobs
-            .values()
-            .filter(|job| job.completes <= next && matches!(job.work, Work::Shelter { .. }))
+    pub fn allocation_bound(&self, store: &Store, next: SimTime) -> u64 {
+        jobs(store)
+            .filter(|(_, job)| job.completes <= next && matches!(job.work, Work::Shelter { .. }))
             .count() as u64
     }
 }

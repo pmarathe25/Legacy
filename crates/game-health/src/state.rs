@@ -4,15 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
     pub water: BTreeMap<InventoryId, WaterLot>,
     pub rules: Rules,
-    pub clinical: BTreeMap<PersonId, Clinical>,
     pub shelters: BTreeMap<ShelterId, Shelter>,
     pub occupancy: BTreeMap<PersonId, ShelterId>,
     #[serde(with = "offer_rows")]
     pub offers: BTreeMap<(PersonId, PersonId), Offer>,
-    pub jobs: BTreeMap<PersonId, Job>,
     pub known: BTreeMap<PersonId, Knowledge>,
     pub last_review: SimTime,
 }
@@ -36,6 +35,7 @@ pub struct Course {
     pub healing: u16,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Clinical {
     pub thirst: u64,
     pub cold: u64,
@@ -91,6 +91,7 @@ pub enum Work {
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Job {
     pub actor: PersonId,
     pub area: AreaId,

@@ -1,5 +1,6 @@
 use crate::*;
 use game_core::*;
+use game_ecs::Store;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HealthConsumer {
@@ -41,7 +42,7 @@ pub struct NeedFacts {
     pub sheltered: bool,
     pub can_enter_shelter: bool,
 }
-impl World {
+impl Runtime {
     fn present_supply<'a>(
         &self,
         input: &HealthPlanning<'a>,
@@ -57,8 +58,8 @@ impl World {
                 && stock.fact.learned_at <= input.now
         })
     }
-    fn ready_for_need(&self, actor: PersonId) -> bool {
-        !self.jobs.contains_key(&actor) && !self.patient_busy(actor)
+    fn ready_for_need(&self, store: &Store, actor: PersonId) -> bool {
+        job(store, actor).is_none() && !self.patient_busy(store, actor)
     }
     fn water_requires_preparation(
         &self,
@@ -79,11 +80,12 @@ impl World {
     /// risk preference. The host revalidates body and toolkit allocation.
     pub fn boiling_action(
         &self,
+        store: &Store,
         actor: PersonId,
         source: InventoryId,
         input: &HealthPlanning<'_>,
     ) -> Option<HealthAction> {
-        if !self.ready_for_need(actor) {
+        if !self.ready_for_need(store, actor) {
             return None;
         }
         let water = input.stocks.iter().find(|stock| {
@@ -108,12 +110,13 @@ impl World {
     }
     pub fn consume_supply(
         &self,
+        store: &Store,
         actor: PersonId,
         source: InventoryId,
         input: &HealthPlanning<'_>,
         consumer: HealthConsumer,
     ) -> Option<HealthAction> {
-        if !self.ready_for_need(actor) {
+        if !self.ready_for_need(store, actor) {
             return None;
         }
         match consumer {
@@ -128,7 +131,7 @@ impl World {
                         && stock.fact.learned_at <= input.now
                 })?;
                 if self.water_requires_preparation(actor, source, input) {
-                    if let Some(action) = self.boiling_action(actor, source, input) {
+                    if let Some(action) = self.boiling_action(store, actor, source, input) {
                         return Some(action);
                     }
                     if stock.fact.quantity > self.rules.drink_quantity
@@ -147,11 +150,16 @@ impl World {
             }
         }
     }
-    pub fn plan_need(&self, need: NeedFacts, input: &HealthPlanning<'_>) -> Option<HealthIntent> {
-        if !self.ready_for_need(need.actor) {
+    pub fn plan_need(
+        &self,
+        store: &Store,
+        need: NeedFacts,
+        input: &HealthPlanning<'_>,
+    ) -> Option<HealthIntent> {
+        if !self.ready_for_need(store, need.actor) {
             return None;
         }
-        let clinical = self.clinical.get(&need.actor)?;
+        let clinical = clinical(store, need.actor)?;
         if clinical.thirst >= need.drink_relief / 4 {
             let stock = input
                 .stocks
@@ -173,6 +181,7 @@ impl World {
                 });
             if let Some(stock) = stock {
                 if let Some(action) = self.consume_supply(
+                    store,
                     need.actor,
                     stock.fact.inventory,
                     input,

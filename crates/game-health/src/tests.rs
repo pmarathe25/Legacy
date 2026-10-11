@@ -336,9 +336,11 @@ fn real_medical_work_has_explicit_progress_and_borrowed_level_duration() {
 }
 #[test]
 fn owned_state_roundtrips_current_semantic_data() {
-    let mut world = World::default();
+    let mut world = Runtime::default();
     world.water.insert(InventoryId(7), WaterLot::new(10, 2));
-    world.clinical.insert(
+    let mut store = component_store();
+    insert_clinical(
+        &mut store,
         PersonId(1),
         Clinical {
             thirst: 120,
@@ -346,7 +348,8 @@ fn owned_state_roundtrips_current_semantic_data() {
             cold_remainder: 31,
             ..Clinical::default()
         },
-    );
+    )
+    .unwrap();
     world.offers.insert(
         (PersonId(1), PersonId(2)),
         Offer {
@@ -360,8 +363,17 @@ fn owned_state_roundtrips_current_semantic_data() {
     );
     let json = serde_json::to_value(&world).unwrap();
     assert!(json["offers"].is_array());
-    assert_eq!(serde_json::from_value::<World>(json).unwrap(), world);
-    assert!(serde_json::from_value::<World>(serde_json::json!({"water":{}})).is_err());
+    assert!(json.get("clinical").is_none());
+    assert!(json.get("jobs").is_none());
+    assert_eq!(serde_json::from_value::<Runtime>(json).unwrap(), world);
+    let snapshot = serde_json::to_vec(&store.snapshot().unwrap()).unwrap();
+    let restored = game_ecs::Store::restore(
+        store.schema().clone(),
+        serde_json::from_slice(&snapshot).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored, store);
+    assert!(serde_json::from_value::<Runtime>(serde_json::json!({"water":{}})).is_err());
 }
 
 #[test]

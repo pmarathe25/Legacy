@@ -169,7 +169,7 @@ pub struct CanonicalState {
     #[serde(default)]
     pub ecology: Option<ecology::Runtime>,
     #[serde(default)]
-    pub health: Option<health::World>,
+    pub health: Option<health::Runtime>,
     #[serde(default)]
     pub social: Option<social::World>,
     #[serde(default)]
@@ -1646,6 +1646,13 @@ impl Simulation {
             arbitration_ns,
         } = prepared;
         self.validate_physical_output(&physical_output)?;
+        if let Some(batch) = &health_output {
+            batch.validate(
+                self.state.health.as_ref().ok_or(Error::Unavailable)?,
+                &self.state.components,
+            )?;
+        }
+
         if let Some(step) = &environment_output {
             self.state
                 .environment

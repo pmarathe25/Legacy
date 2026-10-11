@@ -557,7 +557,7 @@ fn main() {
         for (actor, body) in state.components.bodies() {
             let actor = &actor;
             if !body.vitals.alive {
-                let clinical = &state.health.as_ref().unwrap().clinical[actor];
+                let clinical = state.components.clinical(*actor).unwrap();
                 eprintln!(
                     "dead_body actor={} ruler={} hunger={} fatigue={} thirst={} cold={} illnesses={} age_ms={} activity={:?}",
                     actor.0,

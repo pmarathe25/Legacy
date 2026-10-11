@@ -27,18 +27,22 @@ fn planning(stocks: &[RememberedStock]) -> HealthPlanning<'_> {
         stocks,
     }
 }
-fn thirsty() -> World {
-    let mut world = World::default();
-    world.clinical.insert(
+fn thirsty() -> (Runtime, game_ecs::Store) {
+    let world = Runtime::default();
+    let mut store = component_store();
+    insert_clinical(
+        &mut store,
         PersonId(1),
         Clinical {
             thirst: world.rules.drink_relief,
             ..Clinical::default()
         },
-    );
-    world
+    )
+    .unwrap();
+    (world, store)
 }
-fn need(world: &World) -> NeedFacts {
+
+fn need(world: &Runtime) -> NeedFacts {
     NeedFacts {
         actor: PersonId(1),
         drink_relief: world.rules.drink_relief,
@@ -48,10 +52,10 @@ fn need(world: &World) -> NeedFacts {
 }
 #[test]
 fn missing_local_intake_declares_resource_need_without_choosing_a_source_route_or_collecting() {
-    let world = thirsty();
+    let (world, store) = thirsty();
     for stocks in [vec![], vec![stock(10, Good::Water, 1_000, false, false)]] {
         assert_eq!(
-            world.plan_need(need(&world), &planning(&stocks)),
+            world.plan_need(&store, need(&world), &planning(&stocks)),
             Some(HealthIntent::Supply(SupplyNeed {
                 good: Good::Water,
                 quantity: Quantity(1_000),
@@ -64,14 +68,14 @@ fn missing_local_intake_declares_resource_need_without_choosing_a_source_route_o
 }
 #[test]
 fn unsafe_area_water_declares_a_separated_serving_then_actual_held_water_can_be_prepared() {
-    let world = thirsty();
+    let (world, store) = thirsty();
     let mut stocks = vec![
         stock(10, Good::Water, 5_000, true, false),
         stock(11, Good::Timber, 1_000, true, false),
         stock(12, Good::Tool, 1_000, true, false),
     ];
     assert_eq!(
-        world.plan_need(need(&world), &planning(&stocks)),
+        world.plan_need(&store, need(&world), &planning(&stocks)),
         Some(HealthIntent::Supply(SupplyNeed {
             good: Good::Water,
             quantity: Quantity(1_000),
@@ -82,6 +86,7 @@ fn unsafe_area_water_declares_a_separated_serving_then_actual_held_water_can_be_
     );
     assert_eq!(
         world.consume_supply(
+            &store,
             PersonId(1),
             InventoryId(10),
             &planning(&stocks),
@@ -91,7 +96,7 @@ fn unsafe_area_water_declares_a_separated_serving_then_actual_held_water_can_be_
     );
     stocks.push(stock(20, Good::Water, 1_000, true, true));
     assert_eq!(
-        world.plan_need(need(&world), &planning(&stocks)),
+        world.plan_need(&store, need(&world), &planning(&stocks)),
         Some(HealthIntent::Action(HealthAction::Boil {
             source: InventoryId(20),
             fuel: InventoryId(11),
@@ -99,17 +104,18 @@ fn unsafe_area_water_declares_a_separated_serving_then_actual_held_water_can_be_
         }))
     );
     assert_eq!(
-        world.clinical[&PersonId(1)].thirst,
+        clinical(&store, PersonId(1)).unwrap().thirst,
         world.rules.drink_relief
     );
 }
 #[test]
 fn native_consumer_rejects_distant_or_insufficient_water_and_remains_a_real_timed_action() {
-    let world = thirsty();
+    let (world, store) = thirsty();
     for (quantity, here) in [(1_000, false), (999, true)] {
         let stocks = [stock(10, Good::Water, quantity, here, true)];
         assert_eq!(
             world.consume_supply(
+                &store,
                 PersonId(1),
                 InventoryId(10),
                 &planning(&stocks),
@@ -121,6 +127,7 @@ fn native_consumer_rejects_distant_or_insufficient_water_and_remains_a_real_time
     let stocks = [stock(10, Good::Water, 1_000, true, true)];
     assert_eq!(
         world.consume_supply(
+            &store,
             PersonId(1),
             InventoryId(10),
             &planning(&stocks),
@@ -131,13 +138,13 @@ fn native_consumer_rejects_distant_or_insufficient_water_and_remains_a_real_time
         })
     );
     assert_eq!(
-        world.clinical[&PersonId(1)].thirst,
+        clinical(&store, PersonId(1)).unwrap().thirst,
         world.rules.drink_relief
     );
 }
 #[test]
 fn known_safe_supply_avoids_purification_without_granting_access_or_changing_water() {
-    let mut world = thirsty();
+    let (mut world, store) = thirsty();
     world.known.entry(PersonId(1)).or_default().water.insert(
         InventoryId(10),
         WaterSafetyView {
@@ -153,7 +160,7 @@ fn known_safe_supply_avoids_purification_without_granting_access_or_changing_wat
         stock(12, Good::Tool, 1_000, true, false),
     ];
     assert_eq!(
-        world.plan_need(need(&world), &planning(&stocks)),
+        world.plan_need(&store, need(&world), &planning(&stocks)),
         Some(HealthIntent::Action(HealthAction::Drink {
             source: InventoryId(10)
         }))
@@ -195,7 +202,8 @@ fn exposure_pressure_tracks_physical_thresholds_without_selecting_a_provider() {
 
 #[test]
 fn boiling_is_an_available_physical_option_without_thirst_or_personality_policy() {
-    let world = World::default();
+    let world = Runtime::default();
+    let store = component_store();
     let stocks = [
         stock(10, Good::Water, 1_000, true, false),
         stock(11, Good::Timber, 1_000, true, false),
@@ -210,7 +218,7 @@ fn boiling_is_an_available_physical_option_without_thirst_or_personality_policy(
         let mut input = planning(&stocks);
         input.values.risk_tolerance = risk_tolerance;
         assert_eq!(
-            world.boiling_action(PersonId(1), InventoryId(10), &input),
+            world.boiling_action(&store, PersonId(1), InventoryId(10), &input),
             expected
         );
     }
@@ -221,7 +229,7 @@ fn boiling_is_an_available_physical_option_without_thirst_or_personality_policy(
     ];
     assert!(
         world
-            .boiling_action(PersonId(1), InventoryId(10), &planning(&bulk))
+            .boiling_action(&store, PersonId(1), InventoryId(10), &planning(&bulk))
             .is_none()
     );
     let absent_tool = [
@@ -231,8 +239,13 @@ fn boiling_is_an_available_physical_option_without_thirst_or_personality_policy(
     ];
     assert!(
         world
-            .boiling_action(PersonId(1), InventoryId(10), &planning(&absent_tool))
+            .boiling_action(
+                &store,
+                PersonId(1),
+                InventoryId(10),
+                &planning(&absent_tool)
+            )
             .is_none()
     );
-    assert!(world.clinical.is_empty());
+    assert!(clinicals(&store).next().is_none());
 }
