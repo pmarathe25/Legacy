@@ -185,7 +185,7 @@ impl Store {
     pub fn validate_batch(&self, batch: &Batch) -> Result<(), Error> {
         self.backend.validate_batch(&batch.edits)
     }
-    /// Preflight all schemas, validators, identities, and the structural counter
+    /// Preflight all schemas, validators, identities, and structural changes
     /// before applying sparse writes. Unrelated components remain in place.
     pub fn apply_batch(&mut self, batch: Batch) -> Result<(), Error> {
         self.backend.apply_batch(batch.edits)

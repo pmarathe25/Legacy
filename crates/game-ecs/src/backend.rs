@@ -92,11 +92,27 @@ impl Registration {
         }
     }
 }
+// A query retains its generation allocation, so an old token cannot be
+// confused with a later allocation even after arbitrarily many changes.
+#[derive(Clone)]
+struct Generation(Arc<()>);
+impl Default for Generation {
+    fn default() -> Self {
+        Self(Arc::new(()))
+    }
+}
+impl PartialEq for Generation {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Generation {}
+
 pub(super) struct Storage {
     world: World,
     entities: BTreeMap<StableId, Entity>,
     schema: Schema,
-    structural_revision: u64,
+    structural_revision: Generation,
 }
 // Pending operations are erased only inside this adapter. They validate against
 // typed registrations and publish into native typed columns, never a value bag.
@@ -171,7 +187,7 @@ impl Storage {
             world,
             entities: BTreeMap::new(),
             schema,
-            structural_revision: 0,
+            structural_revision: Generation::default(),
         }
     }
     pub(super) fn schema(&self) -> &Schema {
@@ -187,9 +203,9 @@ impl Storage {
         self.entities.contains_key(&id)
     }
     pub(super) fn validate_batch(&self, edits: &[Box<dyn Edit>]) -> Result<(), Error> {
-        self.batch_revision(edits).map(|_| ())
+        self.batch_is_structural(edits).map(|_| ())
     }
-    fn batch_revision(&self, edits: &[Box<dyn Edit>]) -> Result<u64, Error> {
+    fn batch_is_structural(&self, edits: &[Box<dyn Edit>]) -> Result<bool, Error> {
         let mut keys = std::collections::BTreeSet::new();
         let mut structural = false;
         for edit in edits {
@@ -201,21 +217,16 @@ impl Storage {
             }
             structural |= edit.preflight(self)?;
         }
-        let revision = if structural {
-            self.structural_revision
-                .checked_add(1)
-                .ok_or(Error::Overflow)?
-        } else {
-            self.structural_revision
-        };
-        Ok(revision)
+        Ok(structural)
     }
     pub(super) fn apply_batch(&mut self, edits: Vec<Box<dyn Edit>>) -> Result<(), Error> {
-        let revision = self.batch_revision(&edits)?;
+        let revision = self.batch_is_structural(&edits)?.then(Generation::default);
         for edit in edits {
             edit.publish(self);
         }
-        self.structural_revision = revision;
+        if let Some(revision) = revision {
+            self.structural_revision = revision;
+        }
         Ok(())
     }
     pub(super) fn spawn(&mut self, id: StableId) -> Result<(), Error> {
@@ -225,13 +236,12 @@ impl Storage {
         if self.contains(id) {
             return Err(Error::SequenceConflict);
         }
-        let revision = self
-            .structural_revision
-            .checked_add(1)
-            .ok_or(Error::Overflow)?;
+        let revision = Some(Generation::default());
         let entity = self.world.spawn(NativeId(id)).id();
         self.entities.insert(id, entity);
-        self.structural_revision = revision;
+        if let Some(revision) = revision {
+            self.structural_revision = revision;
+        }
         Ok(())
     }
     pub(super) fn get<C: Component>(&self, id: StableId) -> Option<&C> {
@@ -274,14 +284,9 @@ impl Storage {
         if existing.is_none() && !create_missing {
             return Err(Error::Unavailable);
         }
-        let revision =
-            if existing.is_some_and(|entity| self.world.get::<Native<C>>(entity).is_some()) {
-                self.structural_revision
-            } else {
-                self.structural_revision
-                    .checked_add(1)
-                    .ok_or(Error::Overflow)?
-            };
+        let revision = existing
+            .is_none_or(|entity| self.world.get::<Native<C>>(entity).is_none())
+            .then(Generation::default);
         let entity = match existing {
             Some(entity) => entity,
             None => {
@@ -291,7 +296,9 @@ impl Storage {
             }
         };
         self.world.entity_mut(entity).insert(Native(component));
-        self.structural_revision = revision;
+        if let Some(revision) = revision {
+            self.structural_revision = revision;
+        }
         Ok(())
     }
     pub(super) fn remove<C: Component>(&mut self, id: StableId) -> Result<Option<C>, Error> {
@@ -300,16 +307,15 @@ impl Storage {
         if self.world.get::<Native<C>>(entity).is_none() {
             return Ok(None);
         }
-        let revision = self
-            .structural_revision
-            .checked_add(1)
-            .ok_or(Error::Overflow)?;
+        let revision = Some(Generation::default());
         let removed = self
             .world
             .entity_mut(entity)
             .take::<Native<C>>()
             .map(|component| component.0);
-        self.structural_revision = revision;
+        if let Some(revision) = revision {
+            self.structural_revision = revision;
+        }
         Ok(removed)
     }
     pub(super) fn insert_pair_or_spawn<A: Component, B: Component>(
@@ -341,13 +347,7 @@ impl Storage {
             self.world.get::<Native<A>>(entity).is_none()
                 || self.world.get::<Native<B>>(entity).is_none()
         });
-        let revision = if structural {
-            self.structural_revision
-                .checked_add(1)
-                .ok_or(Error::Overflow)?
-        } else {
-            self.structural_revision
-        };
+        let revision = structural.then(Generation::default);
         let entity = match existing {
             Some(entity) => entity,
             None => {
@@ -359,7 +359,9 @@ impl Storage {
         self.world
             .entity_mut(entity)
             .insert((Native(first), Native(second)));
-        self.structural_revision = revision;
+        if let Some(revision) = revision {
+            self.structural_revision = revision;
+        }
         Ok(())
     }
     pub(super) fn iter<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> {
@@ -474,16 +476,16 @@ macro_rules! queries {
         pub(super) struct $name<$($type: Component),+> {
             state: QueryState<(&'static NativeId, $(&'static Native<$type>),+)>,
             world: WorldId,
-            revision: u64,
+            revision: Generation,
         }
         impl<$($type: Component),+> $name<$($type),+> {
             pub(super) fn new(store: &mut Storage) -> Self {
-                Self { state: store.world.query(), world: store.world.id(), revision: store.structural_revision }
+                Self { state: store.world.query(), world: store.world.id(), revision: store.structural_revision.clone() }
             }
             pub(super) fn refresh(&mut self, store: &Storage) -> Result<(), Error> {
                 if self.world != store.world.id() { return Err(cache_error()); }
                 self.state.update_archetypes(&store.world);
-                self.revision = store.structural_revision;
+                self.revision = store.structural_revision.clone();
                 Ok(())
             }
             pub(super) fn iter<'a>(&'a self, store: &'a Storage) -> Result<impl Iterator<Item = (StableId, $(&'a $type),+)> + 'a, Error> {
@@ -506,14 +508,14 @@ type OptionalState<A, B, C> = QueryState<(
 pub(super) struct Query2Optional<A: Component, B: Component, C: Component> {
     state: OptionalState<A, B, C>,
     world: WorldId,
-    revision: u64,
+    revision: Generation,
 }
 impl<A: Component, B: Component, C: Component> Query2Optional<A, B, C> {
     pub(super) fn new(store: &mut Storage) -> Self {
         Self {
             state: store.world.query(),
             world: store.world.id(),
-            revision: store.structural_revision,
+            revision: store.structural_revision.clone(),
         }
     }
     pub(super) fn refresh(&mut self, store: &Storage) -> Result<(), Error> {
@@ -521,7 +523,7 @@ impl<A: Component, B: Component, C: Component> Query2Optional<A, B, C> {
             return Err(cache_error());
         }
         self.state.update_archetypes(&store.world);
-        self.revision = store.structural_revision;
+        self.revision = store.structural_revision.clone();
         Ok(())
     }
     pub(super) fn iter<'a>(
@@ -543,24 +545,43 @@ mod batch_tests {
     use super::*;
 
     #[test]
-    fn structural_counter_admission_precedes_every_batch_write() {
+    fn rejected_batch_keeps_generation_and_successful_structure_invalidates_old_queries() {
         let mut schema = Schema::new();
-        schema.register::<u64>("test/count", |_| Ok(())).unwrap();
+        schema
+            .register::<u64>("test/count", |row| {
+                if *row == 0 {
+                    Err(Error::Unavailable)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
         let mut store = Storage::new(schema);
         store.insert_or_spawn(StableId(1), 10_u64).unwrap();
-        store.structural_revision = u64::MAX;
+        let mut query = Query1::<u64>::new(&mut store);
+        let before = store.structural_revision.clone();
         let edits = vec![
             insert_edit(StableId(1), 20_u64),
-            insert_edit(StableId(2), 30_u64),
+            insert_edit(StableId(2), 0_u64),
         ];
-        assert_eq!(store.apply_batch(edits), Err(Error::Overflow));
+        assert_eq!(store.apply_batch(edits), Err(Error::Unavailable));
+        assert!(store.structural_revision == before);
         assert_eq!(store.get::<u64>(StableId(1)), Some(&10));
         assert!(!store.contains(StableId(2)));
-        assert_eq!(store.structural_revision, u64::MAX);
+        assert_eq!(query.iter(&store).unwrap().count(), 1);
         store
             .apply_batch(vec![insert_edit(StableId(1), 20_u64)])
             .unwrap();
-        assert_eq!(store.get::<u64>(StableId(1)), Some(&20));
-        assert_eq!(store.structural_revision, u64::MAX);
+        assert!(store.structural_revision == before);
+        assert_eq!(query.iter(&store).unwrap().count(), 1);
+        for id in 2..=32 {
+            store
+                .apply_batch(vec![insert_edit(StableId(id), id)])
+                .unwrap();
+            assert!(store.structural_revision != before);
+            assert!(query.iter(&store).is_err());
+        }
+        query.refresh(&store).unwrap();
+        assert_eq!(query.iter(&store).unwrap().count(), 32);
     }
 }
