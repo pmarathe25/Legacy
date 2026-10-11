@@ -2,6 +2,8 @@
 
 Domain crates own game data and the systems that change it. The playable game assumes all systems are available; modularity serves independent development and testing. `game-sim` supplies deterministic scheduling and parallel execution. `game-world` currently assembles the playable simulation, connects domain interfaces, and presents it through `game-api`; its remaining feature handlers are being moved into their owners.
 
+The final `game-world` boundary is a feature-agnostic host. Domain algorithms and feature-named modules belong in their owning crates. A separate game assembly crate will depend on the features to register their components and systems, wire typed interfaces, build scenarios, and bind public commands and views. Shared storage, clock and identity management, execution, and transaction infrastructure remain generic. The graph below describes current dependencies, before that assembly boundary is extracted.
+
 ## Dependency graph
 
 An arrow means a production Cargo dependency, from consumer to provider. The domain node groups the 23 feature crates; its internal edges are listed below. Development dependencies are omitted.
