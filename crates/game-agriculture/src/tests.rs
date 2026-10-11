@@ -1463,3 +1463,19 @@ fn agriculture_does_not_register_or_serialize_an_owned_soil_definition() {
     assert!(schema.keys().any(|key| key == "land/soil"));
     assert!(!schema.keys().any(|key| key == "agriculture/soil"));
 }
+
+#[test]
+fn projected_share_preserves_integer_operation_order_and_rejects_bad_inputs() {
+    let mut crop = rules();
+    crop.food_yield = Quantity(12_345);
+    assert_eq!(projected_food_share(&crop, 731, 2, 3), Ok(6_016));
+    assert_eq!(projected_food_share(&crop, 0, 1, 1), Ok(0));
+    assert!(projected_food_share(&crop, 1_001, 1, 1).is_err());
+    assert!(projected_food_share(&crop, 500, 1, 0).is_err());
+    assert!(projected_food_share(&crop, 500, 2, 1).is_err());
+    crop.food_yield = Quantity(u64::MAX);
+    assert_eq!(
+        projected_food_share(&crop, 1_000, u64::MAX, u64::MAX),
+        Err(Error::Overflow)
+    );
+}

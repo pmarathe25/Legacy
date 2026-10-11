@@ -3,6 +3,39 @@ use crate::*;
 pub use game_agreements::{Agreement, Amendment, Obligation};
 use game_agreements::{accrue_share, same_duty, stream_ended};
 
+struct OfferKnowledgeFacts<'a> {
+    stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
+    sites: &'a BTreeMap<SiteId, decisions::SiteKnowledge>,
+    projects: BTreeSet<ProjectId>,
+    shares: BTreeMap<(SiteId, u64, u64), game_agreements::ShareProspect>,
+    speakers: BTreeMap<PersonId, game_agreements::SpeakerFacts>,
+}
+impl game_agreements::OfferKnowledge for OfferKnowledgeFacts<'_> {
+    fn stock(&self, id: InventoryId) -> Option<&StockKnowledge> {
+        self.stocks.get(&id)
+    }
+    fn work_site_access(&self, id: SiteId) -> bool {
+        self.sites.get(&id).is_some_and(|site| site.access)
+    }
+    fn project_known(&self, id: ProjectId) -> bool {
+        self.projects.contains(&id)
+    }
+    fn share_prospect(
+        &self,
+        id: SiteId,
+        numerator: u64,
+        denominator: u64,
+    ) -> game_agreements::ShareProspect {
+        self.shares
+            .get(&(id, numerator, denominator))
+            .copied()
+            .unwrap_or(game_agreements::ShareProspect::Unknown)
+    }
+    fn speaker(&self, id: PersonId) -> Option<game_agreements::SpeakerFacts> {
+        self.speakers.get(&id).copied()
+    }
+}
+
 fn site_exists(state: &CanonicalState, site: SiteId) -> bool {
     state
         .physical
@@ -2185,54 +2218,18 @@ impl Simulation {
             if *actor == self.state.ruler {
                 continue;
             }
-            for a in known.values().filter(|a| {
-                a.status == AgreementStatus::Proposed
-                    && a.parties.contains(actor)
-                    && !a.accepted.contains(actor)
-            }) {
+            for a in known.values() {
+                if !game_agreements::needs_proposal_response(*actor, a) {
+                    continue;
+                }
                 if self.agreement_actor_area(*actor).ok()
                     != self.agreement_actor_area(a.proposer).ok()
                 {
                     continue;
                 }
-                let score = self.agreement_offer_score(*actor, &a.terms);
-                if score >= 0 {
-                    answers.push((*actor, AgreementAction::Accept { agreement: a.id }));
-                } else if score >= -2_000 && a.proposer != *actor {
-                    let terms = a
-                        .terms
-                        .iter()
-                        .map(|term| match term {
-                            AgreementTerm::Labor {
-                                debtor,
-                                creditor,
-                                site,
-                                millis,
-                                deadline,
-                            } if debtor == actor => AgreementTerm::Labor {
-                                debtor: *debtor,
-                                creditor: *creditor,
-                                site: *site,
-                                millis: (*millis / 2).max(1),
-                                deadline: *deadline,
-                            },
-                            _ => term.clone(),
-                        })
-                        .collect::<Vec<_>>();
-                    if terms != a.terms {
-                        answers.push((
-                            *actor,
-                            AgreementAction::Counteroffer {
-                                agreement: a.id,
-                                terms,
-                                procedure: a.procedure.clone(),
-                            },
-                        ));
-                    } else {
-                        answers.push((*actor, AgreementAction::Reject { agreement: a.id }));
-                    }
-                } else {
-                    answers.push((*actor, AgreementAction::Reject { agreement: a.id }));
+                let score = self.agreement_offer_score(*actor, &a.terms)?;
+                if let Some(answer) = game_agreements::proposal_answer(*actor, a, score, true) {
+                    answers.push((*actor, answer));
                 }
             }
         }
@@ -2244,28 +2241,20 @@ impl Simulation {
             if *actor == self.state.ruler {
                 continue;
             }
-            for a in known.values().filter(|a| a.parties.contains(actor)) {
-                let Some(p) = &a.procedure else { continue };
-                for m in a.amendments.iter().filter(|m| {
-                    m.status == AmendmentStatus::Proposed
-                        && m.base_revision == a.revision
-                        && !m.votes.contains_key(actor)
-                }) {
-                    if (!p.approvers.contains(actor)
-                        && !p.term_approvers.values().any(|ids| ids.contains(actor)))
-                        || self.agreement_actor_area(*actor).ok()
-                            != self.agreement_actor_area(m.proposer).ok()
+            for a in known.values() {
+                for m in game_agreements::pending_amendments(*actor, a) {
+                    if self.agreement_actor_area(*actor).ok()
+                        != self.agreement_actor_area(m.proposer).ok()
                     {
                         continue;
                     }
-                    let mut revised = a.terms.clone();
-                    for (index, term) in &m.replacements {
-                        revised[*index as usize] = term.clone();
-                    }
+                    let revised = game_agreements::amended_terms(a, m)?;
                     let mind = &self.state.components.mind(*actor).unwrap();
-                    let concession = i64::from(mind.personality.empathy.saturating_sub(700)) * 5;
-                    let support = self.agreement_offer_score(*actor, &revised) + concession
-                        >= self.agreement_offer_score(*actor, &a.terms);
+                    let support = game_agreements::amendment_support(
+                        self.agreement_offer_score(*actor, &a.terms)?,
+                        self.agreement_offer_score(*actor, &revised)?,
+                        mind.personality.empathy,
+                    )?;
                     votes.push((
                         *actor,
                         AgreementAction::Vote {
@@ -2284,289 +2273,185 @@ impl Simulation {
         Ok(())
     }
 
-    fn agreement_offer_score(&self, actor: PersonId, terms: &[AgreementTerm]) -> i64 {
-        let mind = &self.state.components.mind(actor).unwrap();
-        let mut score = self.project_financing_utility(actor, terms);
+    fn agreement_offer_score(
+        &self,
+        actor: PersonId,
+        terms: &[AgreementTerm],
+    ) -> Result<i64, Error> {
+        let mind = self
+            .state
+            .components
+            .mind(actor)
+            .ok_or(Error::Unavailable)?;
+        let mut shares = BTreeMap::new();
         for term in terms {
-            if term.amount() == 0 && !matches!(term, AgreementTerm::OutputShare { .. }) {
-                continue;
-            }
-            match *term {
-                AgreementTerm::OutputShare {
-                    creditor,
-                    debtor,
-                    site,
-                    numerator,
-                    denominator,
-                    ..
-                } => {
-                    let fertility = self
-                        .state
-                        .ecology
-                        .as_ref()
-                        .and_then(|_| {
-                            self.state
-                                .components
-                                .ecology_knowledge(actor)
-                                .map(|row| &row.known_plots)
-                        })
-                        .and_then(|k| k.get(&site))
-                        .map(|p| p.soil_fertility);
-                    let remembered_plan = self
-                        .state
-                        .projects
-                        .as_ref()
-                        .and_then(|w| w.known_projects.get(&actor))
-                        .is_some_and(|k| {
-                            k.values()
-                                .any(|p| matches!(p.kind,ProjectKind::Farm {plot,..} if plot==site))
-                        });
-                    let value = if let Some(fertility) = fertility.filter(|_| remembered_plan) {
-                        let agriculture = self.state.agriculture.as_ref().unwrap();
-                        let crop = agriculture
-                            .catalog
-                            .crops
-                            .get(&agriculture.catalog.default_crop)
-                            .expect("validated default crop");
-                        let expected = u128::from(crop.food_yield.0)
-                            * u128::from(fertility)
-                            * u128::from(numerator)
-                            / u128::from(denominator)
-                            / 1_000;
-                        // A known plan is a risky future food prospect, not a guarantee.
-                        let estimate = (expected / 100).min(20_000) as i64;
-                        estimate * i64::from(mind.personality.risk_tolerance) / 1_000
-                    } else if self
-                        .state
-                        .projects
-                        .as_ref()
-                        .and_then(|w| w.known_enterprises.get(&actor))
-                        .is_some_and(|k| k.values().any(|e| e.site == site))
-                        || self.state.agriculture.as_ref().is_some_and(|w| {
-                            w.field(&self.state.components, site).is_some_and(|f| {
-                                *self
-                                    .state
-                                    .components
-                                    .location(self.state.people[self.person_index[&actor]].id)
-                                    .expect("location exists")
-                                    == Location::AtArea(f.area)
+            if let AgreementTerm::OutputShare {
+                site,
+                numerator,
+                denominator,
+                ..
+            } = *term
+            {
+                let fertility = self
+                    .state
+                    .components
+                    .ecology_knowledge(actor)
+                    .and_then(|known| known.known_plots.get(&site))
+                    .map(|plot| plot.soil_fertility);
+                let remembered_plan = self
+                    .state
+                    .projects
+                    .as_ref()
+                    .and_then(|world| world.known_projects.get(&actor))
+                    .is_some_and(|known| {
+                        known.values().any(
+                            |plan| matches!(plan.kind,ProjectKind::Farm {plot,..} if plot==site),
+                        )
+                    });
+                let planned = if let Some(fertility) = fertility.filter(|_| remembered_plan) {
+                    let agriculture = self.state.agriculture.as_ref().ok_or(Error::Unavailable)?;
+                    let crop = &agriculture.catalog.crops[&agriculture.catalog.default_crop];
+                    Some(game_agriculture::projected_food_share(
+                        crop,
+                        fertility,
+                        numerator,
+                        denominator,
+                    )?)
+                } else {
+                    None
+                };
+                let established = self
+                    .state
+                    .projects
+                    .as_ref()
+                    .and_then(|world| world.known_enterprises.get(&actor))
+                    .is_some_and(|known| known.values().any(|enterprise| enterprise.site == site))
+                    || self.state.agriculture.as_ref().is_some_and(|world| {
+                        world
+                            .field(&self.state.components, site)
+                            .is_some_and(|field| {
+                                self.state.components.location(actor)
+                                    == Some(&Location::AtArea(field.area))
                             })
-                        })
-                    {
-                        (numerator.saturating_mul(
-                            u64::from(mind.personality.ambition)
-                                + u64::from(mind.personality.hedonism),
-                        ) / denominator)
-                            .min(2_000) as i64
-                    } else {
-                        -2_000
-                    };
-                    if creditor == actor {
-                        score += value;
+                    });
+                let prospect = match planned {
+                    Some(expected_share) => {
+                        game_agreements::ShareProspect::PlannedFood { expected_share }
                     }
-                    if debtor == actor {
-                        score -= value / 2;
-                    }
-                }
-                AgreementTerm::SiteAccess {
-                    grantee, allowed, ..
-                } if grantee == actor => score += if allowed { 1_000 } else { -1_000 },
-                AgreementTerm::Delivery {
-                    debtor,
-                    creditor,
-                    source,
-                    quantity,
-                    deadline,
-                    ..
-                } => {
-                    if debtor == actor {
-                        let known = mind.knowledge.get(&source);
-                        if known.is_none_or(|k| !k.accessible || k.quantity < quantity)
-                            || deadline.0.saturating_sub(self.state.time.0) < 120_000
-                        {
-                            score -= 10_000;
-                        }
-                        score -= i64::try_from(quantity.0 / 2)
-                            .unwrap_or(i64::MAX / 32)
-                            .min(100_000);
-                    }
-                    if creditor == actor {
-                        score += i64::try_from(quantity.0)
-                            .unwrap_or(i64::MAX / 32)
-                            .min(100_000);
-                    }
-                }
-                AgreementTerm::Labor {
-                    debtor,
-                    site,
-                    millis,
-                    deadline,
-                    ..
-                } if debtor == actor => {
-                    if !mind.sites.get(&site).is_some_and(|s| s.access)
-                        || deadline.0.saturating_sub(self.state.time.0) < millis
-                    {
-                        score -= 10_000;
-                    }
-                    score -= i64::try_from(millis / 60)
-                        .unwrap_or(i64::MAX / 32)
-                        .min(100_000);
-                }
-                AgreementTerm::ConstructionLabor {
-                    debtor,
-                    project,
-                    millis,
-                    deadline,
-                    ..
-                } if debtor == actor => {
-                    if !self.project_is_known(actor, project)
-                        || deadline.0.saturating_sub(self.state.time.0) < millis
-                    {
-                        score -= 10_000;
-                    }
-                    score -= i64::try_from(millis / 60)
-                        .unwrap_or(i64::MAX / 32)
-                        .min(100_000);
-                }
-                AgreementTerm::Access {
-                    grantee,
-                    inventory,
-                    allowed,
-                    ..
-                } if grantee == actor => {
-                    if let Some(k) = mind.knowledge.get(&inventory) {
-                        let utility = if k.good == Good::Food
-                            && self
-                                .state
-                                .components
-                                .body(actor)
-                                .expect("body exists")
-                                .vitals
-                                .hunger
-                                > 120_000
-                        {
-                            3_000
-                        } else {
-                            1_000
-                        };
-                        score += if allowed { utility } else { -utility };
-                    } else {
-                        score -= 2_000;
-                    }
-                }
-                _ => {}
+                    None if established => game_agreements::ShareProspect::Established,
+                    None => game_agreements::ShareProspect::Unknown,
+                };
+                shares.insert((site, numerator, denominator), prospect);
             }
         }
         let area = self.agreement_actor_area(actor).ok();
-        let speakers: BTreeSet<_> = terms
+        let speakers = terms
             .iter()
             .filter(|term| !matches!(term, AgreementTerm::Access { .. }))
-            .map(|term| term.parties())
+            .map(AgreementTerm::parties)
             .filter(|[debtor, creditor]| *debtor != actor && *creditor == actor)
-            .map(|[debtor, _]| debtor)
+            .map(|[speaker, _]| {
+                (
+                    speaker,
+                    game_agreements::SpeakerFacts {
+                        locally_present: area.is_some()
+                            && self.agreement_actor_area(speaker).ok() == area,
+                        trust: mind
+                            .relationships
+                            .get(&speaker)
+                            .map_or(0, |relation| relation.trust),
+                        observed_invocation_penalty: if area.is_some()
+                            && self.agreement_actor_area(speaker).ok() == area
+                        {
+                            self.invocation_social_penalty(speaker)
+                        } else {
+                            0
+                        },
+                    },
+                )
+            })
             .collect();
-        for speaker in speakers {
-            // A relationship does not disclose new symptoms across distance.
-            if area.is_some() && self.agreement_actor_area(speaker).ok() == area {
-                let trust = i64::from(mind.relationships.get(&speaker).map_or(0, |r| r.trust))
-                    .clamp(-1_000, 1_000);
-                score -= self.invocation_social_penalty(speaker) * (1_000 - trust) / 1_000;
-            }
-        }
-        score + i64::from(mind.personality.empathy) - 500
+        let projects = self
+            .state
+            .projects
+            .as_ref()
+            .and_then(|world| world.known_projects.get(&actor))
+            .map(|known| known.keys().copied().collect())
+            .unwrap_or_default();
+        let facts = game_agreements::OfferActorFacts {
+            actor,
+            now: self.state.time,
+            hunger: self
+                .state
+                .components
+                .body(actor)
+                .ok_or(Error::Unavailable)?
+                .vitals
+                .hunger,
+            empathy: mind.personality.empathy,
+            risk_tolerance: mind.personality.risk_tolerance,
+            ambition: mind.personality.ambition,
+            hedonism: mind.personality.hedonism,
+            financing_utility: self.project_financing_utility(actor, terms),
+        };
+        game_agreements::offer_score(
+            facts,
+            terms,
+            &OfferKnowledgeFacts {
+                stocks: &mind.knowledge,
+                sites: &mind.sites,
+                projects,
+                shares,
+                speakers,
+            },
+        )
     }
 
     fn seek_local_exchange(&mut self) -> Result<(), Error> {
         let world = self.state.agreements.as_ref().unwrap();
         let mut proposals = Vec::new();
         for (actor, mind) in self.state.components.minds() {
-            let actor = &actor;
-            if *actor == self.state.ruler
-                || world
-                    .next_search
-                    .get(actor)
-                    .is_some_and(|time| *time > self.state.time)
-                || world.knowledge.get(actor).is_some_and(|known| {
-                    known.values().any(|a| {
-                        a.parties.contains(actor)
-                            && matches!(
-                                a.status,
-                                AgreementStatus::Proposed | AgreementStatus::Active
-                            )
-                    })
+            let sites: Vec<_> = mind
+                .sites
+                .values()
+                .map(|site| game_agreements::KnownSiteRight {
+                    site: site.site,
+                    area: site.area,
+                    accessible: site.access,
+                })
+                .collect();
+            let facts = game_agreements::LocalExchangeFacts {
+                actor,
+                autonomous: actor != self.state.ruler,
+                area: self.agreement_actor_area(actor).ok(),
+                hunger: self
+                    .state
+                    .components
+                    .body(actor)
+                    .ok_or(Error::Unavailable)?
+                    .vitals
+                    .hunger,
+                stocks: &mind.knowledge,
+                sites: &sites,
+                custodians: &world.custodians,
+            };
+            if let Some(proposal) = world
+                .ledger
+                .local_exchange(self.state.time, facts, |owner| {
+                    self.agreement_actor_area(owner).ok()
                 })
             {
-                continue;
+                proposals.push(proposal);
             }
-            let Ok(area) = self.agreement_actor_area(*actor) else {
-                continue;
-            };
-            if self
-                .state
-                .components
-                .body(*actor)
-                .expect("body exists")
-                .vitals
-                .hunger
-                < 180_000
-            {
-                continue;
-            }
-            if mind.knowledge.values().any(|k| {
-                k.area == area && k.good == Good::Food && k.accessible && k.quantity.0 >= 1_000
-            }) {
-                continue;
-            }
-            let Some(food) = mind.knowledge.values().find(|k| {
-                k.area == area
-                    && k.good == Good::Food
-                    && k.quantity.0 >= 1_000
-                    && !k.accessible
-                    && world.custodians.contains_key(&k.inventory)
-            }) else {
-                continue;
-            };
-            let owner = world.custodians[&food.inventory];
-            if self.agreement_actor_area(owner).ok() != Some(area) {
-                continue;
-            }
-            let Some(site) = mind.sites.values().find(|s| s.area == area && s.access) else {
-                continue;
-            };
-            let Some(deadline) = self.state.time.0.checked_add(180_000).map(SimTime) else {
-                continue;
-            };
-            proposals.push((
-                *actor,
-                AgreementAction::Propose {
-                    parties: BTreeSet::from([*actor, owner]),
-                    terms: vec![
-                        AgreementTerm::Access {
-                            grantor: owner,
-                            grantee: *actor,
-                            inventory: food.inventory,
-                            allowed: true,
-                        },
-                        AgreementTerm::Labor {
-                            debtor: *actor,
-                            creditor: owner,
-                            site: site.site,
-                            millis: 60_000,
-                            deadline,
-                        },
-                    ],
-                    procedure: None,
-                },
-            ));
         }
-        for (actor, proposal) in proposals {
-            self.agreement_command(actor, &proposal)?;
+        for proposal in proposals {
+            self.agreement_command(proposal.actor, &proposal.action)?;
             self.state
                 .agreements
                 .as_mut()
                 .unwrap()
                 .next_search
-                .insert(actor, SimTime(self.state.time.0.saturating_add(300_000)));
+                .insert(proposal.actor, proposal.next_search);
         }
         Ok(())
     }

@@ -704,3 +704,23 @@ pub fn prepare_completion(
 
 #[cfg(test)]
 mod tests;
+
+/// Project a promised share from a remembered fertility measurement. Agreement
+/// preferences may discount this quantity; they never compute crop production.
+pub fn projected_food_share(
+    crop: &CropRules,
+    fertility: u16,
+    numerator: u64,
+    denominator: u64,
+) -> Result<u128, Error> {
+    if fertility > 1_000 || denominator == 0 || numerator > denominator {
+        return Err(Error::InvalidConfiguration(
+            "invalid projected crop share".into(),
+        ));
+    }
+    u128::from(crop.food_yield.0)
+        .checked_mul(u128::from(fertility))
+        .and_then(|yield_at_fertility| yield_at_fertility.checked_mul(u128::from(numerator)))
+        .map(|scaled| scaled / u128::from(denominator) / 1_000)
+        .ok_or(Error::Overflow)
+}
