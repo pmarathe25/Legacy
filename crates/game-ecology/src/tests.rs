@@ -1,6 +1,183 @@
 use super::*;
 
-fn world(kind: ResourceKind, remaining: u64) -> World {
+// Tests assemble an explicit host; the production runtime owns no store.
+struct Fixture {
+    runtime: Runtime,
+    store: game_ecs::Store,
+    queries: Queries,
+}
+impl std::ops::Deref for Fixture {
+    type Target = Runtime;
+    fn deref(&self) -> &Runtime {
+        &self.runtime
+    }
+}
+impl std::ops::DerefMut for Fixture {
+    fn deref_mut(&mut self) -> &mut Runtime {
+        &mut self.runtime
+    }
+}
+fn schema() -> game_ecs::Schema {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+}
+impl Fixture {
+    fn new(rules: EcologyRules, day: u64) -> Result<Self, Error> {
+        let runtime = Runtime::new(rules, day)?;
+        let mut store = game_ecs::Store::with_schema(schema());
+        let queries = Runtime::bind(&mut store);
+        Ok(Self {
+            runtime,
+            store,
+            queries,
+        })
+    }
+    fn resources(&self) -> impl Iterator<Item = (ResourceId, &Resource)> {
+        self.runtime.resources(&self.store)
+    }
+    fn plots(&self) -> impl Iterator<Item = (SiteId, &Plot)> {
+        self.runtime.plots(&self.store)
+    }
+    fn resource(&self, id: ResourceId) -> Option<&Resource> {
+        self.runtime.resource(&self.store, id)
+    }
+    fn plot(&self, id: SiteId) -> Option<&Plot> {
+        self.runtime.plot(&self.store, id)
+    }
+    fn resource_mut(&mut self, id: ResourceId) -> Option<&mut Resource> {
+        self.runtime.resource_mut(&mut self.store, id)
+    }
+    fn insert_resource(&mut self, resource: Resource) -> Result<(), Error> {
+        self.runtime.insert_resource(&mut self.store, resource)?;
+        self.queries.refresh(&self.store)
+    }
+    fn insert_plot(&mut self, plot: Plot) -> Result<(), Error> {
+        self.runtime.insert_plot(&mut self.store, plot)?;
+        self.queries.refresh(&self.store)
+    }
+    fn remove_resource(&mut self, id: ResourceId) -> Result<Option<Resource>, Error> {
+        let row = self.runtime.remove_resource(&mut self.store, id)?;
+        self.queries.refresh(&self.store)?;
+        Ok(row)
+    }
+    fn remove_plot(&mut self, id: SiteId) -> Result<Option<Plot>, Error> {
+        let row = self.runtime.remove_plot(&mut self.store, id)?;
+        self.queries.refresh(&self.store)?;
+        Ok(row)
+    }
+    fn gather_upper_bound(
+        &self,
+        actor: PersonId,
+        resource: ResourceId,
+        facts: GatherFacts,
+    ) -> Result<Quantity, Error> {
+        self.runtime
+            .gather_upper_bound(&self.store, actor, resource, facts)
+    }
+    fn gathering_conditions(
+        &self,
+        actor: PersonId,
+        resource: ResourceId,
+        quantity: Quantity,
+        unauthorized: bool,
+        facts: GatherFacts,
+    ) -> Result<GatheringConditions, Error> {
+        self.runtime.gathering_conditions(
+            &self.store,
+            actor,
+            resource,
+            quantity,
+            unauthorized,
+            facts,
+        )
+    }
+    fn prepare_gather(
+        &self,
+        actor: PersonId,
+        resource: ResourceId,
+        quantity: Quantity,
+        unauthorized: bool,
+        facts: GatherFacts,
+    ) -> Result<GatheringPlan, Error> {
+        self.runtime
+            .prepare_gather(&self.store, actor, resource, quantity, unauthorized, facts)
+    }
+    fn prepare_advance_serial(
+        &self,
+        day: Option<&LocalWeatherDay>,
+    ) -> Result<PreparedAdvance, Error> {
+        self.runtime
+            .prepare_advance_serial(&self.store, &self.queries, day)
+    }
+    fn commit_advance(&mut self, prepared: PreparedAdvance) -> Result<(), Error> {
+        self.runtime.commit_advance(&mut self.store, prepared)
+    }
+    fn advance(&self, day: Option<&LocalWeatherDay>) -> Result<Self, Error> {
+        let prepared = self.prepare_advance_serial(day)?;
+        let mut future = self.clone();
+        future.commit_advance(prepared)?;
+        Ok(future)
+    }
+}
+impl Clone for Fixture {
+    fn clone(&self) -> Self {
+        let mut store = self.store.clone();
+        let queries = Runtime::bind(&mut store);
+        Self {
+            runtime: self.runtime.clone(),
+            store,
+            queries,
+        }
+    }
+}
+impl PartialEq for Fixture {
+    fn eq(&self, other: &Self) -> bool {
+        self.runtime == other.runtime && self.store == other.store
+    }
+}
+impl std::fmt::Debug for Fixture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fixture")
+            .field("runtime", &self.runtime)
+            .field("store", &self.store)
+            .finish()
+    }
+}
+#[derive(Serialize)]
+struct SavedRef<'a> {
+    runtime: &'a Runtime,
+    components: game_ecs::Snapshot,
+}
+#[derive(Deserialize)]
+struct Saved {
+    runtime: Runtime,
+    components: game_ecs::Snapshot,
+}
+impl Serialize for Fixture {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        SavedRef {
+            runtime: &self.runtime,
+            components: self.store.snapshot().map_err(serde::ser::Error::custom)?,
+        }
+        .serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for Fixture {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let saved = Saved::deserialize(deserializer)?;
+        let mut store = game_ecs::Store::restore(schema(), saved.components)
+            .map_err(serde::de::Error::custom)?;
+        let queries = Runtime::bind(&mut store);
+        Ok(Self {
+            runtime: saved.runtime,
+            store,
+            queries,
+        })
+    }
+}
+
+fn world(kind: ResourceKind, remaining: u64) -> Fixture {
     let source = Resource {
         id: ResourceId(1),
         area: AreaId(2),
@@ -31,17 +208,10 @@ fn world(kind: ResourceKind, remaining: u64) -> World {
         access: BTreeSet::from([PersonId(3)]),
         custodian: Some(PersonId(3)),
     };
-    World {
-        rules: EcologyRules::default(),
-        resources: BTreeMap::from([(source.id, source)]),
-        plots: BTreeMap::from([(plot.id, plot)]),
-        jobs: BTreeMap::new(),
-        known: BTreeMap::new(),
-        known_plots: BTreeMap::new(),
-        observed_areas: BTreeMap::new(),
-        day: 0,
-        next_request: BTreeMap::new(),
-    }
+    let mut world = Fixture::new(EcologyRules::default(), 0).unwrap();
+    world.insert_resource(source).unwrap();
+    world.insert_plot(plot).unwrap();
+    world
 }
 fn day(number: u64, temp: i32) -> LocalWeatherDay {
     LocalWeatherDay {
@@ -81,17 +251,20 @@ fn renewal_is_finite_and_changes_no_custody_permissions_or_personal_knowledge() 
     let world = world(ResourceKind::Coppice, 0);
     let before = world.clone();
     let next = world.advance(Some(&day(1, 20))).unwrap();
-    assert_eq!(next.resources[&ResourceId(1)].remaining, Quantity(250));
-    assert_eq!(next.plots[&SiteId(9)].fertility, 901);
     assert_eq!(
-        next.resources[&ResourceId(1)].access,
-        world.resources[&ResourceId(1)].access
+        next.resource(ResourceId(1)).unwrap().remaining,
+        Quantity(250)
+    );
+    assert_eq!(next.plot(SiteId(9)).unwrap().fertility, 901);
+    assert_eq!(
+        next.resource(ResourceId(1)).unwrap().access,
+        world.resource(ResourceId(1)).unwrap().access
     );
     assert!(next.known.is_empty());
     assert_eq!(world, before);
     let cold = world.advance(Some(&day(1, -5))).unwrap();
-    assert_eq!(cold.resources[&ResourceId(1)].remaining, Quantity(0));
-    assert_eq!(cold.plots[&SiteId(9)].fertility, 900);
+    assert_eq!(cold.resource(ResourceId(1)).unwrap().remaining, Quantity(0));
+    assert_eq!(cold.plot(SiteId(9)).unwrap().fertility, 900);
     assert_eq!(next.advance(Some(&day(1, 20))).unwrap(), next);
 }
 #[test]
@@ -103,15 +276,15 @@ fn land_recovery_configuration_is_independent_of_crop_rules() {
         ..EcologyRules::default()
     };
     let cool = world.advance(Some(&day(1, 20))).unwrap();
-    assert_eq!(cool.plots[&SiteId(9)].fertility, 900);
+    assert_eq!(cool.plot(SiteId(9)).unwrap().fertility, 900);
     let warm = world.advance(Some(&day(1, 40))).unwrap();
-    assert_eq!(warm.plots[&SiteId(9)].fertility, 907);
+    assert_eq!(warm.plot(SiteId(9)).unwrap().fertility, 907);
 }
 
 #[test]
 fn renewal_and_soil_match_local_weather_without_a_global_fallback() {
     let mut world = world(ResourceKind::Berries, 1_000);
-    let mut cold_source = world.resources[&ResourceId(1)].clone();
+    let mut cold_source = world.resource(ResourceId(1)).unwrap().clone();
     cold_source.id = ResourceId(2);
     cold_source.area = AreaId(3);
     let mut missing_source = cold_source.clone();
@@ -119,18 +292,16 @@ fn renewal_and_soil_match_local_weather_without_a_global_fallback() {
     missing_source.area = AreaId(4);
     missing_source.decay_permille = 500;
     missing_source.growth_remainder = 125_000;
-    world.resources.insert(cold_source.id, cold_source);
-    world
-        .resources
-        .insert(missing_source.id, missing_source.clone());
-    let mut cold_plot = world.plots[&SiteId(9)].clone();
+    world.insert_resource(cold_source).unwrap();
+    world.insert_resource(missing_source.clone()).unwrap();
+    let mut cold_plot = world.plot(SiteId(9)).unwrap().clone();
     cold_plot.id = SiteId(10);
     cold_plot.area = AreaId(3);
     let mut missing_plot = cold_plot.clone();
     missing_plot.id = SiteId(11);
     missing_plot.area = AreaId(4);
-    world.plots.insert(cold_plot.id, cold_plot);
-    world.plots.insert(missing_plot.id, missing_plot.clone());
+    world.insert_plot(cold_plot).unwrap();
+    world.insert_plot(missing_plot.clone()).unwrap();
 
     let mut local = day(1, 20);
     local.cells.insert(
@@ -142,25 +313,27 @@ fn renewal_and_soil_match_local_weather_without_a_global_fallback() {
         },
     );
     let next = world.advance(Some(&local)).unwrap();
-    assert_eq!(next.resources[&ResourceId(1)].remaining, Quantity(1_250));
-    assert_eq!(next.resources[&ResourceId(2)].remaining, Quantity(1_000));
-    assert_eq!(next.resources[&ResourceId(2)].soil_water, 70);
-    assert_eq!(next.plots[&SiteId(9)].fertility, 901);
-    assert_eq!(next.plots[&SiteId(10)].fertility, 900);
-    assert_eq!(next.plots[&SiteId(10)].soil_water, 70);
-    assert_eq!(next.resources[&ResourceId(3)], missing_source);
-    assert_eq!(next.plots[&SiteId(11)], missing_plot);
+    assert_eq!(
+        next.resource(ResourceId(1)).unwrap().remaining,
+        Quantity(1_250)
+    );
+    assert_eq!(
+        next.resource(ResourceId(2)).unwrap().remaining,
+        Quantity(1_000)
+    );
+    assert_eq!(next.resource(ResourceId(2)).unwrap().soil_water, 70);
+    assert_eq!(next.plot(SiteId(9)).unwrap().fertility, 901);
+    assert_eq!(next.plot(SiteId(10)).unwrap().fertility, 900);
+    assert_eq!(next.plot(SiteId(10)).unwrap().soil_water, 70);
+    assert_eq!(next.resource(ResourceId(3)).unwrap(), &missing_source);
+    assert_eq!(next.plot(SiteId(11)).unwrap(), &missing_plot);
     assert_eq!(next.day, 1);
 }
 
 #[test]
 fn missing_weather_preserves_land_and_finite_gathering_still_completes() {
     let mut world = world(ResourceKind::Spring, 2_000);
-    world
-        .resources
-        .get_mut(&ResourceId(1))
-        .unwrap()
-        .contamination = 250;
+    world.resource_mut(ResourceId(1)).unwrap().contamination = 250;
     let plan = world
         .prepare_gather(PersonId(3), ResourceId(1), Quantity(500), false, facts())
         .unwrap();
@@ -172,11 +345,17 @@ fn missing_weather_preserves_land_and_finite_gathering_still_completes() {
     };
     let next = world.advance(Some(&no_cells)).unwrap();
     assert_eq!(next.day, 1);
-    assert_eq!(next.resources, world.resources);
-    assert_eq!(next.plots, world.plots);
+    assert_eq!(
+        next.resources().collect::<Vec<_>>(),
+        world.resources().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        next.plots().collect::<Vec<_>>(),
+        world.plots().collect::<Vec<_>>()
+    );
     assert_eq!(next.jobs, world.jobs);
     let effect = prepare_collection(
-        &next.resources[&ResourceId(1)],
+        next.resource(ResourceId(1)).unwrap(),
         PersonId(3),
         &next.jobs[&PersonId(3)],
         closing(plan.completes),
@@ -213,14 +392,14 @@ fn invalid_local_cell_rejects_the_whole_day_without_stock_or_soil_changes() {
 fn independent_entity_updates_equal_a_batch_regardless_of_insertion_order() {
     let first = world(ResourceKind::Berries, 1_000);
     let mut second = world(ResourceKind::Herbs, 500);
-    let mut source = second.resources.remove(&ResourceId(1)).unwrap();
+    let mut source = second.remove_resource(ResourceId(1)).unwrap().unwrap();
     source.id = ResourceId(2);
     source.area = AreaId(3);
-    second.resources.insert(source.id, source);
-    let mut plot = second.plots.remove(&SiteId(9)).unwrap();
+    second.insert_resource(source).unwrap();
+    let mut plot = second.remove_plot(SiteId(9)).unwrap().unwrap();
     plot.id = SiteId(10);
     plot.area = AreaId(3);
-    second.plots.insert(plot.id, plot);
+    second.insert_plot(plot).unwrap();
     let mut local = day(1, 20);
     local.cells.insert(
         AreaId(3),
@@ -231,11 +410,19 @@ fn independent_entity_updates_equal_a_batch_regardless_of_insertion_order() {
         },
     );
     let mut combined = first.clone();
-    combined.resources.extend(second.resources.clone());
-    combined.plots.extend(second.plots.clone());
-    let mut reversed = combined.clone();
-    reversed.resources = combined.resources.clone().into_iter().rev().collect();
-    reversed.plots = combined.plots.clone().into_iter().rev().collect();
+    for (_, resource) in second.resources() {
+        combined.insert_resource(resource.clone()).unwrap();
+    }
+    for (_, plot) in second.plots() {
+        combined.insert_plot(plot.clone()).unwrap();
+    }
+    let mut reversed = Fixture::new(combined.rules.clone(), 0).unwrap();
+    for (_, resource) in combined.resources().collect::<Vec<_>>().into_iter().rev() {
+        reversed.insert_resource(resource.clone()).unwrap();
+    }
+    for (_, plot) in combined.plots().collect::<Vec<_>>().into_iter().rev() {
+        reversed.insert_plot(plot.clone()).unwrap();
+    }
     let mut reversed_local = local.clone();
     reversed_local.cells = local.cells.clone().into_iter().rev().collect();
     let batch = combined.advance(Some(&local)).unwrap();
@@ -243,15 +430,21 @@ fn independent_entity_updates_equal_a_batch_regardless_of_insertion_order() {
     let first_result = first.advance(Some(&local)).unwrap();
     let second_result = second.advance(Some(&local)).unwrap();
     assert_eq!(
-        batch.resources[&ResourceId(1)],
-        first_result.resources[&ResourceId(1)]
+        batch.resource(ResourceId(1)).unwrap(),
+        first_result.resource(ResourceId(1)).unwrap()
     );
     assert_eq!(
-        batch.resources[&ResourceId(2)],
-        second_result.resources[&ResourceId(2)]
+        batch.resource(ResourceId(2)).unwrap(),
+        second_result.resource(ResourceId(2)).unwrap()
     );
-    assert_eq!(batch.plots[&SiteId(9)], first_result.plots[&SiteId(9)]);
-    assert_eq!(batch.plots[&SiteId(10)], second_result.plots[&SiteId(10)]);
+    assert_eq!(
+        batch.plot(SiteId(9)).unwrap(),
+        first_result.plot(SiteId(9)).unwrap()
+    );
+    assert_eq!(
+        batch.plot(SiteId(10)).unwrap(),
+        second_result.plot(SiteId(10)).unwrap()
+    );
 }
 #[test]
 fn actual_reservations_worker_slots_and_cargo_limits_bound_collection_plans() {
@@ -329,8 +522,7 @@ fn capable_child_can_collect_small_herbs_but_needs_maturity_and_tool_for_timber(
 fn permission_is_distinct_from_physical_possibility_and_closing_refusal_moves_no_goods() {
     let mut world = world(ResourceKind::Coppice, 2_000);
     world
-        .resources
-        .get_mut(&ResourceId(1))
+        .resource_mut(ResourceId(1))
         .unwrap()
         .access
         .remove(&PersonId(4));
@@ -345,7 +537,7 @@ fn permission_is_distinct_from_physical_possibility_and_closing_refusal_moves_no
     let before = world.clone();
     assert_eq!(
         prepare_collection(
-            &world.resources[&ResourceId(1)],
+            world.resource(ResourceId(1)).unwrap(),
             PersonId(4),
             &job,
             CollectionFacts {
@@ -357,7 +549,7 @@ fn permission_is_distinct_from_physical_possibility_and_closing_refusal_moves_no
     );
     assert_eq!(
         prepare_collection(
-            &world.resources[&ResourceId(1)],
+            world.resource(ResourceId(1)).unwrap(),
             PersonId(4),
             &job,
             CollectionFacts {
@@ -369,7 +561,7 @@ fn permission_is_distinct_from_physical_possibility_and_closing_refusal_moves_no
     );
     assert_eq!(
         prepare_collection(
-            &world.resources[&ResourceId(1)],
+            world.resource(ResourceId(1)).unwrap(),
             PersonId(4),
             &job,
             closing(SimTime(job.completes.0 - 1))
@@ -378,7 +570,7 @@ fn permission_is_distinct_from_physical_possibility_and_closing_refusal_moves_no
     );
     assert_eq!(world, before);
     let effect = prepare_collection(
-        &world.resources[&ResourceId(1)],
+        world.resource(ResourceId(1)).unwrap(),
         PersonId(4),
         &job,
         closing(job.completes),
@@ -386,7 +578,7 @@ fn permission_is_distinct_from_physical_possibility_and_closing_refusal_moves_no
     .unwrap();
     assert_eq!(
         effect.remaining.0 + effect.quantity.0,
-        world.resources[&ResourceId(1)].remaining.0
+        world.resource(ResourceId(1)).unwrap().remaining.0
     );
     assert_eq!(effect.destination, InventoryId(7));
     assert!(effect.contamination.is_none());
@@ -394,17 +586,20 @@ fn permission_is_distinct_from_physical_possibility_and_closing_refusal_moves_no
 #[test]
 fn water_quality_effect_uses_committed_renewed_source_without_owning_health_lots() {
     let mut world = world(ResourceKind::Spring, 1_000);
-    let source = world.resources.get_mut(&ResourceId(1)).unwrap();
+    let source = world.resource_mut(ResourceId(1)).unwrap();
     source.contamination = 1_000;
     source.daily_growth = Quantity(1_000);
     let renewed = world.advance(Some(&day(1, 20))).unwrap();
-    assert_eq!(renewed.resources[&ResourceId(1)].remaining, Quantity(2_000));
-    assert_eq!(renewed.resources[&ResourceId(1)].contamination, 500);
+    assert_eq!(
+        renewed.resource(ResourceId(1)).unwrap().remaining,
+        Quantity(2_000)
+    );
+    assert_eq!(renewed.resource(ResourceId(1)).unwrap().contamination, 500);
     let plan = renewed
         .prepare_gather(PersonId(3), ResourceId(1), Quantity(1_000), false, facts())
         .unwrap();
     let effect = prepare_collection(
-        &renewed.resources[&ResourceId(1)],
+        renewed.resource(ResourceId(1)).unwrap(),
         PersonId(3),
         &plan.job(InventoryId(7)),
         closing(plan.completes),
@@ -416,7 +611,7 @@ fn water_quality_effect_uses_committed_renewed_source_without_owning_health_lots
 #[test]
 fn current_restore_pending_jobs_and_fractional_renewal_continue_without_rerolling() {
     let mut world = world(ResourceKind::Berries, 1_000);
-    let source = world.resources.get_mut(&ResourceId(1)).unwrap();
+    let source = world.resource_mut(ResourceId(1)).unwrap();
     source.daily_growth = Quantity(1);
     source.soil_water = 1;
     let plan = world
@@ -436,22 +631,22 @@ fn current_restore_pending_jobs_and_fractional_renewal_continue_without_rerollin
             ..day(1, 10)
         }))
         .unwrap();
-    assert!(first.resources[&ResourceId(1)].growth_remainder > 0);
-    let loaded: World = serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
+    assert!(first.resource(ResourceId(1)).unwrap().growth_remainder > 0);
+    let loaded: Fixture = serde_json::from_slice(&serde_json::to_vec(&first).unwrap()).unwrap();
     assert_eq!(
         first.advance(Some(&day(2, 20))).unwrap(),
         loaded.advance(Some(&day(2, 20))).unwrap()
     );
     assert_eq!(
         prepare_collection(
-            &first.resources[&ResourceId(1)],
+            first.resource(ResourceId(1)).unwrap(),
             PersonId(3),
             &first.jobs[&PersonId(3)],
             closing(plan.completes)
         )
         .unwrap(),
         prepare_collection(
-            &loaded.resources[&ResourceId(1)],
+            loaded.resource(ResourceId(1)).unwrap(),
             PersonId(3),
             &loaded.jobs[&PersonId(3)],
             closing(plan.completes)
@@ -465,13 +660,9 @@ fn malformed_or_overflowing_inputs_fail_without_partial_renewal_or_reservation()
     let before = world.clone();
     assert!(world.advance(Some(&day(2, 20))).is_err());
     assert_eq!(world, before);
-    world
-        .resources
-        .get_mut(&ResourceId(1))
-        .unwrap()
-        .optimal_water = 0;
+    world.resource_mut(ResourceId(1)).unwrap().optimal_water = 0;
     assert!(world.advance(Some(&day(1, 20))).is_err());
-    let source = world.resources.get_mut(&ResourceId(1)).unwrap();
+    let source = world.resource_mut(ResourceId(1)).unwrap();
     source.optimal_water = 50;
     source.capacity = Quantity(u64::MAX);
     source.remaining = Quantity(u64::MAX);
@@ -860,4 +1051,247 @@ fn gathering_physical_ceiling_is_not_gear_or_deadline_admission() {
         world.prepare_gather(PersonId(4), ResourceId(1), limit, false, too_late),
         Err(Error::Overflow)
     );
+}
+
+#[test]
+fn no_day_prepares_no_rows_and_preserves_concurrent_runtime_metadata() {
+    let mut world = world(ResourceKind::Herbs, 0);
+    let batch = world
+        .runtime
+        .prepare_advance(
+            &world.store,
+            &world.queries,
+            None,
+            |_| panic!("resource renewal is not due"),
+            |_| panic!("land recovery is not due"),
+        )
+        .unwrap();
+    assert_eq!(batch.changed_resource_rows(), 0);
+    assert_eq!(batch.changed_plot_rows(), 0);
+    world.observe_area(PersonId(3), AreaId(2), SimTime(19));
+    world
+        .next_request
+        .entry(PersonId(3))
+        .or_default()
+        .insert(ResourceId(1), SimTime(99));
+    let before = world.clone();
+    world.commit_advance(batch).unwrap();
+    assert_eq!(world, before);
+}
+
+#[test]
+fn sparse_daily_commit_keeps_gathering_knowledge_and_foreign_components() {
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct ForeignTag(u64);
+    let mut world = world(ResourceKind::Spring, 2_000);
+    let mut schema = schema();
+    schema
+        .register::<ForeignTag>("fixture/tag", |_| Ok(()))
+        .unwrap();
+    let mut saved = world.store.snapshot().unwrap();
+    saved.columns.insert("fixture/tag".into(), Vec::new());
+    world.store = game_ecs::Store::restore(schema, saved).unwrap();
+    world
+        .store
+        .insert(game_ecs::StableId(1), ForeignTag(5))
+        .unwrap();
+    world.queries = Runtime::bind(&mut world.store);
+    let batch = world.prepare_advance_serial(Some(&day(1, 20))).unwrap();
+    let job = world
+        .prepare_gather(PersonId(3), ResourceId(1), Quantity(500), false, facts())
+        .unwrap()
+        .job(InventoryId(7));
+    world.jobs.insert(PersonId(3), job.clone());
+    world.observe_area(PersonId(3), AreaId(2), SimTime(19));
+    world.known.entry(PersonId(3)).or_default().insert(
+        ResourceId(1),
+        ResourceView {
+            id: ResourceId(1),
+            area: AreaId(2),
+            kind: ResourceKind::Spring,
+            available: Quantity(2_000),
+            accessible: true,
+            custodian: Some(PersonId(3)),
+            contamination: 0,
+            observed_at: SimTime(19),
+        },
+    );
+    world
+        .store
+        .get_mut::<ForeignTag>(game_ecs::StableId(1))
+        .unwrap()
+        .0 = 9;
+    let known = world.known.clone();
+    let observed = world.observed_areas.clone();
+    world.commit_advance(batch).unwrap();
+    assert_eq!(world.jobs[&PersonId(3)], job);
+    assert_eq!(world.known, known);
+    assert_eq!(world.observed_areas, observed);
+    assert_eq!(
+        world.resource(ResourceId(1)).unwrap().remaining,
+        Quantity(2_250)
+    );
+    assert_eq!(
+        world.store.get::<ForeignTag>(game_ecs::StableId(1)),
+        Some(&ForeignTag(9))
+    );
+}
+
+#[test]
+fn late_row_rules_day_and_membership_changes_reject_the_entire_batch() {
+    let world = world(ResourceKind::Herbs, 0);
+    let batch = world.prepare_advance_serial(Some(&day(1, 20))).unwrap();
+    for mutation in 0..5 {
+        let mut changed = world.clone();
+        match mutation {
+            0 => {
+                changed
+                    .runtime
+                    .plot_mut(&mut changed.store, SiteId(9))
+                    .unwrap()
+                    .soil_water = 0
+            }
+            1 => changed.rules.soil_recovery += 1,
+            2 => changed.day += 1,
+            3 => {
+                changed.remove_plot(SiteId(9)).unwrap();
+            }
+            4 => {
+                let mut added = changed.resource(ResourceId(1)).unwrap().clone();
+                added.id = ResourceId(99);
+                changed.insert_resource(added).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = changed.clone();
+        assert!(changed.commit_advance(batch.clone()).is_err());
+        assert_eq!(changed, before);
+    }
+}
+
+#[test]
+fn stable_native_inputs_support_parallel_pure_evaluation_after_save_restore() {
+    let mut world = world(ResourceKind::Herbs, 0);
+    for id in (2..18).rev() {
+        let mut source = world.resource(ResourceId(1)).unwrap().clone();
+        source.id = ResourceId(id);
+        world.insert_resource(source).unwrap();
+    }
+    for id in (20..28).rev() {
+        let mut plot = world.plot(SiteId(9)).unwrap().clone();
+        plot.id = SiteId(id);
+        world.insert_plot(plot).unwrap();
+    }
+    let restored: Fixture = serde_json::from_slice(&serde_json::to_vec(&world).unwrap()).unwrap();
+    let forcing = day(1, 20);
+    let batch = restored
+        .runtime
+        .prepare_advance(
+            &restored.store,
+            &restored.queries,
+            Some(&forcing),
+            |rows| {
+                std::thread::scope(|scope| {
+                    assert!(rows.windows(2).all(|pair| pair[0].0 < pair[1].0));
+                    let jobs: Vec<_> = rows
+                        .iter()
+                        .map(|(id, input)| scope.spawn(move || Ok((*id, input.evaluate()?))))
+                        .collect();
+                    jobs.into_iter().map(|job| job.join().unwrap()).collect()
+                })
+            },
+            |rows| {
+                std::thread::scope(|scope| {
+                    assert!(rows.windows(2).all(|pair| pair[0].0 < pair[1].0));
+                    let jobs: Vec<_> = rows
+                        .iter()
+                        .map(|(id, input)| scope.spawn(move || Ok((*id, input.evaluate()?))))
+                        .collect();
+                    jobs.into_iter().map(|job| job.join().unwrap()).collect()
+                })
+            },
+        )
+        .unwrap();
+    let expected = world.advance(Some(&forcing)).unwrap();
+    let mut parallel = restored;
+    parallel.commit_advance(batch).unwrap();
+    assert_eq!(parallel, expected);
+}
+
+#[test]
+fn missing_schema_stricter_validation_and_foreign_executor_writes_are_inert() {
+    let fixture = world(ResourceKind::Herbs, 0);
+    let mut store = game_ecs::Store::with_schema(game_ecs::Schema::new());
+    let before = store.snapshot().unwrap();
+    assert!(
+        fixture
+            .runtime
+            .insert_resource(&mut store, fixture.resource(ResourceId(1)).unwrap().clone())
+            .is_err()
+    );
+    assert!(
+        fixture
+            .runtime
+            .insert_plot(&mut store, fixture.plot(SiteId(9)).unwrap().clone())
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    let mut schema = game_ecs::Schema::new();
+    schema
+        .register::<Resource>("ecology/resource", |_| Err(Error::Unavailable))
+        .unwrap();
+    schema
+        .register::<Plot>("ecology/plot", |_| Err(Error::Unavailable))
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        fixture
+            .runtime
+            .insert_resource(&mut store, fixture.resource(ResourceId(1)).unwrap().clone()),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .insert_plot(&mut store, fixture.plot(SiteId(9)).unwrap().clone()),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    let before = fixture.clone();
+    assert!(
+        fixture
+            .runtime
+            .prepare_advance(
+                &fixture.store,
+                &fixture.queries,
+                Some(&day(1, 20)),
+                |rows| {
+                    let mut output = rows[0].1.evaluate()?;
+                    output.access.clear();
+                    Ok(vec![(rows[0].0, output)])
+                },
+                |rows| rows
+                    .iter()
+                    .map(|(id, input)| Ok((*id, input.evaluate()?)))
+                    .collect()
+            )
+            .is_err()
+    );
+    assert!(
+        fixture
+            .runtime
+            .prepare_advance(
+                &fixture.store,
+                &fixture.queries,
+                Some(&day(1, 20)),
+                |rows| Ok(vec![(ResourceId(99), rows[0].1.evaluate()?)]),
+                |rows| rows
+                    .iter()
+                    .map(|(id, input)| Ok((*id, input.evaluate()?)))
+                    .collect()
+            )
+            .is_err()
+    );
+    assert_eq!(fixture, before);
 }

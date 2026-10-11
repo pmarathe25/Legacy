@@ -2,6 +2,10 @@
 use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod advancing;
+mod storage;
+pub use advancing::{PlotInput, PreparedAdvance, ResourceInput};
+pub use storage::{Queries, register_components};
 
 /// Daily forcing for one local cell, independent of its weather provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +120,9 @@ pub struct Resource {
 }
 impl Resource {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.capacity.0 == 0
+        if self.id.0 == 0
+            || self.area.0 == 0
+            || self.capacity.0 == 0
             || self.remaining > self.capacity
             || self.decay_permille > 1_000
             || self.contamination > 1_000
@@ -151,7 +157,9 @@ pub struct Plot {
 }
 impl Plot {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.fertility > 1_000
+        if self.id.0 == 0
+            || self.area.0 == 0
+            || self.fertility > 1_000
             || self.water_capacity == 0
             || self.soil_water > self.water_capacity
         {
@@ -172,10 +180,8 @@ pub struct Gathering {
     pub unauthorized: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
+pub struct Runtime {
     pub rules: EcologyRules,
-    pub resources: BTreeMap<ResourceId, Resource>,
-    pub plots: BTreeMap<SiteId, Plot>,
     pub jobs: BTreeMap<PersonId, Gathering>,
     pub known: BTreeMap<PersonId, BTreeMap<ResourceId, ResourceView>>,
     pub known_plots: BTreeMap<PersonId, BTreeMap<SiteId, PlotView>>,
@@ -237,7 +243,7 @@ impl EcologyRules {
         Ok(())
     }
 }
-impl World {
+impl Runtime {
     /// Remote prospects consume the person's dated resource views only. Local
     /// preparation facts come from the physical collection owner at this point.
     pub fn acquisition_prospects(
@@ -340,108 +346,16 @@ impl World {
             .map(|target| (target, inspected))
             .collect()
     }
-    /// Prepare daily changes by matching each resource or plot to its local
-    /// weather cell. Without a day provider, finite gathering remains usable
-    /// and the calendar cursor stays unchanged. An empty cell map advances the
-    /// cursor without changing land, stock, or fractional growth.
-    pub fn advance(&self, input: Option<&LocalWeatherDay>) -> Result<Self, Error> {
-        self.rules.validate()?;
-        if let Some(input) = input {
-            for weather in input.cells.values() {
-                weather.validate()?;
-            }
-        }
-        for resource in self.resources.values() {
-            resource.validate()?;
-        }
-        for plot in self.plots.values() {
-            plot.validate()?;
-        }
-        let mut world = self.clone();
-        let Some(input) = input else {
-            return Ok(world);
-        };
-        let day = input.day;
-        if day == world.day {
-            return Ok(world);
-        }
-        if day != world.day.checked_add(1).ok_or(Error::Overflow)? {
-            return Err(Error::InvalidSave("ecology skipped a calendar day".into()));
-        }
-        for source in world.resources.values_mut() {
-            let Some(weather) = input.cells.get(&source.area) else {
-                continue;
-            };
-            source.soil_water = source
-                .soil_water
-                .saturating_add(weather.rain)
-                .min(source.water_capacity)
-                .saturating_sub(weather.evaporation);
-            let warmth = i64::from(weather.temperature - source.minimum_temperature)
-                .max(0)
-                .min(i64::from(
-                    source.optimum_temperature - source.minimum_temperature,
-                )) as u64
-                * 1_000
-                / u64::try_from(source.optimum_temperature - source.minimum_temperature)
-                    .map_err(|_| Error::Overflow)?;
-            let moisture = (u128::from(source.soil_water.min(source.optimal_water)) * 1_000
-                / u128::from(source.optimal_water)) as u64;
-            let growth =
-                u128::from(source.daily_growth.0) * u128::from(warmth) * u128::from(moisture)
-                    + u128::from(source.growth_remainder);
-            let available = source.capacity.0 - source.remaining.0;
-            let added = u64::try_from((growth / 1_000_000).min(u128::from(available)))
-                .map_err(|_| Error::Overflow)?;
-            source.growth_remainder = if added == available {
-                0
-            } else {
-                (growth % 1_000_000) as u64
-            };
-            let decay =
-                (u128::from(source.remaining.0) * u128::from(source.decay_permille) / 1_000) as u64;
-            let previous = source.remaining.0 - decay;
-            source.remaining.0 = previous.saturating_add(added).min(source.capacity.0);
-            if source.kind == ResourceKind::Spring && added > 0 {
-                source.contamination = ((u128::from(previous) * u128::from(source.contamination)
-                    + u128::from(added) * u128::from(source.runoff_contamination))
-                    / u128::from(source.remaining.0.max(1)))
-                    as u16;
-            }
-        }
-        for plot in world.plots.values_mut() {
-            let Some(weather) = input.cells.get(&plot.area) else {
-                continue;
-            };
-            plot.soil_water = plot
-                .soil_water
-                .saturating_add(if weather.temperature > 0 {
-                    weather.rain
-                } else {
-                    0
-                })
-                .min(plot.water_capacity)
-                .saturating_sub(weather.evaporation);
-            if weather.temperature > world.rules.base_temperature && plot.soil_water > 0 {
-                plot.fertility = plot
-                    .fertility
-                    .saturating_add(world.rules.soil_recovery)
-                    .min(1_000);
-            }
-        }
-        world.day = day;
-        Ok(world)
-    }
-
     /// A source/body ceiling. Access, work spaces, gear and the chosen amount's
     /// deadline are validated separately by prepare_gather.
     pub fn gather_upper_bound(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         resource: ResourceId,
         facts: GatherFacts,
     ) -> Result<Quantity, Error> {
-        let source = self.resources.get(&resource).ok_or(Error::Unavailable)?;
+        let source = self.resource(store, resource).ok_or(Error::Unavailable)?;
         source.validate()?;
         let (reserved, _) = self.gathering_reservations(actor, resource)?;
         let available = u128::from(source.remaining.0).saturating_sub(reserved) as u64;
@@ -472,13 +386,14 @@ impl World {
 
     pub fn gathering_conditions(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         resource: ResourceId,
         quantity: Quantity,
         unauthorized: bool,
         facts: GatherFacts,
     ) -> Result<GatheringConditions, Error> {
-        let source = self.resources.get(&resource).ok_or(Error::Unavailable)?;
+        let source = self.resource(store, resource).ok_or(Error::Unavailable)?;
         source.validate()?;
         let (reserved, working) = self.gathering_reservations(actor, resource)?;
         if quantity.0 == 0
@@ -515,6 +430,7 @@ impl World {
     }
     pub fn prepare_gather(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         resource: ResourceId,
         quantity: Quantity,
@@ -522,11 +438,11 @@ impl World {
         facts: GatherFacts,
     ) -> Result<GatheringPlan, Error> {
         let conditions =
-            self.gathering_conditions(actor, resource, quantity, unauthorized, facts)?;
+            self.gathering_conditions(store, actor, resource, quantity, unauthorized, facts)?;
         if !conditions.ready {
             return Err(Error::Unavailable);
         }
-        let source = &self.resources[&resource];
+        let source = self.resource(store, resource).ok_or(Error::Unavailable)?;
         Ok(GatheringPlan {
             resource,
             quantity,

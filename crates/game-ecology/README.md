@@ -1,5 +1,7 @@
-# game-ecology
+# Ecology
 
-This crate tracks natural deposits and undeveloped plots, including their access, custody, and observed views. Daily renewal and soil recovery match each deposit or plot to its local weather cell. Weather is supplied as plain facts by any provider; this crate has no environment dependency. Missing cells preserve stock and soil, while finite gathering continues without weather. Crops and weather simulation are outside this crate.
+`game-ecology` models finite natural deposits, undeveloped plots, and gathering. Resources and plots are plain components in the host's shared store; `Runtime` retains rules, gathering jobs, and dated personal observations.
 
-Gathering preparation checks coordinator-supplied actor facts, access, carrying capacity, worker slots, and existing reservations, then returns a timed plan. Collection preparation checks the completed job and produces an effect for resource stock and collected goods, including spring-water contamination. The coordinator supplies actual actors, cargo, and tools, then applies goods and health effects.
+Daily systems match each resource or plot with its area-local weather. They renew finite stocks, track moisture and water contamination, and recover undeveloped soil. Missing weather leaves those rows unchanged; gathering remains available.
+
+Preparation produces stable ordered row changes that a supplied executor can evaluate in parallel. Commit checks opening rows and membership before updating components and the consumed day. It never replaces jobs, knowledge, or foreign components. Gathering uses explicit body, capacity, equipment, permission, and contact facts and returns material effects for their owners to admit.

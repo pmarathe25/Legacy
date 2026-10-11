@@ -168,6 +168,11 @@ impl Store {
             backend: backend::Query2::new(&mut self.backend),
         }
     }
+    pub fn query1<A: Component>(&mut self) -> Query1<A> {
+        Query1 {
+            backend: backend::Query1::new(&mut self.backend),
+        }
+    }
     pub fn query3<A: Component, B: Component, C: Component>(&mut self) -> Query3<A, B, C> {
         Query3 {
             backend: backend::Query3::new(&mut self.backend),
@@ -215,6 +220,21 @@ impl fmt::Debug for Store {
 }
 /// A cached join. Refresh after adding/removing components or entities. Row order
 /// is unspecified; authoritative ordering uses stable IDs, never engine storage.
+pub struct Query1<A: Component> {
+    backend: backend::Query1<A>,
+}
+impl<A: Component> Query1<A> {
+    pub fn refresh(&mut self, store: &Store) -> Result<(), Error> {
+        self.backend.refresh(&store.backend)
+    }
+    pub fn iter<'a>(
+        &'a self,
+        store: &'a Store,
+    ) -> Result<impl Iterator<Item = (StableId, &'a A)> + 'a, Error> {
+        self.backend.iter(&store.backend)
+    }
+}
+
 pub struct Query2<A: Component, B: Component> {
     backend: backend::Query2<A, B>,
 }
@@ -302,6 +322,8 @@ mod tests {
     #[test]
     fn plain_components_join_without_engine_derives_or_native_handles() {
         let mut store = fixture(true);
+        let query1 = store.query1::<Count>();
+        assert_eq!(query1.iter(&store).unwrap().count(), 3);
         let query = store.query3::<Count, Name, Wide>();
         let rows: Vec<_> = query
             .iter(&store)

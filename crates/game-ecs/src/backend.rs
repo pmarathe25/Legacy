@@ -388,6 +388,7 @@ macro_rules! queries {
         }
     }
 }
+queries!(Query1; A a);
 queries!(Query2; A a, B b);
 queries!(Query3; A a, B b, C c);
 
