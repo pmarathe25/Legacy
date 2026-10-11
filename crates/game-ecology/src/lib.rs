@@ -4,6 +4,10 @@ pub use game_land::Soil;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 mod advancing;
+mod observation;
+mod opportunities;
+pub use observation::{ObserverArea, PreparedObservations};
+pub use opportunities::{AutonomousOptions, GatherOpportunity};
 mod storage;
 pub use advancing::{PlotInput, PreparedAdvance, ResourceInput};
 pub use storage::{Queries, register_components};
@@ -313,20 +317,9 @@ impl Runtime {
         now: SimTime,
     ) -> Result<(), Error> {
         let mut knowledge = self.knowledge(store, actor).cloned().unwrap_or_default();
-        let observed = &mut knowledge.observed_areas;
-        if observed.get(&area).is_some_and(|at| *at > now) {
+        if !observation::remember_area(&mut knowledge, area, now) {
             return Ok(());
         }
-        if observed.len() == 16
-            && !observed.contains_key(&area)
-            && let Some(oldest) = observed
-                .iter()
-                .min_by_key(|(id, at)| (**at, **id))
-                .map(|(id, _)| *id)
-        {
-            observed.remove(&oldest);
-        }
-        observed.insert(area, now);
         self.insert_knowledge(store, actor, knowledge)
     }
     pub fn exploration_areas(
