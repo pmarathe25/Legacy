@@ -563,3 +563,6 @@ mod tests;
 
 #[cfg(test)]
 mod free_port_tests;
+
+mod cancellation;
+pub use cancellation::PreparedGatheringCancellation;

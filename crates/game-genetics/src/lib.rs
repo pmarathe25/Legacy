@@ -733,13 +733,9 @@ impl Runtime {
         Ok(())
     }
     pub fn end_pregnancy(&self, store: &mut Store, pregnancy: PregnancyId, now: SimTime) {
-        if let Some(record) = inheritance_mut(store, pregnancy)
-            && record.born.is_none()
-            && record.ended_at.is_none()
-            && now >= record.conceived_at
-        {
-            record.ended_at = Some(now);
-        }
+        self.prepare_end_pregnancy(store, pregnancy, now)
+            .commit(store)
+            .expect("immediately prepared genetic interruption");
     }
     fn genome_valid(&self, genome: &Genome) -> bool {
         self.genome_valid_with(genome, None)
@@ -899,3 +895,6 @@ pub fn validate(world: &Runtime, store: &Store, now: SimTime) -> Result<(), Erro
 
 #[cfg(test)]
 mod tests;
+
+mod ending;
+pub use ending::PreparedPregnancyEnd;

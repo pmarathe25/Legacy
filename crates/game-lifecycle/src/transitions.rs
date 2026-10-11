@@ -130,9 +130,13 @@ impl PreparedLifecycle {
         }
         Ok(())
     }
-    pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<Vec<Effect>, Error> {
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<LifecycleFinalization, Error> {
         self.validate(runtime, store)?;
-        let mut batch = Batch::new();
         for edit in self.edits {
             match edit {
                 Edit::Pregnancy { after, .. } => {
@@ -143,8 +147,15 @@ impl PreparedLifecycle {
                 }
             }
         }
+        Ok(LifecycleFinalization {
+            effects: self.effects,
+        })
+    }
+    pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<Vec<Effect>, Error> {
+        let mut batch = Batch::new();
+        let finish = self.stage_into(runtime, store, &mut batch)?;
         store.apply_batch(batch)?;
-        Ok(self.effects)
+        Ok(finish.finish())
     }
     fn noop(rules: &Rules) -> Self {
         Self {
@@ -153,6 +164,91 @@ impl PreparedLifecycle {
             edits: Vec::new(),
             effects: Vec::new(),
         }
+    }
+}
+pub struct LifecycleFinalization {
+    effects: Vec<Effect>,
+}
+impl LifecycleFinalization {
+    pub fn finish(self) -> Vec<Effect> {
+        self.effects
+    }
+}
+#[derive(Clone, Debug)]
+pub struct InterruptionRequest {
+    pub actor: PersonId,
+    pub died: bool,
+    pub affected: Vec<PregnancyId>,
+}
+pub struct PreparedLifecycleInterruptions {
+    change: PreparedLifecycle,
+    groups: Vec<(PersonId, Vec<Effect>)>,
+}
+impl PreparedLifecycleInterruptions {
+    pub fn effects(&self) -> impl Iterator<Item = (PersonId, &[Effect])> {
+        self.groups
+            .iter()
+            .map(|(actor, effects)| (*actor, effects.as_slice()))
+    }
+    pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
+        self.change.validate(runtime, store)
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<LifecycleInterruptionFinalization, Error> {
+        self.change.stage_into(runtime, store, batch)?;
+        Ok(LifecycleInterruptionFinalization {
+            groups: self.groups,
+        })
+    }
+}
+pub struct LifecycleInterruptionFinalization {
+    groups: Vec<(PersonId, Vec<Effect>)>,
+}
+impl LifecycleInterruptionFinalization {
+    pub fn finish(self) -> Vec<(PersonId, Vec<Effect>)> {
+        self.groups
+    }
+}
+impl Runtime {
+    pub fn prepare_interruptions(
+        &self,
+        store: &Store,
+        requests: &[InterruptionRequest],
+    ) -> PreparedLifecycleInterruptions {
+        let mut change = PreparedLifecycle::noop(&self.rules);
+        let mut groups = Vec::new();
+        let mut ended = BTreeSet::new();
+        for request in requests {
+            let one = self.prepare_interruption(
+                store,
+                request.actor,
+                request.died,
+                request.affected.iter().copied(),
+            );
+            change.guards.extend(one.guards);
+            let mut effects = Vec::new();
+            for edit in one.edits {
+                if let Edit::Pregnancy { after, .. } = &edit
+                    && ended.insert(after.id)
+                {
+                    change.edits.push(edit);
+                }
+            }
+            for effect in one.effects {
+                if let Effect::PregnancyEnded(ending) = &effect {
+                    if change.effects.iter().any(|effect|matches!(effect,Effect::PregnancyEnded(old) if old.pregnancy==ending.pregnancy)){continue;}
+                    change.effects.push(effect.clone());
+                    effects.push(effect);
+                }
+            }
+            groups.push((request.actor, effects));
+        }
+        change.effects.clear();
+        PreparedLifecycleInterruptions { change, groups }
     }
 }
 /// Typed lifecycle deadlines; adapters translate their scheduling storage into
@@ -656,3 +752,7 @@ impl Runtime {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "staging_tests.rs"]
+mod staging_tests;

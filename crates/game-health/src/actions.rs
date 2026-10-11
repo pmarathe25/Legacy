@@ -390,13 +390,15 @@ impl PreparedHealth {
         }
         Ok(())
     }
-    pub fn commit(
+    /// Guard and stage only health-owned sparse rows. The caller discards the
+    /// transient batch on failure, and publishes finalization after joint apply.
+    pub fn stage_into(
         self,
-        world: &mut Runtime,
-        store: &mut Store,
-    ) -> Result<Vec<HealthEffect>, Error> {
+        world: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<HealthFinalization, Error> {
         self.validate(world, store)?;
-        let mut batch = Batch::new();
         for (id, (_, after)) in &self.jobs {
             if let Some(value) = after {
                 value.validate()?;
@@ -433,11 +435,97 @@ impl PreparedHealth {
             after.validate()?;
             batch.insert(StableId(id.0), after);
         }
+        Ok(HealthFinalization {
+            effects: self.effects,
+        })
+    }
+    pub fn commit(
+        self,
+        world: &mut Runtime,
+        store: &mut Store,
+    ) -> Result<Vec<HealthEffect>, Error> {
+        let mut batch = Batch::new();
+        let finish = self.stage_into(world, store, &mut batch)?;
         store.apply_batch(batch)?;
-        Ok(self.effects)
+        Ok(finish.finish())
+    }
+}
+pub struct HealthFinalization {
+    effects: Vec<HealthEffect>,
+}
+impl HealthFinalization {
+    pub fn finish(self) -> Vec<HealthEffect> {
+        self.effects
+    }
+}
+pub struct PreparedHealthCancellations {
+    change: PreparedHealth,
+    groups: Vec<(PersonId, Vec<HealthEffect>)>,
+}
+impl PreparedHealthCancellations {
+    pub fn effects(&self) -> impl Iterator<Item = (PersonId, &[HealthEffect])> {
+        self.groups
+            .iter()
+            .map(|(actor, effects)| (*actor, effects.as_slice()))
+    }
+    pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
+        self.change.validate(runtime, store)
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<HealthCancellationFinalization, Error> {
+        self.change.stage_into(runtime, store, batch)?;
+        Ok(HealthCancellationFinalization {
+            groups: self.groups,
+        })
+    }
+    pub fn commit(
+        self,
+        runtime: &Runtime,
+        store: &mut Store,
+    ) -> Result<Vec<(PersonId, Vec<HealthEffect>)>, Error> {
+        let mut batch = Batch::new();
+        let finish = self.stage_into(runtime, store, &mut batch)?;
+        store.apply_batch(batch)?;
+        Ok(finish.finish())
+    }
+}
+pub struct HealthCancellationFinalization {
+    groups: Vec<(PersonId, Vec<HealthEffect>)>,
+}
+impl HealthCancellationFinalization {
+    pub fn finish(self) -> Vec<(PersonId, Vec<HealthEffect>)> {
+        self.groups
     }
 }
 impl Runtime {
+    pub fn prepare_cancel_many(
+        &self,
+        store: &Store,
+        actors: &[PersonId],
+    ) -> PreparedHealthCancellations {
+        let mut change = PreparedHealth::new(self);
+        let mut groups = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut cleared = BTreeSet::new();
+        for actor in actors.iter().copied().filter(|actor| seen.insert(*actor)) {
+            change.cancel(self, store, actor);
+            let effects = std::mem::take(&mut change.effects)
+                .into_iter()
+                .filter(|effect| match effect {
+                    HealthEffect::ClearWork { actor, completes } => {
+                        cleared.insert((*actor, *completes))
+                    }
+                    _ => true,
+                })
+                .collect();
+            groups.push((actor, effects));
+        }
+        PreparedHealthCancellations { change, groups }
+    }
     pub fn prepare_cancel(&self, store: &Store, actor: PersonId) -> PreparedHealth {
         let mut change = PreparedHealth::new(self);
         change.cancel(self, store, actor);
@@ -1089,3 +1177,7 @@ impl Runtime {
             .count() as u64
     }
 }
+
+#[cfg(test)]
+#[path = "action_staging_tests.rs"]
+mod staging_tests;
