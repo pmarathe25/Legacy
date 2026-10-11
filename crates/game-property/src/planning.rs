@@ -12,20 +12,17 @@ pub struct AcquisitionFacts {
     pub destination: Option<InventoryId>,
     pub quantity: Quantity,
 }
-impl World {
-    pub fn acquisition_eligible(&self, actor: ActorFacts) -> bool {
-        actor.capable
-            && !self
-                .next_search
-                .get(&actor.actor)
-                .is_some_and(|at| *at > actor.now)
+impl Runtime {
+    pub fn acquisition_eligible(&self, store: &Store, actor: ActorFacts) -> bool {
+        actor.capable && !next_search(store, actor.actor).is_some_and(|at| *at > actor.now)
     }
     pub fn acquisition_source_eligible(
         &self,
+        store: &Store,
         need: &AcquisitionFacts,
         stock: &StockKnowledge,
     ) -> bool {
-        self.acquisition_eligible(need.actor)
+        self.acquisition_eligible(store, need.actor)
             && stock.good == need.good
             && !stock.accessible
             && stock.quantity.0 > 0
@@ -35,16 +32,17 @@ impl World {
     /// Enumerates known feasible actions; personal motives belong to the actor.
     pub fn acquisition_opportunities(
         &self,
+        store: &Store,
         need: AcquisitionFacts,
         opportunities: &[NeedOpportunity],
     ) -> Vec<PropertyAction> {
-        if !self.acquisition_eligible(need.actor) {
+        if !self.acquisition_eligible(store, need.actor) {
             return Vec::new();
         }
         let mut actions = Vec::new();
         for opportunity in opportunities {
             let stock = &opportunity.known;
-            if !self.acquisition_source_eligible(&need, stock) {
+            if !self.acquisition_source_eligible(store, &need, stock) {
                 continue;
             }
             if opportunity.local_custodian {
@@ -67,13 +65,14 @@ impl World {
     }
     pub fn plan_sharing(
         &self,
+        store: &Store,
         actor: ActorFacts,
         needy: bool,
         good: Good,
         minimum: Quantity,
         stores: &[SharingStore],
     ) -> Vec<PropertyAction> {
-        if !self.sharing_eligible(actor, needy) {
+        if !self.sharing_eligible(store, actor, needy) {
             return Vec::new();
         }
         stores
@@ -96,13 +95,8 @@ impl World {
             })
             .collect()
     }
-    pub fn sharing_eligible(&self, actor: ActorFacts, needy: bool) -> bool {
-        actor.capable
-            && needy
-            && self
-                .attitudes
-                .get(&actor.actor)
-                .is_some_and(|a| a.sharing >= 700)
+    pub fn sharing_eligible(&self, store: &Store, actor: ActorFacts, needy: bool) -> bool {
+        actor.capable && needy && attitude(store, actor.actor).is_some_and(|a| a.sharing >= 700)
     }
 }
 pub struct SharingStore {

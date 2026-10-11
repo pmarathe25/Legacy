@@ -149,7 +149,7 @@ pub struct AssemblyState {
     #[serde(default)]
     pub lineage: Option<lineage::World>,
     #[serde(default)]
-    pub property: Option<property::World>,
+    pub property: Option<game_property::Runtime>,
     #[serde(default)]
     pub institutions: Option<institutions::World>,
     #[serde(default)]

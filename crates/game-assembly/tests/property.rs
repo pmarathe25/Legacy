@@ -127,13 +127,19 @@ fn newly_created_cargo_keeps_complete_ownership_bookkeeping_after_real_loading()
         Quantity(1_000)
     );
     assert_eq!(cargo.quantity, Quantity(2_000));
-    let portions = &state.state.property.as_ref().unwrap().portions;
+    let provenance_count = state.components.count::<game_property::Provenance>();
     assert_eq!(
-        portions.len(),
+        provenance_count,
         game_cargo::inventories(state.components).count()
     );
     for (id, inventory) in game_cargo::inventories(state.components) {
-        assert_eq!(portions[&id].values().sum::<u64>(), inventory.quantity.0);
+        assert_eq!(
+            game_property::portions(state.components, id)
+                .expect("stock provenance exists")
+                .values()
+                .sum::<u64>(),
+            inventory.quantity.0
+        );
     }
     assert_eq!(
         state,
@@ -154,13 +160,8 @@ fn theft_uses_loading_time_conserves_goods_and_keeps_claims_attached_to_cargo() 
         .quantity
         .0;
     let claim = sim.property_view(ruler).claims[0].id;
-    let assertion = sim
-        .canonical_state()
-        .state
-        .property
-        .as_ref()
-        .unwrap()
-        .claims[&claim]
+    let assertion = game_property::claim(sim.canonical_state().components, claim)
+        .expect("property row exists")
         .clone();
     take(&mut sim, 1_000);
     sim.advance(SimDuration(59_999)).unwrap();
@@ -193,9 +194,16 @@ fn theft_uses_loading_time_conserves_goods_and_keeps_claims_attached_to_cargo() 
             .0,
         1_000
     );
-    let world = sim.canonical_state().state.property.as_ref().unwrap();
-    assert_eq!(world.claims[&claim], assertion);
-    assert_eq!(world.portions[&destination][&claim], 1_000);
+    let world = sim.canonical_state();
+    assert_eq!(
+        game_property::claim(world.components, claim).expect("claim exists"),
+        &assertion
+    );
+    assert_eq!(
+        game_property::portions(world.components, destination).expect("stock provenance exists")
+            [&claim],
+        1_000
+    );
     assert!(
         !game_cargo::inventory(sim.canonical_state().components, origin)
             .expect("stock exists")
@@ -235,13 +243,7 @@ fn competing_claims_and_recognition_do_not_grant_custody_or_access() {
     sim.debug_property_action(owner, PropertyAction::Contest { claim: own })
         .unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .property
-            .as_ref()
-            .unwrap()
-            .claims
-            .len(),
+        game_property::claims(sim.canonical_state().components).count(),
         2
     );
     assert_eq!(
@@ -307,12 +309,8 @@ fn reports_take_time_and_transfer_remembered_incidents_without_live_global_updat
     sim.debug_move_actor(witness, AreaId(3)).unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .property
-            .as_ref()
-            .unwrap()
-            .incidents[&incident]
+        game_property::incident(sim.canonical_state().components, incident)
+            .expect("property row exists")
             .outcome,
         IncidentOutcome::Taken
     );
@@ -382,14 +380,9 @@ fn reporting_listener_occupancy_and_actual_departure_cancel_the_frozen_conversat
     for world in [&mut sim, &mut restored] {
         world.debug_move_actor(recipient, AreaId(1)).unwrap();
         assert!(
-            world
-                .canonical_state()
-                .state
-                .property
-                .as_ref()
-                .unwrap()
-                .reports
-                .is_empty()
+            game_property::reports(world.canonical_state().components)
+                .next()
+                .is_none()
         );
         assert_eq!(
             *world
@@ -452,13 +445,9 @@ fn completed_report_preserves_dated_snapshot_across_workers_save_and_minute_revi
     assert_eq!(report.outcome, IncidentOutcome::Attempt);
     assert_eq!(report.changed_at, SimTime(0));
     assert!(
-        sim.canonical_state()
-            .state
-            .property
-            .as_ref()
-            .unwrap()
-            .reports
-            .is_empty()
+        game_property::reports(sim.canonical_state().components)
+            .next()
+            .is_none()
     );
     assert!(
         !sim.canonical_state().events[first_event..]
@@ -503,13 +492,8 @@ fn willing_local_custodian_uses_real_combat_and_interrupts_loading_before_transf
     let result = sim.advance(MINUTE).unwrap();
     assert!(matches!(result.reason, StopReason::CombatInput { .. }));
     assert!(
-        sim.canonical_state()
-            .state
-            .property
-            .as_ref()
-            .unwrap()
-            .pending
-            .is_empty()
+        game_property::activities(sim.canonical_state().components)
+            .all(|(_, row)| row.pending.is_none())
     );
     assert!(
         !sim.canonical_state()
@@ -749,12 +733,8 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
         0
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .property
-            .as_ref()
-            .unwrap()
-            .portions[&inventory]
+        game_property::portions(sim.canonical_state().components, inventory)
+            .expect("property row exists")
             .is_empty()
     );
     let site = game_workshop::sites(sim.canonical_state().components)
@@ -765,9 +745,16 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
     sim.debug_actor_command(ruler, Command::Work { site })
         .unwrap();
     sim.advance(MINUTE).unwrap();
-    let world = sim.canonical_state().state.property.as_ref().unwrap();
-    assert_eq!(world.portions[&stock][&ClaimId(0)], 1_000);
-    assert_eq!(world.portions[&stock][&claim], 99_000);
+    let world = sim.canonical_state();
+    assert_eq!(
+        game_property::portions(world.components, stock).expect("stock provenance exists")
+            [&ClaimId(0)],
+        1_000
+    );
+    assert_eq!(
+        game_property::portions(world.components, stock).expect("stock provenance exists")[&claim],
+        99_000
+    );
     assert_eq!(
         game_cargo::inventory(sim.canonical_state().components, stock)
             .expect("stock exists")
@@ -776,7 +763,10 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
         100_000
     );
     let owner = actor(&sim, 3);
-    let rights = world.claims[&claim].rights.clone();
+    let rights = game_property::claim(world.components, claim)
+        .expect("claim exists")
+        .rights
+        .clone();
     sim.debug_property_action(
         owner,
         PropertyAction::Claim {
@@ -787,13 +777,7 @@ fn consumption_removes_claimed_portions_and_new_production_stays_unclaimed() {
     )
     .unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .property
-            .as_ref()
-            .unwrap()
-            .claims
-            .len(),
+        game_property::claims(sim.canonical_state().components).count(),
         2
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();

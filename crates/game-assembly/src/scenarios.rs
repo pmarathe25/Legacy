@@ -400,41 +400,32 @@ impl Simulation {
             },
             custodians,
         });
-        self.host.state.property = Some(property::World {
-            reports: BTreeMap::new(),
-            claims: BTreeMap::new(),
-            incidents: BTreeMap::new(),
-            known_claims: BTreeMap::new(),
-            knowledge: BTreeMap::new(),
-            attitudes: people
-                .iter()
-                .map(|p| {
-                    (
-                        *p,
-                        property::Attitude {
-                            exclusive_claims: 500,
-                            sharing: 600,
-                            willingness_to_defend: 500,
-                        },
-                    )
-                })
-                .collect(),
-            portions: game_cargo::inventories(&self.host.storage)
-                .map(|(_, row)| row)
-                .map(|stock| {
-                    (
-                        stock.id,
-                        if stock.quantity.0 == 0 {
-                            BTreeMap::new()
-                        } else {
-                            BTreeMap::from([(ClaimId(0), stock.quantity.0)])
-                        },
-                    )
-                })
-                .collect(),
-            pending: BTreeMap::new(),
+        let mut property_rows = game_ecs::Batch::new();
+        for person in &people {
+            property_rows.insert(
+                game_ecs::StableId(person.0),
+                game_property::Attitude {
+                    exclusive_claims: 500,
+                    sharing: 600,
+                    willingness_to_defend: 500,
+                },
+            );
+        }
+        for (id, stock) in game_cargo::inventories(&self.host.storage) {
+            property_rows.insert(
+                game_ecs::StableId(id.0),
+                game_property::Provenance {
+                    portions: if stock.quantity.0 == 0 {
+                        BTreeMap::new()
+                    } else {
+                        BTreeMap::from([(ClaimId(0), stock.quantity.0)])
+                    },
+                },
+            );
+        }
+        self.host.storage.apply_batch(property_rows)?;
+        self.host.state.property = Some(game_property::Runtime {
             last_event: self.host.next_event() - 1,
-            next_search: BTreeMap::new(),
         });
         self.host.state.institutions = Some(institutions::World {
             institutions: BTreeMap::new(),
@@ -513,13 +504,13 @@ impl Simulation {
         game_cargo::inventory_mut(&mut self.host.storage, tool)
             .unwrap()
             .quantity = Quantity(3_000);
-        self.host
-            .state
-            .property
-            .as_mut()
-            .unwrap()
-            .portions
-            .insert(tool, BTreeMap::from([(ClaimId(0), 3_000)]));
+        game_property::insert_provenance(
+            &mut self.host.storage,
+            tool,
+            game_property::Provenance {
+                portions: BTreeMap::from([(ClaimId(0), 3000)]),
+            },
+        )?;
         let output = self.add_inventory(
             Good::Tool,
             InventoryLocation::Area(area),
@@ -985,15 +976,9 @@ impl Simulation {
                 evidence: Vec::new(),
             },
         )?;
-        let claim = *self
-            .host
-            .state
-            .property
-            .as_ref()
-            .unwrap()
-            .claims
-            .keys()
-            .next_back()
+        let claim = game_property::claims(&self.host.storage)
+            .map(|(id, _)| id)
+            .last()
             .unwrap();
         for actor in founders.iter().copied().filter(|actor| *actor != ruler) {
             self.debug_property_action(actor, PropertyAction::Recognize { claim })?;
@@ -1733,14 +1718,8 @@ mod tests {
                     .all(|office| office.holder != current.person))
         );
         assert!(
-            sim.host
-                .state
-                .property
-                .as_ref()
-                .unwrap()
-                .claims
-                .values()
-                .all(|claim| claim.claimant != current.person)
+            game_property::claims(&sim.host.storage)
+                .all(|(_, claim)| claim.claimant != current.person)
         );
         assert!(
             sim.observe()

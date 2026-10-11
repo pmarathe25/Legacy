@@ -70,8 +70,14 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         })
         .collect();
     for id in water_ids {
-        state["state"]["property"]["portions"][&id] = serde_json::json!({});
         let entity = id.parse::<u64>().expect("inventory identity");
+        let provenance = state["components"]["columns"]["property/provenance"]
+            .as_array_mut()
+            .expect("actual provenance column")
+            .iter_mut()
+            .find(|row| row["entity"].as_u64() == Some(entity))
+            .expect("stock has provenance");
+        provenance["value"]["portions"] = serde_json::json!({});
         let value = serde_json::json!({
             "basis_quantity": 0, "basis_load": 0,
             "removed_quantity": 0, "removed_load": 0,

@@ -714,7 +714,9 @@ dependencies = [
 name = "game-property"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
  "game-core",
+ "game-ecs",
  "serde",
  "serde_json",
 ]

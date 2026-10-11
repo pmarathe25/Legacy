@@ -1120,10 +1120,10 @@ mod tests {
                 );
             }
         }
-        let portions = &one.host.state.property.as_ref().unwrap().portions;
         for (inventory, stock) in game_cargo::inventories(&one.host.storage) {
             assert_eq!(
-                portions[&inventory]
+                game_property::portions(&one.host.storage, inventory)
+                    .expect("stock provenance exists")
                     .values()
                     .map(|quantity| u128::from(*quantity))
                     .sum::<u128>(),

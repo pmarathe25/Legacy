@@ -992,3 +992,80 @@ fn native_inventory_columns_are_canonical_and_reject_identity_and_reference_forg
         assert_eq!(sim.save().unwrap(), before);
     }
 }
+
+#[test]
+fn native_property_columns_restore_and_reject_metadata_shadows_and_orphan_rows() {
+    let sim = Simulation::property_fixture(71, Execution::default()).unwrap();
+    let before = sim.save().unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    let metadata = &saved["state"]["state"]["property"];
+    assert_eq!(metadata.as_object().unwrap().len(), 1);
+    assert!(metadata.get("last_event").is_some());
+    let columns = &saved["state"]["components"]["columns"];
+    for name in [
+        "claim",
+        "incident",
+        "provenance",
+        "attitude",
+        "knowledge",
+        "activity",
+        "requests",
+    ] {
+        assert!(columns[format!("property/{name}")].is_array());
+    }
+    assert_eq!(
+        columns["property/provenance"].as_array().unwrap().len(),
+        columns["cargo/inventory"].as_array().unwrap().len()
+    );
+    let restored = Simulation::load(&before, Execution::default()).unwrap();
+    assert_eq!(restored.canonical_state(), sim.canonical_state());
+    assert_eq!(restored.save().unwrap(), before);
+    for field in [
+        "claims",
+        "incidents",
+        "portions",
+        "attitudes",
+        "knowledge",
+        "incident_knowledge",
+        "pending",
+        "reports",
+        "next_search",
+    ] {
+        assert!(metadata.get(field).is_none());
+        let mut forged = saved.clone();
+        forged["state"]["state"]["property"][field] = serde_json::json!({});
+        assert!(
+            Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default()).is_err(),
+            "runtime shadow {field}"
+        );
+    }
+    let area = sim.host.state.areas[0].id.0;
+    for attack in 0..8 {
+        let mut forged = saved.clone();
+        let columns = &mut forged["state"]["components"]["columns"];
+        match attack {
+            0 => forged["state"]["state"]["property"] = serde_json::Value::Null,
+            1 => columns["property/claim"][0]["value"]["id"] = serde_json::json!(999999),
+            2 => columns["property/claim"][0]["value"]["claimant"] = serde_json::json!(area),
+            3 => {
+                columns["property/provenance"][0]["entity"] =
+                    serde_json::json!(sim.host.state.ruler.0)
+            }
+            4 => columns["property/attitude"][0]["entity"] = serde_json::json!(area),
+            5 => columns["property/knowledge"][0]["entity"] = serde_json::json!(area),
+            6 => columns["property/activity"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"entity":area,"value":{"pending":null,"report":null}})),
+            _ => columns["property/requests"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"entity":area,"value":{"next_search":0}})),
+        }
+        assert!(
+            Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default()).is_err(),
+            "property reference attack {attack}"
+        );
+        assert_eq!(sim.save().unwrap(), before);
+    }
+}

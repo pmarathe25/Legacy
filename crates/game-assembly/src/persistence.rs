@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 40;
+const SAVE_VERSION: u32 = 41;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -328,12 +328,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.property {
-        for id in world
-            .claims
-            .keys()
-            .map(|id| id.0)
-            .chain(world.incidents.keys().map(|id| id.0))
+    if s.state.property.is_some() {
+        for id in game_property::claims(s.components)
+            .map(|(id, _)| id.0)
+            .chain(game_property::incidents(s.components).map(|(id, _)| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
@@ -1606,7 +1604,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .property
                         .as_ref()
-                        .is_some_and(|w| w.claims.contains_key(&claim))
+                        .is_some_and(|_| game_property::claim(s.components, claim).is_some())
                 {
                     return Err(fail());
                 }
@@ -1617,7 +1615,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .property
                         .as_ref()
-                        .is_some_and(|w| w.claims.contains_key(&claim))
+                        .is_some_and(|_| game_property::claim(s.components, claim).is_some())
                 {
                     return Err(fail());
                 }
@@ -1667,7 +1665,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .property
                         .as_ref()
-                        .is_some_and(|w| w.incidents.contains_key(&incident))
+                        .is_some_and(|_| game_property::incident(s.components, incident).is_some())
                 {
                     return Err(fail());
                 }
@@ -1678,7 +1676,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .property
                         .as_ref()
-                        .is_some_and(|w| w.incidents.contains_key(&incident))
+                        .is_some_and(|_| game_property::incident(s.components, incident).is_some())
                 {
                     return Err(fail());
                 }
@@ -1694,7 +1692,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .property
                         .as_ref()
-                        .is_some_and(|w| w.incidents.contains_key(&incident))
+                        .is_some_and(|_| game_property::incident(s.components, incident).is_some())
                 {
                     return Err(fail());
                 }

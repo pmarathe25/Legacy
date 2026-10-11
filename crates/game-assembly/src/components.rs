@@ -13,6 +13,7 @@ pub(crate) fn schema() -> Result<Schema, Error> {
     game_skills::register_components(&mut schema)?;
     game_health::register_components(&mut schema)?;
     game_lifecycle::register_components(&mut schema)?;
+    game_property::register_components(&mut schema)?;
     game_characters::decisions::register_minds::<game_api::Command>(&mut schema)?;
     game_genetics::register_components(&mut schema)?;
     game_physiology::traits::register_components(&mut schema)?;

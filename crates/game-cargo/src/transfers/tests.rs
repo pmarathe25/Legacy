@@ -460,3 +460,50 @@ fn receipt_can_publish_foreign_components_and_touched_stock_changes_reject_next_
         Some("receipt")
     );
 }
+
+#[test]
+fn staged_stock_and_foreign_receipt_rows_share_one_admission_boundary() {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<String>("test/receipt", |value| {
+            if value == "reject" {
+                Err(Error::InvalidConfiguration(
+                    "foreign receipt rejected".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+    let mut store = Store::with_schema(schema);
+    insert_inventory(&mut store, stock(1, None, 1_000, 3_000)).unwrap();
+    insert_inventory(&mut store, stock(2, Some(1), 0, 3_000)).unwrap();
+    let before = store.snapshot().unwrap();
+    let mut batch = Batch::new();
+    let decisions = plan(&store, None, vec![request(1, 1, 2, 500)], None)
+        .stage_into(&store, &mut batch)
+        .unwrap();
+    assert!(decisions[0].1);
+    batch.insert(StableId(2), "reject".to_owned());
+    assert!(store.apply_batch(batch).is_err());
+    assert_eq!(store.snapshot().unwrap(), before);
+    let mut batch = Batch::new();
+    plan(&store, None, vec![request(1, 1, 2, 500)], None)
+        .stage_into(&store, &mut batch)
+        .unwrap();
+    batch.insert(StableId(2), "accepted".to_owned());
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        inventory(&store, InventoryId(1)).unwrap().quantity,
+        Quantity(500)
+    );
+    assert_eq!(
+        inventory(&store, InventoryId(2)).unwrap().quantity,
+        Quantity(500)
+    );
+    assert_eq!(
+        store.get::<String>(StableId(2)).map(String::as_str),
+        Some("accepted")
+    );
+}

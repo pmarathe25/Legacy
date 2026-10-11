@@ -12,3 +12,19 @@ pub use planning::*;
 mod tests;
 mod validation;
 pub use state::*;
+pub use validation::validate_runtime;
+
+mod storage;
+use game_ecs::{Batch, StableId, Store};
+pub use storage::*;
+mod references;
+pub use references::*;
+
+#[cfg(test)]
+mod component_tests;
+
+mod menu;
+pub use menu::MenuFacts;
+
+#[cfg(test)]
+mod menu_tests;

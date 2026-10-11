@@ -25,11 +25,12 @@ pub struct PropertyReceipt {
     pub event: u64,
     pub change: ReceiptChange,
 }
-impl World {
+impl Runtime {
     /// `balances` contains touched or newly created stocks only. The host's
     /// inventory-count fast path avoids enumerating unchanged stock history.
     pub fn prepare_receipts(
         &self,
+        store: &Store,
         receipts: &[PropertyReceipt],
         balances: &BTreeMap<InventoryId, Quantity>,
         through: u64,
@@ -48,7 +49,7 @@ impl World {
         change.cursor = Some((self.last_event, through));
         for (inventory, closing) in balances
             .iter()
-            .filter(|(id, _)| !self.portions.contains_key(id))
+            .filter(|(id, _)| !portions(store, **id).is_some())
         {
             let mut opening = i128::from(closing.0);
             for receipt in receipts {
@@ -78,7 +79,7 @@ impl World {
             }
             let opening = u64::try_from(opening).map_err(|_| Error::Unavailable)?;
             change.set_portions(
-                self,
+                store,
                 *inventory,
                 if opening == 0 {
                     BTreeMap::new()
@@ -95,29 +96,29 @@ impl World {
                     quantity,
                 } => {
                     let parts = change
-                        .current_portions(self, *source)
+                        .current_portions(store, *source)
                         .ok_or(Error::Unavailable)?;
                     let (left, moved) = split_portions(parts, quantity.0)?;
-                    change.set_portions(self, *source, left);
+                    change.set_portions(store, *source, left);
                     let mut target = change
-                        .current_portions(self, *destination)
+                        .current_portions(store, *destination)
                         .cloned()
                         .ok_or(Error::Unavailable)?;
                     for (marker, q) in moved {
                         let total = target.entry(marker).or_default();
                         *total = total.checked_add(q).ok_or(Error::Overflow)?;
                     }
-                    change.set_portions(self, *destination, target);
+                    change.set_portions(store, *destination, target);
                 }
                 ReceiptChange::Consume {
                     inventory,
                     quantity,
                 } => {
                     let parts = change
-                        .current_portions(self, *inventory)
+                        .current_portions(store, *inventory)
                         .ok_or(Error::Unavailable)?;
                     let (left, _) = split_portions(parts, quantity.0)?;
-                    change.set_portions(self, *inventory, left);
+                    change.set_portions(store, *inventory, left);
                 }
                 ReceiptChange::Produce { outputs } => {
                     for (inventory, quantity) in outputs {
@@ -125,12 +126,12 @@ impl World {
                             continue;
                         }
                         let mut parts = change
-                            .current_portions(self, *inventory)
+                            .current_portions(store, *inventory)
                             .cloned()
                             .ok_or(Error::Unavailable)?;
                         let total = parts.entry(ClaimId(0)).or_default();
                         *total = total.checked_add(quantity.0).ok_or(Error::Overflow)?;
-                        change.set_portions(self, *inventory, parts);
+                        change.set_portions(store, *inventory, parts);
                     }
                 }
                 ReceiptChange::Born { person } => {
@@ -143,7 +144,7 @@ impl World {
         }
         for (inventory, quantity) in balances {
             let total = change
-                .current_portions(self, *inventory)
+                .current_portions(store, *inventory)
                 .ok_or(Error::Unavailable)?
                 .values()
                 .try_fold(0u64, |sum, q| sum.checked_add(*q).ok_or(Error::Overflow))?;

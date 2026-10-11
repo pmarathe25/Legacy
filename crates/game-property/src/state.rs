@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Claim {
     pub id: ClaimId,
     pub claimant: PersonId,
@@ -17,6 +18,7 @@ pub struct Claim {
     pub opposed_by: BTreeSet<PersonId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Incident {
     pub id: IncidentId,
     pub actor: PersonId,
@@ -31,6 +33,7 @@ pub struct Incident {
     pub portions: BTreeMap<ClaimId, u64>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Report {
     pub sender: PersonId,
     pub recipient: PersonId,
@@ -40,28 +43,21 @@ pub struct Report {
     pub snapshot: IncidentKnowledge,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IncidentKnowledge {
     pub incident: Incident,
     pub learned_at: SimTime,
     pub source: IncidentSource,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Attitude {
     pub exclusive_claims: u16,
     pub sharing: u16,
     pub willingness_to_defend: u16,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub claims: BTreeMap<ClaimId, Claim>,
-    pub incidents: BTreeMap<IncidentId, Incident>,
-    pub known_claims: BTreeMap<PersonId, BTreeMap<ClaimId, ClaimView>>,
-    pub knowledge: BTreeMap<PersonId, BTreeMap<IncidentId, IncidentKnowledge>>,
-    pub attitudes: BTreeMap<PersonId, Attitude>,
-    /// This partition records provenance, and must sum to physical quantity.
-    pub portions: BTreeMap<InventoryId, BTreeMap<ClaimId, u64>>,
-    pub pending: BTreeMap<PersonId, IncidentId>,
-    pub reports: BTreeMap<PersonId, Report>,
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
     pub last_event: u64,
-    pub next_search: BTreeMap<PersonId, SimTime>,
 }

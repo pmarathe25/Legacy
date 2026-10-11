@@ -163,6 +163,7 @@ pub struct PreparedProperty {
     cooldown: BTreeMap<PersonId, (Option<SimTime>, SimTime)>,
     pub(crate) cursor: Option<(u64, u64)>,
     effects: Vec<Effect>,
+    report_membership: BTreeMap<PersonId, Vec<(PersonId, Report)>>,
 }
 impl PreparedProperty {
     pub(crate) fn new() -> Self {
@@ -178,6 +179,7 @@ impl PreparedProperty {
             cooldown: BTreeMap::new(),
             cursor: None,
             effects: Vec::new(),
+            report_membership: BTreeMap::new(),
         }
     }
     pub fn effects(&self) -> &[Effect] {
@@ -185,34 +187,34 @@ impl PreparedProperty {
     }
     pub(crate) fn current_portions<'a>(
         &'a self,
-        world: &'a World,
+        store: &'a Store,
         id: InventoryId,
     ) -> Option<&'a Portions> {
         self.portions
             .get(&id)
             .map(|(_, after)| after)
-            .or_else(|| world.portions.get(&id))
+            .or_else(|| portions(store, id))
     }
-    pub(crate) fn set_portions(&mut self, world: &World, id: InventoryId, after: Portions) {
+    pub(crate) fn set_portions(&mut self, store: &Store, id: InventoryId, after: Portions) {
         self.portions
-            .insert(id, (world.portions.get(&id).cloned(), after));
+            .insert(id, (portions(store, id).cloned(), after));
     }
     /// Prove that the future physical transfer has a valid conserved receipt.
     /// Keep both opening partitions in the prepared CAS without moving them:
     /// only the authoritative physical receipt will actually relocate portions.
     fn prepare_transfer_receipt(
         &mut self,
-        world: &World,
+        store: &Store,
         source: StockFacts,
         destination: StockFacts,
         quantity: Quantity,
     ) -> Result<Portions, Error> {
         let from = self
-            .current_portions(world, source.id)
+            .current_portions(store, source.id)
             .cloned()
             .ok_or(Error::Unavailable)?;
         let to = self
-            .current_portions(world, destination.id)
+            .current_portions(store, destination.id)
             .cloned()
             .ok_or(Error::Unavailable)?;
         let total = |parts: &Portions| {
@@ -237,36 +239,37 @@ impl PreparedProperty {
         if total(&predicted)? != closing {
             return Err(Error::Unavailable);
         }
-        self.set_portions(world, source.id, from);
-        self.set_portions(world, destination.id, to);
+        self.set_portions(store, source.id, from);
+        self.set_portions(store, destination.id, to);
         Ok(moved)
     }
-    fn set_incident(&mut self, world: &World, id: IncidentId, after: Incident) {
+    fn set_incident(&mut self, store: &Store, id: IncidentId, after: Incident) {
         self.incidents
-            .insert(id, (world.incidents.get(&id).cloned(), after));
+            .insert(id, (incident(store, id).cloned(), after));
     }
-    fn set_knowledge(&mut self, world: &World, observer: PersonId, after: IncidentKnowledge) {
+    fn set_knowledge(&mut self, store: &Store, observer: PersonId, after: IncidentKnowledge) {
         let id = after.incident.id;
         self.knowledge.insert(
             (observer, id),
             (
-                world
-                    .knowledge
-                    .get(&observer)
+                known_incidents(store, observer)
                     .and_then(|k| k.get(&id))
                     .cloned(),
                 after,
             ),
         );
     }
-    fn cancel(&mut self, world: &World, actor: PersonId, now: SimTime) {
-        if let Some(id) = world.pending.get(&actor)
-            && let Some(incident) = world.incidents.get(id)
+    fn cancel(&mut self, store: &Store, actor: PersonId, now: SimTime) {
+        self.report_membership
+            .entry(actor)
+            .or_insert_with(|| report_membership(store, actor));
+        if let Some(id) = pending(store, actor)
+            && let Some(incident) = incident(store, *id)
         {
             let mut after = incident.clone();
             after.outcome = IncidentOutcome::Interrupted;
             after.changed_at = now;
-            self.set_incident(world, *id, after);
+            self.set_incident(store, *id, after);
             self.pending.insert(actor, (Some(*id), None));
             self.effects.push(Effect::TakingInterrupted {
                 incident: *id,
@@ -274,9 +277,8 @@ impl PreparedProperty {
             });
             self.effects.push(Effect::ClearTaking { actor });
         }
-        for report in world
-            .reports
-            .values()
+        for report in reports(store)
+            .map(|(_, row)| row)
             .filter(|r| r.sender == actor || r.recipient == actor)
         {
             self.reports
@@ -288,92 +290,151 @@ impl PreparedProperty {
             });
         }
     }
-    pub fn commit(self, world: &mut World) -> Result<Vec<Effect>, Error> {
+    pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
         if self
             .claims
             .iter()
-            .any(|(id, (before, _))| world.claims.get(id) != before.as_ref())
+            .any(|(id, (before, _))| claim(store, *id) != before.as_ref())
             || self
                 .incidents
                 .iter()
-                .any(|(id, (before, _))| world.incidents.get(id) != before.as_ref())
+                .any(|(id, (before, _))| incident(store, *id) != before.as_ref())
             || self
                 .portions
                 .iter()
-                .any(|(id, (before, _))| world.portions.get(id) != before.as_ref())
+                .any(|(id, (before, _))| portions(store, *id) != before.as_ref())
             || self
                 .pending
                 .iter()
-                .any(|(id, (before, _))| world.pending.get(id) != before.as_ref())
+                .any(|(actor, (before, _))| pending(store, *actor) != before.as_ref())
             || self
                 .reports
                 .iter()
-                .any(|(id, (before, _))| world.reports.get(id) != before.as_ref())
-            || self.known_claims.iter().any(|((person, id), (before, _))| {
-                world.known_claims.get(person).and_then(|k| k.get(id)) != before.as_ref()
+                .any(|(actor, (before, _))| report(store, *actor) != before.as_ref())
+            || self.known_claims.iter().any(|((actor, id), (before, _))| {
+                known_claims(store, *actor).and_then(|rows| rows.get(id)) != before.as_ref()
             })
-            || self.knowledge.iter().any(|((person, id), (before, _))| {
-                world.knowledge.get(person).and_then(|k| k.get(id)) != before.as_ref()
+            || self.knowledge.iter().any(|((actor, id), (before, _))| {
+                known_incidents(store, *actor).and_then(|rows| rows.get(id)) != before.as_ref()
             })
             || self
                 .cooldown
                 .iter()
-                .any(|(id, (before, _))| world.next_search.get(id) != before.as_ref())
+                .any(|(actor, (before, _))| next_search(store, *actor) != before.as_ref())
             || self
                 .cursor
-                .is_some_and(|(before, _)| world.last_event != before)
+                .is_some_and(|(before, _)| runtime.last_event != before)
+            || self
+                .report_membership
+                .iter()
+                .any(|(actor, before)| report_membership(store, *actor) != *before)
         {
             return Err(Error::Unavailable);
         }
+        for (id, (_, after)) in &self.claims {
+            if *id != after.id {
+                return Err(Error::Unavailable);
+            }
+            after.validate()?;
+        }
+        for (id, (_, after)) in &self.incidents {
+            if *id != after.id {
+                return Err(Error::Unavailable);
+            }
+            after.validate()?;
+        }
+        for (_, after) in self.portions.values() {
+            Provenance {
+                portions: after.clone(),
+            }
+            .validate()?;
+        }
+        Ok(())
+    }
+    /// Stage only this owner's rows. The caller discards the entire transient
+    /// batch on failure and finishes headers/effects after its combined admission.
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<PropertyFinalization, Error> {
+        self.validate(runtime, store)?;
+        let mut memories = BTreeMap::<PersonId, Knowledge>::new();
+        let mut actions = BTreeMap::<PersonId, Activity>::new();
         for (id, (_, after)) in self.claims {
-            world.claims.insert(id, after);
+            batch.insert(StableId(id.0), after);
         }
         for (id, (_, after)) in self.incidents {
-            world.incidents.insert(id, after);
+            batch.insert(StableId(id.0), after);
         }
         for (id, (_, after)) in self.portions {
-            world.portions.insert(id, after);
+            batch.insert(StableId(id.0), Provenance { portions: after });
         }
-        for (id, (_, after)) in self.pending {
-            if let Some(after) = after {
-                world.pending.insert(id, after);
-            } else {
-                world.pending.remove(&id);
-            }
+        for (actor, (_, after)) in self.pending {
+            actions
+                .entry(actor)
+                .or_insert_with(|| activity(store, actor).cloned().unwrap_or_default())
+                .pending = after;
         }
-        for (id, (_, after)) in self.reports {
-            if let Some(after) = after {
-                world.reports.insert(id, after);
-            } else {
-                world.reports.remove(&id);
-            }
+        for (actor, (_, after)) in self.reports {
+            actions
+                .entry(actor)
+                .or_insert_with(|| activity(store, actor).cloned().unwrap_or_default())
+                .report = after;
         }
-        for ((person, id), (_, after)) in self.known_claims {
-            world
-                .known_claims
-                .entry(person)
-                .or_default()
+        for ((actor, id), (_, after)) in self.known_claims {
+            memories
+                .entry(actor)
+                .or_insert_with(|| knowledge(store, actor).cloned().unwrap_or_default())
+                .claims
                 .insert(id, after);
         }
-        for ((person, id), (_, after)) in self.knowledge {
-            world.knowledge.entry(person).or_default().insert(id, after);
+        for ((actor, id), (_, after)) in self.knowledge {
+            memories
+                .entry(actor)
+                .or_insert_with(|| knowledge(store, actor).cloned().unwrap_or_default())
+                .incidents
+                .insert(id, after);
         }
         for actor in self.born {
-            world.attitudes.entry(actor).or_insert(Attitude {
-                exclusive_claims: 0,
-                sharing: 0,
-                willingness_to_defend: 0,
-            });
-            world.known_claims.entry(actor).or_default();
-            world.knowledge.entry(actor).or_default();
+            if attitude(store, actor).is_none() {
+                batch.insert(
+                    StableId(actor.0),
+                    Attitude {
+                        exclusive_claims: 0,
+                        sharing: 0,
+                        willingness_to_defend: 0,
+                    },
+                );
+            }
+            memories
+                .entry(actor)
+                .or_insert_with(|| knowledge(store, actor).cloned().unwrap_or_default());
         }
-        for (id, (_, after)) in self.cooldown {
-            world.next_search.insert(id, after);
+        for (actor, row) in memories {
+            batch.insert(StableId(actor.0), row);
         }
-        if let Some((_, after)) = self.cursor {
-            world.last_event = after;
+        for (actor, row) in actions {
+            if row.pending.is_none() && row.report.is_none() {
+                batch.remove::<Activity>(StableId(actor.0));
+            } else {
+                batch.insert(StableId(actor.0), row);
+            }
         }
-        Ok(self.effects)
+        for (actor, (_, after)) in self.cooldown {
+            batch.insert(StableId(actor.0), Requests { next_search: after });
+        }
+        Ok(PropertyFinalization {
+            cursor: self.cursor.map(|(_, after)| after),
+            effects: self.effects,
+        })
+    }
+    pub fn commit(self, runtime: &mut Runtime, store: &mut Store) -> Result<Vec<Effect>, Error> {
+        let mut batch = Batch::new();
+        let finish = self.stage_into(runtime, store, &mut batch)?;
+        store.apply_batch(batch)?;
+        Ok(finish.finish(runtime))
     }
 }
 pub fn split_portions(source: &Portions, quantity: u64) -> Result<(Portions, Portions), Error> {
@@ -427,17 +488,21 @@ pub fn taking_possible(
         && destination.room >= quantity
         && carrying_room >= quantity
 }
-impl World {
-    pub fn actor_talking(&self, actor: PersonId) -> bool {
-        self.reports.contains_key(&actor) || self.reports.values().any(|r| r.recipient == actor)
+impl Runtime {
+    pub fn actor_talking(&self, store: &Store, actor: PersonId) -> bool {
+        report(store, actor).is_some()
+            || reports(store)
+                .map(|(_, row)| row)
+                .any(|r| r.recipient == actor)
     }
-    pub fn prepare_cancel(&self, actor: PersonId, now: SimTime) -> PreparedProperty {
+    pub fn prepare_cancel(&self, store: &Store, actor: PersonId, now: SimTime) -> PreparedProperty {
         let mut change = PreparedProperty::new();
-        change.cancel(self, actor, now);
+        change.cancel(store, actor, now);
         change
     }
     pub fn prepare_action(
         &self,
+        store: &Store,
         actor: ActorFacts,
         action: &PropertyAction,
         facts: ActionFacts,
@@ -462,7 +527,7 @@ impl World {
                 },
             ) => {
                 let parts = change
-                    .current_portions(self, *inventory)
+                    .current_portions(store, *inventory)
                     .ok_or(Error::Unavailable)?;
                 if parts.values().try_fold(0u64, |total, q| {
                     total.checked_add(*q).ok_or(Error::Overflow)
@@ -471,19 +536,17 @@ impl World {
                     return Err(Error::Unavailable);
                 }
                 if id.0 == 0
-                    || self.claims.contains_key(&id)
+                    || claim(store, id).is_some()
                     || stock.id != *inventory
                     || stock.area != Some(area)
                     || stock.quantity.0 == 0
                     || rights.is_empty()
                     || evidence.len() > 16
                     || evidence.iter().any(|id| {
-                        !self
-                            .knowledge
-                            .get(&actor.actor)
+                        !known_incidents(store, actor.actor)
                             .is_some_and(|known| known.contains_key(id))
                     })
-                    || self.claims.values().any(|c| {
+                    || claims(store).map(|(_, row)| row).any(|c| {
                         c.claimant == actor.actor
                             && c.inventory == *inventory
                             && c.rights == *rights
@@ -517,13 +580,12 @@ impl World {
                     opposed_by: BTreeSet::new(),
                 };
                 change.claims.insert(id, (None, assertion));
-                change.set_portions(self, *inventory, parts);
+                change.set_portions(store, *inventory, parts);
                 for observer in witnesses.into_iter().chain([actor.actor]) {
                     change.known_claims.insert(
                         (observer, id),
                         (
-                            self.known_claims
-                                .get(&observer)
+                            known_claims(store, observer)
                                 .and_then(|k| k.get(&id))
                                 .cloned(),
                             view.clone(),
@@ -539,13 +601,11 @@ impl World {
             (PropertyAction::Recognize { claim }, ActionFacts::Recognition { witnesses })
             | (PropertyAction::Contest { claim }, ActionFacts::Recognition { witnesses }) => {
                 let support = matches!(action, PropertyAction::Recognize { .. });
-                let mut view = self
-                    .known_claims
-                    .get(&actor.actor)
+                let mut view = known_claims(store, actor.actor)
                     .and_then(|k| k.get(claim))
                     .cloned()
                     .ok_or(Error::Unavailable)?;
-                let before = self.claims.get(claim).ok_or(Error::Unavailable)?;
+                let before = crate::claim(store, *claim).ok_or(Error::Unavailable)?;
                 let mut after = before.clone();
                 recognize(
                     &mut after.recognized_by,
@@ -561,9 +621,7 @@ impl World {
                 );
                 change.claims.insert(*claim, (Some(before.clone()), after));
                 for observer in witnesses.into_iter().chain([actor.actor]) {
-                    let before = self
-                        .known_claims
-                        .get(&observer)
+                    let before = known_claims(store, observer)
                         .and_then(|k| k.get(claim))
                         .cloned();
                     let mut after = before.clone().unwrap_or_else(|| view.clone());
@@ -605,7 +663,7 @@ impl World {
                 change.cooldown.insert(
                     actor.actor,
                     (
-                        self.next_search.get(&actor.actor).copied(),
+                        next_search(store, actor.actor).copied(),
                         SimTime(actor.now.0.saturating_add(120_000)),
                     ),
                 );
@@ -616,10 +674,7 @@ impl World {
                 });
                 if custodian.autonomous
                     && custodian.capable
-                    && self
-                        .attitudes
-                        .get(&custodian.actor)
-                        .is_some_and(|a| a.sharing >= 700)
+                    && attitude(store, custodian.actor).is_some_and(|a| a.sharing >= 700)
                     && stock.quantity >= reserve
                     && trust >= 0
                 {
@@ -682,7 +737,7 @@ impl World {
                     || to.id != *destination
                     || id.0 == 0
                     || duration.0 == 0
-                    || self.incidents.contains_key(&id)
+                    || incident(store, id).is_some()
                     || !taking_possible(actor, from, to, *quantity, carrying_room, true)
                 {
                     return Err(Error::Unavailable);
@@ -691,16 +746,16 @@ impl World {
                     SimTime(actor.now.0.checked_add(duration.0).ok_or(Error::Overflow)?);
                 let (_, portions) = split_portions(
                     change
-                        .current_portions(self, *source)
+                        .current_portions(store, *source)
                         .ok_or(Error::Unavailable)?,
                     quantity.0,
                 )?;
-                change.cancel(self, actor.actor, actor.now);
+                change.cancel(store, actor.actor, actor.now);
                 change
                     .effects
                     .push(Effect::Interrupt { actor: actor.actor });
                 change.set_incident(
-                    self,
+                    store,
                     id,
                     Incident {
                         id,
@@ -718,12 +773,12 @@ impl World {
                 );
                 change.pending.insert(
                     actor.actor,
-                    (self.pending.get(&actor.actor).copied(), Some(id)),
+                    (pending(store, actor.actor).copied(), Some(id)),
                 );
                 change.cooldown.insert(
                     actor.actor,
                     (
-                        self.next_search.get(&actor.actor).copied(),
+                        next_search(store, actor.actor).copied(),
                         SimTime(actor.now.0.saturating_add(120_000)),
                     ),
                 );
@@ -746,9 +801,7 @@ impl World {
                     duration,
                 },
             ) => {
-                let snapshot = self
-                    .knowledge
-                    .get(&actor.actor)
+                let snapshot = known_incidents(store, actor.actor)
                     .and_then(|k| k.get(incident))
                     .cloned()
                     .ok_or(Error::Unavailable)?;
@@ -758,21 +811,21 @@ impl World {
                     || !contact.present
                     || contact.area != Some(area)
                     || !contact.available
-                    || self.actor_talking(*recipient)
+                    || self.actor_talking(store, *recipient)
                     || snapshot.learned_at > actor.now
                 {
                     return Err(Error::Unavailable);
                 }
                 let completes =
                     SimTime(actor.now.0.checked_add(duration.0).ok_or(Error::Overflow)?);
-                change.cancel(self, actor.actor, actor.now);
+                change.cancel(store, actor.actor, actor.now);
                 change
                     .effects
                     .push(Effect::Interrupt { actor: actor.actor });
                 change.reports.insert(
                     actor.actor,
                     (
-                        self.reports.get(&actor.actor).cloned(),
+                        report(store, actor.actor).cloned(),
                         Some(Report {
                             sender: actor.actor,
                             recipient: *recipient,
@@ -791,17 +844,14 @@ impl World {
                 });
             }
             (PropertyAction::ResistTaking { thief }, ActionFacts::Resist { thief: contact }) => {
-                let id = self.pending.get(thief).ok_or(Error::Unavailable)?;
-                let incident = &self.incidents[id];
+                let id = pending(store, *thief).ok_or(Error::Unavailable)?;
+                let incident = incident(store, *id).ok_or(Error::Unavailable)?;
                 if *thief != contact.actor
                     || *thief == actor.actor
                     || !contact.present
                     || contact.area != Some(area)
                     || incident.area != area
-                    || !self
-                        .knowledge
-                        .get(&actor.actor)
-                        .is_some_and(|k| k.contains_key(id))
+                    || !known_incidents(store, actor.actor).is_some_and(|k| k.contains_key(id))
                 {
                     return Err(Error::Unavailable);
                 }
@@ -822,17 +872,17 @@ pub struct ObserverFacts {
     pub personally_allowed: bool,
     pub can_defend: bool,
 }
-impl World {
-    fn interpretation(&self, observer: ObserverFacts, incident: &Incident) -> i32 {
+impl Runtime {
+    fn interpretation(&self, store: &Store, observer: ObserverFacts, incident: &Incident) -> i32 {
         if observer.actor == incident.actor {
             return 0;
         }
-        let Some(attitude) = self.attitudes.get(&observer.actor) else {
+        let Some(attitude) = attitude(store, observer.actor) else {
             return 0;
         };
-        let supported = self.known_claims.get(&observer.actor).is_some_and(|known| {
+        let supported = known_claims(store, observer.actor).is_some_and(|known| {
             known.keys().any(|id| {
-                self.claims.get(id).is_some_and(|claim| {
+                claim(store, *id).is_some_and(|claim| {
                     claim.recognized_by.contains(&observer.actor)
                         && claim.rights.contains(&ClaimRight::Transfer)
                         && claim
@@ -855,23 +905,22 @@ impl World {
     }
     pub fn prepare_witness(
         &self,
+        store: &Store,
         id: IncidentId,
         now: SimTime,
         observers: &[ObserverFacts],
     ) -> Result<PreparedProperty, Error> {
-        let incident = self.incidents.get(&id).ok_or(Error::Unavailable)?;
+        let incident = incident(store, id).ok_or(Error::Unavailable)?;
         if incident.changed_at > now {
             return Err(Error::Unavailable);
         }
         let mut change = PreparedProperty::new();
         for observer in observers {
-            let earlier = self
-                .knowledge
-                .get(&observer.actor)
+            let earlier = known_incidents(store, observer.actor)
                 .and_then(|k| k.get(&id))
                 .map(|k| k.incident.outcome);
             change.set_knowledge(
-                self,
+                store,
                 observer.actor,
                 IncidentKnowledge {
                     incident: incident.clone(),
@@ -881,7 +930,7 @@ impl World {
             );
             if incident.outcome == IncidentOutcome::Taken && earlier != Some(IncidentOutcome::Taken)
             {
-                let delta = self.interpretation(*observer, incident);
+                let delta = self.interpretation(store, *observer, incident);
                 if delta != 0 {
                     change.effects.push(Effect::Relationship {
                         observer: observer.actor,
@@ -893,16 +942,21 @@ impl World {
         }
         Ok(change)
     }
-    pub fn resistance(&self, thief: PersonId, observers: &[ObserverFacts]) -> Option<Effect> {
-        let id = self.pending.get(&thief)?;
-        let incident = self.incidents.get(id)?;
+    pub fn resistance(
+        &self,
+        store: &Store,
+        thief: PersonId,
+        observers: &[ObserverFacts],
+    ) -> Option<Effect> {
+        let id = pending(store, thief)?;
+        let incident = incident(store, *id)?;
         observers
             .iter()
             .filter(|p| p.actor != thief && p.can_defend)
             .find(|p| {
-                let supported = self.known_claims.get(&p.actor).is_some_and(|known| {
+                let supported = known_claims(store, p.actor).is_some_and(|known| {
                     known.keys().any(|id| {
-                        self.claims.get(id).is_some_and(|claim| {
+                        claim(store, *id).is_some_and(|claim| {
                             claim.recognized_by.contains(&p.actor)
                                 && claim
                                     .portions
@@ -912,10 +966,7 @@ impl World {
                     })
                 });
                 (p.personal_custody || supported)
-                    && self
-                        .attitudes
-                        .get(&p.actor)
-                        .is_some_and(|a| a.willingness_to_defend >= 500)
+                    && attitude(store, p.actor).is_some_and(|a| a.willingness_to_defend >= 500)
             })
             .map(|p| Effect::Engage {
                 defender: p.actor,
@@ -924,14 +975,15 @@ impl World {
     }
     pub fn prepare_finish_take(
         &self,
+        store: &Store,
         actor: ActorFacts,
         source: StockFacts,
         destination: StockFacts,
         carrying_room: Quantity,
         prefix: Option<PreparedProperty>,
     ) -> Result<PreparedProperty, Error> {
-        let id = self.pending.get(&actor.actor).ok_or(Error::Unavailable)?;
-        let before = self.incidents.get(id).ok_or(Error::Unavailable)?;
+        let id = pending(store, actor.actor).ok_or(Error::Unavailable)?;
+        let before = incident(store, *id).ok_or(Error::Unavailable)?;
         if actor.now < before.completes
             || source.id != before.source
             || destination.id != before.destination
@@ -950,7 +1002,7 @@ impl World {
         let mut after = before.clone();
         if success {
             let parts =
-                change.prepare_transfer_receipt(self, source, destination, before.quantity)?;
+                change.prepare_transfer_receipt(store, source, destination, before.quantity)?;
             after.portions = parts;
             after.outcome = IncidentOutcome::Taken;
             change.effects.push(Effect::Transfer {
@@ -974,7 +1026,7 @@ impl World {
             });
         }
         after.changed_at = actor.now;
-        change.set_incident(self, *id, after);
+        change.set_incident(store, *id, after);
         change.pending.insert(actor.actor, (Some(*id), None));
         change
             .effects
@@ -983,13 +1035,14 @@ impl World {
     }
     pub fn prepare_finish_report(
         &self,
+        store: &Store,
         actor: ActorFacts,
         recipient: ContactFacts,
         observer: ObserverFacts,
     ) -> Result<PreparedProperty, Error> {
         let sender = actor.actor;
         let now = actor.now;
-        let report = self.reports.get(&sender).ok_or(Error::Unavailable)?;
+        let report = report(store, sender).ok_or(Error::Unavailable)?;
         if now < report.completes {
             return Err(Error::Unavailable);
         }
@@ -1011,10 +1064,7 @@ impl World {
             return Ok(change);
         }
         let id = report.snapshot.incident.id;
-        let previous = self
-            .knowledge
-            .get(&recipient.actor)
-            .and_then(|k| k.get(&id));
+        let previous = known_incidents(store, recipient.actor).and_then(|k| k.get(&id));
         let received = &report.snapshot.incident;
         let update = previous.is_none_or(|known| {
             known.incident.changed_at < received.changed_at
@@ -1024,7 +1074,7 @@ impl World {
         });
         if update {
             change.set_knowledge(
-                self,
+                store,
                 recipient.actor,
                 IncidentKnowledge {
                     incident: received.clone(),
@@ -1035,7 +1085,7 @@ impl World {
             if received.outcome == IncidentOutcome::Taken
                 && previous.is_none_or(|k| k.incident.outcome != IncidentOutcome::Taken)
             {
-                let delta = self.interpretation(observer, received);
+                let delta = self.interpretation(store, observer, received);
                 if delta != 0 {
                     change.effects.push(Effect::Relationship {
                         observer: observer.actor,
@@ -1065,5 +1115,25 @@ fn recognize(
     } else {
         opposed.insert(actor);
         supported.remove(&actor);
+    }
+}
+
+fn report_membership(store: &Store, actor: PersonId) -> Vec<(PersonId, Report)> {
+    reports(store)
+        .filter(|(_, report)| report.sender == actor || report.recipient == actor)
+        .map(|(id, report)| (id, report.clone()))
+        .collect()
+}
+/// Finish only after the staged host batch was admitted in the same serialized window.
+pub struct PropertyFinalization {
+    cursor: Option<u64>,
+    effects: Vec<Effect>,
+}
+impl PropertyFinalization {
+    pub fn finish(self, runtime: &mut Runtime) -> Vec<Effect> {
+        if let Some(cursor) = self.cursor {
+            runtime.last_event = cursor;
+        }
+        self.effects
     }
 }

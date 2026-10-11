@@ -1238,7 +1238,8 @@ mod tests {
             Quantity(1_000)
         );
         assert_eq!(
-            sim.host.state.property.as_ref().unwrap().portions[&destination]
+            game_property::portions(&sim.host.storage, destination)
+                .expect("stock provenance exists")
                 .values()
                 .sum::<u64>(),
             1_000

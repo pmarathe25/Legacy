@@ -142,8 +142,13 @@ impl PreparedTransfers {
             remaining: self.effects.into_iter(),
         })
     }
-    /// Without receipt interleaving, publish all final rows atomically.
-    pub fn commit(self, store: &mut Store) -> Result<Vec<(TransferIntent, bool)>, Error> {
+    /// Append final stock rows to a caller-owned combined batch after every
+    /// opening and intermediate-prefix guard. No row is published by staging.
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<Vec<(TransferIntent, bool)>, Error> {
         self.validate(store)?;
         let mut final_rows = BTreeMap::new();
         for effect in &self.effects {
@@ -153,12 +158,17 @@ impl PreparedTransfers {
                 }
             }
         }
-        let mut batch = Batch::new();
         for (id, row) in final_rows {
             batch.insert(StableId(id.0), row);
         }
-        store.apply_batch(batch)?;
         Ok(self.decisions)
+    }
+    /// Without receipt interleaving, publish all final rows atomically.
+    pub fn commit(self, store: &mut Store) -> Result<Vec<(TransferIntent, bool)>, Error> {
+        let mut batch = Batch::new();
+        let decisions = self.stage_into(store, &mut batch)?;
+        store.apply_batch(batch)?;
+        Ok(decisions)
     }
 }
 /// Only referenced stock rows are borrowed. `free_body_room` is the current
