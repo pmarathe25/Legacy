@@ -432,6 +432,7 @@ dependencies = [
  "game-content",
  "game-core",
  "game-ecs",
+ "game-land",
  "game-sim",
  "serde",
  "serde_json",
@@ -536,6 +537,7 @@ version = "0.1.0"
 dependencies = [
  "game-core",
  "game-ecs",
+ "game-land",
  "serde",
  "serde_json",
 ]
@@ -767,6 +769,7 @@ dependencies = [
  "game-genetics",
  "game-health",
  "game-invocation",
+ "game-land",
  "game-lifecycle",
  "game-lineage",
  "game-logistics",

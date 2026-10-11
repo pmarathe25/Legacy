@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 31;
+const SAVE_VERSION: u32 = 32;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -50,6 +50,7 @@ impl Simulation {
 }
 
 fn validate(s: &CanonicalState) -> Result<(), Error> {
+    s.components.validate_land()?;
     genetics::validate(s)?;
     let fail = || Error::InvalidSave("inconsistent committed state".into());
     if s.components.ids().any(|id| id.0 == 0 || id.0 >= s.next_id) {

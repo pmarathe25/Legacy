@@ -9,3 +9,5 @@ Systems return prepared component changes and material effects. They never write
 Interval preparation retains only active labor rows and matched daily growth rows. A supplied executor can evaluate independent growth inputs in parallel. Commit checks the rows and local positions it read before publishing; an idle interval prepares no component writes and never runs daily growth.
 
 The host registers agricultural components, binds queries to its store, and refreshes those bindings after structural changes. Other features can attach their own components to the same entities; agriculture writes only its prepared crop and soil rows.
+
+Soil is shared data owned by `game-land`. Agriculture registers field and crop components, joins them with the existing soil, and applies crop-specific growth, irrigation, and harvest effects. Converting land to a field retains its soil on the same entity.

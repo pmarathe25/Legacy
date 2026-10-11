@@ -8,6 +8,7 @@ license.workspace = true
 game-content.workspace = true
 game-ecs.workspace = true
 game-spatial.workspace = true
+game-land.workspace = true
 game-workshop.workspace = true
 game-cargo.workspace = true
 game-logistics.workspace = true

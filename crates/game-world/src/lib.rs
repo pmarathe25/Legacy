@@ -642,6 +642,7 @@ impl Simulation {
             environment_queries,
             ecology_queries,
         };
+        sim.state.components.validate_land()?;
         sim.validate_environment()?;
         sim.validate_agriculture()?;
         sim.validate_realm()?;

@@ -161,16 +161,18 @@ impl Simulation {
             return Err(Error::InvalidFixture("invalid natural plot".into()));
         }
         let id = SiteId(allocate(&mut self.state)?);
-        self.state.ecology.as_ref().unwrap().insert_plot(
+        self.state.ecology.as_ref().unwrap().insert_plot_soil(
             &mut self.state.components,
             Plot {
                 id,
                 area,
-                fertility,
-                soil_water: 75,
-                water_capacity: 120,
                 access,
                 custodian,
+            },
+            game_land::Soil {
+                fertility,
+                water: 75,
+                capacity: 120,
             },
         )?;
         Ok(id)
@@ -642,6 +644,8 @@ impl Simulation {
                     );
             }
             for plot in plots.iter().filter(|plot| plot.area == area) {
+                let soil =
+                    game_land::soil(&self.state.components, plot.id).expect("validated plot soil");
                 self.state
                     .ecology
                     .as_mut()
@@ -654,8 +658,8 @@ impl Simulation {
                         PlotView {
                             id: plot.id,
                             area,
-                            soil_fertility: plot.fertility,
-                            soil_water: plot.soil_water,
+                            soil_fertility: soil.fertility,
+                            soil_water: soil.water,
                             accessible: plot.access.contains(&actor),
                             custodian: plot.custodian,
                             observed_at: self.state.time,

@@ -44,6 +44,7 @@ struct Saved {
 fn schema() -> Result<Schema, Error> {
     let mut schema = Schema::new();
     register_components(&mut schema)?;
+    game_land::register_components(&mut schema)?;
     Ok(schema)
 }
 impl Fixture {

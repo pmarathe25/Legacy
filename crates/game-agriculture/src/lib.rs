@@ -1,5 +1,6 @@
 //! Agricultural production: crop state and work produce explicit material effects.
 use game_core::*;
+pub use game_land::Soil;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 mod advancing;
@@ -108,20 +109,6 @@ pub struct Crop {
     pub tending: u16,
     /// Actual eligible cultivation time; no travel or idle time is credited.
     pub contributions: BTreeMap<PersonId, u64>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Soil {
-    pub fertility: u16,
-    pub water: u64,
-    pub capacity: u64,
-}
-impl Soil {
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.fertility > 1_000 || self.capacity == 0 || self.water > self.capacity {
-            return Err(Error::InvalidConfiguration("invalid soil component".into()));
-        }
-        Ok(())
-    }
 }
 impl Crop {
     pub fn new(definition: CropId) -> Self {
@@ -334,15 +321,13 @@ impl Runtime {
         }
         let bad = || Error::InvalidSave("inconsistent cultivation progress".into());
         for (id, crop) in self.crops(store) {
+            self.field(store, id).ok_or_else(bad)?;
             let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
             crop.validate(rules)?;
             crop.validate_phase(rules)?;
             if let Some(soil) = self.soil(store, id) {
                 soil.validate()?;
             }
-        }
-        for (_, soil) in self.soils(store) {
-            soil.validate()?;
         }
         let mut fields_in_use = BTreeSet::new();
         let mut contributed: BTreeMap<PersonId, u128> = BTreeMap::new();

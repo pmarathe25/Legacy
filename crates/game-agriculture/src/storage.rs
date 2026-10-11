@@ -31,7 +31,6 @@ fn validate_crop(crop: &Crop) -> Result<(), Error> {
 pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
     schema.register::<Field>("agriculture/field", validate_field)?;
     schema.register::<Crop>("agriculture/crop", validate_crop)?;
-    schema.register::<Soil>("agriculture/soil", Soil::validate)?;
     Ok(())
 }
 /// Cached metadata for the host's store; neither serialized nor authoritative.
@@ -61,9 +60,7 @@ impl Runtime {
             .map(|(id, component)| (SiteId(id.0), component))
     }
     pub fn soils<'a>(&self, store: &'a Store) -> impl Iterator<Item = (SiteId, &'a Soil)> {
-        store
-            .iter::<Soil>()
-            .map(|(id, component)| (SiteId(id.0), component))
+        game_land::soils(store)
     }
     pub fn field<'a>(&self, store: &'a Store, id: SiteId) -> Option<&'a Field> {
         store.get(StableId(id.0))
@@ -72,7 +69,7 @@ impl Runtime {
         store.get(StableId(id.0))
     }
     pub fn soil<'a>(&self, store: &'a Store, id: SiteId) -> Option<&'a Soil> {
-        store.get(StableId(id.0))
+        game_land::soil(store, id)
     }
     pub fn field_mut<'a>(&self, store: &'a mut Store, id: SiteId) -> Option<&'a mut Field> {
         store.get_mut(StableId(id.0))
@@ -81,7 +78,7 @@ impl Runtime {
         store.get_mut(StableId(id.0))
     }
     pub fn soil_mut<'a>(&self, store: &'a mut Store, id: SiteId) -> Option<&'a mut Soil> {
-        store.get_mut(StableId(id.0))
+        game_land::soil_mut(store, id)
     }
     fn insert<T: Component>(
         &self,
@@ -106,8 +103,7 @@ impl Runtime {
         self.insert(store, id, crop)
     }
     pub fn insert_soil(&self, store: &mut Store, id: SiteId, soil: Soil) -> Result<(), Error> {
-        soil.validate()?;
-        self.insert(store, id, soil)
+        game_land::insert_soil(store, id, soil)
     }
     fn remove<T: Component>(&self, store: &mut Store, id: SiteId) -> Result<Option<T>, Error> {
         if !store.contains(StableId(id.0)) {
@@ -122,6 +118,6 @@ impl Runtime {
         self.remove(store, id)
     }
     pub fn remove_soil(&self, store: &mut Store, id: SiteId) -> Result<Option<Soil>, Error> {
-        self.remove(store, id)
+        game_land::remove_soil(store, id)
     }
 }

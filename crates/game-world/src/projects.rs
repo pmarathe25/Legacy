@@ -738,6 +738,7 @@ impl Simulation {
                             water,
                             food,
                         } => {
+                            assert_eq!(site, plot, "farm conversion preserves the land entity");
                             let source = land.remove(&plot).unwrap();
                             self.state
                                 .ecology
@@ -771,17 +772,8 @@ impl Simulation {
                                     agriculture::Crop::new(world.catalog.default_crop.clone()),
                                 )
                                 .expect("validated component insertion");
-                            world
-                                .insert_soil(
-                                    &mut self.state.components,
-                                    site,
-                                    agriculture::Soil {
-                                        fertility: source.fertility,
-                                        water: source.soil_water,
-                                        capacity: source.water_capacity,
-                                    },
-                                )
-                                .expect("validated component insertion");
+                            // Land use changes on the same entity; its soil keeps the
+                            // closing weather update and all prior physical history.
                         }
                     }
                     *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;

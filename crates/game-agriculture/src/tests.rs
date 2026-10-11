@@ -22,6 +22,7 @@ impl Fixture {
     fn with_runtime(runtime: Runtime) -> Result<Self, Error> {
         let mut schema = game_ecs::Schema::new();
         register_components(&mut schema)?;
+        game_land::register_components(&mut schema)?;
         let mut store = game_ecs::Store::with_schema(schema);
         let queries = Runtime::bind(&mut store);
         Ok(Self {
@@ -176,6 +177,7 @@ impl<'de> Deserialize<'de> for Fixture {
             .map_err(serde::de::Error::custom)?;
         let mut schema = game_ecs::Schema::new();
         register_components(&mut schema).map_err(serde::de::Error::custom)?;
+        game_land::register_components(&mut schema).map_err(serde::de::Error::custom)?;
         let mut store =
             game_ecs::Store::restore(schema, saved.components).map_err(serde::de::Error::custom)?;
         let queries = Runtime::bind(&mut store);
@@ -1119,6 +1121,7 @@ fn shared_host_foreign_components_survive_agricultural_commits_and_bind_after_st
     let mut runtime = fixture.runtime.clone();
     let mut schema = game_ecs::Schema::new();
     register_components(&mut schema).unwrap();
+    game_land::register_components(&mut schema).unwrap();
     schema
         .register::<ForeignTag>("fixture/foreign-tag", |_| Ok(()))
         .unwrap();
@@ -1182,6 +1185,7 @@ fn shared_host_foreign_components_survive_agricultural_commits_and_bind_after_st
     let snapshot = store.snapshot().unwrap();
     let mut schema = game_ecs::Schema::new();
     register_components(&mut schema).unwrap();
+    game_land::register_components(&mut schema).unwrap();
     schema
         .register::<ForeignTag>("fixture/foreign-tag", |_| Ok(()))
         .unwrap();
@@ -1252,7 +1256,7 @@ fn stricter_registered_agricultural_validators_cannot_leave_partial_entities() {
         .register::<Crop>("agriculture/crop", |_| Err(Error::Unavailable))
         .unwrap();
     schema
-        .register::<Soil>("agriculture/soil", |_| Err(Error::Unavailable))
+        .register::<Soil>("land/soil", |_| Err(Error::Unavailable))
         .unwrap();
     let mut store = game_ecs::Store::with_schema(schema);
     let before = store.snapshot().unwrap();
@@ -1281,4 +1285,33 @@ fn stricter_registered_agricultural_validators_cannot_leave_partial_entities() {
         Err(Error::Unavailable)
     );
     assert_eq!(store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn shared_soil_can_belong_to_uncultivated_entities_but_crop_requires_field() {
+    let mut world = world();
+    world
+        .insert_soil(
+            SiteId(99),
+            Soil {
+                fertility: 900,
+                water: 75,
+                capacity: 120,
+            },
+        )
+        .unwrap();
+    world.validate(SimTime(0), Some(365)).unwrap();
+    let crop = world.crop(SiteId(1)).unwrap().clone();
+    world.insert_crop(SiteId(100), crop).unwrap();
+    assert!(world.validate(SimTime(0), Some(365)).is_err());
+}
+
+#[test]
+fn agriculture_does_not_register_or_serialize_an_owned_soil_definition() {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    assert!(!schema.is_registered::<Soil>());
+    game_land::register_components(&mut schema).unwrap();
+    assert!(schema.keys().any(|key| key == "land/soil"));
+    assert!(!schema.keys().any(|key| key == "agriculture/soil"));
 }

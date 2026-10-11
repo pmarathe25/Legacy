@@ -1,5 +1,6 @@
 //! Natural deposits, personally observed opportunities and physical collection.
 use game_core::*;
+pub use game_land::Soil;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 mod advancing;
@@ -146,23 +147,16 @@ impl Resource {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Plot {
     pub id: SiteId,
     pub area: AreaId,
-    pub fertility: u16,
-    pub soil_water: u64,
-    pub water_capacity: u64,
     pub access: BTreeSet<PersonId>,
     pub custodian: Option<PersonId>,
 }
 impl Plot {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.id.0 == 0
-            || self.area.0 == 0
-            || self.fertility > 1_000
-            || self.water_capacity == 0
-            || self.soil_water > self.water_capacity
-        {
+        if self.id.0 == 0 || self.area.0 == 0 {
             return Err(Error::InvalidConfiguration(
                 "invalid undeveloped plot".into(),
             ));

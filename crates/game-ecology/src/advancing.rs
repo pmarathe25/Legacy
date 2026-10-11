@@ -52,37 +52,44 @@ impl ResourceInput<'_> {
 #[derive(Clone, Copy, Debug)]
 pub struct PlotInput<'a> {
     pub plot: &'a Plot,
+    pub soil: &'a Soil,
     pub weather: &'a WeatherFacts,
     pub rules: &'a EcologyRules,
 }
 impl PlotInput<'_> {
-    pub fn evaluate(self) -> Result<Plot, Error> {
+    pub fn evaluate(self) -> Result<Soil, Error> {
         self.plot.validate()?;
+        self.soil.validate()?;
         self.weather.validate()?;
         self.rules.validate()?;
-        let mut plot = self.plot.clone();
-        plot.soil_water = plot
-            .soil_water
+        let mut soil = self.soil.clone();
+        soil.water = soil
+            .water
             .saturating_add(if self.weather.temperature > 0 {
                 self.weather.rain
             } else {
                 0
             })
-            .min(plot.water_capacity)
+            .min(soil.capacity)
             .saturating_sub(self.weather.evaporation);
-        if self.weather.temperature > self.rules.base_temperature && plot.soil_water > 0 {
-            plot.fertility = plot
+        if self.weather.temperature > self.rules.base_temperature && soil.water > 0 {
+            soil.fertility = soil
                 .fertility
                 .saturating_add(self.rules.soil_recovery)
                 .min(1_000);
         }
-        Ok(plot)
+        Ok(soil)
     }
 }
 #[derive(Clone, Debug)]
 struct Row<T> {
     before: T,
     after: Option<T>,
+}
+#[derive(Clone, Debug)]
+struct LandRow {
+    plot: Plot,
+    soil: Row<Soil>,
 }
 /// Sparse prepared rows; job ledgers and personal knowledge are never replaced.
 #[derive(Clone, Debug)]
@@ -91,7 +98,7 @@ pub struct PreparedAdvance {
     next_day: u64,
     rules: EcologyRules,
     resources: Vec<(ResourceId, Row<Resource>)>,
-    plots: Vec<(SiteId, Row<Plot>)>,
+    plots: Vec<(SiteId, LandRow)>,
     membership: bool,
 }
 impl PreparedAdvance {
@@ -101,10 +108,10 @@ impl PreparedAdvance {
             .filter(|(_, row)| row.after.is_some())
             .count()
     }
-    pub fn changed_plot_rows(&self) -> usize {
+    pub fn changed_soil_rows(&self) -> usize {
         self.plots
             .iter()
-            .filter(|(_, row)| row.after.is_some())
+            .filter(|(_, row)| row.soil.after.is_some())
             .count()
     }
     pub fn changed_resources(&self) -> impl Iterator<Item = (&ResourceId, &Resource)> {
@@ -112,10 +119,10 @@ impl PreparedAdvance {
             .iter()
             .filter_map(|(id, row)| Some((id, row.after.as_ref()?)))
     }
-    pub fn changed_plots(&self) -> impl Iterator<Item = (&SiteId, &Plot)> {
+    pub fn changed_soils(&self) -> impl Iterator<Item = (&SiteId, &Soil)> {
         self.plots
             .iter()
-            .filter_map(|(id, row)| Some((id, row.after.as_ref()?)))
+            .filter_map(|(id, row)| Some((id, row.soil.after.as_ref()?)))
     }
 }
 fn unchanged_resource_metadata(a: &Resource, b: &Resource) -> bool {
@@ -135,13 +142,6 @@ fn unchanged_resource_metadata(a: &Resource, b: &Resource) -> bool {
         && a.access == b.access
         && a.custodian == b.custodian
 }
-fn unchanged_plot_metadata(a: &Plot, b: &Plot) -> bool {
-    a.id == b.id
-        && a.area == b.area
-        && a.water_capacity == b.water_capacity
-        && a.access == b.access
-        && a.custodian == b.custodian
-}
 impl Runtime {
     pub fn prepare_advance(
         &self,
@@ -151,7 +151,7 @@ impl Runtime {
         evaluate_resources: impl FnOnce(
             &[(ResourceId, ResourceInput<'_>)],
         ) -> Result<Vec<(ResourceId, Resource)>, Error>,
-        evaluate_plots: impl FnOnce(&[(SiteId, PlotInput<'_>)]) -> Result<Vec<(SiteId, Plot)>, Error>,
+        evaluate_plots: impl FnOnce(&[(SiteId, PlotInput<'_>)]) -> Result<Vec<(SiteId, Soil)>, Error>,
     ) -> Result<PreparedAdvance, Error> {
         self.rules.validate()?;
         let mut prepared = PreparedAdvance {
@@ -182,18 +182,26 @@ impl Runtime {
         let mut plots: Vec<_> = queries
             .plots
             .iter(store)?
-            .map(|(id, row)| (SiteId(id.0), row))
+            .map(|(id, plot, soil)| (SiteId(id.0), plot, soil))
             .collect();
         resources.sort_unstable_by_key(|(id, _)| *id);
-        plots.sort_unstable_by_key(|(id, _)| *id);
+        plots.sort_unstable_by_key(|(id, _, _)| *id);
         for (id, row) in &resources {
             row.validate()?;
             if *id != row.id {
                 return Err(Error::InvalidSave("inconsistent resource entity".into()));
             }
         }
-        for (id, row) in &plots {
+        if self
+            .plots(store)
+            .map(|(id, _)| id)
+            .ne(plots.iter().map(|(id, _, _)| *id))
+        {
+            return Err(Error::InvalidSave("missing plot soil".into()));
+        }
+        for (id, row, soil) in &plots {
             row.validate()?;
+            soil.validate()?;
             if *id != row.id {
                 return Err(Error::InvalidSave("inconsistent plot entity".into()));
             }
@@ -212,11 +220,12 @@ impl Runtime {
             .collect();
         let plot_inputs: Vec<_> = plots
             .iter()
-            .filter_map(|(id, row)| {
+            .filter_map(|(id, row, soil)| {
                 Some((
                     *id,
                     PlotInput {
                         plot: row,
+                        soil,
                         weather: day.cells.get(&row.area)?,
                         rules: &self.rules,
                     },
@@ -250,7 +259,7 @@ impl Runtime {
         }
         for ((_, output), (_, input)) in plot_output.iter().zip(&plot_inputs) {
             output.validate()?;
-            if !unchanged_plot_metadata(output, input.plot) {
+            if output.capacity != input.soil.capacity {
                 return Err(Error::InvalidConfiguration(
                     "land recovery changed unrelated plot data".into(),
                 ));
@@ -274,7 +283,7 @@ impl Runtime {
             ));
         }
         let mut plot_output = plot_output.into_iter().peekable();
-        for (id, before) in plots {
+        for (id, before, soil) in plots {
             let after = if plot_output.peek().is_some_and(|(key, _)| *key == id) {
                 Some(plot_output.next().expect("peeked output exists").1)
             } else {
@@ -282,9 +291,12 @@ impl Runtime {
             };
             prepared.plots.push((
                 id,
-                Row {
-                    before: before.clone(),
-                    after,
+                LandRow {
+                    plot: before.clone(),
+                    soil: Row {
+                        before: soil.clone(),
+                        after,
+                    },
                 },
             ));
         }
@@ -330,10 +342,10 @@ impl Runtime {
                 .resources
                 .iter()
                 .any(|(id, row)| self.resource(store, *id) != Some(&row.before))
-            || prepared
-                .plots
-                .iter()
-                .any(|(id, row)| self.plot(store, *id) != Some(&row.before))
+            || prepared.plots.iter().any(|(id, row)| {
+                self.plot(store, *id) != Some(&row.plot)
+                    || self.soil(store, *id) != Some(&row.soil.before)
+            })
         {
             return Err(Error::InvalidSave("stale ecology component batch".into()));
         }
@@ -351,8 +363,8 @@ impl Runtime {
             }
         }
         for (id, row) in prepared.plots {
-            if let Some(after) = row.after {
-                *self.plot_mut(store, id).expect("admitted plot") = after;
+            if let Some(after) = row.soil.after {
+                *self.soil_mut(store, id).expect("admitted plot soil") = after;
             }
         }
         self.day = prepared.next_day;

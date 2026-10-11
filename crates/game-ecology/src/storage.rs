@@ -8,7 +8,7 @@ pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
 }
 pub struct Queries {
     pub(super) resources: game_ecs::Query1<Resource>,
-    pub(super) plots: game_ecs::Query1<Plot>,
+    pub(super) plots: game_ecs::Query2<Plot, Soil>,
 }
 impl Queries {
     pub fn refresh(&mut self, store: &Store) -> Result<(), Error> {
@@ -41,6 +41,9 @@ impl Runtime {
         }
         for (id, plot) in self.plots(store) {
             plot.validate()?;
+            game_land::soil(store, id)
+                .ok_or_else(|| Error::InvalidSave("missing plot soil".into()))?
+                .validate()?;
             if id != plot.id {
                 return Err(Error::InvalidSave("inconsistent plot entity".into()));
             }
@@ -50,7 +53,7 @@ impl Runtime {
     pub fn bind(store: &mut Store) -> Queries {
         Queries {
             resources: store.query1::<Resource>(),
-            plots: store.query1::<Plot>(),
+            plots: store.query2::<Plot, Soil>(),
         }
     }
     pub fn resources<'a>(
@@ -84,9 +87,25 @@ impl Runtime {
         resource.validate()?;
         store.insert_or_spawn(StableId(resource.id.0), resource)
     }
+    /// Attach land-use metadata without replacing existing soil.
     pub fn insert_plot(&self, store: &mut Store, plot: Plot) -> Result<(), Error> {
         plot.validate()?;
-        store.insert_or_spawn(StableId(plot.id.0), plot)
+        game_land::soil(store, plot.id)
+            .ok_or(Error::Unavailable)?
+            .validate()?;
+        store.insert(StableId(plot.id.0), plot)
+    }
+    /// Author one plot and its soil atomically, including schema validation.
+    pub fn insert_plot_soil(&self, store: &mut Store, plot: Plot, soil: Soil) -> Result<(), Error> {
+        plot.validate()?;
+        soil.validate()?;
+        store.insert_pair_or_spawn(StableId(plot.id.0), plot, soil)
+    }
+    pub fn soil<'a>(&self, store: &'a Store, id: SiteId) -> Option<&'a Soil> {
+        game_land::soil(store, id)
+    }
+    pub fn soil_mut<'a>(&self, store: &'a mut Store, id: SiteId) -> Option<&'a mut Soil> {
+        game_land::soil_mut(store, id)
     }
     pub fn remove_resource(
         &self,

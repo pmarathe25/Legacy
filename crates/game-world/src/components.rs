@@ -13,6 +13,7 @@ fn schema() -> Result<Schema, Error> {
     game_spatial::register_components(&mut schema)?;
     game_environment::register_components(&mut schema)?;
     game_ecology::register_components(&mut schema)?;
+    game_land::register_components(&mut schema)?;
     schema.register::<game_api::Activity>("coordination/activity", |_| Ok(()))?;
     Ok(schema)
 }
@@ -22,6 +23,29 @@ pub struct Components(Store);
 impl Components {
     pub fn new() -> Result<Self, Error> {
         Ok(Self(Store::with_schema(schema()?)))
+    }
+    pub(crate) fn validate_land(&self) -> Result<(), Error> {
+        let fields = self
+            .0
+            .iter::<game_agriculture::Field>()
+            .map(|(id, _)| id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let plots = self
+            .0
+            .iter::<game_ecology::Plot>()
+            .map(|(id, _)| id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let soils = self
+            .0
+            .iter::<game_land::Soil>()
+            .map(|(id, _)| id)
+            .collect::<std::collections::BTreeSet<_>>();
+        if !fields.is_disjoint(&plots) || soils != fields.union(&plots).copied().collect() {
+            return Err(Error::InvalidSave(
+                "inconsistent shared soil ownership".into(),
+            ));
+        }
+        Ok(())
     }
     pub fn body(&self, actor: game_api::PersonId) -> Option<&game_physiology::Body> {
         game_physiology::body(&self.0, actor)
@@ -431,5 +455,75 @@ mod tests {
         let mut missing_runtime = sim.canonical_state().clone();
         missing_runtime.skills = None;
         assert!(crate::skills::validate(&missing_runtime).is_err());
+    }
+
+    #[test]
+    fn land_soil_keys_match_one_land_use_and_reject_missing_or_orphan_rows() {
+        let mut sim = Simulation::ecology_fixture(21, Execution::default()).unwrap();
+        let plot = sim
+            .debug_add_plot(
+                sim.state.areas[1].id,
+                None,
+                sim.state.people.iter().map(|person| person.id).collect(),
+                900,
+            )
+            .unwrap();
+        sim.state.components.validate_land().unwrap();
+        let json = serde_json::to_value(sim.canonical_state()).unwrap();
+        assert!(
+            json["components"]["columns"]
+                .get("agriculture/soil")
+                .is_none()
+        );
+        assert!(json["components"]["columns"]["land/soil"].is_array());
+
+        let mut missing = sim.canonical_state().clone();
+        game_land::remove_soil(&mut missing.components, plot).unwrap();
+        assert!(missing.components.validate_land().is_err());
+
+        let mut orphan = sim.canonical_state().clone();
+        let person = game_core::SiteId(orphan.people[0].id.0);
+        game_land::insert_soil(
+            &mut orphan.components,
+            person,
+            game_land::Soil {
+                fertility: 500,
+                water: 1,
+                capacity: 10,
+            },
+        )
+        .unwrap();
+        assert!(orphan.components.validate_land().is_err());
+
+        let mut ambiguous = sim.canonical_state().clone();
+        let field = ambiguous
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .fields(&ambiguous.components)
+            .next()
+            .unwrap()
+            .1
+            .clone();
+        let mut duplicate = field;
+        duplicate.id = plot;
+        ambiguous
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .insert_field(&mut ambiguous.components, duplicate)
+            .unwrap();
+        assert!(ambiguous.components.validate_land().is_err());
+        let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+        for invalid in [missing, orphan, ambiguous] {
+            envelope["state"] = serde_json::to_value(invalid).unwrap();
+            assert!(
+                Simulation::load(
+                    &serde_json::to_vec(&envelope).unwrap(),
+                    Execution::default()
+                )
+                .is_err()
+            );
+        }
     }
 }

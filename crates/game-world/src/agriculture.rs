@@ -674,7 +674,6 @@ impl Simulation {
         let Some(world) = &self.state.agriculture else {
             if self.state.components.iter::<Field>().next().is_some()
                 || self.state.components.iter::<Crop>().next().is_some()
-                || self.state.components.iter::<Soil>().next().is_some()
             {
                 return Err(Error::InvalidSave(
                     "agricultural components have no runtime".into(),

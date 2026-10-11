@@ -20,6 +20,7 @@ impl std::ops::DerefMut for Fixture {
 fn schema() -> game_ecs::Schema {
     let mut schema = game_ecs::Schema::new();
     register_components(&mut schema).unwrap();
+    game_land::register_components(&mut schema).unwrap();
     schema
 }
 impl Fixture {
@@ -45,6 +46,9 @@ impl Fixture {
     fn plot(&self, id: SiteId) -> Option<&Plot> {
         self.runtime.plot(&self.store, id)
     }
+    fn soil(&self, id: SiteId) -> Option<&Soil> {
+        self.runtime.soil(&self.store, id)
+    }
     fn resource_mut(&mut self, id: ResourceId) -> Option<&mut Resource> {
         self.runtime.resource_mut(&mut self.store, id)
     }
@@ -52,8 +56,8 @@ impl Fixture {
         self.runtime.insert_resource(&mut self.store, resource)?;
         self.queries.refresh(&self.store)
     }
-    fn insert_plot(&mut self, plot: Plot) -> Result<(), Error> {
-        self.runtime.insert_plot(&mut self.store, plot)?;
+    fn insert_plot(&mut self, plot: Plot, soil: Soil) -> Result<(), Error> {
+        self.runtime.insert_plot_soil(&mut self.store, plot, soil)?;
         self.queries.refresh(&self.store)
     }
     fn remove_resource(&mut self, id: ResourceId) -> Result<Option<Resource>, Error> {
@@ -202,15 +206,21 @@ fn world(kind: ResourceKind, remaining: u64) -> Fixture {
     let plot = Plot {
         id: SiteId(9),
         area: AreaId(2),
-        fertility: 900,
-        soil_water: 75,
-        water_capacity: 120,
         access: BTreeSet::from([PersonId(3)]),
         custodian: Some(PersonId(3)),
     };
     let mut world = Fixture::new(EcologyRules::default(), 0).unwrap();
     world.insert_resource(source).unwrap();
-    world.insert_plot(plot).unwrap();
+    world
+        .insert_plot(
+            plot,
+            Soil {
+                fertility: 900,
+                water: 75,
+                capacity: 120,
+            },
+        )
+        .unwrap();
     world
 }
 fn day(number: u64, temp: i32) -> LocalWeatherDay {
@@ -255,7 +265,7 @@ fn renewal_is_finite_and_changes_no_custody_permissions_or_personal_knowledge() 
         next.resource(ResourceId(1)).unwrap().remaining,
         Quantity(250)
     );
-    assert_eq!(next.plot(SiteId(9)).unwrap().fertility, 901);
+    assert_eq!(next.soil(SiteId(9)).unwrap().fertility, 901);
     assert_eq!(
         next.resource(ResourceId(1)).unwrap().access,
         world.resource(ResourceId(1)).unwrap().access
@@ -264,7 +274,7 @@ fn renewal_is_finite_and_changes_no_custody_permissions_or_personal_knowledge() 
     assert_eq!(world, before);
     let cold = world.advance(Some(&day(1, -5))).unwrap();
     assert_eq!(cold.resource(ResourceId(1)).unwrap().remaining, Quantity(0));
-    assert_eq!(cold.plot(SiteId(9)).unwrap().fertility, 900);
+    assert_eq!(cold.soil(SiteId(9)).unwrap().fertility, 900);
     assert_eq!(next.advance(Some(&day(1, 20))).unwrap(), next);
 }
 #[test]
@@ -276,9 +286,9 @@ fn land_recovery_configuration_is_independent_of_crop_rules() {
         ..EcologyRules::default()
     };
     let cool = world.advance(Some(&day(1, 20))).unwrap();
-    assert_eq!(cool.plot(SiteId(9)).unwrap().fertility, 900);
+    assert_eq!(cool.soil(SiteId(9)).unwrap().fertility, 900);
     let warm = world.advance(Some(&day(1, 40))).unwrap();
-    assert_eq!(warm.plot(SiteId(9)).unwrap().fertility, 907);
+    assert_eq!(warm.soil(SiteId(9)).unwrap().fertility, 907);
 }
 
 #[test]
@@ -300,8 +310,12 @@ fn renewal_and_soil_match_local_weather_without_a_global_fallback() {
     let mut missing_plot = cold_plot.clone();
     missing_plot.id = SiteId(11);
     missing_plot.area = AreaId(4);
-    world.insert_plot(cold_plot).unwrap();
-    world.insert_plot(missing_plot.clone()).unwrap();
+    world
+        .insert_plot(cold_plot, world.soil(SiteId(9)).unwrap().clone())
+        .unwrap();
+    world
+        .insert_plot(missing_plot.clone(), world.soil(SiteId(9)).unwrap().clone())
+        .unwrap();
 
     let mut local = day(1, 20);
     local.cells.insert(
@@ -322,11 +336,12 @@ fn renewal_and_soil_match_local_weather_without_a_global_fallback() {
         Quantity(1_000)
     );
     assert_eq!(next.resource(ResourceId(2)).unwrap().soil_water, 70);
-    assert_eq!(next.plot(SiteId(9)).unwrap().fertility, 901);
-    assert_eq!(next.plot(SiteId(10)).unwrap().fertility, 900);
-    assert_eq!(next.plot(SiteId(10)).unwrap().soil_water, 70);
+    assert_eq!(next.soil(SiteId(9)).unwrap().fertility, 901);
+    assert_eq!(next.soil(SiteId(10)).unwrap().fertility, 900);
+    assert_eq!(next.soil(SiteId(10)).unwrap().water, 70);
     assert_eq!(next.resource(ResourceId(3)).unwrap(), &missing_source);
     assert_eq!(next.plot(SiteId(11)).unwrap(), &missing_plot);
+    assert_eq!(next.soil(SiteId(11)), world.soil(SiteId(11)));
     assert_eq!(next.day, 1);
 }
 
@@ -354,6 +369,9 @@ fn missing_weather_preserves_land_and_finite_gathering_still_completes() {
         world.plots().collect::<Vec<_>>()
     );
     assert_eq!(next.jobs, world.jobs);
+    for (id, _) in world.plots() {
+        assert_eq!(next.soil(id), world.soil(id));
+    }
     let effect = prepare_collection(
         next.resource(ResourceId(1)).unwrap(),
         PersonId(3),
@@ -399,7 +417,9 @@ fn independent_entity_updates_equal_a_batch_regardless_of_insertion_order() {
     let mut plot = second.remove_plot(SiteId(9)).unwrap().unwrap();
     plot.id = SiteId(10);
     plot.area = AreaId(3);
-    second.insert_plot(plot).unwrap();
+    let soil = second.soil(SiteId(9)).unwrap().clone();
+    game_land::remove_soil(&mut second.store, SiteId(9)).unwrap();
+    second.insert_plot(plot, soil).unwrap();
     let mut local = day(1, 20);
     local.cells.insert(
         AreaId(3),
@@ -413,15 +433,19 @@ fn independent_entity_updates_equal_a_batch_regardless_of_insertion_order() {
     for (_, resource) in second.resources() {
         combined.insert_resource(resource.clone()).unwrap();
     }
-    for (_, plot) in second.plots() {
-        combined.insert_plot(plot.clone()).unwrap();
+    for (id, plot) in second.plots() {
+        combined
+            .insert_plot(plot.clone(), second.soil(id).unwrap().clone())
+            .unwrap();
     }
     let mut reversed = Fixture::new(combined.rules.clone(), 0).unwrap();
     for (_, resource) in combined.resources().collect::<Vec<_>>().into_iter().rev() {
         reversed.insert_resource(resource.clone()).unwrap();
     }
-    for (_, plot) in combined.plots().collect::<Vec<_>>().into_iter().rev() {
-        reversed.insert_plot(plot.clone()).unwrap();
+    for (id, plot) in combined.plots().collect::<Vec<_>>().into_iter().rev() {
+        reversed
+            .insert_plot(plot.clone(), combined.soil(id).unwrap().clone())
+            .unwrap();
     }
     let mut reversed_local = local.clone();
     reversed_local.cells = local.cells.clone().into_iter().rev().collect();
@@ -429,6 +453,8 @@ fn independent_entity_updates_equal_a_batch_regardless_of_insertion_order() {
     assert_eq!(reversed.advance(Some(&reversed_local)).unwrap(), batch);
     let first_result = first.advance(Some(&local)).unwrap();
     let second_result = second.advance(Some(&local)).unwrap();
+    assert_eq!(batch.soil(SiteId(9)), first_result.soil(SiteId(9)));
+    assert_eq!(batch.soil(SiteId(10)), second_result.soil(SiteId(10)));
     assert_eq!(
         batch.resource(ResourceId(1)).unwrap(),
         first_result.resource(ResourceId(1)).unwrap()
@@ -1067,7 +1093,7 @@ fn no_day_prepares_no_rows_and_preserves_concurrent_runtime_metadata() {
         )
         .unwrap();
     assert_eq!(batch.changed_resource_rows(), 0);
-    assert_eq!(batch.changed_plot_rows(), 0);
+    assert_eq!(batch.changed_soil_rows(), 0);
     world.observe_area(PersonId(3), AreaId(2), SimTime(19));
     world
         .next_request
@@ -1141,21 +1167,27 @@ fn sparse_daily_commit_keeps_gathering_knowledge_and_foreign_components() {
 fn late_row_rules_day_and_membership_changes_reject_the_entire_batch() {
     let world = world(ResourceKind::Herbs, 0);
     let batch = world.prepare_advance_serial(Some(&day(1, 20))).unwrap();
-    for mutation in 0..5 {
+    for mutation in 0..6 {
         let mut changed = world.clone();
         match mutation {
             0 => {
                 changed
                     .runtime
-                    .plot_mut(&mut changed.store, SiteId(9))
+                    .soil_mut(&mut changed.store, SiteId(9))
                     .unwrap()
-                    .soil_water = 0
+                    .water = 0
             }
             1 => changed.rules.soil_recovery += 1,
             2 => changed.day += 1,
             3 => {
                 changed.remove_plot(SiteId(9)).unwrap();
             }
+            5 => changed
+                .runtime
+                .plot_mut(&mut changed.store, SiteId(9))
+                .unwrap()
+                .access
+                .clear(),
             4 => {
                 let mut added = changed.resource(ResourceId(1)).unwrap().clone();
                 added.id = ResourceId(99);
@@ -1180,7 +1212,9 @@ fn stable_native_inputs_support_parallel_pure_evaluation_after_save_restore() {
     for id in (20..28).rev() {
         let mut plot = world.plot(SiteId(9)).unwrap().clone();
         plot.id = SiteId(id);
-        world.insert_plot(plot).unwrap();
+        world
+            .insert_plot(plot, world.soil(SiteId(9)).unwrap().clone())
+            .unwrap();
     }
     let restored: Fixture = serde_json::from_slice(&serde_json::to_vec(&world).unwrap()).unwrap();
     let forcing = day(1, 20);
@@ -1232,7 +1266,11 @@ fn missing_schema_stricter_validation_and_foreign_executor_writes_are_inert() {
     assert!(
         fixture
             .runtime
-            .insert_plot(&mut store, fixture.plot(SiteId(9)).unwrap().clone())
+            .insert_plot_soil(
+                &mut store,
+                fixture.plot(SiteId(9)).unwrap().clone(),
+                fixture.soil(SiteId(9)).unwrap().clone()
+            )
             .is_err()
     );
     assert_eq!(store.snapshot().unwrap(), before);
@@ -1243,6 +1281,7 @@ fn missing_schema_stricter_validation_and_foreign_executor_writes_are_inert() {
     schema
         .register::<Plot>("ecology/plot", |_| Err(Error::Unavailable))
         .unwrap();
+    game_land::register_components(&mut schema).unwrap();
     let mut store = game_ecs::Store::with_schema(schema);
     let before = store.snapshot().unwrap();
     assert_eq!(
@@ -1252,9 +1291,11 @@ fn missing_schema_stricter_validation_and_foreign_executor_writes_are_inert() {
         Err(Error::Unavailable)
     );
     assert_eq!(
-        fixture
-            .runtime
-            .insert_plot(&mut store, fixture.plot(SiteId(9)).unwrap().clone()),
+        fixture.runtime.insert_plot_soil(
+            &mut store,
+            fixture.plot(SiteId(9)).unwrap().clone(),
+            fixture.soil(SiteId(9)).unwrap().clone()
+        ),
         Err(Error::Unavailable)
     );
     assert_eq!(store.snapshot().unwrap(), before);
@@ -1313,8 +1354,84 @@ fn owned_validation_checks_component_identity_and_intrinsics_without_foreign_ent
     let mut invalid = world.clone();
     invalid
         .runtime
-        .plot_mut(&mut invalid.store, SiteId(9))
+        .soil_mut(&mut invalid.store, SiteId(9))
         .unwrap()
-        .soil_water = 121;
+        .water = 121;
     assert!(invalid.runtime.validate(&invalid.store).is_err());
+}
+
+#[test]
+fn plot_soil_is_registered_by_land_and_retained_when_land_use_changes() {
+    let mut world = world(ResourceKind::Herbs, 0);
+    let before = world.soil(SiteId(9)).unwrap().clone();
+    let metadata = world.plot(SiteId(9)).unwrap().clone();
+    assert!(!{
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).unwrap();
+        schema.is_registered::<Soil>()
+    });
+    world.remove_plot(SiteId(9)).unwrap();
+    assert_eq!(world.soil(SiteId(9)), Some(&before));
+    world
+        .runtime
+        .insert_plot(&mut world.store, metadata)
+        .unwrap();
+    world.queries.refresh(&world.store).unwrap();
+    let batch = world.prepare_advance_serial(Some(&day(1, 20))).unwrap();
+    assert_eq!(batch.changed_soil_rows(), 1);
+    world.commit_advance(batch).unwrap();
+    assert_eq!(world.soil(SiteId(9)).unwrap().fertility, 901);
+    assert_eq!(world.soil(SiteId(9)).unwrap().water, 105);
+}
+
+#[test]
+fn plot_insertion_requires_real_soil_and_pair_rejection_is_atomic() {
+    let world = world(ResourceKind::Herbs, 0);
+    let mut store = game_ecs::Store::with_schema(schema());
+    let metadata = world.plot(SiteId(9)).unwrap().clone();
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        world.runtime.insert_plot(&mut store, metadata.clone()),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(
+        world
+            .runtime
+            .insert_plot_soil(
+                &mut store,
+                metadata.clone(),
+                Soil {
+                    capacity: 0,
+                    ..world.soil(SiteId(9)).unwrap().clone()
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    let mut strict = game_ecs::Schema::new();
+    register_components(&mut strict).unwrap();
+    strict
+        .register::<Soil>("land/soil", |_| Err(Error::Unavailable))
+        .unwrap();
+    let mut store = game_ecs::Store::with_schema(strict);
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        world.runtime.insert_plot_soil(
+            &mut store,
+            metadata,
+            world.soil(SiteId(9)).unwrap().clone()
+        ),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn missing_shared_soil_is_rejected_before_renewal() {
+    let mut world = world(ResourceKind::Herbs, 0);
+    game_land::remove_soil(&mut world.store, SiteId(9)).unwrap();
+    world.queries.refresh(&world.store).unwrap();
+    assert!(world.runtime.validate(&world.store).is_err());
+    assert!(world.prepare_advance_serial(Some(&day(1, 20))).is_err());
 }
