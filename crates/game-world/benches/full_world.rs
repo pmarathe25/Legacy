@@ -349,7 +349,7 @@ fn main() {
                     .sum::<u128>();
                 let resource_jobs = state.ecology.as_ref().map(|ecology| view.ecology.resources.iter()
                     .filter(|source| matches!(view.location, game_api::Location::AtArea(area) if source.area == area))
-                    .map(|source| (source.id, ecology.resources[&source.id].workers,
+                    .map(|source| (source.id, ecology.resource(&sim.canonical_state().components, source.id).expect("resource exists").workers,
                         ecology.jobs.iter().filter(|(_, job)| job.resource == source.id)
                             .map(|(actor, job)| (*actor, job.quantity, job.completes)).collect::<Vec<_>>()))
                     .collect::<Vec<_>>());

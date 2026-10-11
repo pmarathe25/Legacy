@@ -11,6 +11,7 @@ fn schema() -> Result<Schema, Error> {
     game_workshop::register_components(&mut schema)?;
     game_spatial::register_components(&mut schema)?;
     game_environment::register_components(&mut schema)?;
+    game_ecology::register_components(&mut schema)?;
     schema.register::<game_api::Activity>("coordination/activity", |_| Ok(()))?;
     Ok(schema)
 }

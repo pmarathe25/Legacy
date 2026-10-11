@@ -391,7 +391,7 @@ impl Simulation {
                     .state
                     .ecology
                     .as_ref()
-                    .and_then(|w| w.plots.get(&plot))
+                    .and_then(|w| w.plot(&self.state.components, plot))
                     .is_some_and(|p| p.access.contains(&actor)),
             },
             tool_available: self.project_usable_for_planning(
@@ -473,9 +473,11 @@ impl Simulation {
                     .collect();
                 let people = self.person_index.keys().copied().collect();
                 let land = match &action {
-                    ProjectAction::ProposeFarm { plot, .. } => {
-                        self.state.ecology.as_ref().and_then(|w| w.plots.get(plot))
-                    }
+                    ProjectAction::ProposeFarm { plot, .. } => self
+                        .state
+                        .ecology
+                        .as_ref()
+                        .and_then(|w| w.plot(&self.state.components, *plot)),
                     _ => None,
                 };
                 self.state.projects.as_ref().unwrap().prepare_proposal(
@@ -588,7 +590,7 @@ impl Simulation {
                                 .state
                                 .ecology
                                 .as_ref()
-                                .and_then(|w| w.plots.get(plot))
+                                .and_then(|w| w.plot(&self.state.components, *plot))
                                 .ok_or(Error::Unavailable)?
                                 .clone();
                             if self
@@ -734,7 +736,12 @@ impl Simulation {
                             food,
                         } => {
                             let source = land.remove(&plot).unwrap();
-                            self.state.ecology.as_mut().unwrap().plots.remove(&plot);
+                            self.state
+                                .ecology
+                                .as_ref()
+                                .unwrap()
+                                .remove_plot(&mut self.state.components, plot)
+                                .expect("validated plot removal");
                             self.state
                                 .agriculture
                                 .as_mut()
@@ -859,7 +866,7 @@ impl Simulation {
                 self.state
                     .ecology
                     .as_ref()
-                    .is_some_and(|w| w.plots.contains_key(&plot))
+                    .is_some_and(|w| w.plot(&self.state.components, plot).is_some())
                     && self.state.agriculture.is_some()
             }
         };
@@ -2001,17 +2008,31 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 return Err(fail());
             }
         }
-        if let ProjectKind::Farm { plot, water } = plan.kind
-            && (state.inventories.get(&water).is_none_or(|i| {
+        if let ProjectKind::Farm { plot, water } = plan.kind {
+            let live_plot = state
+                .ecology
+                .as_ref()
+                .and_then(|world| world.plot(&state.components, plot))
+                .is_some_and(|source| source.area == plan.area);
+            // A terminal proposal retains its original land reference after a
+            // different, completed farm project converts that same plot.
+            let historical_conversion = matches!(plan.status,
+                ProjectStatus::Cancelled | ProjectStatus::Failed)
+                && state.agriculture.as_ref().and_then(|world| {
+                    world.field(&state.components, plot)
+                }).is_some_and(|field| field.id == plot && field.area == plan.area)
+                && world.enterprises.values().any(|enterprise| {
+                    enterprise.project != plan.id
+                        && enterprise.site == plot
+                        && enterprise.area == plan.area
+                        && matches!(enterprise.kind, ProjectKind::Farm { plot: source, .. } if source == plot)
+                });
+            if state.inventories.get(&water).is_none_or(|i| {
                 i.good != Good::Water || i.location != InventoryLocation::Area(plan.area)
-            }) || (plan.enterprise.is_none()
-                && state
-                    .ecology
-                    .as_ref()
-                    .and_then(|w| w.plots.get(&plot))
-                    .is_none_or(|p| p.area != plan.area)))
-        {
-            return Err(fail());
+            }) || plan.enterprise.is_none() && !live_plot && !historical_conversion
+            {
+                return Err(fail());
+            }
         }
         if plan.materials_consumed&&!state.events.iter().any(|event|matches!(event.kind,EventKind::ConstructionStarted {project,..} if project==*id)) {return Err(fail());}
     }
@@ -2278,6 +2299,164 @@ mod farm_tests {
     }
 
     #[test]
+    fn farm_conversion_at_a_day_boundary_consumes_the_closing_plot_once() {
+        let mut sim = fixture();
+        let farmer = sim.state.people[3].id;
+        let area = sim.state.areas[0].id;
+        let environment = sim.state.environment.as_mut().unwrap();
+        environment.calendar.day = SimDuration(300_000);
+        environment.climate.seasonal_evaporation = [2; 4];
+        environment
+            .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+            .unwrap();
+        let proposals: Vec<_> = sim
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects
+            .values()
+            .filter(|p| p.sponsor == farmer)
+            .map(|p| p.id)
+            .collect();
+        for project in proposals {
+            sim.debug_actor_command(
+                farmer,
+                Command::Project {
+                    action: ProjectAction::Cancel { project },
+                },
+            )
+            .unwrap();
+        }
+        let plot = sim
+            .state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .plots(&sim.state.components)
+            .find(|(_, plot)| plot.custodian == Some(farmer))
+            .unwrap()
+            .0;
+        let stock = |good| {
+            sim.state
+                .inventories
+                .values()
+                .find(|i| {
+                    i.good == good
+                        && i.location == InventoryLocation::Area(area)
+                        && i.access == BTreeSet::from([farmer])
+                })
+                .unwrap()
+                .id
+        };
+        let (tool, seed, water, food) = (
+            stock(Good::Tool),
+            stock(Good::Seed),
+            stock(Good::Water),
+            stock(Good::Food),
+        );
+        let materials = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Area(area),
+                Quantity(5_000),
+                Quantity(5_000),
+                BTreeSet::from([farmer]),
+            )
+            .unwrap();
+        sim.debug_actor_command(
+            farmer,
+            Command::Project {
+                action: ProjectAction::ProposeFarm {
+                    plot,
+                    materials,
+                    tool,
+                    seed,
+                    water,
+                    food,
+                    beneficiaries: BTreeSet::from([farmer]),
+                    workers: BTreeSet::from([farmer]),
+                    finish_by: SimTime(900_000),
+                },
+            },
+        )
+        .unwrap();
+        let project = sim
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects
+            .values()
+            .find(|p| p.sponsor == farmer && p.status != ProjectStatus::Cancelled)
+            .unwrap()
+            .id;
+        sim.debug_actor_command(
+            farmer,
+            Command::Project {
+                action: ProjectAction::Work { project },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sim.state.projects.as_ref().unwrap().jobs[&farmer].completes,
+            SimTime(300_000)
+        );
+        sim.advance(SimDuration(300_000)).unwrap();
+        let agriculture = sim.state.agriculture.as_ref().unwrap();
+        assert!(
+            !sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .plot(&sim.state.components, plot)
+                .is_some()
+        );
+        assert_eq!(
+            agriculture
+                .fields(&sim.state.components)
+                .filter(|(id, _)| *id == plot)
+                .count(),
+            1
+        );
+        assert_eq!(
+            agriculture.soil(&sim.state.components, plot),
+            Some(&agriculture::Soil {
+                fertility: 901,
+                water: 103,
+                capacity: 120,
+            })
+        );
+        Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+        let historical = sim
+            .state
+            .projects
+            .as_ref()
+            .unwrap()
+            .projects
+            .values()
+            .find(|plan| {
+                plan.status == ProjectStatus::Cancelled
+                    && matches!(plan.kind, ProjectKind::Farm { plot: source, .. } if source == plot)
+            })
+            .expect("the cancelled proposal preserves its converted plot reference")
+            .id;
+        let mut invalid = sim.state.clone();
+        invalid
+            .projects
+            .as_mut()
+            .unwrap()
+            .projects
+            .get_mut(&historical)
+            .unwrap()
+            .status = ProjectStatus::SeekingSupport;
+        assert!(
+            validate(&invalid).is_err(),
+            "an unfinished proposal still needs a live plot"
+        );
+    }
+
+    #[test]
     fn valid_farm_with_unrepresentable_harvest_promise_declines_funding_without_mutation() {
         let mut sim = fixture();
         let farmer = sim.state.people[3].id;
@@ -2400,8 +2579,8 @@ mod farm_tests {
                 .ecology
                 .as_ref()
                 .unwrap()
-                .plots
-                .contains_key(&field)
+                .plot(&sim.state.components, field)
+                .is_some()
         );
         assert_eq!(
             sim.state

@@ -29,6 +29,24 @@ impl Runtime {
             next_request: BTreeMap::new(),
         })
     }
+    /// Validate this feature's registered data without interpreting another
+    /// feature's people, topology, inventory, or simulation clock.
+    pub fn validate(&self, store: &Store) -> Result<(), Error> {
+        self.rules.validate()?;
+        for (id, resource) in self.resources(store) {
+            resource.validate()?;
+            if id != resource.id {
+                return Err(Error::InvalidSave("inconsistent resource entity".into()));
+            }
+        }
+        for (id, plot) in self.plots(store) {
+            plot.validate()?;
+            if id != plot.id {
+                return Err(Error::InvalidSave("inconsistent plot entity".into()));
+            }
+        }
+        Ok(())
+    }
     pub fn bind(store: &mut Store) -> Queries {
         Queries {
             resources: store.query1::<Resource>(),

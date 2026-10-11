@@ -941,7 +941,14 @@ mod tests {
             .find(|source| source.kind == ResourceKind::Spring && source.area == AreaId(1))
             .unwrap()
             .id;
-        let before = sim.state.ecology.as_ref().unwrap().resources[&source].remaining;
+        let before = sim
+            .state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resource(&sim.state.components, source)
+            .expect("component exists")
+            .remaining;
         let delivery = Delivery::new(
             Requirement {
                 good: Good::Water,
@@ -989,7 +996,13 @@ mod tests {
             .unwrap();
         assert_eq!(sim.state, restored.state);
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&source].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, source)
+                .expect("component exists")
+                .remaining,
             Quantity(before.0 - 1_000)
         );
         assert!(matches!(
@@ -1124,7 +1137,13 @@ mod tests {
         sim.advance(SimDuration(completes.0 - sim.state.time.0))
             .unwrap();
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&resource].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, resource)
+                .expect("component exists")
+                .remaining,
             Quantity(1_000)
         );
         assert!(matches!(
@@ -1145,8 +1164,8 @@ mod tests {
             .ecology
             .as_ref()
             .unwrap()
-            .resources
-            .values()
+            .resources(&sim.state.components)
+            .map(|(_, value)| value)
             .find(|r| r.kind == ResourceKind::Spring && r.area == AreaId(1))
             .unwrap()
             .id;
@@ -1155,8 +1174,7 @@ mod tests {
             .ecology
             .as_mut()
             .unwrap()
-            .resources
-            .get_mut(&spring)
+            .resource_mut(&mut sim.state.components, spring)
             .unwrap();
         source.access.clear();
         source.custodian = None;
@@ -1226,7 +1244,13 @@ mod tests {
             })
         );
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&spring].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, spring)
+                .expect("component exists")
+                .remaining,
             Quantity(50_000)
         );
         assert_eq!(delivery.remaining, Quantity(1_000));

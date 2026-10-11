@@ -177,7 +177,7 @@ pub(crate) struct PreparedWorldStep {
     pub invocation_output: invocation::PendingInvocation,
     pub environment_output: Option<environment::Step>,
     pub agriculture_output: Option<game_agriculture::PreparedAdvance>,
-    pub ecology_output: Option<ecology::World>,
+    pub ecology_output: Option<game_ecology::PreparedAdvance>,
     pub health_output: health::PendingHealth,
     pub due: Vec<Due>,
     pub lifecycle: Vec<Due>,

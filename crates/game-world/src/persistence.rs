@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 28;
+const SAVE_VERSION: u32 = 29;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -255,10 +255,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     if let Some(world) = &s.ecology {
         for id in world
-            .resources
-            .keys()
+            .resources(&s.components)
+            .map(|(id, _)| id)
             .map(|id| id.0)
-            .chain(world.plots.keys().map(|id| id.0))
+            .chain(world.plots(&s.components).map(|(id, _)| id).map(|id| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
@@ -911,7 +911,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resources.contains_key(&resource))
+                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -931,7 +931,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resources.contains_key(&resource))
+                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -943,7 +943,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resources.contains_key(&resource))
+                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -959,7 +959,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     || !s
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resources.contains_key(&resource))
+                        .is_some_and(|w| w.resource(&s.components, resource).is_some())
                 {
                     return Err(fail());
                 }
@@ -1419,16 +1419,36 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 enterprise,
                 site,
             } => {
-                if !s.projects.as_ref().is_some_and(|w| {
-                    w.projects.contains_key(&project)
-                        && w.enterprises
-                            .get(&enterprise)
-                            .is_some_and(|e| e.site == site)
-                }) || !s
-                    .physical
-                    .as_ref()
-                    .is_some_and(|w| w.sites.contains_key(&site))
-                {
+                let valid = s.projects.as_ref().is_some_and(|world| {
+                    let Some(plan) = world.projects.get(&project) else {
+                        return false;
+                    };
+                    world.enterprises.get(&enterprise).is_some_and(|record| {
+                        record.project == project
+                            && record.site == site
+                            && match plan.kind {
+                                ProjectKind::Workshop => s
+                                    .physical
+                                    .as_ref()
+                                    .is_some_and(|world| world.sites.contains_key(&site)),
+                                ProjectKind::Farm { plot, water } => {
+                                    site == plot
+                                        && s.agriculture
+                                            .as_ref()
+                                            .and_then(|world| world.field(&s.components, site))
+                                            .is_some_and(|field| {
+                                                field.id == plot
+                                                    && field.area == plan.area
+                                                    && field.seed == plan.input
+                                                    && field.tool == plan.tool
+                                                    && field.water == water
+                                                    && field.food == plan.output
+                                            })
+                                }
+                            }
+                    })
+                });
+                if !valid {
                     return Err(fail());
                 }
             }
@@ -1782,7 +1802,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     Subject::Resource(id) => s
                         .ecology
                         .as_ref()
-                        .is_some_and(|w| w.resources.contains_key(&id)),
+                        .is_some_and(|w| w.resource(&s.components, id).is_some()),
                 };
                 let key_valid = match plan.key {
                     IntentionKey::Relief { beneficiary, .. } => people.contains_key(&beneficiary),

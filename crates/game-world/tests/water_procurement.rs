@@ -79,11 +79,11 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
             }
         }
     }
-    for source in state["ecology"]["resources"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
+    for row in state["components"]["columns"]["ecology/resource"]
+        .as_array_mut()
+        .expect("actual saved resource column")
     {
+        let source = row.get_mut("value").expect("saved resource payload");
         if source["kind"] == "Spring" {
             source["daily_growth"] = 0.into();
             source["contamination"] = 0.into();
@@ -199,11 +199,11 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
         }
         mind["plan"] = serde_json::Value::Null;
     }
-    for source in state["ecology"]["resources"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
+    for row in state["components"]["columns"]["ecology/resource"]
+        .as_array_mut()
+        .expect("actual saved resource column")
     {
+        let source = row.get_mut("value").expect("saved resource payload");
         if source["kind"] != "Spring" {
             continue;
         }
@@ -237,10 +237,9 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
         .ecology
         .as_ref()
         .unwrap()
-        .resources
-        .values()
-        .filter(|r| r.kind.good() == Good::Water)
-        .map(|r| r.remaining.0)
+        .resources(&sim.canonical_state().components)
+        .filter(|(_, resource)| resource.kind.good() == Good::Water)
+        .map(|(_, resource)| resource.remaining.0)
         .sum::<u64>();
     assert!(
         sim.canonical_state().ecology.as_ref().unwrap().known[&actor]
@@ -274,10 +273,9 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
         .ecology
         .as_ref()
         .unwrap()
-        .resources
-        .values()
-        .filter(|r| r.kind.good() == Good::Water)
-        .map(|r| r.remaining.0)
+        .resources(&state.components)
+        .filter(|(_, resource)| resource.kind.good() == Good::Water)
+        .map(|(_, resource)| resource.remaining.0)
         .sum::<u64>();
     let carried = state
         .inventories
@@ -305,12 +303,18 @@ fn a_present_custodian_can_refuse_water_without_granting_access_or_forcing_a_the
         .ecology
         .as_ref()
         .unwrap()
-        .resources
-        .values()
-        .find(|r| r.kind.good() == Good::Water && r.remaining.0 > 0)
+        .resources(&sim.canonical_state().components)
+        .find(|(_, resource)| resource.kind.good() == Good::Water && resource.remaining.0 > 0)
         .unwrap()
-        .id;
-    let quantity = sim.canonical_state().ecology.as_ref().unwrap().resources[&private].remaining;
+        .0;
+    let quantity = sim
+        .canonical_state()
+        .ecology
+        .as_ref()
+        .unwrap()
+        .resource(&sim.canonical_state().components, private)
+        .unwrap()
+        .remaining;
     sim.advance(SimDuration(2 * HOUR + 10 * 60_000)).unwrap();
     let state = sim.canonical_state();
     assert!(
@@ -320,12 +324,23 @@ fn a_present_custodian_can_refuse_water_without_granting_access_or_forcing_a_the
     assert!(state.events.iter().any(|e| matches!(e.kind,
         EventKind::ResourceAccessRefused {resource,actor:a,..} if resource==private && a==actor)));
     assert!(
-        !state.ecology.as_ref().unwrap().resources[&private]
+        !state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resource(&state.components, private)
+            .unwrap()
             .access
             .contains(&actor)
     );
     assert_eq!(
-        state.ecology.as_ref().unwrap().resources[&private].remaining,
+        state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resource(&state.components, private)
+            .unwrap()
+            .remaining,
         quantity
     );
     assert!(!state.events.iter().any(|e| matches!(e.kind,

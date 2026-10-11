@@ -3593,7 +3593,14 @@ mod supply_composition_tests {
             .find(|source| source.kind == ResourceKind::Spring && source.area == AreaId(1))
             .unwrap()
             .id;
-        let original = sim.state.ecology.as_ref().unwrap().resources[&source].remaining;
+        let original = sim
+            .state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resource(&sim.state.components, source)
+            .expect("component exists")
+            .remaining;
         let before = sim.state.clone();
         let command = sim.health_candidate(actor, None).unwrap();
         assert!(
@@ -3629,7 +3636,13 @@ mod supply_composition_tests {
             .unwrap();
         assert_eq!(sim.state, restored.state);
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&source].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, source)
+                .expect("component exists")
+                .remaining,
             Quantity(original.0 - 1_000)
         );
         assert!(!sim.state.events.iter().any(

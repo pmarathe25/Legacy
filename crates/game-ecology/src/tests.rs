@@ -1295,3 +1295,26 @@ fn missing_schema_stricter_validation_and_foreign_executor_writes_are_inert() {
     );
     assert_eq!(fixture, before);
 }
+
+#[test]
+fn owned_validation_checks_component_identity_and_intrinsics_without_foreign_entities() {
+    let world = world(ResourceKind::Herbs, 0);
+    world.runtime.validate(&world.store).unwrap();
+    let mut invalid = world.clone();
+    invalid.resource_mut(ResourceId(1)).unwrap().id = ResourceId(99);
+    assert!(invalid.runtime.validate(&invalid.store).is_err());
+    let mut invalid = world.clone();
+    invalid
+        .runtime
+        .plot_mut(&mut invalid.store, SiteId(9))
+        .unwrap()
+        .id = SiteId(99);
+    assert!(invalid.runtime.validate(&invalid.store).is_err());
+    let mut invalid = world.clone();
+    invalid
+        .runtime
+        .plot_mut(&mut invalid.store, SiteId(9))
+        .unwrap()
+        .soil_water = 121;
+    assert!(invalid.runtime.validate(&invalid.store).is_err());
+}

@@ -15,7 +15,7 @@ fn site_exists(state: &CanonicalState, site: SiteId) -> bool {
         || state
             .ecology
             .as_ref()
-            .is_some_and(|w| w.plots.contains_key(&site))
+            .is_some_and(|w| w.plot(&state.components, site).is_some())
 }
 fn site_custodian(state: &CanonicalState, site: SiteId) -> Option<PersonId> {
     state
@@ -27,7 +27,7 @@ fn site_custodian(state: &CanonicalState, site: SiteId) -> Option<PersonId> {
             state
                 .ecology
                 .as_ref()
-                .and_then(|w| w.plots.get(&site))
+                .and_then(|w| w.plot(&state.components, site))
                 .and_then(|p| p.custodian)
         })
 }
@@ -1803,19 +1803,26 @@ impl Simulation {
             PermissionAsset::Inventory(inventory) => {
                 Some(&mut self.state.inventories.get_mut(&inventory).unwrap().access)
             }
-            PermissionAsset::Site(site) => self
-                .state
-                .agriculture
-                .as_mut()
-                .and_then(|w| w.field_mut(&mut self.state.components, site))
-                .map(|f| &mut f.access)
-                .or_else(|| {
+            PermissionAsset::Site(site) => {
+                let cultivated = self
+                    .state
+                    .agriculture
+                    .as_ref()
+                    .is_some_and(|world| world.field(&self.state.components, site).is_some());
+                if cultivated {
+                    self.state
+                        .agriculture
+                        .as_ref()
+                        .and_then(|world| world.field_mut(&mut self.state.components, site))
+                        .map(|field| &mut field.access)
+                } else {
                     self.state
                         .ecology
-                        .as_mut()
-                        .and_then(|w| w.plots.get_mut(&site))
-                        .map(|p| &mut p.access)
-                }),
+                        .as_ref()
+                        .and_then(|world| world.plot_mut(&mut self.state.components, site))
+                        .map(|plot| &mut plot.access)
+                }
+            }
         };
         if let Some(access) = access {
             if effect.allowed {

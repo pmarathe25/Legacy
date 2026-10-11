@@ -169,7 +169,7 @@ pub struct CanonicalState {
     #[serde(default)]
     pub missions: Option<missions::World>,
     #[serde(default)]
-    pub ecology: Option<ecology::World>,
+    pub ecology: Option<ecology::Runtime>,
     #[serde(default)]
     pub health: Option<health::World>,
     #[serde(default)]
@@ -196,6 +196,7 @@ pub struct Simulation {
     agriculture_queries: game_agriculture::Queries,
     physical_query: game_ecs::Query2Optional<game_physiology::Body, Activity, game_workshop::Job>,
     environment_queries: game_environment::Queries,
+    ecology_queries: game_ecology::Queries,
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
@@ -626,6 +627,7 @@ impl Simulation {
             .components
             .query2_optional::<game_physiology::Body, Activity, game_workshop::Job>();
         let environment_queries = game_environment::Runtime::bind(&mut state.components);
+        let ecology_queries = game_ecology::Runtime::bind(&mut state.components);
         let sim = Self {
             state,
             engine,
@@ -640,6 +642,7 @@ impl Simulation {
             agriculture_queries,
             physical_query,
             environment_queries,
+            ecology_queries,
         };
         sim.validate_environment()?;
         sim.validate_agriculture()?;
@@ -1290,6 +1293,7 @@ impl Simulation {
             self.agriculture_queries.refresh(&self.state.components)?;
             self.physical_query.refresh(&self.state.components)?;
             self.environment_queries.refresh(&self.state.components)?;
+            self.ecology_queries.refresh(&self.state.components)?;
             if let Some(warning) = self.required_invocation_input() {
                 return Ok(AdvanceResult {
                     requested,
@@ -1657,6 +1661,13 @@ impl Simulation {
                 .ok_or(Error::Unavailable)?
                 .validate_advance(&self.state.components, batch)?;
         }
+        if let Some(batch) = &ecology_output {
+            self.state
+                .ecology
+                .as_ref()
+                .ok_or(Error::Unavailable)?
+                .validate_advance(&self.state.components, batch)?;
+        }
         self.profile.evaluation_ns += evaluation_ns;
         self.profile.arbitration_ns += arbitration_ns;
         let mut continued_journeys = Vec::new();
@@ -1710,7 +1721,7 @@ impl Simulation {
         self.commit_agriculture(agriculture_output)?;
         self.commit_projects(project_output);
         self.commit_environment(environment_output)?;
-        self.commit_ecology(ecology_output);
+        self.commit_ecology(ecology_output)?;
         self.state.due.remove(&next);
         for event in due {
             match event {

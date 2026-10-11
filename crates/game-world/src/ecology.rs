@@ -1,7 +1,7 @@
 //! Harvestable natural matter renews from climate, not from a person's demand.
 //! Collection creates one physical cargo lot and debits the natural deposit.
 use crate::*;
-pub use game_ecology::{EcologyRules, Gathering, Plot, Resource, World};
+pub use game_ecology::{EcologyRules, Gathering, Plot, Resource, Runtime};
 
 impl Simulation {
     pub fn ecology_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -47,10 +47,8 @@ impl Simulation {
             encounters: BTreeMap::new(),
             captivity: BTreeMap::new(),
         });
-        sim.state.ecology = Some(World {
+        sim.state.ecology = Some(Runtime {
             rules: EcologyRules::default(),
-            resources: BTreeMap::new(),
-            plots: BTreeMap::new(),
             jobs: BTreeMap::new(),
             known: BTreeMap::new(),
             known_plots: BTreeMap::new(),
@@ -111,8 +109,8 @@ impl Simulation {
             return Err(Error::InvalidFixture("invalid natural resource".into()));
         }
         let id = ResourceId(allocate(&mut self.state)?);
-        self.state.ecology.as_mut().unwrap().resources.insert(
-            id,
+        self.state.ecology.as_ref().unwrap().insert_resource(
+            &mut self.state.components,
             Resource {
                 id,
                 area,
@@ -142,7 +140,7 @@ impl Simulation {
                 access,
                 custodian,
             },
-        );
+        )?;
         Ok(id)
     }
     pub fn debug_add_plot(
@@ -163,8 +161,8 @@ impl Simulation {
             return Err(Error::InvalidFixture("invalid natural plot".into()));
         }
         let id = SiteId(allocate(&mut self.state)?);
-        self.state.ecology.as_mut().unwrap().plots.insert(
-            id,
+        self.state.ecology.as_ref().unwrap().insert_plot(
+            &mut self.state.components,
             Plot {
                 id,
                 area,
@@ -174,7 +172,7 @@ impl Simulation {
                 access,
                 custodian,
             },
-        );
+        )?;
         Ok(id)
     }
     fn ecology_area(&self, actor: PersonId) -> Option<AreaId> {
@@ -235,8 +233,7 @@ impl Simulation {
                     .ecology
                     .as_ref()
                     .unwrap()
-                    .resources
-                    .get(&resource)
+                    .resource(&self.state.components, resource)
                     .ok_or(Error::Unavailable)?;
                 if source.area != area
                     || source.custodian != Some(actor)
@@ -250,8 +247,7 @@ impl Simulation {
                     .ecology
                     .as_mut()
                     .unwrap()
-                    .resources
-                    .get_mut(&resource)
+                    .resource_mut(&mut self.state.components, resource)
                     .unwrap()
                     .access;
                 if allowed {
@@ -292,8 +288,7 @@ impl Simulation {
                     .ecology
                     .as_ref()
                     .unwrap()
-                    .resources
-                    .get(&resource)
+                    .resource(&self.state.components, resource)
                     .ok_or(Error::Unavailable)?;
                 let custodian = source.custodian.ok_or(Error::Unavailable)?;
                 if source.area != area
@@ -362,8 +357,7 @@ impl Simulation {
             .ecology
             .as_ref()
             .unwrap()
-            .resources
-            .get(&resource)
+            .resource(&self.state.components, resource)
             .ok_or(Error::Unavailable)?;
         let adult = self.state.development.as_ref().is_none_or(|world| {
             matches!(
@@ -382,6 +376,7 @@ impl Simulation {
             .sum::<u128>();
         let plan =
             self.state.ecology.as_ref().unwrap().prepare_gather(
+                &self.state.components,
                 actor,
                 resource,
                 quantity,
@@ -490,7 +485,14 @@ impl Simulation {
         else {
             return;
         };
-        let source = self.state.ecology.as_ref().unwrap().resources[&job.resource].clone();
+        let source = self
+            .state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resource(&self.state.components, job.resource)
+            .expect("component exists")
+            .clone();
         let plan = game_ecology::prepare_collection(
             &source,
             actor,
@@ -510,8 +512,7 @@ impl Simulation {
                 .ecology
                 .as_mut()
                 .unwrap()
-                .resources
-                .get_mut(&plan.resource)
+                .resource_mut(&mut self.state.components, plan.resource)
                 .unwrap()
                 .remaining = plan.remaining;
             self.state
@@ -538,7 +539,7 @@ impl Simulation {
     pub(crate) fn evaluate_ecology(
         &self,
         day: Option<&game_environment::LocalDayFacts>,
-    ) -> Result<Option<World>, Error> {
+    ) -> Result<Option<game_ecology::PreparedAdvance>, Error> {
         let (Some(world), Some(day)) = (&self.state.ecology, day) else {
             return Ok(None);
         };
@@ -560,19 +561,49 @@ impl Simulation {
                 })
                 .collect(),
         };
-        world.advance(Some(&day)).map(Some)
+        world
+            .prepare_advance(
+                &self.state.components,
+                &self.ecology_queries,
+                Some(&day),
+                |inputs| {
+                    self.engine
+                        .executor()
+                        .map_ordered(inputs, |input| input.evaluate())
+                },
+                |inputs| {
+                    self.engine
+                        .executor()
+                        .map_ordered(inputs, |input| input.evaluate())
+                },
+            )
+            .map(Some)
     }
-    pub(crate) fn commit_ecology(&mut self, output: Option<World>) {
+    pub(crate) fn commit_ecology(
+        &mut self,
+        output: Option<game_ecology::PreparedAdvance>,
+    ) -> Result<(), Error> {
         if let Some(output) = output {
-            self.state.ecology = Some(output);
+            self.state
+                .ecology
+                .as_mut()
+                .ok_or(Error::Unavailable)?
+                .commit_advance(&mut self.state.components, output)?;
         }
+        Ok(())
     }
     pub(crate) fn observe_ecology(&mut self) {
         let Some(world) = &self.state.ecology else {
             return;
         };
-        let resources = world.resources.values().cloned().collect::<Vec<_>>();
-        let plots = world.plots.values().cloned().collect::<Vec<_>>();
+        let resources = world
+            .resources(&self.state.components)
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
+        let plots = world
+            .plots(&self.state.components)
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
         for actor in self
             .state
             .people
@@ -681,7 +712,12 @@ impl Simulation {
             return Vec::new();
         };
         let mut commands = Vec::new();
-        for source in world.resources.values().filter(|s| s.area == area).take(16) {
+        for source in world
+            .resources(&self.state.components)
+            .map(|(_, value)| value)
+            .filter(|s| s.area == area)
+            .take(16)
+        {
             if !source.access.contains(&actor)
                 && source
                     .custodian
@@ -744,12 +780,14 @@ impl Simulation {
         };
         let mut opportunities = Vec::new();
         for source in world
-            .resources
-            .values()
+            .resources(&self.state.components)
+            .map(|(_, value)| value)
             .filter(|source| source.area == area)
             .take(16)
         {
-            let Ok(upper_bound) = world.gather_upper_bound(actor, source.id, facts) else {
+            let Ok(upper_bound) =
+                world.gather_upper_bound(&self.state.components, actor, source.id, facts)
+            else {
                 continue;
             };
             let unauthorized = !source.access.contains(&actor);
@@ -765,7 +803,14 @@ impl Simulation {
                 .into_iter()
                 .filter(|quantity| {
                     world
-                        .prepare_gather(actor, source.id, *quantity, unauthorized, facts)
+                        .prepare_gather(
+                            &self.state.components,
+                            actor,
+                            source.id,
+                            *quantity,
+                            unauthorized,
+                            facts,
+                        )
                         .is_ok()
                 })
                 .collect::<Vec<_>>();
@@ -816,7 +861,7 @@ impl Simulation {
                 adult: self.state.development.as_ref().is_none_or(|w| matches!(w.lives[&actor].stage, LifeStage::Adult | LifeStage::Elder)),
                 carrying_room: room, tool: self.ecology_tool_for_planning(actor, resources) };
             game_ecology::LocalAcquisition { resource: known.id,
-                can_prepare: world.gathering_conditions(actor, known.id, q, !known.accessible, facts).is_ok(),
+                can_prepare: world.gathering_conditions(&self.state.components, actor, known.id, q, !known.accessible, facts).is_ok(),
                 can_request: available.iter().any(|command| matches!(command, Command::Ecology {action: EcologyAction::RequestAccess {resource}} if *resource == known.id)) }
         }).collect::<Vec<_>>();
         let prospects = world.acquisition_prospects(
@@ -942,6 +987,13 @@ impl Simulation {
     }
     pub(crate) fn validate_ecology(&self) -> Result<(), Error> {
         let Some(world) = &self.state.ecology else {
+            if self.state.components.iter::<Resource>().next().is_some()
+                || self.state.components.iter::<Plot>().next().is_some()
+            {
+                return Err(Error::InvalidSave(
+                    "ecological components have no runtime".into(),
+                ));
+            }
             return Ok(());
         };
         let bad = || Error::InvalidSave("invalid ecological deposits, plots or collection".into());
@@ -949,14 +1001,15 @@ impl Simulation {
         if self.state.physical.is_none() || self.state.decisions.is_none() {
             return Err(bad());
         }
-        if world.rules.validate().is_err()
+        if world.validate(&self.state.components).is_err()
             || environment.is_some_and(|w| world.day != self.state.time.0 / w.calendar.day.0)
         {
             return Err(bad());
         }
         let people = self.person_index.keys().copied().collect::<BTreeSet<_>>();
         let area_exists = |area| self.state.areas.iter().any(|a| a.id == area);
-        for (id, s) in &world.resources {
+        for (id, s) in world.resources(&self.state.components) {
+            let id = &id;
             if *id != s.id
                 || id.0 >= self.state.next_id
                 || !area_exists(s.area)
@@ -967,7 +1020,8 @@ impl Simulation {
                 return Err(bad());
             }
         }
-        for (id, p) in &world.plots {
+        for (id, p) in world.plots(&self.state.components) {
+            let id = &id;
             if *id != p.id
                 || id.0 >= self.state.next_id
                 || !area_exists(p.area)
@@ -985,7 +1039,9 @@ impl Simulation {
             }
         }
         for (actor, job) in &world.jobs {
-            let source = world.resources.get(&job.resource).ok_or_else(bad)?;
+            let source = world
+                .resource(&self.state.components, job.resource)
+                .ok_or_else(bad)?;
             let destination = self
                 .state
                 .inventories
@@ -1019,7 +1075,7 @@ impl Simulation {
             !people.contains(actor)
                 || known
                     .keys()
-                    .any(|resource| !world.resources.contains_key(resource))
+                    .any(|resource| !world.resource(&self.state.components, *resource).is_some())
         }) {
             return Err(bad());
         }
@@ -1036,11 +1092,15 @@ impl Simulation {
             if !people.contains(actor)
                 || known.iter().any(|(id, k)| {
                     *id != k.id
-                        || !world.resources.contains_key(id)
+                        || !world.resource(&self.state.components, *id).is_some()
                         || k.observed_at > self.state.time
                         || !area_exists(k.area)
                         || k.contamination > 1_000
-                        || k.available > world.resources[id].capacity
+                        || k.available
+                            > world
+                                .resource(&self.state.components, *id)
+                                .expect("component exists")
+                                .capacity
                         || k.custodian.is_some_and(|p| !people.contains(&p))
                 })
             {
@@ -1051,7 +1111,7 @@ impl Simulation {
             if !people.contains(actor)
                 || known.iter().any(|(id, k)| {
                     *id != k.id
-                        || !(world.plots.contains_key(id)
+                        || !(world.plot(&self.state.components, *id).is_some()
                             || self
                                 .state
                                 .agriculture
@@ -1091,8 +1151,8 @@ mod tests {
             .ecology
             .as_ref()
             .unwrap()
-            .resources
-            .values()
+            .resources(&sim.state.components)
+            .map(|(_, value)| value)
             .find(|r| r.kind == kind && r.area == area)
             .unwrap()
             .id
@@ -1109,7 +1169,14 @@ mod tests {
         let mut sim = fixture();
         let actor = sim.state.ruler;
         let spring = resource(&sim, ResourceKind::Spring, AreaId(1));
-        let before = sim.state.ecology.as_ref().unwrap().resources[&spring].remaining;
+        let before = sim
+            .state
+            .ecology
+            .as_ref()
+            .unwrap()
+            .resource(&sim.state.components, spring)
+            .expect("component exists")
+            .remaining;
         sim.debug_ecology_action(
             actor,
             EcologyAction::Gather {
@@ -1123,7 +1190,13 @@ mod tests {
         assert_eq!(sim.state.inventories[&destination].quantity, Quantity(0));
         sim.advance(SimDuration(59_999)).unwrap();
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&spring].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, spring)
+                .expect("component exists")
+                .remaining,
             before
         );
         sim.advance(SimDuration(1)).unwrap();
@@ -1132,7 +1205,13 @@ mod tests {
             Quantity(1_000)
         );
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&spring].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, spring)
+                .expect("component exists")
+                .remaining,
             Quantity(before.0 - 1_000)
         );
         sim.validate_ecology().unwrap();
@@ -1238,8 +1317,7 @@ mod tests {
             .ecology
             .as_mut()
             .unwrap()
-            .resources
-            .get_mut(&coppice)
+            .resource_mut(&mut sim.state.components, coppice)
             .unwrap()
             .remaining = Quantity(1_000);
         sim.debug_ecology_action(
@@ -1274,7 +1352,13 @@ mod tests {
         );
         sim.advance(SimDuration(3_600_000)).unwrap();
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&coppice].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, coppice)
+                .expect("component exists")
+                .remaining,
             Quantity(0)
         );
     }
@@ -1290,8 +1374,7 @@ mod tests {
             .ecology
             .as_mut()
             .unwrap()
-            .resources
-            .get_mut(&spring)
+            .resource_mut(&mut sim.state.components, spring)
             .unwrap();
         source.access = BTreeSet::from([custodian]);
         source.custodian = Some(custodian);
@@ -1320,7 +1403,13 @@ mod tests {
                 .contains_key(&actor)
         );
         assert_eq!(
-            sim.state.ecology.as_ref().unwrap().resources[&spring].remaining,
+            sim.state
+                .ecology
+                .as_ref()
+                .unwrap()
+                .resource(&sim.state.components, spring)
+                .expect("component exists")
+                .remaining,
             before
         );
     }
@@ -1332,8 +1421,7 @@ mod tests {
             .ecology
             .as_mut()
             .unwrap()
-            .resources
-            .get_mut(&spring)
+            .resource_mut(&mut sim.state.components, spring)
             .unwrap()
             .remaining = Quantity(0);
         let warm = game_environment::LocalDayFacts {
@@ -1355,8 +1443,25 @@ mod tests {
                 })
                 .collect(),
         };
+        sim.ecology_queries.refresh(&sim.state.components).unwrap();
         let renewed = sim.evaluate_ecology(Some(&warm)).unwrap().unwrap();
-        assert_eq!(renewed.resources[&spring].remaining, Quantity(10_000));
+        assert_eq!(
+            renewed
+                .changed_resources()
+                .find(|(id, _)| **id == spring)
+                .map_or_else(
+                    || sim
+                        .state
+                        .ecology
+                        .as_ref()
+                        .unwrap()
+                        .resource(&sim.state.components, spring)
+                        .unwrap()
+                        .remaining,
+                    |(_, source)| source.remaining
+                ),
+            Quantity(10_000)
+        );
         let cold = game_environment::LocalDayFacts {
             cells: warm
                 .cells
@@ -1374,6 +1479,22 @@ mod tests {
             ..warm
         };
         let frozen = sim.evaluate_ecology(Some(&cold)).unwrap().unwrap();
-        assert_eq!(frozen.resources[&spring].remaining, Quantity(0));
+        assert_eq!(
+            frozen
+                .changed_resources()
+                .find(|(id, _)| **id == spring)
+                .map_or_else(
+                    || sim
+                        .state
+                        .ecology
+                        .as_ref()
+                        .unwrap()
+                        .resource(&sim.state.components, spring)
+                        .unwrap()
+                        .remaining,
+                    |(_, source)| source.remaining
+                ),
+            Quantity(0)
+        );
     }
 }

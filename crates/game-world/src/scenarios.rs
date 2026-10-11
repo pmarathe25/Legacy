@@ -737,11 +737,9 @@ impl Simulation {
     fn seed_playable_resources(&mut self) -> Result<(), Error> {
         let residents: BTreeSet<_> = self.state.people.iter().map(|person| person.id).collect();
         let day = self.state.environment.as_ref().unwrap().calendar.day.0;
-        self.state.ecology = Some(ecology::World {
+        self.state.ecology = Some(ecology::Runtime {
             observed_areas: BTreeMap::new(),
             rules: game_ecology::EcologyRules::default(),
-            resources: BTreeMap::new(),
-            plots: BTreeMap::new(),
             jobs: BTreeMap::new(),
             known: BTreeMap::new(),
             known_plots: BTreeMap::new(),
@@ -792,8 +790,7 @@ impl Simulation {
                 .ecology
                 .as_mut()
                 .unwrap()
-                .resources
-                .get_mut(&resource)
+                .resource_mut(&mut self.state.components, resource)
                 .unwrap()
                 .labor_per_unit = match kind {
                 ResourceKind::Coppice => SimDuration(3_600_000),
