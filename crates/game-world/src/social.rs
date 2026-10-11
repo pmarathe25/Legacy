@@ -32,15 +32,12 @@ impl Simulation {
         }
         let development = self
             .state
-            .decisions
-            .as_ref()
-            .unwrap()
-            .minds
-            .iter()
+            .components
+            .minds()
             .map(|(id, mind)| {
                 let mut record = baseline(&mind.personality, mind.dream);
                 record.next_choice = self.state.time;
-                (*id, record)
+                (id, record)
             })
             .collect();
         self.state.social = Some(World {
@@ -108,7 +105,10 @@ impl Simulation {
                     .expect("location exists")
     }
     fn relationship(&self, first: PersonId, second: PersonId) -> decisions::Relationship {
-        self.state.decisions.as_ref().unwrap().minds[&first]
+        self.state
+            .components
+            .mind(first)
+            .unwrap()
             .relationships
             .get(&second)
             .cloned()
@@ -123,7 +123,7 @@ impl Simulation {
         sender: PersonId,
         topic: SocialTopic,
     ) -> bool {
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&recipient];
+        let mind = &self.state.components.mind(recipient).unwrap();
         let relation = self.relationship(recipient, sender);
         let body = self.state.components.body(recipient).expect("body exists");
         let physical = self.body_rules(recipient);
@@ -185,10 +185,8 @@ impl Simulation {
     }
     fn social_tool(&self, actor: PersonId) -> Option<InventoryId> {
         self.state
-            .decisions
-            .as_ref()?
-            .minds
-            .get(&actor)?
+            .components
+            .mind(actor)?
             .knowledge
             .values()
             .filter(|known| {
@@ -231,10 +229,8 @@ impl Simulation {
             return None;
         };
         self.state
-            .decisions
-            .as_ref()?
-            .minds
-            .get(&actor)?
+            .components
+            .mind(actor)?
             .knowledge
             .values()
             .filter(|known| known.good == good && known.accessible && known.quantity >= quantity)
@@ -296,7 +292,7 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                let mind = &self.state.decisions.as_ref().unwrap().minds[&teacher];
+                let mind = &self.state.components.mind(teacher).unwrap();
                 let relation = self.relationship(teacher, actor);
                 if i32::from(mind.personality.empathy + mind.personality.patience) / 2
                     + relation.affection
@@ -747,11 +743,8 @@ impl Simulation {
                 for (id, other) in [(effect.first, effect.second), (effect.second, effect.first)] {
                     let relationship = self
                         .state
-                        .decisions
-                        .as_mut()
-                        .unwrap()
-                        .minds
-                        .get_mut(&id)
+                        .components
+                        .mind_mut(id)
                         .unwrap()
                         .relationships
                         .entry(other)
@@ -777,15 +770,7 @@ impl Simulation {
                 ..
             } => {
                 if topic == InstructionTopic::Routes {
-                    let remembered = &mut self
-                        .state
-                        .decisions
-                        .as_mut()
-                        .unwrap()
-                        .minds
-                        .get_mut(&student)
-                        .unwrap()
-                        .routes;
+                    let remembered = &mut self.state.components.mind_mut(student).unwrap().routes;
                     for (area, neighbors) in routes {
                         remembered.entry(area).or_default().extend(neighbors);
                     }
@@ -833,7 +818,11 @@ impl Simulation {
                 // Biological traits are authored by the separate genetic model.
                 // Social learning neither copies them from a caregiver nor
                 // changes an inherited genotype.
-                let personality = self.state.decisions.as_ref().unwrap().minds[&child]
+                let personality = self
+                    .state
+                    .components
+                    .mind(child)
+                    .unwrap()
                     .personality
                     .clone();
                 let mut record = baseline(&personality, decisions::Aspiration::Comfort);
@@ -963,23 +952,22 @@ impl Simulation {
             .collect();
         let social = self.state.social.as_ref().unwrap();
         for (actor, control, independent) in agency {
+            let vitals = self
+                .state
+                .components
+                .body(actor)
+                .expect("body exists")
+                .vitals
+                .clone();
             self.state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
+                .components
+                .mind_mut(actor)
                 .unwrap()
                 .develop_aspiration(
                     &social.development[&actor],
                     control,
                     independent,
-                    &self
-                        .state
-                        .components
-                        .body(actor)
-                        .expect("body exists")
-                        .vitals,
+                    &vitals,
                     social.rules.aspiration_margin,
                 );
         }
@@ -1005,7 +993,7 @@ impl Simulation {
                 continue;
             };
             local.entry(area).or_default().push(*teacher);
-            let mind = &self.state.decisions.as_ref().unwrap().minds[teacher];
+            let mind = &self.state.components.mind(*teacher).unwrap();
             if !mind.offers_teaching() {
                 continue;
             }
@@ -1086,7 +1074,7 @@ impl Simulation {
             if record.next_choice > self.state.time {
                 continue;
             }
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+            let mind = &self.state.components.mind(actor).unwrap();
             let Location::AtArea(area) = *self
                 .state
                 .components
@@ -1241,7 +1229,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     game_characters::social::validate_local(world, state.time)?;
     let fail = || Error::InvalidSave("inconsistent social development".into());
     state.physical.as_ref().ok_or_else(fail)?;
-    let decisions = state.decisions.as_ref().ok_or_else(fail)?;
+    state.decisions.as_ref().ok_or_else(fail)?;
     let people: BTreeMap<_, _> = state
         .people
         .iter()
@@ -1251,7 +1239,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         return Err(fail());
     }
     for actor in world.development.keys() {
-        if !people.contains_key(actor) || !decisions.minds.contains_key(actor) {
+        if !people.contains_key(actor) || state.components.mind(*actor).is_none() {
             return Err(fail());
         }
     }
@@ -1423,14 +1411,7 @@ mod tests {
         // Ordinary chosen needs remain real, with sufficient authored supplies.
         for actor in ids {
             sim.interrupt_actor_activity(actor);
-            let mind = sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
-                .unwrap();
+            let mind = sim.state.components.mind_mut(actor).unwrap();
             mind.personality.sociability = 950;
             mind.personality.empathy = 950;
             mind.personality.patience = 950;
@@ -1451,7 +1432,11 @@ mod tests {
     fn actual_birth(sim: &mut Simulation, first: PersonId, second: PersonId) -> PersonId {
         // The relocated peer acquires an actual local report, rather than a
         // fixture granting knowledge merely because its body changed area.
-        let food = sim.state.decisions.as_ref().unwrap().minds[&first]
+        let food = sim
+            .state
+            .components
+            .mind(first)
+            .unwrap()
             .knowledge
             .values()
             .find(|fact| fact.good == Good::Food && fact.accessible && fact.quantity.0 >= 3_000)
@@ -1468,14 +1453,7 @@ mod tests {
         sim.advance(MINUTE).unwrap();
         for (actor, partner) in [(first, second), (second, first)] {
             cancel(sim, actor);
-            let mind = sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
-                .unwrap();
+            let mind = sim.state.components.mind_mut(actor).unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.relationships.insert(
                 partner,
@@ -1538,14 +1516,8 @@ mod tests {
         // This authored pair now prefers supporting their actual child. The
         // fixture does not assume that their old intent obliges more births.
         for actor in [first, second] {
-            sim.state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
-                .unwrap()
-                .dream = decisions::Aspiration::SupportOthers;
+            sim.state.components.mind_mut(actor).unwrap().dream =
+                decisions::Aspiration::SupportOthers;
         }
         sim.state
             .components
@@ -1571,22 +1543,13 @@ mod tests {
         let farm = sim.state.areas[1].id;
         let forest = sim.state.areas[2].id;
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&student)
+            .components
+            .mind_mut(student)
             .unwrap()
             .routes
             .clear();
-        sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&teacher)
-            .unwrap()
-            .routes = BTreeMap::from([(farm, BTreeMap::from([(village, MINUTE)]))]);
+        sim.state.components.mind_mut(teacher).unwrap().routes =
+            BTreeMap::from([(farm, BTreeMap::from([(village, MINUTE)]))]);
         social(
             &mut sim,
             student,
@@ -1599,26 +1562,24 @@ mod tests {
             *sim.state.components.activity(teacher).expect("body exists"),
             Activity::Instruction { .. }
         ));
-        let frozen = sim.state.decisions.as_ref().unwrap().minds[&teacher]
-            .routes
-            .clone();
+        let frozen = sim.state.components.mind(teacher).unwrap().routes.clone();
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&teacher)
+            .components
+            .mind_mut(teacher)
             .unwrap()
             .routes
             .insert(forest, BTreeMap::from([(farm, MINUTE)]));
         sim.advance(SimDuration(59_999)).unwrap();
         assert!(
-            !sim.state.decisions.as_ref().unwrap().minds[&student]
+            !sim.state
+                .components
+                .mind(student)
+                .unwrap()
                 .routes
                 .contains_key(&farm)
         );
         sim.advance(SimDuration(1)).unwrap();
-        let known = &sim.state.decisions.as_ref().unwrap().minds[&student].routes;
+        let known = &sim.state.components.mind(student).unwrap().routes;
         assert_eq!(known.get(&farm), frozen.get(&farm));
         assert!(!known.contains_key(&forest));
         assert!(sim.state.events.iter().any(|event|matches!(event.kind,EventKind::InstructionCompleted{teacher:t,student:s,..}if t==teacher&&s==student)));
@@ -1747,14 +1708,7 @@ mod tests {
             Err(Error::Unavailable)
         );
         assert_eq!(sim.state, before);
-        sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&recipient)
-            .unwrap()
-            .dream = decisions::Aspiration::Comfort;
+        sim.state.components.mind_mut(recipient).unwrap().dream = decisions::Aspiration::Comfort;
         social(
             &mut sim,
             actor,
@@ -1779,12 +1733,7 @@ mod tests {
         let first = sim.state.people[3].id;
         let second = sim.state.people[4].id;
         let child = actual_birth(&mut sim, first, second);
-        assert!(
-            sim.state.decisions.as_ref().unwrap().minds[&child]
-                .routes
-                .len()
-                <= 1
-        );
+        assert!(sim.state.components.mind(child).unwrap().routes.len() <= 1);
         assert!(
             sim.own_skill_view(child)
                 .iter()
@@ -1798,7 +1747,7 @@ mod tests {
             LifeStage::Adult
         );
         assert_ne!(
-            sim.state.decisions.as_ref().unwrap().minds[&child].dream,
+            sim.state.components.mind(child).unwrap().dream,
             decisions::Aspiration::Comfort
         );
         assert!(
@@ -1897,14 +1846,7 @@ mod generations {
         // These additional adults begin this fixture with their own intention;
         // later children develop aims from the actual care and activities below.
         for actor in [parents[1].0, parents[1].1] {
-            let mind = sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
-                .unwrap();
+            let mind = sim.state.components.mind_mut(actor).unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 650;
             mind.personality.sociability = 1_000;
@@ -1935,14 +1877,7 @@ mod generations {
                     });
             for (actor, other) in [(gestator, partner), (partner, gestator)] {
                 sim.debug_actor_command(actor, Command::Cancel).unwrap();
-                let mind = sim
-                    .state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(&actor)
-                    .unwrap();
+                let mind = sim.state.components.mind_mut(actor).unwrap();
                 mind.dream = decisions::Aspiration::Parenthood;
                 mind.personality.empathy = 650;
                 mind.personality.sociability = 1_000;
@@ -2017,14 +1952,8 @@ mod generations {
                 .unwrap();
             children.push(child);
             for actor in [gestator, partner] {
-                sim.state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(&actor)
-                    .unwrap()
-                    .dream = decisions::Aspiration::SupportOthers;
+                sim.state.components.mind_mut(actor).unwrap().dream =
+                    decisions::Aspiration::SupportOthers;
             }
         }
         let food = sim
@@ -2070,7 +1999,7 @@ mod generations {
                 LifeStage::Adult
             );
             assert_eq!(
-                sim.state.decisions.as_ref().unwrap().minds[child].dream,
+                sim.state.components.mind(*child).unwrap().dream,
                 decisions::Aspiration::Parenthood,
                 "child {child:?} at {:?}: {:?}, body {:?}",
                 sim.state.time,

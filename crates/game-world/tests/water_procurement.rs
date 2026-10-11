@@ -86,10 +86,11 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
             entities.sort_by_key(|id| id.as_u64().unwrap());
         }
     }
-    for mind in state["decisions"]["minds"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
+    for mind in state["components"]["columns"]["characters/mind"]
+        .as_array_mut()
+        .expect("actual saved mind column")
+        .iter_mut()
+        .map(|row| &mut row["value"])
     {
         mind["plan"] = serde_json::Value::Null;
         for fact in mind["knowledge"].as_object_mut().unwrap().values_mut() {
@@ -213,10 +214,11 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
             stock["quantity"] = 0.into();
         }
     }
-    for mind in state["decisions"]["minds"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
+    for mind in state["components"]["columns"]["characters/mind"]
+        .as_array_mut()
+        .expect("actual saved mind column")
+        .iter_mut()
+        .map(|row| &mut row["value"])
     {
         for fact in mind["knowledge"].as_object_mut().unwrap().values_mut() {
             if fact["good"] == "Water" {
@@ -245,7 +247,8 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
         }
     }
     if !knows_routes {
-        state["decisions"]["minds"][actor.0.to_string()]["routes"] = serde_json::json!({"1":{}});
+        support::component(&mut snapshot, "characters/mind", actor)["routes"] =
+            serde_json::json!({"1":{}});
     }
     let sim = Simulation::load(
         &serde_json::to_vec(&snapshot).unwrap(),

@@ -1,3 +1,4 @@
+mod support;
 use game_api::*;
 use game_world::{
     decisions::{Aspiration, Personality},
@@ -46,7 +47,11 @@ fn personality_changes_autonomous_choices_with_the_same_physical_opportunities()
             .expect("body exists"),
         Activity::Rest
     );
-    let mind = &sim.canonical_state().decisions.as_ref().unwrap().minds[&worker];
+    let mind = &sim
+        .canonical_state()
+        .components
+        .mind(worker)
+        .expect("mind exists");
     assert_eq!(mind.goal, decisions::Goal::Practice);
     assert!(mind.explanation.benefit > 0);
     sim.advance(MINUTE).unwrap();
@@ -80,16 +85,70 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
     }
     let world = reference.canonical_state().decisions.as_ref().unwrap();
     assert_eq!(
-        world.minds[&actor].values[&world.work_concept].experiences,
+        reference
+            .canonical_state()
+            .components
+            .mind(actor)
+            .expect("mind exists")
+            .values[&world.work_concept]
+            .experiences,
         3
     );
     let mut bytes: serde_json::Value = serde_json::from_slice(&reference.save().unwrap()).unwrap();
-    bytes["state"]["decisions"]["minds"][actor.0.to_string()]["values"] = serde_json::json!({});
+    support::component(&mut bytes, "characters/mind", actor)["values"] = serde_json::json!({});
     let mut without_learning =
         Simulation::load(&serde_json::to_vec(&bytes).unwrap(), Execution::default()).unwrap();
     assert_eq!(
         reference.canonical_state().physical,
         without_learning.canonical_state().physical
+    );
+    assert_eq!(
+        reference
+            .canonical_state()
+            .components
+            .bodies()
+            .collect::<Vec<_>>(),
+        without_learning
+            .canonical_state()
+            .components
+            .bodies()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reference
+            .canonical_state()
+            .components
+            .activities()
+            .collect::<Vec<_>>(),
+        without_learning
+            .canonical_state()
+            .components
+            .activities()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reference
+            .canonical_state()
+            .components
+            .jobs()
+            .collect::<Vec<_>>(),
+        without_learning
+            .canonical_state()
+            .components
+            .jobs()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reference
+            .canonical_state()
+            .components
+            .sites()
+            .collect::<Vec<_>>(),
+        without_learning
+            .canonical_state()
+            .components
+            .sites()
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         reference.canonical_state().inventories,
@@ -186,7 +245,11 @@ fn distant_facts_require_a_timed_report_and_keep_their_original_age() {
     assert_eq!(fact.source, KnowledgeSource::Reported(sender));
     assert!(!fact.accessible);
     assert_eq!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&receiver].relationships[&sender]
+        sim.canonical_state()
+            .components
+            .mind(receiver)
+            .expect("mind exists")
+            .relationships[&sender]
             .trust,
         10
     );
@@ -260,7 +323,12 @@ fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() 
     })
     .unwrap();
     assert_eq!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&ruler].knowledge[&source].quantity,
+        sim.canonical_state()
+            .components
+            .mind(ruler)
+            .expect("mind exists")
+            .knowledge[&source]
+            .quantity,
         Quantity(0)
     );
     sim.advance(MINUTE).unwrap();
@@ -367,7 +435,12 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&actor].knowledge[&source].quantity,
+        sim.canonical_state()
+            .components
+            .mind(actor)
+            .expect("mind exists")
+            .knowledge[&source]
+            .quantity,
         Quantity(1_000)
     );
     let mut loaded = Simulation::load(
@@ -381,7 +454,11 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
     sim.advance(SimDuration(60_001)).unwrap();
     loaded.advance(SimDuration(60_001)).unwrap();
     assert_eq!(sim.canonical_state(), loaded.canonical_state());
-    let mind = &sim.canonical_state().decisions.as_ref().unwrap().minds[&actor];
+    let mind = &sim
+        .canonical_state()
+        .components
+        .mind(actor)
+        .expect("mind exists");
     assert_eq!(mind.knowledge[&source].quantity, Quantity(0));
     assert_eq!(mind.last_failure, Some((SimTime(480_000), source)));
     assert_eq!(
@@ -398,7 +475,7 @@ fn a_saved_plan_cannot_forge_movement_shape_for_a_different_command() {
     let actor = simulation.canonical_state().people[3].id;
     let bytes = simulation.save().unwrap();
     let mut data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let plan = &mut data["state"]["decisions"]["minds"][actor.0.to_string()]["plan"];
+    let plan = &mut support::component(&mut data, "characters/mind", actor)["plan"];
     assert_eq!(plan["action"], serde_json::json!("Rest"));
     plan["shape"] = serde_json::json!({"Move":1});
     assert!(matches!(

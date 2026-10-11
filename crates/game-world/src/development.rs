@@ -86,14 +86,7 @@ impl Simulation {
         let first = sim.state.people[3].id;
         let second = sim.state.people[4].id;
         for (id, partner) in [(first, second), (second, first)] {
-            let mind = sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&id)
-                .unwrap();
+            let mind = sim.state.components.mind_mut(id).unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 900;
             mind.relationships.insert(
@@ -145,7 +138,12 @@ impl Simulation {
         if !self.social_family_intent(id, partner) {
             return false;
         }
-        let Some(mind) = self.state.decisions.as_ref().and_then(|w| w.minds.get(&id)) else {
+        let Some(mind) = self
+            .state
+            .decisions
+            .as_ref()
+            .and_then(|_| self.state.components.mind(id))
+        else {
             return false;
         };
         let body = &self.state.components.body(id).expect("body exists");
@@ -295,7 +293,7 @@ impl Simulation {
             .lives()
             .filter(|(id, _)| *id != self.state.ruler)
         {
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&id];
+            let mind = &self.state.components.mind(id).expect("mind exists");
             if mind.dream != decisions::Aspiration::Parenthood {
                 continue;
             }
@@ -593,7 +591,12 @@ impl Simulation {
             .components
             .set_activity(child, Activity::Idle)
             .expect("newborn entity exists");
-        let mut mind = self.state.decisions.as_ref().unwrap().minds[&pregnancy.gestator].clone();
+        let mut mind = self
+            .state
+            .components
+            .mind(pregnancy.gestator)
+            .expect("mind exists")
+            .clone();
         mind.interests.clear();
         mind.routes.clear();
         mind.last_failure = None;
@@ -615,11 +618,9 @@ impl Simulation {
             blocker: None,
         };
         self.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .insert(child, mind);
+            .components
+            .insert_mind(child, mind)
+            .expect("validated newborn mind");
         // Kinship changes a directed initial relationship. It grants no assets,
         // permissions, office, compulsory care, or legal guardianship.
         for parent in parents {
@@ -636,14 +637,7 @@ impl Simulation {
             {
                 continue;
             }
-            let parent_mind = self
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&parent)
-                .unwrap();
+            let parent_mind = self.state.components.mind_mut(parent).unwrap();
             parent_mind.relationships.insert(
                 child,
                 decisions::Relationship {
@@ -810,8 +804,8 @@ impl Simulation {
         let mind = self
             .state
             .decisions
-            .as_mut()
-            .and_then(|w| w.minds.get_mut(&actor))
+            .as_ref()
+            .and_then(|_| self.state.components.mind_mut(actor))
             .ok_or(Error::Unavailable)?;
         mind.relationships.insert(other, relationship);
         Ok(())

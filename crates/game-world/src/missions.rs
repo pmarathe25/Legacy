@@ -250,7 +250,11 @@ impl Simulation {
                     offer.compensation.clone()
                 };
                 if self.guardian_mission_duty(actor, mission.id)
-                    || self.state.decisions.as_ref().unwrap().minds[&actor]
+                    || self
+                        .state
+                        .components
+                        .mind(actor)
+                        .unwrap()
                         .child_signals
                         .values()
                         .any(|signal| signal.urgency >= 20_000)
@@ -434,11 +438,8 @@ impl Simulation {
         for effect in trust {
             let relationship = self
                 .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&effect.observer)
+                .components
+                .mind_mut(effect.observer)
                 .unwrap()
                 .relationships
                 .entry(effect.leader)
@@ -466,7 +467,11 @@ impl Simulation {
             && body.vitals.hunger < self.state.physical.as_ref().unwrap().rules.meal_relief
             && body.vitals.fatigue < self.state.physical.as_ref().unwrap().rules.fatigue_limit
             && !self.combat_restricts(actor)
-            && !self.state.decisions.as_ref().unwrap().minds[&actor]
+            && !self
+                .state
+                .components
+                .mind(actor)
+                .unwrap()
                 .child_signals
                 .values()
                 .any(|signal| signal.urgency >= 20_000)
@@ -684,7 +689,7 @@ impl Simulation {
         }
     }
     fn recruitment_input(&self, actor: PersonId, m: &Mission) -> game_missions::RecruitmentInput {
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let body = &self.state.components.body(actor).expect("body exists");
         let social_disruption = if self
             .mission_area(actor)
@@ -757,7 +762,7 @@ impl Simulation {
         }
         let body = &self.state.components.body(actor).expect("body exists");
         let rules = &self.state.physical.as_ref().unwrap().rules;
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         if self.army_actor_talking(actor) || self.realm_actor_busy(actor) {
             return;
         }
@@ -934,7 +939,7 @@ impl Simulation {
                     && self.mission_area(person).is_ok()
                     && person != self.state.ruler
                 {
-                    let released = &self.state.decisions.as_ref().unwrap().minds[&person];
+                    let released = &self.state.components.mind(person).unwrap();
                     let v = &self
                         .state
                         .components
@@ -1137,7 +1142,7 @@ impl Simulation {
         actor: PersonId,
         objective: &MissionObjective,
     ) -> game_missions::ObjectiveKnowledge {
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let stocks = if let MissionObjective::Deliver {
             source,
             destination,
@@ -1692,7 +1697,11 @@ impl Simulation {
             let input = self.recruitment_input(offer.person, &m);
             let area = self.mission_area(offer.person).unwrap();
             let inventory = self.state.people[self.person_index[&offer.person]].inventory;
-            let known = self.state.decisions.as_ref().unwrap().minds[&offer.person]
+            let known = self
+                .state
+                .components
+                .mind(offer.person)
+                .unwrap()
                 .knowledge
                 .values()
                 .cloned()
@@ -1815,7 +1824,11 @@ impl Simulation {
                     if !offer.countered
                         && view.status == MissionStatus::Preparing
                         && !self.guardian_mission_duty(actor, m.id)
-                        && !self.state.decisions.as_ref().unwrap().minds[&actor]
+                        && !self
+                            .state
+                            .components
+                            .mind(actor)
+                            .unwrap()
                             .child_signals
                             .values()
                             .any(|signal| signal.urgency >= 20_000)
@@ -1894,7 +1907,7 @@ impl Simulation {
         id: MissionId,
     ) -> game_missions::ServiceMotives {
         let m = &self.state.missions.as_ref().unwrap().missions[&id];
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let agreement = self.state.missions.as_ref().unwrap().recruitments
             [&m.members[&actor].recruitment]
             .agreement;
@@ -1932,7 +1945,7 @@ impl Simulation {
             return;
         };
         let map = w.map(e.map).unwrap();
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let opponents = f
             .known
             .keys()
@@ -2017,7 +2030,7 @@ impl Simulation {
         let e = w.encounters.get(&encounter)?;
         let f = e.fighters.get(&actor)?;
         let map = w.map(e.map)?;
-        let mind = &self.state.decisions.as_ref()?.minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let body = &self.state.components.body(actor).expect("body exists");
         let known_status = self
             .state
@@ -2565,7 +2578,11 @@ impl Simulation {
         };
         let m = &self.state.missions.as_ref().unwrap().missions[&id];
         lineage.current() != Some(m.sponsor)
-            || self.state.decisions.as_ref().unwrap().minds[&actor]
+            || self
+                .state
+                .components
+                .mind(actor)
+                .unwrap()
                 .child_signals
                 .get(&m.sponsor)
                 .is_some_and(|signal| signal.urgency > 0 || signal.hydration_urgency > 0)
@@ -2855,15 +2872,7 @@ mod tests {
         let recruit = sim.state.people[5].id;
         let enemy = sim.state.people[6].id;
         {
-            let traits = &mut sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&recruit)
-                .unwrap()
-                .personality;
+            let traits = &mut sim.state.components.mind_mut(recruit).unwrap().personality;
             traits.ambition = 0;
             traits.sociability = 400;
         }
@@ -3005,11 +3014,8 @@ mod tests {
             duration: MINUTE,
         });
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&leader)
+            .components
+            .mind_mut(leader)
             .unwrap()
             .routes
             .clear();
@@ -3202,14 +3208,7 @@ mod tests {
             .unwrap();
         accept(&mut sim, id, leader);
         accept(&mut sim, id, actor);
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.personality.honesty = 100;
         mind.relationships.insert(
             leader,
@@ -3296,15 +3295,7 @@ mod tests {
         let ruler = sim.state.ruler;
         let farm = sim.state.areas[1].id;
         {
-            let traits = &mut sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&leader)
-                .unwrap()
-                .personality;
+            let traits = &mut sim.state.components.mind_mut(leader).unwrap().personality;
             traits.ambition = 900;
             traits.sociability = 900;
             traits.risk_tolerance = 900;
@@ -3404,20 +3395,14 @@ mod tests {
         let body = sim.state.components.body_mut(leader).unwrap();
         body.vitals.health = 70_000;
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&leader)
+            .components
+            .mind_mut(leader)
             .unwrap()
             .personality
             .risk_tolerance = 10;
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&leader)
+            .components
+            .mind_mut(leader)
             .unwrap()
             .routes
             .clear();

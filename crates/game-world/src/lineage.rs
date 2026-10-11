@@ -208,7 +208,11 @@ impl Simulation {
             })
             .collect();
         for guardian in observers {
-            let known_distress = self.state.decisions.as_ref().unwrap().minds[&guardian]
+            let known_distress = self
+                .state
+                .components
+                .mind(guardian)
+                .expect("mind exists")
                 .child_signals
                 .get(&current)
                 .is_some_and(|signal| signal.urgency > 0);
@@ -229,7 +233,11 @@ impl Simulation {
                 .life(current)
                 .expect("life exists")
                 .stage;
-            let personality = self.state.decisions.as_ref().unwrap().minds[&guardian]
+            let personality = self
+                .state
+                .components
+                .mind(guardian)
+                .expect("mind exists")
                 .personality
                 .clone();
             let assessment = self
@@ -301,7 +309,7 @@ impl Simulation {
         }) {
             return Err(Error::Unavailable);
         }
-        let teacher_mind = &self.state.decisions.as_ref().unwrap().minds[&teacher];
+        let teacher_mind = &self.state.components.mind(teacher).expect("mind exists");
         let knows = match topic {
             LessonTopic::Invocation => world.guardians[&teacher].knows_invocation,
             LessonTopic::Craft => {
@@ -418,7 +426,7 @@ impl Simulation {
             {
                 continue;
             }
-            let mind = &self.state.decisions.as_ref().unwrap().minds[teacher];
+            let mind = &self.state.components.mind(*teacher).expect("mind exists");
             if !mind
                 .child_signals
                 .get(&student)
@@ -456,7 +464,11 @@ impl Simulation {
                 k.good == Good::Food
                     && k.accessible
                     && k.quantity.0 >= 1_000
-                    && self.state.decisions.as_ref().unwrap().minds[&student]
+                    && self
+                        .state
+                        .components
+                        .mind(student)
+                        .expect("mind exists")
                         .knowledge
                         .contains_key(&k.inventory)
             }) {
@@ -581,7 +593,11 @@ impl Simulation {
                 gain
             }
             LessonTopic::Craft => {
-                let knowledge = self.state.decisions.as_ref().unwrap().minds[&teacher]
+                let knowledge = self
+                    .state
+                    .components
+                    .mind(teacher)
+                    .expect("mind exists")
                     .interests
                     .get(&ChildhoodInterest::Craft)
                     .copied()
@@ -589,11 +605,8 @@ impl Simulation {
                     .max(u64::from(self.own_skill_level(teacher, Skill::Craft)) * 10);
                 let learning = self
                     .state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(&student)
+                    .components
+                    .mind_mut(student)
                     .unwrap()
                     .interests
                     .entry(ChildhoodInterest::Craft)
@@ -603,18 +616,14 @@ impl Simulation {
                 gain
             }
             LessonTopic::Travel => {
-                let known = self.state.decisions.as_ref().unwrap().minds[&teacher]
+                let known = self
+                    .state
+                    .components
+                    .mind(teacher)
+                    .expect("mind exists")
                     .routes
                     .clone();
-                let student_routes = &mut self
-                    .state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(&student)
-                    .unwrap()
-                    .routes;
+                let student_routes = &mut self.state.components.mind_mut(student).unwrap().routes;
                 let mut new_links = 0_u64;
                 for (area, links) in known {
                     let own = student_routes.entry(area).or_default();
@@ -699,7 +708,11 @@ impl Simulation {
                 in_combat: self.in_combat(guardian),
                 physical_duty_pending: !matches!(*activity, Activity::Idle | Activity::Rest),
                 ready,
-                known_distress: self.state.decisions.as_ref().unwrap().minds[&guardian]
+                known_distress: self
+                    .state
+                    .components
+                    .mind(guardian)
+                    .expect("mind exists")
                     .child_signals
                     .get(&requester)
                     .is_some_and(|s| s.urgency > 0),
@@ -786,7 +799,11 @@ impl Simulation {
                     )
                     && self.state.components.body(id).unwrap().vitals.health > 0;
                 if same_place {
-                    let personality = self.state.decisions.as_ref().unwrap().minds[&id]
+                    let personality = self
+                        .state
+                        .components
+                        .mind(id)
+                        .expect("mind exists")
                         .personality
                         .clone();
                     let stage = self
@@ -943,7 +960,7 @@ impl Simulation {
                 Some(command),
             );
         }
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&guardian];
+        let mind = &self.state.components.mind(guardian).expect("mind exists");
         let mut need = mind
             .child_signals
             .get(&target)

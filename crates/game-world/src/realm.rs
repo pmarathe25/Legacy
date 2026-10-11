@@ -249,7 +249,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
             .ok_or(Error::Unavailable)?;
         let cached = self.institution_view(actor);
         let mut facts = ProposalFacts {
@@ -449,7 +449,7 @@ impl Simulation {
                     .values()
                     .flat_map(|r| r.proposal.value.participants.keys().copied())
                     .collect::<BTreeSet<_>>();
-                let stocks=self.state.decisions.as_ref().unwrap().minds[&actor].knowledge.values()
+                let stocks=self.state.components.mind(actor).unwrap().knowledge.values()
                     .filter(|k|report.snapshot.revisions.values().any(|r|r.proposal.value.terms.iter().any(|term|match term {
                         Term::Delivery {term:AgreementTerm::Delivery {source,destination,..},..}=>k.inventory==*source || k.inventory==*destination,
                         Term::Protection {patrol,..}=>patrol.supplies.iter().any(|s|s.source==k.inventory)
@@ -576,14 +576,7 @@ impl Simulation {
                         memory.institutions.insert(snapshot.id, snapshot);
                     }
                 }
-                let mind = self
-                    .state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(&talk.recipient)
-                    .unwrap();
+                let mind = self.state.components.mind_mut(talk.recipient).unwrap();
                 for mut fact in talk.stocks {
                     if mind
                         .knowledge
@@ -983,7 +976,7 @@ impl Simulation {
             return -10_000;
         };
         let proposal = &known.proposal.value;
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let affiliations = self
             .institution_view(actor)
             .iter()

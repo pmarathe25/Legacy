@@ -156,7 +156,12 @@ impl Simulation {
             );
             development.validate()?;
             let record = game_characters::temperament::PersonTemperament {
-                baseline: (&self.state.decisions.as_ref().unwrap().minds[&person.id].personality)
+                baseline: (&self
+                    .state
+                    .components
+                    .mind(person.id)
+                    .expect("mind exists")
+                    .personality)
                     .into(),
                 learned_offsets: [0; 4],
             };
@@ -237,14 +242,7 @@ impl Simulation {
             .as_mut()
             .unwrap()
             .register_newborn(&mut self.state.components, child)?;
-        self.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&child)
-            .unwrap()
-            .personality = personality;
+        self.state.components.mind_mut(child).unwrap().personality = personality;
         self.apply_trait_temperament(child);
         self.apply_genetic_body_change(child, 1_000, self.genetic_health_milli(child));
         Ok(())
@@ -268,8 +266,8 @@ impl Simulation {
         if let Some(mind) = self
             .state
             .decisions
-            .as_mut()
-            .and_then(|world| world.minds.get_mut(&actor))
+            .as_ref()
+            .and_then(|_| self.state.components.mind_mut(actor))
         {
             temperament.apply_to(&mut mind.personality);
         }
@@ -854,7 +852,10 @@ mod tests {
                 .all(|skill| skill.practice_ms == 0)
         );
         assert!(
-            sim.state.decisions.as_ref().unwrap().minds[&child]
+            sim.state
+                .components
+                .mind(child)
+                .expect("mind exists")
                 .knowledge
                 .values()
                 .all(|fact| fact.source == KnowledgeSource::Observed(child)
@@ -868,7 +869,10 @@ mod tests {
             0
         );
         assert_eq!(
-            sim.state.decisions.as_ref().unwrap().minds[&child]
+            sim.state
+                .components
+                .mind(child)
+                .expect("mind exists")
                 .personality
                 .honesty,
             500

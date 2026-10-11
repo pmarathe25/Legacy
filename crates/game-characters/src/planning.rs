@@ -4,8 +4,14 @@ use crate::decisions::*;
 use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod storage;
+use game_ecs::{Component, Store};
+pub use storage::*;
+#[cfg(test)]
+mod storage_tests;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Mind<A> {
     pub interests: BTreeMap<ChildhoodInterest, u64>,
     pub routes: BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>,
@@ -23,8 +29,8 @@ pub struct Mind<A> {
     pub retry_after: SimTime,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World<A> {
-    pub minds: BTreeMap<PersonId, Mind<A>>,
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
     pub concepts: BTreeMap<ConceptId, Good>,
     pub work_concept: ConceptId,
     pub last_learning_event: u64,
@@ -980,17 +986,34 @@ impl<A: Clone> Mind<A> {
         true
     }
 }
-impl<A> World<A> {
-    pub fn learn_production(&mut self, actor: PersonId) {
-        if let Some(mind) = self.minds.get_mut(&actor) {
-            let attachment = mind.values.entry(self.work_concept).or_insert(Attachment {
-                weight: 0,
-                experiences: 0,
-            });
-            attachment.weight = (attachment.weight + 100).min(1_000);
-            attachment.experiences = attachment.experiences.saturating_add(1);
+impl Runtime {
+    pub fn learn_production<A: Component>(&self, store: &mut Store, actor: PersonId) {
+        if let Some(mind) = mind_mut::<A>(store, actor) {
+            mind.learn_production(self.work_concept);
         }
     }
+}
+impl<A> Mind<A> {
+    pub fn learn_production(&mut self, work_concept: ConceptId) {
+        let attachment = self.values.entry(work_concept).or_insert(Attachment {
+            weight: 0,
+            experiences: 0,
+        });
+        attachment.weight = (attachment.weight + 100).min(1_000);
+        attachment.experiences = attachment.experiences.saturating_add(1);
+    }
+}
+
+pub fn validate_runtime(runtime: &Runtime, next_event: u64) -> Result<(), Error> {
+    if !runtime.concepts.contains_key(&runtime.work_concept)
+        || runtime.last_learning_event >= next_event
+        || runtime.switching_margin < 0
+    {
+        return Err(Error::InvalidSave(
+            "inconsistent character decision metadata".into(),
+        ));
+    }
+    Ok(())
 }
 fn explanation(goal: Goal, need: i64, benefit: i64, value: i64) -> Explanation {
     Explanation {
@@ -1453,37 +1476,49 @@ mod tests {
                 .action,
             1
         );
-        let mut world = World {
-            minds: BTreeMap::from([(f.actor, m)]),
+        let mut schema = game_ecs::Schema::new();
+        register_minds::<u8>(&mut schema).unwrap();
+        let mut store = Store::with_schema(schema);
+        insert_mind(&mut store, f.actor, m).unwrap();
+        let world = Runtime {
             concepts: BTreeMap::from([(ConceptId(6), Good::Timber)]),
             work_concept: ConceptId(6),
             last_learning_event: 0,
             switching_margin: 100,
         };
         for _ in 0..3 {
-            world.learn_production(f.actor);
+            world.learn_production::<u8>(&mut store, f.actor);
         }
         assert_eq!(
-            choose(&world.minds[&f.actor], &f, &[rest.clone(), work.clone()])
-                .plan
-                .unwrap()
-                .action,
+            choose(
+                super::mind::<u8>(&store, f.actor).unwrap(),
+                &f,
+                &[rest.clone(), work.clone()]
+            )
+            .plan
+            .unwrap()
+            .action,
             2
         );
-        assert_eq!(world.minds[&f.actor].values[&ConceptId(6)].experiences, 3);
-        world
-            .minds
-            .get_mut(&f.actor)
+        assert_eq!(
+            super::mind::<u8>(&store, f.actor).unwrap().values[&ConceptId(6)].experiences,
+            3
+        );
+        mind_mut::<u8>(&mut store, f.actor)
             .unwrap()
             .knowledge
             .get_mut(&InventoryId(4))
             .unwrap()
             .quantity = Quantity(0);
         assert_eq!(
-            choose(&world.minds[&f.actor], &f, &[rest, work])
-                .plan
-                .unwrap()
-                .action,
+            choose(
+                super::mind::<u8>(&store, f.actor).unwrap(),
+                &f,
+                &[rest, work]
+            )
+            .plan
+            .unwrap()
+            .action,
             1
         );
     }

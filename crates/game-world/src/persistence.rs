@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 36;
+const SAVE_VERSION: u32 = 37;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -1749,14 +1749,19 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         return Err(fail());
     }
     if let Some(world) = &s.decisions {
-        if world.minds.len() != people.len()
+        if s.components
+            .minds()
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>()
+            != people.keys().copied().collect::<BTreeSet<_>>()
             || !world.concepts.contains_key(&world.work_concept)
             || world.last_learning_event >= s.next_event
             || world.switching_margin < 0
         {
             return Err(fail());
         }
-        for (id, mind) in &world.minds {
+        for (id, mind) in s.components.minds() {
+            let id = &id;
             if !people.contains_key(id)
                 || mind.interests.values().any(|v| *v > 1_000)
                 || mind

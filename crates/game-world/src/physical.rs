@@ -521,7 +521,7 @@ impl Simulation {
                     .state
                     .decisions
                     .as_ref()
-                    .and_then(|w| w.minds.get(&actor))
+                    .and_then(|_| self.state.components.mind(actor))
                     .and_then(|m| m.knowledge.get(&inventory))
                     .cloned();
                 let visible = self.state.inventories.get(&inventory).filter(|i| {
@@ -683,11 +683,8 @@ impl Simulation {
             .expect("activity exists") = activity.clone();
         if let Activity::Tell { ref fact, .. } = activity {
             self.state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
+                .components
+                .mind_mut(actor)
                 .unwrap()
                 .knowledge
                 .insert(fact.inventory, fact.clone());
@@ -1361,11 +1358,8 @@ impl Simulation {
                     }
                     let relationship = self
                         .state
-                        .decisions
-                        .as_mut()
-                        .unwrap()
-                        .minds
-                        .get_mut(&child)
+                        .components
+                        .mind_mut(child)
                         .unwrap()
                         .relationships
                         .entry(actor)
@@ -1390,11 +1384,8 @@ impl Simulation {
             Activity::Play { interest, .. } => {
                 let experience = self
                     .state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(&actor)
+                    .components
+                    .mind_mut(actor)
                     .unwrap()
                     .interests
                     .entry(interest)
@@ -1531,11 +1522,8 @@ impl Simulation {
                         .insert(actor);
                     let relationship = self
                         .state
-                        .decisions
-                        .as_mut()
-                        .unwrap()
-                        .minds
-                        .get_mut(&child)
+                        .components
+                        .mind_mut(child)
                         .unwrap()
                         .relationships
                         .entry(actor)

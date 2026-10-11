@@ -169,7 +169,9 @@ impl Simulation {
         for site in sites {
             sim.state.components.remove_site(site)?;
         }
-        for mind in sim.state.decisions.as_mut().unwrap().minds.values_mut() {
+        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        for actor in actors {
+            let mind = sim.state.components.mind_mut(actor).unwrap();
             mind.sites.clear();
             mind.plan = None;
         }
@@ -277,14 +279,7 @@ impl Simulation {
                 .filter(|stock| sim.inventory_area(stock) == Some(area))
                 .cloned()
                 .collect::<Vec<_>>();
-            let mind = sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&person)
-                .unwrap();
+            let mind = sim.state.components.mind_mut(person).unwrap();
             for stock in inventories {
                 mind.knowledge.insert(
                     stock.id,
@@ -1206,7 +1201,7 @@ impl Simulation {
             {
                 continue;
             }
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+            let mind = &self.state.components.mind(actor).unwrap();
             if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
             {
                 continue;
@@ -1344,7 +1339,7 @@ impl Simulation {
                 continue;
             }
             let actor = plan.sponsor;
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+            let mind = &self.state.components.mind(actor).unwrap();
             if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
             {
                 continue;
@@ -1572,7 +1567,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|world| world.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return Vec::new();
         };
@@ -1778,7 +1773,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|world| world.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return 0;
         };

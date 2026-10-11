@@ -1703,7 +1703,7 @@ impl Simulation {
                 .state
                 .decisions
                 .as_ref()
-                .and_then(|world| world.minds.get(&actor));
+                .and_then(|_| self.state.components.mind(actor));
             if let Some(mind) = mind {
                 for stock in mind.knowledge.values().filter(|stock| {
                     stock.good == Good::Water
@@ -1794,7 +1794,7 @@ impl Simulation {
         self.state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
             .into_iter()
             .flat_map(|mind| mind.knowledge.values())
             .filter(|s| matches!(s.good, Good::Water | Good::Timber | Good::Tool | Good::Herb))
@@ -1830,7 +1830,7 @@ impl Simulation {
         resources: Option<&equipment::RankingResources>,
     ) -> Option<HealthPlanningData> {
         let area = self.health_area(actor, true).ok()?;
-        let mind = self.state.decisions.as_ref()?.minds.get(&actor)?;
+        let mind = self.state.components.mind(actor)?;
         let traits = self
             .invocation_personality(actor)
             .unwrap_or_else(|| mind.personality.clone());
@@ -2015,7 +2015,7 @@ impl Simulation {
             .map(|p| p.id)
             .collect();
         for caregiver in healers {
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&caregiver];
+            let mind = &self.state.components.mind(caregiver).expect("mind exists");
             let body = self.state.components.body(caregiver).unwrap();
             let rules = &self.state.health.as_ref().unwrap().rules;
             let physical = self.body_rules(caregiver);
@@ -2337,7 +2337,7 @@ impl Simulation {
         giver: PersonId,
         patient: PersonId,
     ) -> Option<(InventoryId, InventoryId)> {
-        let mind = self.state.decisions.as_ref()?.minds.get(&giver)?;
+        let mind = self.state.components.mind(giver)?;
         let body = self.state.components.body(giver)?;
         let rules = &self.state.health.as_ref()?.rules;
         let physical = self.body_rules(giver);
@@ -2367,7 +2367,7 @@ impl Simulation {
             let life = active.dominant?;
             return Some(&w.history.get(&life)?.mind);
         }
-        self.state.decisions.as_ref()?.minds.get(&actor)
+        self.state.components.mind(actor)
     }
 }
 
@@ -2513,11 +2513,8 @@ mod integration_tests {
             )
             .unwrap();
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
+            .components
+            .mind_mut(actor)
             .unwrap()
             .personality
             .empathy = 900;
@@ -2532,11 +2529,8 @@ mod integration_tests {
                 )
                 .unwrap();
             sim.state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
+                .components
+                .mind_mut(actor)
                 .unwrap()
                 .knowledge
                 .insert(
@@ -3070,11 +3064,8 @@ mod transport_health_tests {
             .unwrap();
         for source in [endpoint, water] {
             sim.state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&bearer)
+                .components
+                .mind_mut(bearer)
                 .unwrap()
                 .knowledge
                 .insert(
@@ -3822,14 +3813,7 @@ mod supply_composition_tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.knowledge.retain(|_, stock| stock.good != Good::Water);
         for id in [moving, alternate] {
             mind.knowledge.insert(
@@ -3854,8 +3838,13 @@ mod supply_composition_tests {
                 action: HealthAction::Drink { source: moving }
             })
         );
-        let remembered =
-            sim.state.decisions.as_ref().unwrap().minds[&actor].knowledge[&moving].clone();
+        let remembered = sim
+            .state
+            .components
+            .mind(actor)
+            .expect("mind exists")
+            .knowledge[&moving]
+            .clone();
         sim.debug_move_actor(holder, AreaId(3)).unwrap();
         sim.advance(SimDuration(1)).unwrap();
         let before = sim.state.clone();
@@ -3867,7 +3856,11 @@ mod supply_composition_tests {
         );
         assert_eq!(sim.state, before);
         assert_eq!(
-            sim.state.decisions.as_ref().unwrap().minds[&actor].knowledge[&moving],
+            sim.state
+                .components
+                .mind(actor)
+                .expect("mind exists")
+                .knowledge[&moving],
             remembered
         );
         let facts = sim.remembered_health_stocks(actor, None);
@@ -3946,18 +3939,18 @@ mod supply_composition_tests {
         let thirst = sim.state.health.as_ref().unwrap().rules.thirst_harm;
         sim.state.components.clinical_mut(child).unwrap().thirst = thirst;
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&observer)
+            .components
+            .mind_mut(observer)
             .unwrap()
             .child_signals
             .clear();
         assert!(!sim.dependent_signal_visible(observer, child));
         sim.review_decisions().unwrap();
         assert!(
-            !sim.state.decisions.as_ref().unwrap().minds[&observer]
+            !sim.state
+                .components
+                .mind(observer)
+                .expect("mind exists")
                 .child_signals
                 .contains_key(&child)
         );

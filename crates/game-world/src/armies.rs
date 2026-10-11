@@ -932,7 +932,7 @@ impl Simulation {
         let w = self.state.combat.as_ref()?;
         let e = w.encounters.get(&encounter)?;
         let map = w.map(e.map)?;
-        let routes = &self.state.decisions.as_ref()?.minds.get(&actor)?.routes;
+        let routes = &self.state.components.mind(actor)?.routes;
         map.exits
             .iter()
             .filter(|(to, p)| {

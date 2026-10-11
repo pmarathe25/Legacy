@@ -12,6 +12,7 @@ fn schema() -> Result<Schema, Error> {
     game_skills::register_components(&mut schema)?;
     game_health::register_components(&mut schema)?;
     game_lifecycle::register_components(&mut schema)?;
+    game_characters::decisions::register_minds::<game_api::Command>(&mut schema)?;
     game_genetics::register_components(&mut schema)?;
     game_physiology::traits::register_components(&mut schema)?;
     game_characters::temperament::register_components(&mut schema)?;
@@ -118,6 +119,22 @@ impl Components {
         ),
     > {
         game_characters::temperament::all_person_temperaments(&self.0)
+    }
+    pub fn mind(&self, id: game_api::PersonId) -> Option<&crate::decisions::Mind> {
+        game_characters::decisions::mind::<game_api::Command>(&self.0, id)
+    }
+    pub fn mind_mut(&mut self, id: game_api::PersonId) -> Option<&mut crate::decisions::Mind> {
+        game_characters::decisions::mind_mut::<game_api::Command>(&mut self.0, id)
+    }
+    pub fn minds(&self) -> impl Iterator<Item = (game_api::PersonId, &crate::decisions::Mind)> {
+        game_characters::decisions::minds::<game_api::Command>(&self.0)
+    }
+    pub fn insert_mind(
+        &mut self,
+        id: game_api::PersonId,
+        row: crate::decisions::Mind,
+    ) -> Result<(), Error> {
+        game_characters::decisions::insert_mind::<game_api::Command>(&mut self.0, id, row)
     }
     pub fn life(&self, id: game_api::PersonId) -> Option<&game_lifecycle::Life> {
         game_lifecycle::life(&self.0, id)
@@ -596,11 +613,8 @@ mod tests {
         let mut sim = Simulation::skills_fixture(87, Execution::default()).unwrap();
         let last = sim.state.people.last().unwrap().id;
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&last)
+            .components
+            .mind_mut(last)
             .unwrap()
             .personality
             .empathy = 1_001;
@@ -731,6 +745,50 @@ mod tests {
                 |event| matches!(event.kind,game_api::EventKind::Died {actor} if actor == ruler)
             )
         );
+    }
+
+    #[test]
+    fn mind_column_is_authoritative_and_missing_person_rows_fail_restore() {
+        let sim = Simulation::autonomy_fixture(93, Execution::default()).unwrap();
+        let saved = sim.save().unwrap();
+        let mut json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(json["state"]["decisions"].get("minds").is_none());
+        assert_eq!(
+            json["state"]["components"]["columns"]["characters/mind"]
+                .as_array()
+                .unwrap()
+                .len(),
+            sim.state.people.len()
+        );
+        assert_eq!(
+            sim.canonical_state(),
+            Simulation::load(&saved, Execution::default())
+                .unwrap()
+                .canonical_state()
+        );
+        json["state"]["components"]["columns"]["characters/mind"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        assert!(
+            Simulation::load(&serde_json::to_vec(&json).unwrap(), Execution::default()).is_err()
+        );
+    }
+
+    #[test]
+    fn initial_mind_admission_rejects_a_late_bad_row_without_publishing() {
+        let source = Simulation::autonomy_fixture(94, Execution::default()).unwrap();
+        let mut sim = Simulation::survival_fixture(94, Execution::default()).unwrap();
+        let mut rows: std::collections::BTreeMap<_, _> = source
+            .state
+            .components
+            .minds()
+            .map(|(id, mind)| (id, mind.clone()))
+            .collect();
+        rows.last_entry().unwrap().get_mut().personality.empathy = 1_001;
+        let before = sim.canonical_state().clone();
+        assert!(sim.initialize_decision_people(rows).is_err());
+        assert_eq!(&before, sim.canonical_state());
     }
 
     #[test]

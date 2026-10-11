@@ -106,7 +106,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return Step::Blocked(game_logistics::BlockReason::UnknownRoute);
         };
@@ -252,14 +252,7 @@ impl Simulation {
         actor: PersonId,
         inventory: InventoryId,
     ) -> Option<KnownDestination> {
-        let fact = self
-            .state
-            .decisions
-            .as_ref()?
-            .minds
-            .get(&actor)?
-            .knowledge
-            .get(&inventory);
+        let fact = self.state.components.mind(actor)?.knowledge.get(&inventory);
         let stock = self.state.inventories.get(&inventory)?;
         let local = match stock.location {
             InventoryLocation::Area(area) => {
@@ -398,7 +391,7 @@ impl Simulation {
         self.state
             .decisions
             .as_ref()
-            .and_then(|world| world.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
             .into_iter()
             .flat_map(|mind| mind.knowledge.values())
             .filter(|fact| {
@@ -484,7 +477,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return Vec::new();
         };
@@ -536,7 +529,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return Vec::new();
         };
@@ -609,7 +602,7 @@ impl Simulation {
         }
     }
     fn delivery_travel_command(&self, actor: PersonId, target: &Location) -> Option<Command> {
-        let routes = &self.state.decisions.as_ref()?.minds.get(&actor)?.routes;
+        let routes = &self.state.components.mind(actor)?.routes;
         match game_transport::route_intent(
             &self.resolved_location(actor),
             target,
@@ -657,14 +650,7 @@ mod tests {
             .unwrap();
         }
         let actor = sim.state.ruler;
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         sim
@@ -678,11 +664,8 @@ mod tests {
     ) {
         let actor = sim.state.ruler;
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
+            .components
+            .mind_mut(actor)
             .unwrap()
             .knowledge
             .insert(
@@ -728,11 +711,8 @@ mod tests {
             sim.advance(SimDuration(arrives.0 - sim.state.time.0))
                 .unwrap();
             sim.state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
+                .components
+                .mind_mut(actor)
                 .unwrap()
                 .knowledge
                 .clear();
@@ -926,14 +906,7 @@ mod tests {
             )
             .unwrap();
         }
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         let source = sim.state.ecology.as_ref().unwrap().known[&actor]
@@ -1089,15 +1062,7 @@ mod tests {
             .unwrap();
         sim.observe_ecology();
         sim.review_decisions().unwrap();
-        sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap()
-            .sites
-            .clear();
+        sim.state.components.mind_mut(actor).unwrap().sites.clear();
         let delivery = Delivery::new(
             Requirement {
                 good: Good::Timber,
@@ -1179,14 +1144,7 @@ mod tests {
         source.access.clear();
         source.custodian = None;
         sim.observe_ecology();
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         mind.personality.honesty = 900;
@@ -1224,14 +1182,7 @@ mod tests {
             })
         ));
         // A different personal judgment can choose that same factual attempt.
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.personality.honesty = 0;
         assert_eq!(
             sim.plan_delivery(actor, &delivery, &destination(&sim), Quantity(1_000)),
@@ -1346,14 +1297,7 @@ mod tests {
             )
             .unwrap();
         sim.observe_ecology();
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         let delivery = Delivery::new(
@@ -1431,25 +1375,15 @@ mod tests {
                 .custodians
                 .insert(source, custodian);
         }
-        let mind = sim
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = sim.state.components.mind_mut(actor).unwrap();
         mind.knowledge.clear();
         mind.sites.clear();
         mind.personality.honesty = 0;
         mind.personality.risk_tolerance = 900;
         remember(&mut sim, source, AreaId(1), Good::Food, false);
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
+            .components
+            .mind_mut(actor)
             .unwrap()
             .knowledge
             .get_mut(&source)

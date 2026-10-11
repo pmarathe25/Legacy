@@ -408,7 +408,12 @@ impl Simulation {
             let snapshot = PastLife {
                 person,
                 died_at,
-                mind: self.state.decisions.as_ref().unwrap().minds[&person].clone(),
+                mind: self
+                    .state
+                    .components
+                    .mind(person)
+                    .expect("mind exists")
+                    .clone(),
                 skills: self.own_skill_view(person),
                 institutions: self.institution_view(person),
                 cases: self.social_case_view(person),
@@ -1028,14 +1033,7 @@ impl Simulation {
     ) -> Option<BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>> {
         let w = self.state.invocation.as_ref()?;
         let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
-        let mut routes = self
-            .state
-            .decisions
-            .as_ref()?
-            .minds
-            .get(&actor)?
-            .routes
-            .clone();
+        let mut routes = self.state.components.mind(actor)?.routes.clone();
         for id in &a.lives {
             for (from, links) in &w.history[id].mind.routes {
                 for (to, duration) in links {
@@ -1064,7 +1062,12 @@ impl Simulation {
             Location::InTransit { to, .. } => to,
             Location::StoppedOnRoad { .. } | Location::Carried { .. } => return,
         };
-        let owned = &self.state.decisions.as_ref().unwrap().minds[&actor].routes;
+        let owned = &self
+            .state
+            .components
+            .mind(actor)
+            .expect("mind exists")
+            .routes;
         let route = decisions::known_path(owned, origin, destination)
             .map_or_else(|_| Vec::new(), |(path, _)| path);
         self.state.people[self.person_index[&actor]].route = route;
@@ -1189,7 +1192,7 @@ impl Simulation {
         } else {
             unreachable!()
         };
-        let current = &self.state.decisions.as_ref().unwrap().minds[&a.actor];
+        let current = &self.state.components.mind(a.actor).expect("mind exists");
         let mut knowledge = mind.knowledge.clone();
         knowledge.extend(
             current
@@ -1728,7 +1731,7 @@ impl Simulation {
                 {
                     return Err(Error::Unavailable);
                 }
-                let mind = &self.state.decisions.as_ref().unwrap().minds[recipient];
+                let mind = &self.state.components.mind(*recipient).expect("mind exists");
                 let trust = mind.relationships.get(&actor).map_or(0, |r| r.trust);
                 if i64::from(mind.personality.sociability) + i64::from(trust) < 200
                     || self
@@ -1854,14 +1857,7 @@ impl Simulation {
         content: &RecordedMemory,
         source: KnowledgeSource,
     ) {
-        let mind = self
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
-            .unwrap();
+        let mind = self.state.components.mind_mut(actor).unwrap();
         match content {
             RecordedMemory::Stock { fact, .. } => {
                 if mind
@@ -2542,7 +2538,10 @@ mod tests {
             .unwrap()
             .inventory;
         assert!(
-            !sim.state.decisions.as_ref().unwrap().minds[&actor]
+            !sim.state
+                .components
+                .mind(actor)
+                .expect("mind exists")
                 .knowledge
                 .contains_key(&remote)
         );
@@ -2594,16 +2593,26 @@ mod tests {
         act(&mut sim, InvocationAction::Dismiss).unwrap();
         assert!(sim.invocation_view().unwrap().memories.is_empty());
         assert!(
-            !sim.state.decisions.as_ref().unwrap().minds[&actor]
+            !sim.state
+                .components
+                .mind(actor)
+                .expect("mind exists")
                 .knowledge
                 .contains_key(&remote)
         );
         act(&mut sim, InvocationAction::ReadRecord { record }).unwrap();
         sim.advance(MINUTE).unwrap();
         assert!(
-            matches!(sim.state.decisions.as_ref().unwrap().minds[&actor].knowledge[&remote].source,KnowledgeSource::Recorded(id)if id==record)
+            matches!(sim.state.components.mind(actor).expect("mind exists").knowledge[&remote].source,KnowledgeSource::Recorded(id)if id==record)
         );
-        assert!(!sim.state.decisions.as_ref().unwrap().minds[&actor].knowledge[&remote].accessible);
+        assert!(
+            !sim.state
+                .components
+                .mind(actor)
+                .expect("mind exists")
+                .knowledge[&remote]
+                .accessible
+        );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     }
     #[test]

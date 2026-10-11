@@ -203,14 +203,7 @@ impl Simulation {
         // The reports predate control; newborns acquire their own knowledge later.
         let reporter = self.state.people[3].id;
         for person in &self.state.people {
-            let mind = self
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&person.id)
-                .unwrap();
+            let mind = self.state.components.mind_mut(person.id).unwrap();
             mind.plan = None;
             mind.retry_after = self.state.time;
             for stock in self
@@ -239,14 +232,7 @@ impl Simulation {
         }
         let parents = [self.state.people[3].id, self.state.people[4].id];
         for (actor, partner) in [(parents[0], parents[1]), (parents[1], parents[0])] {
-            let mind = self
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
-                .unwrap();
+            let mind = self.state.components.mind_mut(actor).unwrap();
             mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 900;
             mind.relationships.insert(
@@ -853,14 +839,7 @@ impl Simulation {
                     progress_ms: 0,
                 },
             );
-        let mind = self
-            .state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&healer)
-            .unwrap();
+        let mind = self.state.components.mind_mut(healer).unwrap();
         mind.personality.empathy = 900;
         mind.personality.patience = 900;
         mind.dream = decisions::Aspiration::SupportOthers;
@@ -881,11 +860,8 @@ impl Simulation {
         for (actor, partner) in [(first, second), (second, first)] {
             let relationship = self
                 .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&actor)
+                .components
+                .mind_mut(actor)
                 .unwrap()
                 .relationships
                 .get_mut(&partner)

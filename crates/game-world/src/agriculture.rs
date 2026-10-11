@@ -81,7 +81,9 @@ impl Simulation {
         for site in sites {
             sim.state.components.remove_site(site)?;
         }
-        for mind in sim.state.decisions.as_mut().unwrap().minds.values_mut() {
+        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        for actor in actors {
+            let mind = sim.state.components.mind_mut(actor).unwrap();
             mind.sites.clear();
             mind.plan = None;
             mind.retry_after = sim.state.time;

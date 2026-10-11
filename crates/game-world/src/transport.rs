@@ -609,7 +609,7 @@ impl Simulation {
             self.resolved_location(guardian),
             Location::StoppedOnRoad { .. }
         ) {
-            let mind = &self.state.decisions.as_ref()?.minds[&guardian];
+            let mind = &self.state.components.mind(guardian).unwrap();
             if let Some(signal) = mind.child_signals.get(&target).filter(|s| {
                 s.location == self.resolved_location(guardian) && s.observed_at == self.state.time
             }) {
@@ -975,8 +975,11 @@ impl Simulation {
         let reverse = link(target.to, target.from).unwrap_or(SimDuration(0));
         let (leg, approach) =
             game_transport::approach_from(start, target, forward, reverse, self.state.time)?;
-        if !self.state.decisions.as_ref().is_none_or(|w| {
-            w.minds[&actor]
+        if !self.state.decisions.as_ref().is_none_or(|_| {
+            self.state
+                .components
+                .mind(actor)
+                .unwrap()
                 .routes
                 .get(&leg.from)
                 .is_some_and(|links| links.contains_key(&leg.to))
@@ -1419,7 +1422,7 @@ impl Simulation {
                     &bodies,
                 )
                 .is_ok();
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&passenger];
+            let mind = &self.state.components.mind(passenger).unwrap();
             let relation = mind
                 .relationships
                 .get(&offers[0].bearer)
@@ -1531,7 +1534,7 @@ impl Simulation {
             {
                 continue;
             }
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+            let mind = &self.state.components.mind(actor).unwrap();
             let body = self.state.components.body(actor).unwrap();
             let rules = self.body_rules(actor);
             let relation = mind
@@ -1933,14 +1936,7 @@ mod connected_tests {
                 )
             })
             .collect();
-        sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&gestator)
-            .unwrap()
-            .routes = routes;
+        sim.state.components.mind_mut(gestator).unwrap().routes = routes;
         sim.debug_move_actor(gestator, AreaId(3)).unwrap();
         sim.debug_move_actor(gestator, AreaId(2)).unwrap();
         sim.advance(SimDuration(60_000)).unwrap();
@@ -2292,7 +2288,7 @@ mod connected_tests {
             .unwrap();
         sim.state.components.body_mut(mother).unwrap().vitals.hunger = 0;
         sim.review_decisions().unwrap();
-        let mind = &sim.state.decisions.as_ref().unwrap().minds[&mother];
+        let mind = &sim.state.components.mind(mother).unwrap();
         assert!(!mind.knowledge.contains_key(&endpoint));
         assert_eq!(mind.knowledge[&carried].quantity, Quantity(2_000));
         assert!(matches!(

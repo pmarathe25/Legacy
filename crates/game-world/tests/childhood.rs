@@ -106,7 +106,10 @@ fn infancy_signals_have_timed_voluntary_responses_and_no_free_resources() {
             .any(|e| matches!(e.kind, EventKind::Comforted { child, .. } if child == ruler))
     );
     assert!(
-        !sim.canonical_state().decisions.as_ref().unwrap().minds[&ruler]
+        !sim.canonical_state()
+            .components
+            .mind(ruler)
+            .expect("mind exists")
             .relationships
             .is_empty()
     );
@@ -287,11 +290,20 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
         .map(|p| p.id)
         .collect();
     for id in citizens {
-        let mut personality = sim.canonical_state().decisions.as_ref().unwrap().minds[&id]
+        let mut personality = sim
+            .canonical_state()
+            .components
+            .mind(id)
+            .expect("mind exists")
             .personality
             .clone();
         personality.empathy = 0;
-        let dream = sim.canonical_state().decisions.as_ref().unwrap().minds[&id].dream;
+        let dream = sim
+            .canonical_state()
+            .components
+            .mind(id)
+            .expect("mind exists")
+            .dream;
         sim.debug_set_personality(id, personality, dream).unwrap();
         let ruler = sim.observe().ruler;
         sim.debug_set_relationship(

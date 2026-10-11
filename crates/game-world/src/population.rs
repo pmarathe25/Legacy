@@ -102,14 +102,7 @@ impl Simulation {
             let a = settlement.residents[3];
             let b = settlement.residents[4];
             for (actor, partner) in [(a, b), (b, a)] {
-                let mind = sim
-                    .state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(&actor)
-                    .unwrap();
+                let mind = sim.state.components.mind_mut(actor).unwrap();
                 mind.dream = decisions::Aspiration::Parenthood;
                 mind.relationships.insert(
                     partner,
@@ -290,22 +283,13 @@ impl Simulation {
                 },
             );
         self.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&healer)
+            .components
+            .mind_mut(healer)
             .unwrap()
             .personality
             .empathy = 900;
-        self.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&healer)
-            .unwrap()
-            .dream = decisions::Aspiration::SupportOthers;
+        self.state.components.mind_mut(healer).unwrap().dream =
+            decisions::Aspiration::SupportOthers;
         let timber = lots
             .iter()
             .find(|id| {
@@ -461,14 +445,7 @@ impl Simulation {
         }
         let reported:Vec<_>=self.state.inventories.values().filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
         for actor in &settlement.residents {
-            let mind = self
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(actor)
-                .unwrap();
+            let mind = self.state.components.mind_mut(*actor).unwrap();
             for stock in &reported {
                 let InventoryLocation::Area(area) = stock.location else {
                     unreachable!()
@@ -887,14 +864,7 @@ impl Simulation {
             let reporter = settlement.residents[3];
             let visible:Vec<_>=sim.state.inventories.values().filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
             for actor in &settlement.residents {
-                let mind = sim
-                    .state
-                    .decisions
-                    .as_mut()
-                    .unwrap()
-                    .minds
-                    .get_mut(actor)
-                    .unwrap();
+                let mind = sim.state.components.mind_mut(*actor).unwrap();
                 for stock in &visible {
                     let InventoryLocation::Area(area) = stock.location else {
                         unreachable!()
@@ -984,7 +954,7 @@ mod tests {
         assert_eq!(sim.state.areas.len(), 9);
         assert_eq!(sim.state.components.bodies().count(), 45);
         assert_eq!(sim.state.components.lives().count(), 45);
-        assert_eq!(sim.state.decisions.as_ref().unwrap().minds.len(), 45);
+        assert_eq!(sim.state.components.minds().count(), 45);
         assert!(sim.state.armies.is_some() && sim.state.realm.is_some());
         assert!(
             sim.state
@@ -993,7 +963,7 @@ mod tests {
                 .map(|(_, row)| row)
                 .all(|p| matches!(p.state, development::PregnancyState::Conceiving { .. }))
         );
-        for mind in sim.state.decisions.as_ref().unwrap().minds.values() {
+        for mind in sim.state.components.minds().map(|(_, mind)| mind) {
             assert!(mind.routes.len() <= 3);
         }
         assert_eq!(

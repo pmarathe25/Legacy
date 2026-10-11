@@ -40,12 +40,11 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        let mind = &self
+        let mind = self
             .state
-            .decisions
-            .as_ref()
-            .ok_or(Error::Unavailable)?
-            .minds[&guardian];
+            .components
+            .mind(guardian)
+            .ok_or(Error::Unavailable)?;
         let source_carried = self
             .state
             .inventories
@@ -639,11 +638,8 @@ mod tests {
             )
             .unwrap();
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&guardian)
+            .components
+            .mind_mut(guardian)
             .unwrap()
             .knowledge
             .insert(

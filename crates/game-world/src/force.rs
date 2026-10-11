@@ -400,7 +400,7 @@ impl Simulation {
                     && !self.combat_restricts(person.id)
             })
             .filter(|person| {
-                let mind = &self.state.decisions.as_ref().unwrap().minds[&person.id];
+                let mind = &self.state.components.mind(person.id).unwrap();
                 if person.id == captivity.captor {
                     mind.personality.risk_tolerance >= 500 && mind.personality.aggression >= 500
                 } else {
@@ -721,7 +721,7 @@ impl Simulation {
         if self.force_tool(guardian).is_some() {
             return Some(Command::FreeCaptive { target });
         }
-        let mind = self.state.decisions.as_ref()?.minds.get(&guardian)?;
+        let mind = self.state.components.mind(guardian)?;
         let tool = mind.knowledge.values().find(|fact| {
             fact.good == Good::Tool
                 && Some(fact.area) == self.force_area(guardian)
@@ -1527,15 +1527,7 @@ mod transport_force_tests {
     fn a_willing_bearer_intervenes_in_a_real_roadside_initiative_encounter() {
         let (mut sim, captor, captive) = carried_captive(true);
         {
-            let personality = &mut sim
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&captor)
-                .unwrap()
-                .personality;
+            let personality = &mut sim.state.components.mind_mut(captor).unwrap().personality;
             personality.risk_tolerance = 1_000;
             personality.aggression = 1_000;
         }

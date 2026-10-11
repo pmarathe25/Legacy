@@ -36,7 +36,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|world| world.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         {
             for site in mind.sites.values() {
                 if mind
@@ -335,11 +335,8 @@ mod tests {
         let input = sim.state.components.site(site).expect("site exists").input;
         sim.state.components.site_mut(site).unwrap().input_quantity = Quantity(250);
         sim.state
-            .decisions
-            .as_mut()
-            .unwrap()
-            .minds
-            .get_mut(&actor)
+            .components
+            .mind_mut(actor)
             .unwrap()
             .sites
             .get_mut(&site)

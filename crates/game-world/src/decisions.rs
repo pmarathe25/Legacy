@@ -1,7 +1,6 @@
 //! Bounded action templates. Decisions read personal knowledge; physical execution
 //! can fail and teach the actor without granting an unseen fact in advance.
 use crate::*;
-use rayon::prelude::*;
 
 pub use game_characters::decisions::{
     Aspiration, Attachment, ChildSignal, Explanation, Goal, Personality, Relationship,
@@ -9,8 +8,8 @@ pub use game_characters::decisions::{
 };
 
 pub type Mind = game_characters::decisions::Mind<Command>;
-pub type World = game_characters::decisions::World<Command>;
 pub(crate) use game_characters::decisions::Control;
+pub use game_characters::decisions::Runtime;
 pub(crate) use game_characters::decisions::known_path;
 use game_characters::decisions::{
     ActionShape, Candidate, Capability, CommitmentRef, Decision, Effort, IntentionKey, Motive,
@@ -55,9 +54,19 @@ impl Simulation {
         {
             return Err(Error::InvalidConfiguration("invalid initial minds".into()));
         }
+        if self.state.components.minds().next().is_some() {
+            return Err(Error::InvalidConfiguration(
+                "initial minds already exist".into(),
+            ));
+        }
+        self.state.next_id.checked_add(1).ok_or(Error::Overflow)?;
+        let mut batch = game_ecs::Batch::new();
+        for (actor, mind) in minds {
+            batch.insert(game_ecs::StableId(actor.0), mind);
+        }
+        self.state.components.apply_batch(batch)?;
         let work_concept = ConceptId(allocate(&mut self.state)?);
-        self.state.decisions = Some(World {
-            minds,
+        self.state.decisions = Some(Runtime {
             concepts: BTreeMap::from([(work_concept, Good::Food)]),
             work_concept,
             last_learning_event: self.state.next_event - 1,
@@ -237,14 +246,71 @@ impl Simulation {
                 .take(64)
                 .copied()
                 .collect();
-            let mind = self
+            let mut observed_children = Vec::new();
+            for child in &visible_children {
+                let vitals = &self
+                    .state
+                    .components
+                    .body(*child)
+                    .expect("body exists")
+                    .vitals;
+                let rules = &signal_rules[child];
+                let mut urgency = if vitals.hunger >= rules.hunger_harm {
+                    20_000
+                } else if vitals.hunger >= rules.meal_relief {
+                    3_000
+                } else {
+                    0
+                };
+                if self
+                    .state
+                    .components
+                    .life(*child)
+                    .unwrap()
+                    .preference
+                    .is_some_and(|(p, until)| {
+                        p == ChildhoodInterest::Food && until >= self.state.time
+                    })
+                {
+                    urgency = urgency.max(3_000);
+                }
+                observed_children.push((
+                    *child,
+                    ChildSignal {
+                        preference: self
+                            .state
+                            .components
+                            .life(*child)
+                            .unwrap()
+                            .preference
+                            .filter(|(_, until)| *until >= self.state.time)
+                            .map(|(p, _)| p),
+                        location: locations[child].clone(),
+                        urgency,
+                        hydration_urgency: hydration_signals[child],
+                        observed_at: self.state.time,
+                    },
+                ));
+            }
+            let mut observed_sites = Vec::new();
+            for site in self
                 .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&p.id)
-                .unwrap();
+                .components
+                .sites()
+                .map(|(_, site)| site)
+                .filter(|s| at_area && s.area == area)
+            {
+                observed_sites.push(SiteKnowledge {
+                    site: site.id,
+                    area,
+                    input: site.input,
+                    tool: site.tool,
+                    input_quantity: site.input_quantity,
+                    output: site.output,
+                    access: site.access.contains(&p.id),
+                });
+            }
+            let mind = self.state.components.mind_mut(p.id).unwrap();
             if at_area {
                 let actual_routes = self
                     .state
@@ -278,71 +344,12 @@ impl Simulation {
             }
             mind.child_signals
                 .retain(|_, signal| signal.location != *location);
-            for child in &visible_children {
-                let vitals = &self
-                    .state
-                    .components
-                    .body(*child)
-                    .expect("body exists")
-                    .vitals;
-                let rules = &signal_rules[child];
-                let mut urgency = if vitals.hunger >= rules.hunger_harm {
-                    20_000
-                } else if vitals.hunger >= rules.meal_relief {
-                    3_000
-                } else {
-                    0
-                };
-                if self
-                    .state
-                    .components
-                    .life(*child)
-                    .unwrap()
-                    .preference
-                    .is_some_and(|(p, until)| {
-                        p == ChildhoodInterest::Food && until >= self.state.time
-                    })
-                {
-                    urgency = urgency.max(3_000);
-                }
-                mind.child_signals.insert(
-                    *child,
-                    ChildSignal {
-                        preference: self
-                            .state
-                            .components
-                            .life(*child)
-                            .unwrap()
-                            .preference
-                            .filter(|(_, until)| *until >= self.state.time)
-                            .map(|(p, _)| p),
-                        location: locations[child].clone(),
-                        urgency,
-                        hydration_urgency: hydration_signals[child],
-                        observed_at: self.state.time,
-                    },
-                );
+            for (child, signal) in observed_children {
+                mind.child_signals.insert(child, signal);
             }
             mind.reconcile_care_observation(p.id);
-            for site in self
-                .state
-                .components
-                .sites()
-                .map(|(_, site)| site)
-                .filter(|s| at_area && s.area == area)
-            {
-                mind.sites.insert(
-                    site.id,
-                    SiteKnowledge {
-                        site: site.id,
-                        area,
-                        input: site.input,
-                        tool: site.tool,
-                        input_quantity: site.input_quantity,
-                        output: site.output,
-                        access: site.access.contains(&p.id),
-                    },
-                );
+            for site in observed_sites {
+                mind.sites.insert(site.site, site);
             }
         }
     }
@@ -415,16 +422,20 @@ impl Simulation {
         let mut intentions: Vec<_> = {
             let resources = self.prepare_ranking_resources()?;
             let world = self.state.decisions.as_ref().unwrap();
-            let evaluate = |(id, mind): (&PersonId, &Mind)| {
-                self.decide(*id, mind, world.switching_margin, Some(&resources))
-            };
-            if self.execution.workers == 1 {
-                world.minds.iter().map(evaluate).collect()
-            } else {
-                self.engine
-                    .executor()
-                    .install(|| world.minds.par_iter().map(evaluate).collect())
-            }
+            let jobs: Vec<_> = self
+                .state
+                .components
+                .minds()
+                .map(|(id, mind)| (id, (id, mind)))
+                .collect();
+            self.engine
+                .executor()
+                .map_ordered(&jobs, |mind| {
+                    Ok(self.decide(mind.0, mind.1, world.switching_margin, Some(&resources)))
+                })?
+                .into_iter()
+                .map(|(_, intention)| intention)
+                .collect()
         };
         self.profile.record_phase("review.rank", phase_started);
         let phase_started = Instant::now();
@@ -473,14 +484,7 @@ impl Simulation {
                 self.debug_actor_command(i.actor, command.clone())
             };
             self.profile.record_phase(kind, phase_started);
-            let mind = self
-                .state
-                .decisions
-                .as_mut()
-                .unwrap()
-                .minds
-                .get_mut(&i.actor)
-                .unwrap();
+            let mind = self.state.components.mind_mut(i.actor).unwrap();
             mind.record_attempt(
                 self.state.time,
                 plan,
@@ -1073,7 +1077,7 @@ impl Simulation {
             .state
             .decisions
             .as_mut()
-            .and_then(|world| world.minds.get_mut(caregiver))
+            .and_then(|_| self.state.components.mind_mut(*caregiver))
         {
             let _ = mind.record_care_receipt(*child, good, *quantity, sequence.0);
         }
@@ -1095,7 +1099,7 @@ impl Simulation {
             if let EventKind::Produced { actor, .. } | EventKind::CropHarvested { actor, .. } =
                 event.kind
             {
-                world.learn_production(actor);
+                world.learn_production::<Command>(&mut self.state.components, actor);
             }
         }
         world.last_learning_event = self.state.next_event - 1;
@@ -1114,7 +1118,7 @@ impl Simulation {
             .state
             .decisions
             .as_mut()
-            .and_then(|w| w.minds.get_mut(&id))
+            .and_then(|_| self.state.components.mind_mut(id))
             .ok_or(Error::Unavailable)?;
         mind.personality = personality;
         mind.dream = dream;
@@ -1133,7 +1137,7 @@ impl Simulation {
             .state
             .decisions
             .as_mut()
-            .and_then(|w| w.minds.get_mut(&id))
+            .and_then(|_| self.state.components.mind_mut(id))
             .ok_or(Error::Unavailable)?;
         mind.knowledge.insert(fact.inventory, fact);
         Ok(())
@@ -1145,10 +1149,10 @@ impl Simulation {
         recipient: PersonId,
         fact: StockKnowledge,
     ) -> bool {
-        let Some(world) = &mut self.state.decisions else {
+        let Some(_) = &mut self.state.decisions else {
             return false;
         };
-        let Some(receiver) = world.minds.get_mut(&recipient) else {
+        let Some(receiver) = self.state.components.mind_mut(recipient) else {
             return false;
         };
         let inventory = fact.inventory;

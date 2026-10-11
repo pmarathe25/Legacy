@@ -350,7 +350,7 @@ fn a_ready_guardian_performs_real_work_but_refuses_resources_they_cannot_use() {
         .as_array_mut()
         .unwrap()
         .retain(|id| id != &serde_json::json!(guardian.0));
-    save["state"]["decisions"]["minds"][guardian.0.to_string()]["sites"][site.0.to_string()]["access"] =
+    support::component(&mut save, "characters/mind", guardian)["sites"][site.0.to_string()]["access"] =
         serde_json::json!(false);
     let mut restricted =
         Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
@@ -396,14 +396,17 @@ fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknow
     let child = sim.canonical_state().ruler;
     let teacher = guardians(&sim)[0];
     let mut save: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
-    save["state"]["decisions"]["minds"][teacher.0.to_string()]["routes"]
+    support::component(&mut save, "characters/mind", teacher)["routes"]
         .as_object_mut()
         .unwrap()
         .remove("3");
     let mut sim =
         Simulation::load(&serde_json::to_vec(&save).unwrap(), Execution::default()).unwrap();
     assert!(
-        !sim.canonical_state().decisions.as_ref().unwrap().minds[&child]
+        !sim.canonical_state()
+            .components
+            .mind(child)
+            .expect("mind exists")
             .routes
             .contains_key(&AreaId(2))
     );
@@ -415,7 +418,12 @@ fn travel_instruction_copies_personal_route_knowledge_and_cannot_teach_an_unknow
         },
     );
     sim.advance(MINUTE).unwrap();
-    let routes = &sim.canonical_state().decisions.as_ref().unwrap().minds[&child].routes;
+    let routes = &sim
+        .canonical_state()
+        .components
+        .mind(child)
+        .expect("mind exists")
+        .routes;
     assert!(routes.contains_key(&AreaId(2)));
     assert!(!routes.contains_key(&AreaId(3)));
     assert_eq!(sim.observe().lineage.unwrap().invocation_learning, 0);
@@ -733,7 +741,10 @@ fn actual_first_post_death_birth_changes_control_without_inheriting_assets() {
         Quantity(0)
     );
     assert!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&child]
+        sim.canonical_state()
+            .components
+            .mind(child)
+            .expect("mind exists")
             .values
             .is_empty()
     );

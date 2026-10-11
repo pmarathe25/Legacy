@@ -87,7 +87,9 @@ impl Simulation {
         for actor in workers {
             sim.state.components.set_job(actor, None)?;
         }
-        for mind in sim.state.decisions.as_mut().unwrap().minds.values_mut() {
+        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        for actor in actors {
+            let mind = sim.state.components.mind_mut(actor).unwrap();
             mind.sites.clear();
             mind.plan = None;
         }
@@ -1921,7 +1923,7 @@ impl Simulation {
                 continue;
             }
             let commands = self.available_enforcement_commands(actor);
-            let personality = &self.state.decisions.as_ref().unwrap().minds[&actor].personality;
+            let personality = &self.state.components.mind(actor).unwrap().personality;
             let chosen = commands.into_iter().find(|command| match command {
                 Command::Enforcement {
                     action: EnforcementAction::File { .. },
@@ -2225,7 +2227,7 @@ impl Simulation {
                 else {
                     continue;
                 };
-                let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+                let mind = &self.state.components.mind(actor).unwrap();
                 let remedy = match &case.evidence {
                     EnforcementEvidence::Default(old)
                         if policy.remedies.contains(&RemedyKind::Settlement) =>
@@ -2322,7 +2324,11 @@ impl Simulation {
                 .map(|o| o.term.parties()[0])
                 .collect::<BTreeSet<_>>();
             if unpaid.is_empty()
-                || self.state.decisions.as_ref().unwrap().minds[&actor]
+                || self
+                    .state
+                    .components
+                    .mind(actor)
+                    .unwrap()
                     .personality
                     .honesty
                     < 500
@@ -2579,7 +2585,7 @@ impl Simulation {
         _i: &institutions::Institution,
         change: &InstitutionChange,
     ) -> i64 {
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         match change {
             InstitutionChange::EnforcementPolicy {
                 policy: Some(policy),

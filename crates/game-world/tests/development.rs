@@ -127,7 +127,10 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
     assert!(life.caregivers.is_empty());
     assert_eq!(sim.canonical_state().people.last().unwrap().work_units, 0);
     assert!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&child]
+        sim.canonical_state()
+            .components
+            .mind(child)
+            .expect("mind exists")
             .values
             .is_empty()
     );
@@ -305,7 +308,11 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
         0
     );
     assert!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&child].relationships[&caregiver]
+        sim.canonical_state()
+            .components
+            .mind(child)
+            .expect("mind exists")
+            .relationships[&caregiver]
             .affection
             > 0
     );

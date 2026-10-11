@@ -74,7 +74,7 @@ impl Simulation {
         let mut personality = decisions::Personality::industrious();
         personality.aggression = 900;
         personality.risk_tolerance = 900;
-        let dream = sim.state.decisions.as_ref().unwrap().minds[&target].dream;
+        let dream = sim.state.components.mind(target).unwrap().dream;
         sim.debug_set_personality(target, personality, dream)?;
         Ok(sim)
     }
@@ -1267,9 +1267,9 @@ impl Simulation {
                         .vitals
                         .health;
                     let borrowed = self.invocation_personality(actor);
-                    let traits = borrowed.as_ref().unwrap_or(
-                        &self.state.decisions.as_ref().unwrap().minds[&actor].personality,
-                    );
+                    let traits = borrowed
+                        .as_ref()
+                        .unwrap_or(&self.state.components.mind(actor).unwrap().personality);
                     let action = if rescue == Some(target)
                         && reachable
                         && self.can_release(actor, target)

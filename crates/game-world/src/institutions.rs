@@ -863,8 +863,7 @@ impl Simulation {
                             .expect("body exists")
                             .vitals
                             .hunger,
-                        known_stocks: &self.state.decisions.as_ref().unwrap().minds[&office.holder]
-                            .knowledge,
+                        known_stocks: &self.state.components.mind(office.holder).unwrap().knowledge,
                     };
                     let Some(intent) = self.state.institutions.as_ref().unwrap().rule_intent(
                         &institution,
@@ -954,7 +953,10 @@ impl Simulation {
             .map(|observer| {
                 (
                     observer,
-                    self.state.decisions.as_ref().unwrap().minds[&observer]
+                    self.state
+                        .components
+                        .mind(observer)
+                        .unwrap()
                         .personality
                         .empathy,
                 )
@@ -1248,7 +1250,8 @@ impl Simulation {
     fn observe_exclusions(&mut self) -> Result<(), Error> {
         let mut requests = Vec::new();
         let w = self.state.institutions.as_ref().unwrap();
-        for (actor, mind) in &self.state.decisions.as_ref().unwrap().minds {
+        for (actor, mind) in self.state.components.minds() {
+            let actor = &actor;
             let Ok(area) = self.social_area(*actor) else {
                 continue;
             };
@@ -1371,7 +1374,7 @@ impl Simulation {
         charter: &InstitutionCharter,
         rule: &InstitutionalRule,
     ) -> i64 {
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let recipient = rule.subjects.members
             || rule.subjects.named.contains(&actor)
             || rule.subjects.offices.iter().any(|slot| {
@@ -1444,7 +1447,7 @@ impl Simulation {
             .iter()
             .map(|rule| self.rule_vote_score(actor, charter, rule))
             .sum();
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         for office in &charter.offices {
             score += i64::from(
                 mind.relationships
@@ -1487,7 +1490,10 @@ impl Simulation {
                 -self.rule_vote_score(actor, &i.charter, &i.charter.rules[*index as usize])
             }
             InstitutionChange::Appoint { holder, .. } => i64::from(
-                self.state.decisions.as_ref().unwrap().minds[&actor]
+                self.state
+                    .components
+                    .mind(actor)
+                    .unwrap()
                     .relationships
                     .get(holder)
                     .map_or(0, |r| r.trust),
@@ -1532,7 +1538,10 @@ impl Simulation {
                     }
                     let score = i64::from(c.need_band) * 100
                         + i64::from(
-                            self.state.decisions.as_ref().unwrap().minds[&office.holder]
+                            self.state
+                                .components
+                                .mind(office.holder)
+                                .unwrap()
                                 .personality
                                 .empathy,
                         )
@@ -1658,7 +1667,7 @@ impl Simulation {
                 let Ok(area) = self.social_area(debtor) else {
                     continue;
                 };
-                let mind = &self.state.decisions.as_ref().unwrap().minds[&debtor];
+                let mind = &self.state.components.mind(debtor).unwrap();
                 let body = self.state.components.body(debtor).expect("body exists");
                 let rules = &self.state.physical.as_ref().unwrap().rules;
                 if !matches!(
@@ -1791,7 +1800,7 @@ impl Simulation {
             if owner == self.state.ruler || self.social_area(owner).ok() != Some(area) {
                 continue;
             }
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+            let mind = &self.state.components.mind(actor).unwrap();
             let Some(site) = mind
                 .sites
                 .values()

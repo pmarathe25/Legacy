@@ -313,7 +313,7 @@ impl Simulation {
                     actor,
                     custodian,
                 });
-                let mind = &self.state.decisions.as_ref().unwrap().minds[&custodian];
+                let mind = &self.state.components.mind(custodian).unwrap();
                 if custodian != self.state.ruler
                     && self.ecology_able(custodian)
                     && mind.personality.empathy >= 700
@@ -465,7 +465,7 @@ impl Simulation {
             && self.can_fight(actor)
             && self.can_fight(custodian)
         {
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&custodian];
+            let mind = &self.state.components.mind(custodian).unwrap();
             if mind.personality.aggression >= 500 && mind.personality.risk_tolerance >= 500 {
                 self.debug_start_encounter(vec![(actor, 0), (custodian, 1)])?;
             }
@@ -856,7 +856,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return Vec::new();
         };
@@ -954,7 +954,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return Vec::new();
         };

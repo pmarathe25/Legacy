@@ -783,7 +783,7 @@ impl Simulation {
             .state
             .decisions
             .as_mut()
-            .and_then(|world| world.minds.get_mut(&actor))
+            .and_then(|_| self.state.components.mind_mut(actor))
         {
             for debtor in failures {
                 let loss = i32::from(mind.personality.honesty) / 100;
@@ -2262,7 +2262,7 @@ impl Simulation {
                     for (index, term) in &m.replacements {
                         revised[*index as usize] = term.clone();
                     }
-                    let mind = &self.state.decisions.as_ref().unwrap().minds[actor];
+                    let mind = &self.state.components.mind(*actor).unwrap();
                     let concession = i64::from(mind.personality.empathy.saturating_sub(700)) * 5;
                     let support = self.agreement_offer_score(*actor, &revised) + concession
                         >= self.agreement_offer_score(*actor, &a.terms);
@@ -2285,7 +2285,7 @@ impl Simulation {
     }
 
     fn agreement_offer_score(&self, actor: PersonId, terms: &[AgreementTerm]) -> i64 {
-        let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
+        let mind = &self.state.components.mind(actor).unwrap();
         let mut score = self.project_financing_utility(actor, terms);
         for term in terms {
             if term.amount() == 0 && !matches!(term, AgreementTerm::OutputShare { .. }) {
@@ -2474,7 +2474,8 @@ impl Simulation {
     fn seek_local_exchange(&mut self) -> Result<(), Error> {
         let world = self.state.agreements.as_ref().unwrap();
         let mut proposals = Vec::new();
-        for (actor, mind) in &self.state.decisions.as_ref().unwrap().minds {
+        for (actor, mind) in self.state.components.minds() {
+            let actor = &actor;
             if *actor == self.state.ruler
                 || world
                     .next_search
@@ -2605,7 +2606,7 @@ impl Simulation {
                 continue;
             };
             let body = &self.state.components.body(debtor).expect("body exists");
-            let mind = &self.state.decisions.as_ref().unwrap().minds[&debtor];
+            let mind = &self.state.components.mind(debtor).unwrap();
             let rules = &self.state.physical.as_ref().unwrap().rules;
             if !matches!(
                 *self

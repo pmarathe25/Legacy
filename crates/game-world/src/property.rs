@@ -114,9 +114,11 @@ impl Simulation {
         )?;
         // Initial permission knowledge is authored alongside the fixture's
         // exclusive store, rather than retaining the earlier shared fixture.
-        for (person, mind) in &mut sim.state.decisions.as_mut().unwrap().minds {
+        let actors: Vec<_> = sim.state.components.minds().map(|(id, _)| id).collect();
+        for person in actors {
+            let mind = sim.state.components.mind_mut(person).unwrap();
             if let Some(fact) = mind.knowledge.get_mut(&food) {
-                fact.accessible = *person == custodian;
+                fact.accessible = person == custodian;
             }
         }
         Ok(sim)
@@ -313,7 +315,7 @@ impl Simulation {
                         .state
                         .decisions
                         .as_ref()
-                        .and_then(|w| w.minds.get(&custodian))
+                        .and_then(|_| self.state.components.mind(custodian))
                         .and_then(|m| m.relationships.get(&actor))
                         .map_or(0, |r| r.trust),
                     reserve: Quantity(
@@ -535,7 +537,7 @@ impl Simulation {
                         .state
                         .decisions
                         .as_mut()
-                        .and_then(|w| w.minds.get_mut(&recipient))
+                        .and_then(|_| self.state.components.mind_mut(recipient))
                         .and_then(|m| m.knowledge.get_mut(&inventory))
                     {
                         fact.accessible = allowed;
@@ -664,7 +666,7 @@ impl Simulation {
                         .state
                         .decisions
                         .as_mut()
-                        .and_then(|w| w.minds.get_mut(&observer))
+                        .and_then(|_| self.state.components.mind_mut(observer))
                     {
                         let relationship =
                             mind.relationships
@@ -1052,7 +1054,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|w| w.minds.get(&actor))
+            .and_then(|_| self.state.components.mind(actor))
         else {
             return Vec::new();
         };
@@ -1124,7 +1126,7 @@ impl Simulation {
                 .state
                 .decisions
                 .as_ref()
-                .and_then(|w| w.minds.get(&actor))
+                .and_then(|_| self.state.components.mind(actor))
                 .is_some_and(|m| {
                     m.child_signals.values().any(|signal| {
                         signal.location == Location::AtArea(area) && signal.urgency >= 1_000

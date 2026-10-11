@@ -539,16 +539,35 @@ fn observers_can_interpret_the_same_taking_differently() {
         },
     )
     .unwrap();
-    let before = sim.canonical_state().decisions.as_ref().unwrap().minds[&owner]
+    let before = sim
+        .canonical_state()
+        .components
+        .mind(owner)
+        .expect("mind exists")
         .relationships
         .get(&ruler)
         .map(|r| r.trust)
         .unwrap_or(0);
     take(&mut sim, 1_000);
     sim.advance(MINUTE).unwrap();
-    let minds = &sim.canonical_state().decisions.as_ref().unwrap().minds;
-    assert_eq!(minds[&owner].relationships[&ruler].trust, before - 100);
-    assert_eq!(minds[&supportive].relationships[&ruler].trust, 10);
+    assert_eq!(
+        sim.canonical_state()
+            .components
+            .mind(owner)
+            .expect("mind exists")
+            .relationships[&ruler]
+            .trust,
+        before - 100
+    );
+    assert_eq!(
+        sim.canonical_state()
+            .components
+            .mind(supportive)
+            .expect("mind exists")
+            .relationships[&ruler]
+            .trust,
+        10
+    );
 }
 
 #[test]
@@ -750,7 +769,11 @@ fn permission_granted_during_loading_does_not_stop_the_physical_transfer() {
     )
     .unwrap();
     assert!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&ruler].knowledge[&stock]
+        sim.canonical_state()
+            .components
+            .mind(ruler)
+            .expect("mind exists")
+            .knowledge[&stock]
             .accessible
     );
     sim.advance(SimDuration(30_000)).unwrap();
@@ -765,7 +788,10 @@ fn permission_granted_during_loading_does_not_stop_the_physical_transfer() {
         IncidentOutcome::Taken
     );
     assert_eq!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&owner]
+        sim.canonical_state()
+            .components
+            .mind(owner)
+            .expect("mind exists")
             .relationships
             .get(&ruler)
             .map(|relationship| relationship.trust)

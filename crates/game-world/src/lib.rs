@@ -140,7 +140,7 @@ pub struct CanonicalState {
     pub inventories: BTreeMap<InventoryId, Inventory>,
     pub events: Vec<Event>,
     pub physical: Option<physical::World>,
-    pub decisions: Option<decisions::World>,
+    pub decisions: Option<decisions::Runtime>,
     #[serde(default)]
     pub development: Option<development::Runtime>,
     #[serde(default)]
@@ -679,7 +679,7 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .map(|w| &w.minds[&ruler.id].routes);
+            .map(|_| &self.state.components.mind(ruler.id).unwrap().routes);
         let known_area = |id: AreaId| {
             known_routes.is_none_or(|routes| {
                 routes.contains_key(&id) || routes.values().any(|links| links.contains_key(&id))
@@ -956,8 +956,15 @@ impl Simulation {
             available_commands,
             quantity_opportunities,
             physical: self.physical_view(),
-            known_stocks: self.state.decisions.as_ref().map_or_else(Vec::new, |w| {
-                w.minds[&ruler.id].knowledge.values().cloned().collect()
+            known_stocks: self.state.decisions.as_ref().map_or_else(Vec::new, |_| {
+                self.state
+                    .components
+                    .mind(ruler.id)
+                    .unwrap()
+                    .knowledge
+                    .values()
+                    .cloned()
+                    .collect()
             }),
             combat: self.tactical_view(),
             life_stage: self
@@ -974,8 +981,11 @@ impl Simulation {
                     .filter(|(_, until)| *until >= self.state.time)
                     .map(|(p, _)| p)
             }),
-            interests: self.state.decisions.as_ref().map_or_else(Vec::new, |w| {
-                w.minds[&ruler.id]
+            interests: self.state.decisions.as_ref().map_or_else(Vec::new, |_| {
+                self.state
+                    .components
+                    .mind(ruler.id)
+                    .unwrap()
                     .interests
                     .iter()
                     .map(|(i, p)| (*i, *p))
@@ -1163,8 +1173,13 @@ impl Simulation {
         };
         let path = if let Some(routes) = self.invocation_routes(actor) {
             decisions::known_path(&routes, origin, destination)?.0
-        } else if let Some(world) = &self.state.decisions {
-            decisions::known_path(&world.minds[&actor].routes, origin, destination)?.0
+        } else if self.state.decisions.is_some() {
+            decisions::known_path(
+                &self.state.components.mind(actor).unwrap().routes,
+                origin,
+                destination,
+            )?
+            .0
         } else {
             self.path(origin, destination)?
         };

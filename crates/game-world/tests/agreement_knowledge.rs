@@ -272,7 +272,11 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(known(&sim, debtor, id).obligations[0].defaulted);
     assert!(!known(&sim, creditor, id).obligations[0].defaulted);
-    let before = sim.canonical_state().decisions.as_ref().unwrap().minds[&creditor]
+    let before = sim
+        .canonical_state()
+        .components
+        .mind(creditor)
+        .expect("mind exists")
         .relationships
         .get(&debtor)
         .map_or(0, |r| r.trust);
@@ -288,8 +292,12 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert!(known(&sim, creditor, id).obligations[0].defaulted);
-    let after = sim.canonical_state().decisions.as_ref().unwrap().minds[&creditor].relationships
-        [&debtor]
+    let after = sim
+        .canonical_state()
+        .components
+        .mind(creditor)
+        .expect("mind exists")
+        .relationships[&debtor]
         .trust;
     assert!(after < before);
     let carrying = cargo(&sim, debtor);
@@ -300,7 +308,11 @@ fn a_remote_default_changes_trust_only_after_known_notice_and_a_late_delivery_up
     assert!(view.obligations[0].defaulted);
     assert_eq!(view.obligations[0].performed, 1_000);
     assert_eq!(
-        sim.canonical_state().decisions.as_ref().unwrap().minds[&creditor].relationships[&debtor]
+        sim.canonical_state()
+            .components
+            .mind(creditor)
+            .expect("mind exists")
+            .relationships[&debtor]
             .trust,
         after
     );
