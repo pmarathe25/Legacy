@@ -40,19 +40,8 @@ pub enum InvocationAction {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RecordedMemory {
-    Stock {
-        life: PersonId,
-        fact: StockKnowledge,
-    },
-    Route {
-        life: PersonId,
-        origin: AreaId,
-        destination: AreaId,
-        duration: SimDuration,
-    },
-}
+pub use game_invocation::RecordedMemory;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryRecordView {
     pub id: RecordId,

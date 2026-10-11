@@ -15,3 +15,5 @@ pub mod resource_responses;
 
 pub mod independence;
 pub use independence::independence_material_goal;
+
+pub mod memories;

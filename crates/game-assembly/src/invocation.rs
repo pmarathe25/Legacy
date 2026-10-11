@@ -643,9 +643,7 @@ impl Simulation {
                         .get(&actor)
                         .is_some_and(|a| match &a.work {
                             MemoryWork::Write { content, .. }
-                            | MemoryWork::Teach { content, .. } => {
-                                !lives.contains(&Self::memory_life(content))
-                            }
+                            | MemoryWork::Teach { content, .. } => !lives.contains(&content.life()),
                             _ => false,
                         })
                     {
@@ -1719,42 +1717,7 @@ impl Simulation {
             actor,
         )
         .unwrap();
-        match content {
-            RecordedMemory::Stock { fact, .. } => {
-                if mind
-                    .knowledge
-                    .get(&fact.inventory)
-                    .is_some_and(|old| old.observed_at > fact.observed_at)
-                {
-                    return;
-                }
-                let mut learned = fact.clone();
-                learned.accessible = mind
-                    .knowledge
-                    .get(&fact.inventory)
-                    .is_some_and(|old| old.accessible);
-                learned.learned_at = owner_now;
-                learned.source = source;
-                mind.knowledge.insert(fact.inventory, learned);
-            }
-            RecordedMemory::Route {
-                origin,
-                destination,
-                duration,
-                ..
-            } => {
-                mind.routes
-                    .entry(*origin)
-                    .or_default()
-                    .entry(*destination)
-                    .or_insert(*duration);
-            }
-        }
-    }
-    fn memory_life(content: &RecordedMemory) -> PersonId {
-        match content {
-            RecordedMemory::Stock { life, .. } | RecordedMemory::Route { life, .. } => *life,
-        }
+        content.teach_into(mind, owner_now, source);
     }
     fn finish_memory_actions(&mut self) -> Result<(), Error> {
         let owner_now = self.host.clock().time;
@@ -1783,7 +1746,7 @@ impl Simulation {
             let mut success = false;
             match &action.work {
                 MemoryWork::Write { content, tool, .. } => {
-                    let life = Self::memory_life(content);
+                    let life = content.life();
                     let held: u128 = self
                         .inventory_index
                         .get(&InventoryLocation::Carried(actor))
@@ -1877,7 +1840,7 @@ impl Simulation {
                     }
                 }
                 MemoryWork::Teach { content, recipient } => {
-                    let life = Self::memory_life(content);
+                    let life = content.life();
                     if self
                         .host
                         .state

@@ -33,3 +33,6 @@ mod benefits;
 pub use benefits::*;
 mod options;
 pub use options::*;
+
+mod recorded;
+pub use recorded::*;
