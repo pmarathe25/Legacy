@@ -825,7 +825,7 @@ impl Simulation {
         };
         let through = self.host.next_event() - 1;
         if world.last_event == through
-            && world.portions.len() == game_cargo::inventories(&self.host.storage).count()
+            && world.portions.len() == self.host.storage.count::<game_cargo::Inventory>()
         {
             return Ok(None);
         }
@@ -911,7 +911,7 @@ impl Simulation {
                 });
             }
         }
-        if world.portions.len() != game_cargo::inventories(&self.host.storage).count() {
+        if world.portions.len() != self.host.storage.count::<game_cargo::Inventory>() {
             touched.extend(
                 game_cargo::inventories(&self.host.storage)
                     .map(|(id, _)| id)
@@ -1227,7 +1227,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             .keys()
             .chain(world.next_search.keys())
             .any(|actor| !people.contains_key(actor))
-        || world.portions.len() != game_cargo::inventories(state.components).count()
+        || world.portions.len() != state.components.count::<game_cargo::Inventory>()
     {
         return Err(fail());
     }
