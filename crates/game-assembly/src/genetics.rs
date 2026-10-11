@@ -56,6 +56,7 @@ impl Simulation {
     }
     fn trait_development(
         &self,
+        traits: &game_physiology::traits::Runtime,
         actor: PersonId,
     ) -> Result<game_physiology::traits::Development, Error> {
         let world = self.state.development.as_ref().ok_or(Error::Unavailable)?;
@@ -65,17 +66,11 @@ impl Simulation {
             .life(actor)
             .ok_or(Error::Unavailable)?
             .maturity_milli(&world.rules, self.state.time)?;
-        let training = self.state.physical_traits.as_ref().map_or(0, |traits| {
-            traits.training_from_levels(
-                [Skill::Craft, Skill::Farming, Skill::Combat]
-                    .into_iter()
-                    .map(|skill| self.own_skill_level(actor, skill)),
-            )
-        });
-        Ok(game_physiology::traits::Development {
-            maturity_milli: maturity,
-            physical_training_milli: training,
-        })
+        let levels: Vec<_> = Skill::ALL
+            .into_iter()
+            .map(|skill| (skill, self.own_skill_level(actor, skill)))
+            .collect();
+        traits.development_from_facts(maturity, &levels)
     }
     pub fn initialize_genetics(&mut self, config: Config) -> Result<(), Error> {
         let mut content = Content::read(config.content_dir)?;
@@ -148,12 +143,7 @@ impl Simulation {
                     "founder reproductive substrate disagrees with its role".into(),
                 ));
             }
-            let mut development = self.trait_development(person.id)?;
-            development.physical_training_milli = traits.training_from_levels(
-                [Skill::Craft, Skill::Farming, Skill::Combat]
-                    .into_iter()
-                    .map(|skill| self.own_skill_level(person.id, skill)),
-            );
+            let development = self.trait_development(&traits, person.id)?;
             development.validate()?;
             let record = game_characters::temperament::PersonTemperament {
                 baseline: (&self
@@ -248,29 +238,22 @@ impl Simulation {
         Ok(())
     }
     fn apply_trait_temperament(&mut self, actor: PersonId) {
-        let Some(temperament) = self.state.temperament.as_ref().and_then(|world| {
-            world
-                .express_from_genes(
-                    &self.state.components,
-                    actor,
-                    &self
-                        .state
-                        .genetics
-                        .as_ref()?
-                        .allele_source(&self.state.components),
-                )
-                .ok()
-        }) else {
+        let (Some(temperament), Some(genes)) = (&self.state.temperament, &self.state.genetics)
+        else {
             return;
         };
-        if let Some(mind) = self
-            .state
-            .decisions
-            .as_ref()
-            .and_then(|_| self.state.components.mind_mut(actor))
-        {
-            temperament.apply_to(&mut mind.personality);
-        }
+        let Ok(prepared) = temperament.prepare_expression::<Command>(
+            &self.state.components,
+            &[actor],
+            &genes.allele_source(&self.state.components),
+        ) else {
+            return;
+        };
+        let _ = prepared.commit(
+            temperament,
+            &mut self.state.components,
+            |store, actor, locus| genes.alleles_named(store, actor, locus),
+        );
     }
     pub(crate) fn genetic_phenotype(
         &self,
@@ -333,14 +316,9 @@ impl Simulation {
         if self.state.physical_traits.is_none() {
             return Ok(rate);
         }
-        Ok(SkillRate {
-            numerator: rate
-                .numerator
-                .checked_mul(u64::from(self.genetic_strength_milli(actor)))
-                .ok_or(Error::Overflow)?,
-            denominator: rate.denominator.checked_mul(1_000).ok_or(Error::Overflow)?,
-        })
+        game_physiology::traits::scale_work_rate(rate, self.genetic_strength_milli(actor))
     }
+
     pub(crate) fn traits_boundary(&self, next: SimTime) -> SimTime {
         self.state
             .physical_traits
@@ -352,37 +330,34 @@ impl Simulation {
         let Some(traits) = &self.state.physical_traits else {
             return Ok(());
         };
-        if traits.next_expression > self.state.time {
+        if !traits.refresh_due(self.state.time) {
             return Ok(());
         }
-        let next = traits.prepare_refresh_time(self.state.time)?;
+        let genes = self.state.genetics.as_ref().ok_or(Error::Unavailable)?;
         let pending = self
             .state
             .components
             .trait_developments()
             .map(|(actor, _)| actor)
             .map(|actor| {
-                self.trait_development(actor)
-                    .map(|d| (actor, d, self.genetic_health_milli(actor)))
+                self.trait_development(traits, actor)
+                    .map(|development| (actor, development))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        for (actor, d, before) in pending {
-            self.state.physical_traits.as_mut().unwrap().develop(
-                &mut self.state.components,
-                actor,
-                d.maturity_milli,
-                d.physical_training_milli,
-            )?;
-            self.apply_genetic_body_change(actor, before, self.genetic_health_milli(actor));
-        }
-        let committed_next = self
-            .state
-            .physical_traits
-            .as_mut()
-            .unwrap()
-            .refresh_time(self.state.time)?;
-        debug_assert_eq!(committed_next, next);
-        Ok(())
+        let Some(prepared) = traits.prepare_refresh(
+            &self.state.components,
+            self.state.time,
+            &pending,
+            &genes.allele_source(&self.state.components),
+        )?
+        else {
+            return Ok(());
+        };
+        prepared.commit(
+            self.state.physical_traits.as_mut().unwrap(),
+            &mut self.state.components,
+            |store, actor, locus| genes.alleles_named(store, actor, locus),
+        )
     }
     pub(crate) fn on_trait_event(&mut self, kind: &EventKind) {
         if self.state.genetics.is_none() {
@@ -418,19 +393,20 @@ impl Simulation {
             }
             _ => Vec::new(),
         };
-        for (actor, experience) in learning {
-            // Removing a learning definition removes that effect; event handling
-            // remains available and never changes inherited alleles.
-            if self
-                .state
-                .temperament
-                .as_mut()
-                .unwrap()
-                .learn(&mut self.state.components, actor, experience)
-                .is_ok()
-            {
-                self.apply_trait_temperament(actor);
-            }
+        let (Some(temperament), Some(genes)) = (&self.state.temperament, &self.state.genetics)
+        else {
+            return;
+        };
+        if let Ok(prepared) = temperament.prepare_learning::<Command>(
+            &self.state.components,
+            &learning,
+            &genes.allele_source(&self.state.components),
+        ) {
+            let _ = prepared.commit(
+                temperament,
+                &mut self.state.components,
+                |store, actor, locus| genes.alleles_named(store, actor, locus),
+            );
         }
     }
 }

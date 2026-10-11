@@ -1,6 +1,6 @@
 //! Physical characteristic definitions and acquired development. Inheritance
 //! supplies raw alleles; this module alone interprets them as body properties.
-use game_core::{Error, PersonId, SimTime};
+use game_core::{Error, PersonId, SimTime, Skill, SkillRate};
 use game_ecs::{Schema, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -204,6 +204,17 @@ pub fn rescale_health(
         (scaled % 1_000) as u16,
     )
 }
+impl crate::Body {
+    pub fn rescale_health_factor(&mut self, old_factor: u16, new_factor: u16) {
+        (self.vitals.health, self.health_remainder) = rescale_health(
+            self.vitals.health,
+            self.health_remainder,
+            self.vitals.alive,
+            old_factor,
+            new_factor,
+        );
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Runtime {
@@ -287,9 +298,16 @@ impl Runtime {
         &self,
         store: &Store,
         person: PersonId,
-        mut score: impl FnMut(&str) -> Result<i32, Error>,
+        score: impl FnMut(&str) -> Result<i32, Error>,
     ) -> Result<Phenotype, Error> {
         let d = development(store, person).ok_or(Error::Unavailable)?;
+        self.phenotype_for(d, score)
+    }
+    fn phenotype_for(
+        &self,
+        d: &Development,
+        mut score: impl FnMut(&str) -> Result<i32, Error>,
+    ) -> Result<Phenotype, Error> {
         let mut result = Phenotype {
             strength_milli: 1_000,
             max_health_milli: 1_000,
@@ -346,9 +364,34 @@ impl Runtime {
         (total.saturating_mul(u128::from(self.definitions.training_per_level)))
             .min(u128::from(self.definitions.max_training)) as u16
     }
+    pub fn development_from_facts(
+        &self,
+        maturity_milli: u16,
+        levels: &[(Skill, u16)],
+    ) -> Result<Development, Error> {
+        let physical_training_milli = self.training_from_levels(
+            [Skill::Craft, Skill::Farming, Skill::Combat]
+                .into_iter()
+                .map(|skill| {
+                    levels
+                        .iter()
+                        .find(|(key, _)| *key == skill)
+                        .map_or(0, |(_, level)| *level)
+                }),
+        );
+        let result = Development {
+            maturity_milli,
+            physical_training_milli,
+        };
+        self.check_development(result)?;
+        Ok(result)
+    }
     pub fn next_boundary(&self, now: SimTime, limit: SimTime) -> Option<SimTime> {
         (self.next_expression > now && self.next_expression <= limit)
             .then_some(self.next_expression)
+    }
+    pub fn refresh_due(&self, now: SimTime) -> bool {
+        now >= self.next_expression
     }
     pub fn prepare_refresh_time(&self, now: SimTime) -> Result<SimTime, Error> {
         if now < self.next_expression {
@@ -405,7 +448,7 @@ mod tests {
         assert_eq!(world.reset_epoch(SimTime(u64::MAX)), Err(Error::Overflow));
         assert_eq!(world, before);
     }
-    fn definitions() -> Definitions {
+    pub(super) fn definitions() -> Definitions {
         Definitions {
             expression_period_ms: 10,
             strength_growth_base: 500,
@@ -727,3 +770,208 @@ mod tests {
         assert_eq!((runtime, store), before);
     }
 }
+
+/// Preserve exact skill-rate fractions; overflow precedes any publication.
+pub fn scale_work_rate(rate: SkillRate, strength_milli: u16) -> Result<SkillRate, Error> {
+    Ok(SkillRate {
+        numerator: rate
+            .numerator
+            .checked_mul(u64::from(strength_milli))
+            .ok_or(Error::Overflow)?,
+        denominator: rate.denominator.checked_mul(1_000).ok_or(Error::Overflow)?,
+    })
+}
+
+#[cfg(feature = "genetics")]
+#[derive(Clone, Debug)]
+struct RefreshRow {
+    actor: PersonId,
+    before: Development,
+    after: Development,
+    body: Option<crate::Body>,
+    next_body: Option<crate::Body>,
+    before_phenotype: Phenotype,
+    after_phenotype: Phenotype,
+    alleles: Vec<[i32; 2]>,
+}
+#[cfg(feature = "genetics")]
+#[derive(Clone, Debug)]
+pub struct PreparedRefresh {
+    definitions: Definitions,
+    opening_deadline: SimTime,
+    next_deadline: SimTime,
+    rows: Vec<RefreshRow>,
+}
+
+#[cfg(feature = "genetics")]
+impl Runtime {
+    fn phenotype_from_pairs(
+        &self,
+        development: &Development,
+        pairs: &[[i32; 2]],
+    ) -> Result<Phenotype, Error> {
+        if pairs.len() != self.definitions.traits.len() {
+            return Err(Error::InvalidConfiguration(
+                "inconsistent physical allele facts".into(),
+            ));
+        }
+        let mut pairs = pairs.iter();
+        self.phenotype_for(development, |_| {
+            let [first, second] = *pairs.next().ok_or(Error::Unavailable)?;
+            Ok(((i64::from(first) + i64::from(second)) / 2) as i32)
+        })
+    }
+    pub fn prepare_refresh(
+        &self,
+        store: &Store,
+        now: SimTime,
+        developments: &[(PersonId, Development)],
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<Option<PreparedRefresh>, Error> {
+        if !self.refresh_due(now) {
+            return Ok(None);
+        }
+        self.definitions.validate()?;
+        let next_deadline = self.prepare_refresh_time(now)?;
+        let mut inputs = developments.to_vec();
+        inputs.sort_unstable_by_key(|(actor, _)| *actor);
+        let actual: BTreeSet<_> = all_developments(store).map(|(actor, _)| actor).collect();
+        if inputs.windows(2).any(|pair| pair[0].0 == pair[1].0)
+            || inputs
+                .iter()
+                .map(|(actor, _)| *actor)
+                .collect::<BTreeSet<_>>()
+                != actual
+        {
+            return Err(Error::InvalidConfiguration(
+                "refresh facts do not match physical development rows".into(),
+            ));
+        }
+        let mut rows = Vec::with_capacity(inputs.len());
+        for (actor, after) in inputs {
+            self.check_development(after)?;
+            let before = *development(store, actor).ok_or(Error::Unavailable)?;
+            self.check_development(before)?;
+            let alleles: Vec<_> = self
+                .definitions
+                .traits
+                .iter()
+                .map(|definition| source.alleles_named(actor, &definition.inheritance.locus))
+                .collect::<Result<_, _>>()?;
+            let before_phenotype = self.phenotype_from_pairs(&before, &alleles)?;
+            let after_phenotype = self.phenotype_from_pairs(&after, &alleles)?;
+            let body = crate::body(store, actor).cloned();
+            if let Some(body) = &body {
+                body.validate()?;
+            }
+            let mut next_body = body.clone();
+            if let Some(body) = &mut next_body {
+                body.rescale_health_factor(
+                    before_phenotype.max_health_milli,
+                    after_phenotype.max_health_milli,
+                );
+                body.validate()?;
+            }
+            rows.push(RefreshRow {
+                actor,
+                before,
+                after,
+                body,
+                next_body,
+                before_phenotype,
+                after_phenotype,
+                alleles,
+            });
+        }
+        Ok(Some(PreparedRefresh {
+            definitions: self.definitions.clone(),
+            opening_deadline: self.next_expression,
+            next_deadline,
+            rows,
+        }))
+    }
+}
+
+#[cfg(feature = "genetics")]
+impl PreparedRefresh {
+    pub fn next_deadline(&self) -> SimTime {
+        self.next_deadline
+    }
+    pub fn phenotypes(&self) -> impl Iterator<Item = (PersonId, Phenotype, Phenotype)> + '_ {
+        self.rows
+            .iter()
+            .map(|row| (row.actor, row.before_phenotype, row.after_phenotype))
+    }
+    pub fn validate(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<(), Error> {
+        if runtime.definitions != self.definitions
+            || runtime.next_expression != self.opening_deadline
+            || all_developments(store)
+                .map(|(actor, _)| actor)
+                .collect::<BTreeSet<_>>()
+                != self.rows.iter().map(|row| row.actor).collect()
+        {
+            return Err(Error::Unavailable);
+        }
+        for row in &self.rows {
+            if development(store, row.actor) != Some(&row.before)
+                || crate::body(store, row.actor) != row.body.as_ref()
+            {
+                return Err(Error::Unavailable);
+            }
+            runtime.check_development(row.after)?;
+            if let Some(body) = &row.next_body {
+                body.validate()?;
+            }
+            for (definition, before) in self.definitions.traits.iter().zip(&row.alleles) {
+                if source.alleles_named(row.actor, &definition.inheritance.locus)? != *before {
+                    return Err(Error::Unavailable);
+                }
+            }
+        }
+        Ok(())
+    }
+    pub fn commit(
+        self,
+        runtime: &mut Runtime,
+        store: &mut Store,
+        read_alleles: impl Fn(&Store, PersonId, &str) -> Result<[i32; 2], Error>,
+    ) -> Result<(), Error> {
+        struct Source<'a, F> {
+            store: &'a Store,
+            read: &'a F,
+        }
+        impl<F: Fn(&Store, PersonId, &str) -> Result<[i32; 2], Error>> game_genetics::AlleleSource
+            for Source<'_, F>
+        {
+            fn alleles_named(&self, actor: PersonId, locus: &str) -> Result<[i32; 2], Error> {
+                (self.read)(self.store, actor, locus)
+            }
+        }
+        self.validate(
+            runtime,
+            store,
+            &Source {
+                store,
+                read: &read_alleles,
+            },
+        )?;
+        let mut batch = game_ecs::Batch::new();
+        for row in self.rows {
+            batch.insert(StableId(row.actor.0), row.after);
+            if let Some(body) = row.next_body {
+                batch.insert(StableId(row.actor.0), body);
+            }
+        }
+        store.apply_batch(batch)?;
+        runtime.next_expression = self.next_deadline;
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "genetics"))]
+mod system_tests;

@@ -299,9 +299,16 @@ impl Runtime {
         &self,
         store: &Store,
         person: PersonId,
-        mut score: impl FnMut(&str) -> Result<i32, Error>,
+        score: impl FnMut(&str) -> Result<i32, Error>,
     ) -> Result<Temperament, Error> {
         let record = person_temperament(store, person).ok_or(Error::Unavailable)?;
+        self.express_record(record, score)
+    }
+    fn express_record(
+        &self,
+        record: &PersonTemperament,
+        mut score: impl FnMut(&str) -> Result<i32, Error>,
+    ) -> Result<Temperament, Error> {
         let mut values = record.baseline.values().map(i32::from);
         for t in &self.definitions.traits {
             let score = score(&t.inheritance.locus)?;
@@ -345,12 +352,15 @@ impl Runtime {
         let mut record = person_temperament(store, person)
             .ok_or(Error::Unavailable)?
             .clone();
+        self.apply_learning(&mut record, deltas);
+        insert_person_temperament(store, person, record)?;
+        Ok(())
+    }
+    fn apply_learning(&self, record: &mut PersonTemperament, deltas: [i16; 4]) {
         let bound = i32::from(self.definitions.learned_limit);
         for (offset, delta) in record.learned_offsets.iter_mut().zip(deltas) {
             *offset = (i32::from(*offset) + i32::from(delta)).clamp(-bound, bound) as i16;
         }
-        insert_person_temperament(store, person, record)?;
-        Ok(())
     }
     pub fn validate(&self, store: &Store) -> Result<(), Error> {
         if self.definitions.validate().is_err()
@@ -376,7 +386,7 @@ mod tests {
         game_genetics::register_components(&mut schema).unwrap();
         Store::with_schema(schema)
     }
-    fn definitions() -> Definitions {
+    pub(super) fn definitions() -> Definitions {
         Definitions {
             newborn_personality: crate::decisions::Personality::industrious(),
             learned_limit: 2,
@@ -677,3 +687,237 @@ mod tests {
         assert_eq!((runtime, store), before);
     }
 }
+
+#[cfg(feature = "genetics")]
+#[derive(Clone, Debug)]
+struct TemperamentRow {
+    actor: PersonId,
+    before: PersonTemperament,
+    after: PersonTemperament,
+    personality: Option<crate::decisions::Personality>,
+    next_personality: Option<crate::decisions::Personality>,
+    alleles: Vec<[i32; 2]>,
+    write_trait: bool,
+}
+#[cfg(feature = "genetics")]
+#[derive(Clone, Debug)]
+pub struct PreparedTemperament<A> {
+    definitions: Definitions,
+    rows: Vec<TemperamentRow>,
+    action: std::marker::PhantomData<fn() -> A>,
+}
+
+#[cfg(feature = "genetics")]
+impl Runtime {
+    fn prepare_temperament_rows<A: game_ecs::Component>(
+        &self,
+        store: &Store,
+        staged: BTreeMap<PersonId, (PersonTemperament, PersonTemperament, bool)>,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<PreparedTemperament<A>, Error> {
+        let mut rows = Vec::with_capacity(staged.len());
+        for (actor, (before, after, write_trait)) in staged {
+            before.validate()?;
+            after.validate()?;
+            if after
+                .learned_offsets
+                .iter()
+                .any(|offset| offset.unsigned_abs() > self.definitions.learned_limit)
+            {
+                return Err(Error::InvalidConfiguration(
+                    "invalid personal temperament".into(),
+                ));
+            }
+            let current = crate::decisions::mind::<A>(store, actor);
+            if let Some(mind) = current {
+                mind.validate()?;
+            }
+            let personality = current.map(|mind| mind.personality.clone());
+            let mut next_personality = personality.clone();
+            let mut alleles = Vec::new();
+            if let Some(next) = &mut next_personality {
+                alleles = self
+                    .definitions
+                    .traits
+                    .iter()
+                    .map(|definition| source.alleles_named(actor, &definition.inheritance.locus))
+                    .collect::<Result<_, _>>()?;
+                let mut pairs = alleles.iter();
+                let expression = self.express_record(&after, |_| {
+                    let [first, second] = *pairs.next().ok_or(Error::Unavailable)?;
+                    Ok(((i64::from(first) + i64::from(second)) / 2) as i32)
+                })?;
+                expression.apply_to(next);
+                if !next.valid() {
+                    return Err(Error::InvalidConfiguration(
+                        "invalid expressed personality".into(),
+                    ));
+                }
+            }
+            rows.push(TemperamentRow {
+                actor,
+                before,
+                after,
+                personality,
+                next_personality,
+                alleles,
+                write_trait,
+            });
+        }
+        Ok(PreparedTemperament {
+            definitions: self.definitions.clone(),
+            rows,
+            action: std::marker::PhantomData,
+        })
+    }
+    /// Experience IDs are authored content. Unknown IDs and absent personal
+    /// temperament rows produce no learning or fabricated records.
+    pub fn prepare_learning<A: game_ecs::Component>(
+        &self,
+        store: &Store,
+        experiences: &[(PersonId, &str)],
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<PreparedTemperament<A>, Error> {
+        self.definitions.validate()?;
+        let mut staged: BTreeMap<PersonId, (PersonTemperament, PersonTemperament, bool)> =
+            BTreeMap::new();
+        for (actor, id) in experiences {
+            let Some(definition) = self
+                .definitions
+                .learning
+                .iter()
+                .find(|definition| definition.id == *id)
+            else {
+                continue;
+            };
+            let row = match staged.entry(*actor) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let Some(before) = person_temperament(store, *actor) else {
+                        continue;
+                    };
+                    entry.insert((before.clone(), before.clone(), true))
+                }
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            };
+            self.apply_learning(&mut row.1, definition.deltas);
+        }
+        self.prepare_temperament_rows(store, staged, source)
+    }
+    /// Express current substrate without inventing an experience or changing
+    /// learned offsets. This also serves founder and newborn admission.
+    pub fn prepare_expression<A: game_ecs::Component>(
+        &self,
+        store: &Store,
+        actors: &[PersonId],
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<PreparedTemperament<A>, Error> {
+        self.definitions.validate()?;
+        let mut staged = BTreeMap::new();
+        for actor in actors {
+            if let Some(row) = person_temperament(store, *actor) {
+                staged.insert(*actor, (row.clone(), row.clone(), false));
+            }
+        }
+        self.prepare_temperament_rows(store, staged, source)
+    }
+}
+
+#[cfg(feature = "genetics")]
+impl<A: game_ecs::Component> PreparedTemperament<A> {
+    pub fn affected(&self) -> impl Iterator<Item = PersonId> + '_ {
+        self.rows.iter().map(|row| row.actor)
+    }
+    pub fn validate(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<(), Error> {
+        if runtime.definitions != self.definitions {
+            return Err(Error::Unavailable);
+        }
+        for row in &self.rows {
+            if person_temperament(store, row.actor) != Some(&row.before) {
+                return Err(Error::Unavailable);
+            }
+            row.after.validate()?;
+            if row
+                .after
+                .learned_offsets
+                .iter()
+                .any(|offset| offset.unsigned_abs() > self.definitions.learned_limit)
+            {
+                return Err(Error::Unavailable);
+            }
+            let current = crate::decisions::mind::<A>(store, row.actor);
+            if current.map(|mind| &mind.personality) != row.personality.as_ref() {
+                return Err(Error::Unavailable);
+            }
+            if let Some(current) = current {
+                current.validate()?;
+            }
+            if row
+                .next_personality
+                .as_ref()
+                .is_some_and(|next| !next.valid())
+            {
+                return Err(Error::InvalidConfiguration(
+                    "invalid expressed personality".into(),
+                ));
+            }
+            for (definition, expected) in self.definitions.traits.iter().zip(&row.alleles) {
+                if source.alleles_named(row.actor, &definition.inheritance.locus)? != *expected {
+                    return Err(Error::Unavailable);
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Trait rows receive full registered schema admission. Personality is an
+    /// owner-controlled field commit: intrinsic mind/candidate invariants are
+    /// preflighted, and other mind fields are preserved rather than cloned.
+    pub fn commit(
+        self,
+        runtime: &Runtime,
+        store: &mut Store,
+        read_alleles: impl Fn(&Store, PersonId, &str) -> Result<[i32; 2], Error>,
+    ) -> Result<(), Error> {
+        struct Source<'a, F> {
+            store: &'a Store,
+            read: &'a F,
+        }
+        impl<F: Fn(&Store, PersonId, &str) -> Result<[i32; 2], Error>> game_genetics::AlleleSource
+            for Source<'_, F>
+        {
+            fn alleles_named(&self, actor: PersonId, locus: &str) -> Result<[i32; 2], Error> {
+                (self.read)(self.store, actor, locus)
+            }
+        }
+        self.validate(
+            runtime,
+            store,
+            &Source {
+                store,
+                read: &read_alleles,
+            },
+        )?;
+        let mut batch = game_ecs::Batch::new();
+        for row in &self.rows {
+            if row.write_trait {
+                batch.insert(StableId(row.actor.0), row.after.clone());
+            }
+        }
+        store.apply_batch(batch)?;
+        for row in self.rows {
+            if let Some(personality) = row.next_personality {
+                crate::decisions::mind_mut::<A>(store, row.actor)
+                    .expect("preflighted personal mind exists")
+                    .personality = personality;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "genetics"))]
+mod system_tests;

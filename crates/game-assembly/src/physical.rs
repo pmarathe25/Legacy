@@ -115,13 +115,7 @@ impl Simulation {
         else {
             return;
         };
-        (body.vitals.health, body.health_remainder) = game_physiology::traits::rescale_health(
-            body.vitals.health,
-            body.health_remainder,
-            body.vitals.alive,
-            old_health_milli,
-            new_health_milli,
-        );
+        body.rescale_health_factor(old_health_milli, new_health_milli);
     }
     pub(crate) fn initialize_physical_people(&mut self, rules: Rules) -> Result<(), Error> {
         if self.state.physical.is_some()
