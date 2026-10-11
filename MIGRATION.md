@@ -5,9 +5,10 @@ Complete the migration of the existing headless game to shared components and fe
 ## Crate responsibilities
 
 - [x] `game-world` is a feature-agnostic host. Its production dependencies and source contain no game feature, command, scenario, ruler, trait, crop, or health policy. Feature-named modules such as `genetics.rs` and `health.rs` have left the crate.
-- [ ] A separate game assembly crate registers component schemas and systems, connects typed feature interfaces, constructs scenarios, and binds public commands and views. Its code performs wiring and cross-feature transactions; domain algorithms, entity-update loops, scoring rules, and feature validation live in their owners.
+- [ ] A separate game assembly crate registers component schemas and systems, connects typed feature interfaces, constructs scenarios, and binds public commands and views. It orders owner-prepared effects and invokes generic transaction infrastructure; domain algorithms, entity-update loops, scoring rules, and feature validation live in their owners.
 - [ ] Every gameplay behavior has a feature-owned entry point that tests can exercise without the assembly. This includes candidate selection, scoring, progression, perception, reconciliation, and event reactions. Assembly adapters translate factual inputs and typed effects; they do not determine those policies or mutate feature state directly during play.
 - [ ] Features communicate through small typed dependencies, traits, components, and effects. Integration that has a natural feature owner lives there. Shared contracts or a focused integration crate handle genuinely shared behavior; the assembly does not provide a required helper library for the features.
+- [ ] Representative composed behaviors run in tests without importing the assembly. Receiving features own their reactions to typed effects or events. Ports supply facts or invoke another owner's operation; callbacks do not conceal assembly-owned decisions, thresholds, selection, or progression.
 - [ ] Each domain crate owns its components, rules, validation, behavior, and prepared effects. It compiles and tests independently of the assembly crate. Tightly coupled behavior has a clear owner rather than duplicate implementations or circular dependencies.
 - [ ] Interfaces expose plain Rust components, borrowed rows, small factual inputs, and typed effects. Genetics handles opaque inheritance; trait providers interpret genes. Comparable boundaries keep other features indifferent to their collaborators' internal representation.
 
@@ -30,6 +31,10 @@ Complete the migration of the existing headless game to shared components and fe
 ## Assembly boundary review
 
 For every production assembly module, identify why its code needs to remain at the application boundary. Registration, startup construction, public command/view binding, and transaction ordering are valid reasons. An algorithm mentioning several features is insufficient: assign its policy to a feature or a focused integration owner and pass the required facts through typed interfaces.
+
+Apply this review to each function, not just its module name. Conditions that decide whether an actor agrees, which target is chosen, how work progresses, or how an event changes a character belong to feature owners. Assembly may resolve IDs, borrow the required rows, translate public request and response types, register handlers, and sequence prepared effects. Atomic application and publication are generic infrastructure. A new integration crate must own a specific interaction, not become a second assembly containing unrelated policies.
+
+For example, genetics owns transmission and emits a prepared inherited genome; physiology and temperament own interpretation and their resulting component changes. A composed test must exercise those public interfaces with a small store, without constructing the playable simulation. Likewise, a material transfer must use Cargo's conservation and capacity checks together with Property's claim and provenance effects, rather than reimplementing either rule in an assembly handler.
 
 Dependency tests must prevent features from importing the assembly. Owner tests must cover the public entry points that the assembly calls. The final source review must find no domain policy left in assembly handlers and no production dependency from the generic host to a feature. Extracting a crate or reducing its line count alone does not satisfy these criteria.
 
