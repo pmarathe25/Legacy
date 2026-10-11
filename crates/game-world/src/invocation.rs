@@ -1056,7 +1056,12 @@ impl Simulation {
         let Some(destination) = person.route.last().copied() else {
             return;
         };
-        let origin = match person.location {
+        let origin = match *self
+            .state
+            .components
+            .location(person.id)
+            .expect("location exists")
+        {
             Location::AtArea(area) => area,
             Location::InTransit { to, .. } => to,
             Location::StoppedOnRoad { .. } | Location::Carried { .. } => return,
@@ -1145,7 +1150,14 @@ impl Simulation {
         if !self.independent(a.actor) {
             return Ok(());
         }
-        if !matches!(person.location, Location::AtArea(_)) {
+        if !matches!(
+            *self
+                .state
+                .components
+                .location(person.id)
+                .expect("location exists"),
+            Location::AtArea(_)
+        ) {
             if changed && mind.dream == decisions::Aspiration::Comfort {
                 let _ = self.debug_actor_command(a.actor, Command::Cancel);
             }
@@ -1169,7 +1181,12 @@ impl Simulation {
         {
             return Ok(());
         }
-        let area = if let Location::AtArea(area) = person.location {
+        let area = if let Location::AtArea(area) = *self
+            .state
+            .components
+            .location(person.id)
+            .expect("location exists")
+        {
             area
         } else {
             unreachable!()
@@ -1228,7 +1245,12 @@ impl Simulation {
                 .iter()
                 .filter(|p| {
                     p.id != a.actor
-                        && p.location == Location::AtArea(area)
+                        && *self
+                            .state
+                            .components
+                            .location(p.id)
+                            .expect("location exists")
+                            == Location::AtArea(area)
                         && self.state.components.body(p.id).unwrap().vitals.alive
                 })
                 .filter(|p| mind.relationships.get(&p.id).is_some_and(|r| r.trust < 0))
@@ -1384,7 +1406,7 @@ impl Simulation {
                 }
             })
             .collect();
-        let records=w.records.values().filter_map(|record|{let inventory=self.state.inventories.get(&record.inventory)?;let local=&self.state.people[self.person_index[&actor]].location;let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
+        let records=w.records.values().filter_map(|record|{let inventory=self.state.inventories.get(&record.inventory)?;let local=self.state.components.location(actor).expect("location exists");let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
         let preview_lives = w
             .control
             .activation
@@ -1471,7 +1493,12 @@ impl Simulation {
         if !self.independent(actor) || self.in_combat(actor) || self.combat_restricts(actor) {
             return Err(Error::Unavailable);
         }
-        match self.state.people[self.person_index[&actor]].location {
+        match *self
+            .state
+            .components
+            .location(actor)
+            .expect("location exists")
+        {
             Location::AtArea(area) => Ok(area),
             _ => Err(Error::Unavailable),
         }
@@ -2191,7 +2218,10 @@ mod tests {
             let mut learned = false;
             for _ in 0..12 {
                 if matches!(
-                    sim.state.people[sim.person_index[&teacher]].location,
+                    *sim.state
+                        .components
+                        .location(teacher)
+                        .expect("location exists"),
                     Location::AtArea(_)
                 ) {
                     sim.debug_actor_command(teacher, Command::Rest).unwrap();
@@ -2234,7 +2264,12 @@ mod tests {
         for site in sim.state.physical.as_mut().unwrap().sites.values_mut() {
             site.access.insert(actor);
         }
-        let area = match sim.state.people[sim.person_index[&actor]].location {
+        let area = match *sim
+            .state
+            .components
+            .location(actor)
+            .expect("location exists")
+        {
             Location::AtArea(area) => area,
             _ => panic!("pupil stayed local"),
         };

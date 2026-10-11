@@ -283,8 +283,11 @@ impl Simulation {
     }
     fn health_tactical_place(&self, actor: PersonId) -> Option<(EncounterId, PersonId)> {
         let mut anchor = actor;
-        while let Location::Carried { carrier } =
-            self.state.people[self.person_index[&anchor]].location
+        while let Location::Carried { carrier } = *self
+            .state
+            .components
+            .location(anchor)
+            .expect("location exists")
         {
             anchor = carrier;
         }
@@ -428,7 +431,14 @@ impl Simulation {
             capable: self.health_area(actor, true).is_ok(),
             at_area: matches!(self.resolved_location(actor), Location::AtArea(_)),
             carried: self.person_index.get(&actor).is_some_and(|index| {
-                matches!(self.state.people[*index].location, Location::Carried { .. })
+                matches!(
+                    *self
+                        .state
+                        .components
+                        .location(self.state.people[*index].id)
+                        .expect("location exists"),
+                    Location::Carried { .. }
+                )
             }),
             tactical: self.person_index.contains_key(&actor)
                 && self.health_tactical_place(actor).is_some(),
@@ -751,7 +761,11 @@ impl Simulation {
 impl Simulation {
     fn effective_shelter(&self, actor: PersonId) -> Option<&Shelter> {
         let w = self.state.health.as_ref()?;
-        if let Location::Carried { carrier } = self.state.people[self.person_index[&actor]].location
+        if let Location::Carried { carrier } = *self
+            .state
+            .components
+            .location(actor)
+            .expect("location exists")
         {
             return self
                 .state
@@ -792,8 +806,8 @@ impl Simulation {
         {
             return false;
         }
-        if matches!(self.state.people[self.person_index[&a]].location, Location::Carried { carrier } if carrier == b)
-            || matches!(self.state.people[self.person_index[&b]].location, Location::Carried { carrier } if carrier == a)
+        if matches!(*self.state.components.location(a).expect("location exists"), Location::Carried { carrier } if carrier == b)
+            || matches!(*self.state.components.location(b).expect("location exists"), Location::Carried { carrier } if carrier == a)
         {
             return true;
         }
@@ -849,7 +863,12 @@ impl Simulation {
                 if let Some(shelter) = shelters.get(&current) {
                     break *shelter;
                 }
-                match self.state.people[self.person_index[&current]].location {
+                match *self
+                    .state
+                    .components
+                    .location(current)
+                    .expect("location exists")
+                {
                     Location::Carried { carrier } => {
                         chain.push(current);
                         current = carrier;
@@ -980,7 +999,12 @@ impl Simulation {
             }
         }
         for person in &self.state.people {
-            if let Location::Carried { carrier } = person.location {
+            if let Location::Carried { carrier } = *self
+                .state
+                .components
+                .location(person.id)
+                .expect("location exists")
+            {
                 add_pair(person.id, carrier, true);
             }
         }
@@ -1323,7 +1347,13 @@ impl Simulation {
     ) -> Result<(), Error> {
         let w = self.state.health.as_ref().ok_or(Error::Unavailable)?;
         let s = w.shelters.get(&shelter).ok_or(Error::Unavailable)?;
-        if self.state.people[*self.person_index.get(&person).ok_or(Error::Unavailable)?].location
+        if *self
+            .state
+            .components
+            .location(
+                self.state.people[*self.person_index.get(&person).ok_or(Error::Unavailable)?].id,
+            )
+            .expect("location exists")
             != Location::AtArea(s.area)
             || !s.access.contains(&person)
             || w.occupancy.contains_key(&person)
@@ -1422,7 +1452,11 @@ impl Simulation {
             BTreeMap::new();
         for (actor, location) in &locations {
             let shelter = if matches!(
-                self.state.people[self.person_index[actor]].location,
+                *self
+                    .state
+                    .components
+                    .location(*actor)
+                    .expect("location exists"),
                 Location::Carried { .. }
             ) {
                 location.1
@@ -1567,7 +1601,11 @@ impl Simulation {
         if self.health_area(actor, true).is_ok() {
             let can_enter = self.resolved_location(actor) == Location::AtArea(area)
                 && !matches!(
-                    self.state.people[self.person_index[&actor]].location,
+                    *self
+                        .state
+                        .components
+                        .location(actor)
+                        .expect("location exists"),
                     Location::Carried { .. }
                 );
             let mind = self
@@ -1719,7 +1757,11 @@ impl Simulation {
             sheltered: self.effective_shelter(actor).is_some(),
             can_enter_shelter: facts.stationary
                 && !matches!(
-                    self.state.people[self.person_index[&actor]].location,
+                    *self
+                        .state
+                        .components
+                        .location(actor)
+                        .expect("location exists"),
                     Location::Carried { .. }
                 ),
         };
@@ -2647,7 +2689,10 @@ mod integration_tests {
         for person in people {
             sim.interrupt_actor_activity(person);
         }
-        sim.state.people[sim.person_index[&worker]].location = Location::AtArea(area);
+        *sim.state
+            .components
+            .location_mut(worker)
+            .expect("location exists") = Location::AtArea(area);
         let tool = sim
             .debug_add_inventory(
                 Good::Tool,
@@ -2849,7 +2894,10 @@ mod transport_health_tests {
         .unwrap();
         sim.advance(SimDuration(6_000)).unwrap();
         assert_eq!(
-            sim.state.people[sim.person_index[&passenger]].location,
+            *sim.state
+                .components
+                .location(passenger)
+                .expect("location exists"),
             Location::Carried { carrier: bearer }
         );
         (sim, bearer, passenger)
@@ -3208,7 +3256,12 @@ mod index_tests {
             .iter()
             .filter(|p| sim.state.components.body(p.id).unwrap().vitals.alive)
         {
-            let Location::AtArea(area) = observer.location else {
+            let Location::AtArea(area) = *sim
+                .state
+                .components
+                .location(observer.id)
+                .expect("location exists")
+            else {
                 continue;
             };
             let people: Vec<_> = sim
@@ -3294,10 +3347,17 @@ mod index_tests {
             sim.state.health.as_mut().unwrap().jobs.clear();
             for (index, actor) in people.iter().enumerate() {
                 let area = sim.state.areas[if index < 6 { 0 } else { (index + phase) % 3 }].id;
-                sim.state.people[sim.person_index[actor]].location = if (index + phase) % 11 == 0 {
+                *sim.state
+                    .components
+                    .location_mut(*actor)
+                    .expect("location exists") = if (index + phase) % 11 == 0 {
                     Location::InTransit {
                         from: area,
-                        to: sim.state.areas[1].id,
+                        to: if area == sim.state.areas[0].id {
+                            sim.state.areas[1].id
+                        } else {
+                            sim.state.areas[0].id
+                        },
                         departed: SimTime(0),
                         arrives: SimTime(100_000),
                         road_start: None,
@@ -3444,7 +3504,10 @@ mod index_tests {
         let mut sim = population_fixture(90);
         let area = sim.state.areas[0].id;
         for p in &mut sim.state.people {
-            p.location = Location::AtArea(area);
+            *sim.state
+                .components
+                .location_mut(p.id)
+                .expect("location exists") = Location::AtArea(area);
         }
         add_shelters(&mut sim);
         let expected = exhaustive_observations(&sim);
@@ -3809,7 +3872,7 @@ mod supply_composition_tests {
         .unwrap();
         sim.advance(SimDuration(6_000)).unwrap();
         assert!(
-            matches!(sim.state.people[sim.person_index[&child]].location,Location::Carried {carrier} if carrier==observer)
+            matches!(*sim.state.components.location(child).expect("location exists"),Location::Carried {carrier} if carrier==observer)
         );
         sim.debug_actor_command(
             observer,

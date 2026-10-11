@@ -5,13 +5,11 @@ use std::collections::BTreeSet;
 fn fixture() -> (Simulation, InventoryId) {
     let mut sim = Simulation::new("health-fixture", 91, Execution::default()).unwrap();
     let actor = sim.canonical_state().ruler;
-    let area = match sim
+    let area = match *sim
         .canonical_state()
-        .people
-        .iter()
-        .find(|p| p.id == actor)
-        .unwrap()
-        .location
+        .components
+        .location(actor)
+        .expect("location exists")
     {
         Location::AtArea(area) => area,
         _ => unreachable!(),

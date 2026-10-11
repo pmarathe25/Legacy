@@ -428,7 +428,12 @@ impl Simulation {
                 .iter()
                 .copied()
                 .filter(|id| {
-                    self.state.people[self.person_index[id]].location == Location::AtArea(area)
+                    *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[id]].id)
+                        .expect("location exists")
+                        == Location::AtArea(area)
                 })
                 .collect();
             for chunk in occupants.chunks(32) {
@@ -645,7 +650,10 @@ impl Simulation {
                 .collect::<BTreeMap<_, _>>();
             for (local, actor) in settlement.residents.iter().copied().enumerate() {
                 let p = &mut sim.state.people[sim.person_index[&actor]];
-                p.location =
+                *sim.state
+                    .components
+                    .location_mut(p.id)
+                    .expect("location exists") =
                     Location::AtArea(if mixed && local % 4 == 1 && p.role == Role::Citizen {
                         settlement.fields
                     } else {
@@ -710,7 +718,7 @@ impl Simulation {
         sim.initialize_decision_people(minds)?;
         sim.initialize_life_people(config.biology.clone(), lives)?;
         let weather_day = sim.state.time.0 / config.environment.calendar.day.0;
-        sim.state.environment = Some(environment::World::new(
+        sim.state.environment = Some(environment::Runtime::new(
             config.environment.clone(),
             sim.state.time,
             seed,
@@ -925,7 +933,12 @@ impl Simulation {
         }
         sim.dependent_index.clear();
         for person in sim.state.people.clone() {
-            if let Location::AtArea(area) = person.location {
+            if let Location::AtArea(area) = *sim
+                .state
+                .components
+                .location(person.id)
+                .expect("location exists")
+            {
                 sim.index_dependent(person.id, area);
             }
         }
@@ -999,7 +1012,13 @@ mod tests {
                     .state
                     .people
                     .iter()
-                    .filter(|p| matches!(p.location, Location::InTransit { .. }))
+                    .filter(|p| matches!(
+                        *sim.state
+                            .components
+                            .location(p.id)
+                            .expect("location exists"),
+                        Location::InTransit { .. }
+                    ))
                     .count(),
             45
         );

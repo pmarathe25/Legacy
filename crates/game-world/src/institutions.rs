@@ -74,7 +74,12 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        match p.location {
+        match *self
+            .state
+            .components
+            .location(p.id)
+            .ok_or(Error::Unavailable)?
+        {
             Location::AtArea(area) => Ok(area),
             _ => Err(Error::Unavailable),
         }
@@ -310,7 +315,11 @@ impl Simulation {
                         term,
                         AgreementTerm::Labor { .. } | AgreementTerm::Delivery { .. }
                     ) && matches!(
-                        self.state.people[self.person_index[&term.parties()[0]]].location,
+                        *self
+                            .state
+                            .components
+                            .location(self.state.people[self.person_index[&term.parties()[0]]].id)
+                            .expect("location exists"),
                         Location::AtArea(_)
                     ))
                     .then_some(CaseReceipt::Ledger)
@@ -920,7 +929,12 @@ impl Simulation {
             .people
             .iter()
             .filter(|p| {
-                p.location == Location::AtArea(case.area)
+                *self
+                    .state
+                    .components
+                    .location(p.id)
+                    .expect("location exists")
+                    == Location::AtArea(case.area)
                     && self.independent(p.id)
                     && self
                         .state
@@ -1165,8 +1179,10 @@ impl Simulation {
                             .people
                             .get(self.person_index[&actor])
                             .and_then(|p| {
-                                if let Location::AtArea(area) = p.location {
-                                    Some(area)
+                                if let Some(Location::AtArea(area)) =
+                                    self.state.components.location(p.id)
+                                {
+                                    Some(*area)
                                 } else {
                                     None
                                 }
@@ -1787,7 +1803,12 @@ impl Simulation {
                     .iter()
                     .filter(|p| {
                         p.role == Role::Citizen
-                            && p.location == Location::AtArea(area)
+                            && *self
+                                .state
+                                .components
+                                .location(p.id)
+                                .expect("location exists")
+                                == Location::AtArea(area)
                             && p.id != self.state.ruler
                             && self.social_area(p.id).is_ok()
                     })

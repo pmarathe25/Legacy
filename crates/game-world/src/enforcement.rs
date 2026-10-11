@@ -106,7 +106,10 @@ impl Simulation {
         rules.meal_relief = 86_400_000;
         rules.fatigue_limit = 16 * 3_600_000;
         for actor in [judge, filer, officer, target] {
-            sim.state.people[sim.person_index[&actor]].location = Location::AtArea(court);
+            *sim.state
+                .components
+                .location_mut(sim.state.people[sim.person_index[&actor]].id)
+                .expect("location exists") = Location::AtArea(court);
         }
         sim.state.missions = Some(missions::World {
             missions: BTreeMap::new(),
@@ -332,7 +335,12 @@ impl Simulation {
         {
             return None;
         }
-        match person.location {
+        match *self
+            .state
+            .components
+            .location(person.id)
+            .expect("location exists")
+        {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -1249,7 +1257,12 @@ impl Simulation {
             .iter()
             .filter(|(_, index)| {
                 let p = &self.state.people[**index];
-                p.location == Location::AtArea(area)
+                *self
+                    .state
+                    .components
+                    .location(p.id)
+                    .expect("location exists")
+                    == Location::AtArea(area)
                     && self.state.physical.as_ref().is_some_and(|_| {
                         self.state
                             .components
@@ -1493,7 +1506,11 @@ impl Simulation {
         self.state.enforcement.as_mut().unwrap().last_event = self.state.next_event - 1;
         let mut by_area = BTreeMap::<AreaId, Vec<PersonId>>::new();
         for person in &self.state.people {
-            if let Location::AtArea(area) = person.location
+            if let Location::AtArea(area) = *self
+                .state
+                .components
+                .location(person.id)
+                .expect("location exists")
                 && self.state.physical.as_ref().is_some_and(|_| {
                     self.state
                         .components
@@ -2639,13 +2656,11 @@ mod atomic_tests {
     }
     fn travel(sim: &mut Simulation, who: PersonId, destination: AreaId) {
         sim.debug_move_actor(who, destination).unwrap();
-        let Location::InTransit { arrives, .. } = sim
+        let Location::InTransit { arrives, .. } = *sim
             .canonical_state()
-            .people
-            .iter()
-            .find(|p| p.id == who)
-            .unwrap()
-            .location
+            .components
+            .location(who)
+            .expect("location exists")
         else {
             panic!("traveler did not depart")
         };

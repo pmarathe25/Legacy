@@ -176,7 +176,12 @@ impl Simulation {
                 && let Some(stock) = self.state.inventories.get(&tool)
                 && stock.good == Good::Tool
                 && let Some(area) = self.inventory_area(stock)
-                && self.state.people[self.person_index[actor]].location == Location::AtArea(area)
+                && *self
+                    .state
+                    .components
+                    .location(self.state.people[self.person_index[actor]].id)
+                    .expect("location exists")
+                    == Location::AtArea(area)
             {
                 uses.push(game_cargo::ToolUse {
                     actor: *actor,
@@ -275,7 +280,12 @@ impl Simulation {
         {
             return false;
         }
-        let Location::AtArea(area) = self.state.people[*index].location else {
+        let Location::AtArea(area) = *self
+            .state
+            .components
+            .location(self.state.people[*index].id)
+            .expect("location exists")
+        else {
             return false;
         };
         if stock.good != Good::Tool
@@ -298,7 +308,11 @@ impl Simulation {
             return None;
         }
         let site = physical.sites.get(&site)?;
-        let Location::AtArea(area) = self.state.people[*self.person_index.get(&actor)?].location
+        let Location::AtArea(area) = *self
+            .state
+            .components
+            .location(self.state.people[*self.person_index.get(&actor)?].id)
+            .expect("location exists")
         else {
             return None;
         };
@@ -808,7 +822,13 @@ mod tests {
         )
         .unwrap();
         for actor in [farmer, worker] {
-            if sim.state.people[sim.person_index[&actor]].location != Location::AtArea(field.area) {
+            if *sim
+                .state
+                .components
+                .location(sim.state.people[sim.person_index[&actor]].id)
+                .expect("location exists")
+                != Location::AtArea(field.area)
+            {
                 sim.debug_move_actor(actor, field.area).unwrap();
             }
         }

@@ -9,6 +9,8 @@ fn schema() -> Result<Schema, Error> {
     game_agriculture::register_components(&mut schema)?;
     game_physiology::register_components(&mut schema)?;
     game_workshop::register_components(&mut schema)?;
+    game_spatial::register_components(&mut schema)?;
+    game_environment::register_components(&mut schema)?;
     schema.register::<game_api::Activity>("coordination/activity", |_| Ok(()))?;
     Ok(schema)
 }
@@ -27,6 +29,22 @@ impl Components {
     }
     pub fn bodies(&self) -> impl Iterator<Item = (game_api::PersonId, &game_physiology::Body)> {
         game_physiology::bodies(&self.0)
+    }
+    pub fn location(&self, actor: game_api::PersonId) -> Option<&game_api::Location> {
+        game_spatial::location(&self.0, game_ecs::StableId(actor.0))
+    }
+    pub fn location_mut(&mut self, actor: game_api::PersonId) -> Option<&mut game_api::Location> {
+        game_spatial::location_mut(&mut self.0, game_ecs::StableId(actor.0))
+    }
+    pub fn set_location(
+        &mut self,
+        actor: game_api::PersonId,
+        location: game_api::Location,
+    ) -> Result<(), Error> {
+        game_spatial::set_location(&mut self.0, game_ecs::StableId(actor.0), location)
+    }
+    pub fn locations(&self) -> impl Iterator<Item = (game_api::PersonId, &game_api::Location)> {
+        game_spatial::locations(&self.0).map(|(id, location)| (game_api::PersonId(id.0), location))
     }
     pub fn activity(&self, actor: game_api::PersonId) -> Option<&game_api::Activity> {
         self.0.get(game_ecs::StableId(actor.0))
@@ -219,6 +237,16 @@ mod tests {
         newcomer.role = game_api::Role::Citizen;
         let body = sim.state.components.body(sim.state.ruler).unwrap().clone();
         game_physiology::insert_body(&mut sim.state.components, newcomer.id, body).unwrap();
+        let location = sim
+            .state
+            .components
+            .location(sim.state.ruler)
+            .unwrap()
+            .clone();
+        sim.state
+            .components
+            .set_location(newcomer.id, location)
+            .unwrap();
         sim.state
             .components
             .set_activity(newcomer.id, game_api::Activity::Idle)
@@ -246,5 +274,50 @@ mod tests {
             ))
         );
         assert_eq!(&before, sim.canonical_state());
+    }
+
+    #[test]
+    fn spatial_column_is_the_only_person_position_and_bad_graphs_fail_restore() {
+        let sim = Simulation::kernel_fixture(17, 5, Execution::default()).unwrap();
+        let saved = sim.save().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(
+            json["state"]["people"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|person| person.get("location").is_none())
+        );
+        assert_eq!(
+            json["state"]["components"]["columns"]["spatial/location"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+        let first = sim.state.people[0].id;
+        let second = sim.state.people[1].id;
+        let mut state = sim.canonical_state().clone();
+        state
+            .components
+            .set_location(first, game_api::Location::Carried { carrier: second })
+            .unwrap();
+        state
+            .components
+            .set_location(second, game_api::Location::Carried { carrier: first })
+            .unwrap();
+        let mut corrupt = json.clone();
+        corrupt["state"] = serde_json::to_value(&state).unwrap();
+        assert!(
+            Simulation::load(&serde_json::to_vec(&corrupt).unwrap(), Execution::default()).is_err()
+        );
+        let mut missing = sim.canonical_state().clone();
+        game_spatial::remove_location(&mut missing.components, game_ecs::StableId(first.0))
+            .unwrap();
+        corrupt["state"] = serde_json::to_value(missing).unwrap();
+        assert!(
+            Simulation::load(&serde_json::to_vec(&corrupt).unwrap(), Execution::default()).is_err()
+        );
+        assert_eq!(sim.save().unwrap(), saved);
     }
 }

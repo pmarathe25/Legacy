@@ -678,6 +678,7 @@ name = "game-sim"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "game-environment",
  "rayon",
  "serde",

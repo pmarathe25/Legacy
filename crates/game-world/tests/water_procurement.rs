@@ -163,7 +163,15 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
         .canonical_state()
         .people
         .iter()
-        .find(|p| p.role == Role::Citizen && p.location == Location::AtArea(AreaId(1)))
+        .find(|p| {
+            p.role == Role::Citizen
+                && *sim
+                    .canonical_state()
+                    .components
+                    .location(p.id)
+                    .expect("location exists")
+                    == Location::AtArea(AreaId(1))
+        })
         .unwrap()
         .id;
     for person in sim.canonical_state().people.clone() {
@@ -257,12 +265,7 @@ fn a_thirsty_person_searches_known_routes_and_collects_real_water_after_local_st
     assert!(state.events.iter().any(|e| matches!(e.kind,
         EventKind::Drank {actor:a,source,..} if a==actor && source==collected)));
     assert_eq!(
-        state
-            .people
-            .iter()
-            .find(|p| p.id == actor)
-            .unwrap()
-            .location,
+        *state.components.location(actor).expect("location exists"),
         Location::AtArea(AreaId(3))
     );
     assert!(state.health.as_ref().unwrap().clinical[&actor].thirst < HOUR);

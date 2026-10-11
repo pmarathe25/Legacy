@@ -335,7 +335,10 @@ fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplie
         .position(|p| p.id == actor)
         .unwrap();
     assert!(matches!(
-        sim.canonical_state().people[index].location,
+        *sim.canonical_state()
+            .components
+            .location(sim.canonical_state().people[index].id)
+            .expect("location exists"),
         Location::InTransit {
             arrives: SimTime(480_000),
             ..
@@ -343,7 +346,10 @@ fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplie
     ));
     sim.advance(SimDuration(240_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().people[index].location,
+        *sim.canonical_state()
+            .components
+            .location(sim.canonical_state().people[index].id)
+            .expect("location exists"),
         Location::AtArea(AreaId(3))
     );
     assert_eq!(sim.canonical_state().people[index].work_units, 0);

@@ -12,7 +12,12 @@ impl Simulation {
             .find(|s| s.id == "lineage-fixture")
             .ok_or_else(|| Error::InvalidFixture("lineage fixture is not registered".into()))?;
         let ruler = sim.state.ruler;
-        let location = sim.state.people[sim.person_index[&ruler]].location.clone();
+        let location = sim
+            .state
+            .components
+            .location(ruler)
+            .expect("location exists")
+            .clone();
         sim.state.lineage = Some(World {
             rules: MentorshipRules::default(),
             invocation_learning: BTreeMap::new(),
@@ -102,8 +107,11 @@ impl Simulation {
             initial_age: life.initial_age,
             parent_count: life.parents.len(),
             alive: self.state.components.body(child).unwrap().vitals.alive,
-            location: self.state.people[self.person_index[&child]]
-                .location
+            location: self
+                .state
+                .components
+                .location(child)
+                .expect("location exists")
                 .clone(),
         };
         let constraints = self
@@ -167,15 +175,19 @@ impl Simulation {
         if actor != current {
             return;
         }
-        let area =
-            departure.or_else(
-                || match self.state.people[self.person_index[&actor]].location {
-                    Location::AtArea(area) => Some(area),
-                    Location::InTransit { .. }
-                    | Location::StoppedOnRoad { .. }
-                    | Location::Carried { .. } => None,
-                },
-            );
+        let area = departure.or_else(|| {
+            match *self
+                .state
+                .components
+                .location(actor)
+                .expect("location exists")
+            {
+                Location::AtArea(area) => Some(area),
+                Location::InTransit { .. }
+                | Location::StoppedOnRoad { .. }
+                | Location::Carried { .. } => None,
+            }
+        });
         let Some(area) = area else { return };
         let observers: Vec<_> = self
             .state
@@ -186,7 +198,12 @@ impl Simulation {
             .keys()
             .copied()
             .filter(|id| {
-                self.state.people[self.person_index[id]].location == Location::AtArea(area)
+                *self
+                    .state
+                    .components
+                    .location(*id)
+                    .expect("location exists")
+                    == Location::AtArea(area)
                     && self.state.components.body(*id).unwrap().vitals.health > 0
             })
             .collect();
@@ -254,8 +271,16 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        let student_location = &self.state.people[self.person_index[&student]].location;
-        let teacher_location = &self.state.people[self.person_index[&teacher]].location;
+        let student_location = self
+            .state
+            .components
+            .location(student)
+            .expect("location exists");
+        let teacher_location = self
+            .state
+            .components
+            .location(teacher)
+            .expect("location exists");
         if student_location != teacher_location || !matches!(student_location, Location::AtArea(_))
         {
             return Err(Error::Unavailable);
@@ -360,7 +385,11 @@ impl Simulation {
         }
         let body = self.state.components.body(student).unwrap();
         let activity = self.state.components.activity(student).unwrap();
-        let location = &self.state.people[self.person_index[&student]].location;
+        let location = self
+            .state
+            .components
+            .location(student)
+            .expect("location exists");
         if !body.vitals.alive
             || body.vitals.health == 0
             || !matches!(*activity, Activity::Idle | Activity::Rest)
@@ -371,7 +400,12 @@ impl Simulation {
         let mut commands = Vec::new();
         for (teacher, guard) in &world.guardians {
             let teacher_activity = self.state.components.activity(*teacher).unwrap();
-            if &self.state.people[self.person_index[teacher]].location != location
+            if self
+                .state
+                .components
+                .location(*teacher)
+                .expect("location exists")
+                != location
                 || self.in_combat(*teacher)
                 || self.combat_restricts(*teacher)
                 || self.care_index.contains_key(teacher)
@@ -509,8 +543,16 @@ impl Simulation {
             == *self.state.components.activity(student).unwrap();
         if !paired
             || completes != self.state.time
-            || self.state.people[self.person_index[&teacher]].location
-                != self.state.people[self.person_index[&student]].location
+            || *self
+                .state
+                .components
+                .location(teacher)
+                .expect("location exists")
+                != *self
+                    .state
+                    .components
+                    .location(student)
+                    .expect("location exists")
             || [teacher, student]
                 .into_iter()
                 .any(|id| !self.state.components.body(id).unwrap().vitals.alive)
@@ -615,10 +657,22 @@ impl Simulation {
                 Activity::Idle | Activity::Rest
             )
             || !self.state.components.body(requester).unwrap().vitals.alive
-            || self.state.people[self.person_index[&requester]].location
-                != self.state.people[self.person_index[&guardian]].location
+            || *self
+                .state
+                .components
+                .location(requester)
+                .expect("location exists")
+                != *self
+                    .state
+                    .components
+                    .location(guardian)
+                    .expect("location exists")
             || !matches!(
-                self.state.people[self.person_index[&requester]].location,
+                *self
+                    .state
+                    .components
+                    .location(requester)
+                    .expect("location exists"),
                 Location::AtArea(_)
             )
         {
@@ -715,10 +769,14 @@ impl Simulation {
         let guardians: Vec<_> = world.guardians.keys().copied().collect();
         for id in guardians {
             if let Some(person) = current {
-                let same_place = self.state.people[self.person_index[&id]].location
-                    == self.state.people[self.person_index[&person]].location
+                let same_place = *self.state.components.location(id).expect("location exists")
+                    == *self
+                        .state
+                        .components
+                        .location(person)
+                        .expect("location exists")
                     && matches!(
-                        self.state.people[self.person_index[&id]].location,
+                        *self.state.components.location(id).expect("location exists"),
                         Location::AtArea(_)
                     )
                     && self.state.components.body(id).unwrap().vitals.health > 0;
@@ -1043,12 +1101,12 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     .people
                     .iter()
                     .find(|p| p.id == teacher)
-                    .map(|p| &p.location)
+                    .and_then(|p| state.components.location(p.id))
                     != state
                         .people
                         .iter()
                         .find(|p| p.id == student)
-                        .map(|p| &p.location)
+                        .and_then(|p| state.components.location(p.id))
             {
                 return Err(fail());
             }

@@ -182,12 +182,7 @@ impl Simulation {
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
-        match self
-            .state
-            .people
-            .get(*self.person_index.get(&actor)?)?
-            .location
-        {
+        match *self.state.components.location(actor)? {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -1103,7 +1098,10 @@ mod tests {
             .id
     }
     fn local(sim: &mut Simulation, actor: PersonId, area: AreaId) {
-        sim.state.people[sim.person_index[&actor]].location = Location::AtArea(area);
+        *sim.state
+            .components
+            .location_mut(sim.state.people[sim.person_index[&actor]].id)
+            .expect("location exists") = Location::AtArea(area);
         sim.observe_ecology();
     }
     #[test]

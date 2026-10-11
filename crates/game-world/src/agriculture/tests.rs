@@ -37,7 +37,9 @@ fn compact(workers: usize) -> (Simulation, SiteId) {
         temperature_variation: 0,
         rainfall_variation: 0,
     };
-    world.reset_epoch(sim.state.time, sim.state.seed).unwrap();
+    world
+        .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+        .unwrap();
     let rules = crop_rules(&mut sim);
     rules.planting_last_day = 9;
     rules.food_yield = Quantity(30_000);
@@ -126,13 +128,16 @@ fn local_crop_fixture(workers: usize) -> (Simulation, SiteId, SiteId) {
         .refresh(&sim.state.components)
         .unwrap();
     let environment = sim.state.environment.as_mut().unwrap();
-    environment.cells.get_mut(&cold_area).unwrap().policy = game_environment::LocalClimate {
+    *sim.state
+        .components
+        .get_mut::<game_environment::LocalClimate>(game_ecs::StableId(cold_area.0))
+        .unwrap() = game_environment::LocalClimate {
         temperature_offset: -20,
         rain_multiplier_milli: 0,
         evaporation_multiplier_milli: 1_000,
     };
     environment
-        .reset_epoch(sim.state.time, sim.state.seed)
+        .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
         .unwrap();
     sim.validate_environment().unwrap();
     sim.validate_agriculture().unwrap();
@@ -159,15 +164,33 @@ fn connected_crops_match_local_weather_and_soil_without_changing_field_metadata(
         .collect();
     let environment = sim.state.environment.as_ref().unwrap();
     assert_eq!(
-        environment.local_weather(warm_area).unwrap().temperature,
+        environment
+            .local_weather(&sim.state.components, warm_area)
+            .unwrap()
+            .temperature,
         10
     );
-    assert_eq!(environment.local_weather(warm_area).unwrap().rain, 10);
     assert_eq!(
-        environment.local_weather(cold_area).unwrap().temperature,
+        environment
+            .local_weather(&sim.state.components, warm_area)
+            .unwrap()
+            .rain,
+        10
+    );
+    assert_eq!(
+        environment
+            .local_weather(&sim.state.components, cold_area)
+            .unwrap()
+            .temperature,
         -10
     );
-    assert_eq!(environment.local_weather(cold_area).unwrap().rain, 0);
+    assert_eq!(
+        environment
+            .local_weather(&sim.state.components, cold_area)
+            .unwrap()
+            .rain,
+        0
+    );
     sim.advance(SimDuration(1_200_000 - sim.state.time.0))
         .unwrap();
     let world = sim.state.agriculture.as_ref().unwrap();
@@ -413,7 +436,9 @@ fn drought_can_kill_a_crop_and_irrigation_uses_actual_water() {
     let world = sim.state.environment.as_mut().unwrap();
     world.climate.seasonal_rain = [0; 4];
     world.climate.seasonal_evaporation = [0; 4];
-    world.reset_epoch(sim.state.time, sim.state.seed).unwrap();
+    world
+        .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
+        .unwrap();
     crop_rules(&mut sim).failure_stress_days = 2;
     let world = sim.state.agriculture.as_mut().unwrap();
     world
@@ -555,8 +580,11 @@ fn calendar_and_weather_are_configurable_and_validation_rejects_corruption() {
     config.environment.climate.seasonal_temperature = [30; 4];
     let configured =
         Simulation::farming_with_config(4, Execution::default(), config.clone()).unwrap();
-    let Location::AtArea(ruler_area) =
-        configured.state.people[configured.person_index[&configured.state.ruler]].location
+    let Location::AtArea(ruler_area) = *configured
+        .state
+        .components
+        .location(configured.state.ruler)
+        .expect("location exists")
     else {
         panic!("fixture ruler starts in a local area");
     };
@@ -567,7 +595,7 @@ fn calendar_and_weather_are_configurable_and_validation_rejects_corruption() {
             .environment
             .as_ref()
             .unwrap()
-            .local_weather(ruler_area)
+            .local_weather(&configured.state.components, ruler_area)
             .unwrap()
             .temperature
     );

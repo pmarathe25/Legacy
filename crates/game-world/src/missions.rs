@@ -120,7 +120,12 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        match self.state.people[*index].location {
+        match *self
+            .state
+            .components
+            .location(self.state.people[*index].id)
+            .expect("location exists")
+        {
             Location::AtArea(area) => Ok(area),
             _ => Err(Error::Unavailable),
         }
@@ -274,7 +279,14 @@ impl Simulation {
             self.state
                 .people
                 .iter()
-                .filter(|p| p.location == Location::AtArea(area))
+                .filter(|p| {
+                    *self
+                        .state
+                        .components
+                        .location(p.id)
+                        .expect("location exists")
+                        == Location::AtArea(area)
+                })
                 .map(|p| (p.id, area))
                 .collect::<BTreeMap<_, _>>()
                 .into_iter()
@@ -611,7 +623,17 @@ impl Simulation {
         let visible_locations = relevant
             .iter()
             .filter(|p| self.mission_can_observe(observer, **p))
-            .map(|p| (*p, self.state.people[self.person_index[p]].location.clone()))
+            .map(|p| {
+                (
+                    *p,
+                    (*self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[p]].id)
+                        .expect("location exists"))
+                    .clone(),
+                )
+            })
             .collect();
         let heard = relevant
             .into_iter()
@@ -903,7 +925,11 @@ impl Simulation {
             if destination != area {
                 if let MissionObjective::Rescue { person, return_to } = member.directive
                     && destination == return_to
-                    && self.state.people[self.person_index[&person]].location
+                    && *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[&person]].id)
+                        .expect("location exists")
                         == Location::AtArea(area)
                     && self.mission_area(person).is_ok()
                     && person != self.state.ruler
@@ -934,7 +960,11 @@ impl Simulation {
             }
             match member.directive {
                 MissionObjective::Defeat { person } => {
-                    if self.state.people[self.person_index[&person]].location
+                    if *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[&person]].id)
+                        .expect("location exists")
                         == Location::AtArea(area)
                         && self
                             .state
@@ -949,7 +979,11 @@ impl Simulation {
                     }
                 }
                 MissionObjective::Confine { person, until } => {
-                    if self.state.people[self.person_index[&person]].location
+                    if *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[&person]].id)
+                        .expect("location exists")
                         != Location::AtArea(area)
                     {
                         return;
@@ -985,7 +1019,11 @@ impl Simulation {
                     }
                 }
                 MissionObjective::Rescue { person, .. } => {
-                    if self.state.people[self.person_index[&person]].location
+                    if *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[&person]].id)
+                        .expect("location exists")
                         == Location::AtArea(area)
                         && self
                             .state
@@ -1132,7 +1170,12 @@ impl Simulation {
         )
     }
     fn start_mission_encounter(&mut self, id: MissionId, actor: PersonId, target: PersonId) {
-        let area = match self.state.people[self.person_index[&actor]].location {
+        let area = match *self
+            .state
+            .components
+            .location(self.state.people[self.person_index[&actor]].id)
+            .expect("location exists")
+        {
             Location::AtArea(area) => area,
             _ => return,
         };
@@ -1161,7 +1204,11 @@ impl Simulation {
             .filter(|(mission, member)| {
                 member.person != self.state.ruler
                     && member.status == CompanionStatus::Accepted
-                    && self.state.people[self.person_index[&member.person]].location
+                    && *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[&member.person]].id)
+                        .expect("location exists")
                         == Location::AtArea(area)
                     && self.can_fight(member.person)
                     && !self.in_combat(member.person)
@@ -1344,7 +1391,12 @@ impl Simulation {
             .collect::<Vec<_>>();
         let mut local: BTreeMap<AreaId, BTreeSet<PersonId>> = BTreeMap::new();
         for person in &self.state.people {
-            if let Location::AtArea(area) = person.location {
+            if let Location::AtArea(area) = *self
+                .state
+                .components
+                .location(person.id)
+                .expect("location exists")
+            {
                 local.entry(area).or_default().insert(person.id);
             }
         }
@@ -1809,7 +1861,15 @@ impl Simulation {
                 .state
                 .people
                 .iter()
-                .filter(|p| p.id != actor && p.location == Location::AtArea(area))
+                .filter(|p| {
+                    p.id != actor
+                        && *self
+                            .state
+                            .components
+                            .location(p.id)
+                            .expect("location exists")
+                            == Location::AtArea(area)
+                })
                 .map(|p| p.id)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -2425,9 +2485,11 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
                     completes: talk.completes,
                 })
             || ![talk.speaker, talk.listener].iter().all(|actor| {
-                s.people
-                    .iter()
-                    .any(|p| p.id == *actor && p.location == Location::AtArea(talk.area))
+                s.people.iter().any(|p| {
+                    p.id == *actor
+                        && *s.components.location(p.id).expect("location exists")
+                            == Location::AtArea(talk.area)
+                })
             })
         {
             return Err(fail());
@@ -2618,7 +2680,10 @@ mod tests {
         sim.advance(MINUTE).unwrap();
         assert_eq!(sim.state.inventories[&carried].quantity, Quantity(2_000));
         assert!(matches!(
-            sim.state.people[sim.person_index[&leader]].location,
+            *sim.state
+                .components
+                .location(sim.state.people[sim.person_index[&leader]].id)
+                .expect("location exists"),
             Location::InTransit { .. }
         ));
         sim.advance(SimDuration(600_000)).unwrap();
@@ -2698,7 +2763,10 @@ mod tests {
             [&source];
         assert_eq!(tags.values().sum::<u64>(), 2000);
         assert!(matches!(
-            sim.state.people[sim.person_index[&actor]].location,
+            *sim.state
+                .components
+                .location(sim.state.people[sim.person_index[&actor]].id)
+                .expect("location exists"),
             Location::InTransit { .. }
         ));
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -2894,7 +2962,10 @@ mod tests {
         );
         sim.advance(SimDuration(420_000)).unwrap();
         assert_eq!(
-            sim.state.people[sim.person_index[&leader]].location,
+            *sim.state
+                .components
+                .location(sim.state.people[sim.person_index[&leader]].id)
+                .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
         // A cached account can be reported to a bystander who never joined the party.
@@ -2953,7 +3024,10 @@ mod tests {
         accept(&mut sim, id, leader);
         sim.advance(SimDuration(180_000)).unwrap();
         assert_eq!(
-            sim.state.people[sim.person_index[&leader]].location,
+            *sim.state
+                .components
+                .location(sim.state.people[sim.person_index[&leader]].id)
+                .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
         assert!(
@@ -3179,7 +3253,10 @@ mod tests {
             CompanionStatus::Defected
         );
         assert_eq!(
-            sim.state.people[sim.person_index[&actor]].location,
+            *sim.state
+                .components
+                .location(sim.state.people[sim.person_index[&actor]].id)
+                .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
     }
@@ -3377,7 +3454,10 @@ mod tests {
                 .contains_key(&leader)
         );
         assert_eq!(
-            sim.state.people[sim.person_index[&leader]].location,
+            *sim.state
+                .components
+                .location(sim.state.people[sim.person_index[&leader]].id)
+                .expect("location exists"),
             Location::AtArea(sim.state.areas[0].id)
         );
         assert_eq!(
@@ -3522,7 +3602,10 @@ mod tests {
         let target = sim.state.people[3].id;
         let home = sim.state.areas[0].id;
         sim.interrupt_actor_activity(target);
-        sim.state.people[sim.person_index[&target]].location = Location::AtArea(home);
+        *sim.state
+            .components
+            .location_mut(sim.state.people[sim.person_index[&target]].id)
+            .expect("location exists") = Location::AtArea(home);
         for stock in sim
             .state
             .inventories
@@ -3586,14 +3669,25 @@ mod tests {
             MissionObjective::Defeat { person: target },
             vec![],
         );
-        let actual = sim.state.people[sim.person_index[&target]].location.clone();
+        let actual = (*sim
+            .state
+            .components
+            .location(sim.state.people[sim.person_index[&target]].id)
+            .expect("location exists"))
+        .clone();
         sim.seed_mission_target_report(id, actor, target, reported_area, SimTime(0))
             .unwrap();
         assert_eq!(
             sim.state.missions.as_ref().unwrap().missions[&id].members[&actor].contacts[&target],
             reported_area
         );
-        assert_eq!(sim.state.people[sim.person_index[&target]].location, actual);
+        assert_eq!(
+            *sim.state
+                .components
+                .location(sim.state.people[sim.person_index[&target]].id)
+                .expect("location exists"),
+            actual
+        );
         let before = sim.state.clone();
         assert_eq!(
             sim.seed_mission_target_report(id, target, target, reported_area, SimTime(0)),
@@ -3609,8 +3703,14 @@ mod tests {
         let home = sim.state.areas[0].id;
         sim.interrupt_actor_activity(leader);
         sim.interrupt_actor_activity(target);
-        sim.state.people[sim.person_index[&leader]].location = Location::AtArea(home);
-        sim.state.people[sim.person_index[&target]].location = Location::AtArea(home);
+        *sim.state
+            .components
+            .location_mut(sim.state.people[sim.person_index[&leader]].id)
+            .expect("location exists") = Location::AtArea(home);
+        *sim.state
+            .components
+            .location_mut(sim.state.people[sim.person_index[&target]].id)
+            .expect("location exists") = Location::AtArea(home);
         sim.debug_add_inventory(
             Good::Binding,
             InventoryLocation::Carried(leader),

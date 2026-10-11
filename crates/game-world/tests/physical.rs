@@ -568,7 +568,13 @@ fn death_at_an_intermediate_arrival_does_not_publish_a_phantom_next_leg() {
             .vitals
             .alive
     );
-    assert_eq!(state.people[0].location, Location::AtArea(AreaId(1)));
+    assert_eq!(
+        *state
+            .components
+            .location(state.people[0].id)
+            .expect("location exists"),
+        Location::AtArea(AreaId(1))
+    );
     assert!(state.people[0].route.is_empty());
     assert!(
         !state
@@ -585,7 +591,10 @@ fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
     let (mut sim, ruler) = arriving_at_a_body_limit(true);
     sim.advance(SimDuration(120_000)).unwrap();
     assert_eq!(
-        sim.canonical_state().people[0].location,
+        *sim.canonical_state()
+            .components
+            .location(sim.canonical_state().people[0].id)
+            .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
     assert!(sim.canonical_state().people[0].route.is_empty());

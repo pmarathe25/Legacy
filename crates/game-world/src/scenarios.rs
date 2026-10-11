@@ -100,7 +100,7 @@ impl Simulation {
                 .max(3 * 24 * 3_600_000),
         );
         let environment = sim.state.environment.as_mut().unwrap();
-        environment.reset_epoch(sim.state.time, seed)?;
+        environment.reset_epoch(&mut sim.state.components, sim.state.time, seed)?;
         sim.state.scenario = ScenarioInfo {
             id: id.into(),
             version: 1,
@@ -166,7 +166,11 @@ impl Simulation {
         }
         self.state.development.as_mut().unwrap().rules = config.biology.clone();
         for person in &mut self.state.people {
-            person.location = Location::AtArea(village);
+            *self
+                .state
+                .components
+                .location_mut(person.id)
+                .expect("location exists") = Location::AtArea(village);
             person.route.clear();
         }
         for life in self.state.development.as_mut().unwrap().lives.values_mut() {
@@ -1138,7 +1142,11 @@ impl Simulation {
         }
         for person in &mut self.state.people {
             person.route.clear();
-            person.location = Location::AtArea(self.state.areas[0].id);
+            *self
+                .state
+                .components
+                .location_mut(person.id)
+                .expect("location exists") = Location::AtArea(self.state.areas[0].id);
         }
         let lifespan = self.state.development.as_ref().unwrap().rules.lifespan.0;
         let elderhood = self.state.development.as_ref().unwrap().rules.elderhood.0;
@@ -1199,7 +1207,7 @@ impl Simulation {
             .push(Due::Review);
         let environment = self.state.environment.as_mut().unwrap();
         let day = self.state.time.0 / environment.calendar.day.0;
-        environment.reset_epoch(self.state.time, self.state.seed)?;
+        environment.reset_epoch(&mut self.state.components, self.state.time, self.state.seed)?;
         self.state.ecology.as_mut().unwrap().day = day;
         self.state.agriculture.as_mut().unwrap().day = day;
         let old = self.state.ruler;
@@ -1356,7 +1364,13 @@ impl Simulation {
                 .people
                 .iter()
                 .filter(|person| {
-                    access.contains(&person.id) && person.location == Location::AtArea(area)
+                    access.contains(&person.id)
+                        && *self
+                            .state
+                            .components
+                            .location(person.id)
+                            .expect("location exists")
+                            == Location::AtArea(area)
                 })
                 .take(capacity as usize)
                 .map(|person| person.id)

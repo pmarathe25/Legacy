@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 27;
+const SAVE_VERSION: u32 = 28;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -407,6 +407,20 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         return Err(fail());
     }
     let people: BTreeMap<_, _> = s.people.iter().map(|p| (p.id, p)).collect();
+    if s.components
+        .locations()
+        .map(|(id, _)| id)
+        .collect::<BTreeSet<_>>()
+        != people.keys().copied().collect()
+    {
+        return Err(fail());
+    }
+    game_spatial::resolve_locations(
+        s.components
+            .locations()
+            .map(|(id, location)| (game_ecs::StableId(id.0), location)),
+    )?;
+
     let areas: BTreeSet<_> = s.areas.iter().map(|a| a.id).collect();
     if !people.get(&s.ruler).is_some_and(|p| p.role == Role::Ruler)
         || s.people.iter().filter(|p| p.role == Role::Ruler).count() != 1
@@ -441,7 +455,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|world| world.approaches.get(id))
                         .map(|approach| approach.completes);
-                    if !matches!(p.location, Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
+                    if !matches!(*s.components.location(p.id).expect("location exists"), Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
                         || !scheduled_arrivals.insert(*id)
                     {
                         return Err(fail());
@@ -508,7 +522,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         {
             return Err(fail());
         }
-        let mut origin = match p.location {
+        let mut origin = match *s.components.location(p.id).expect("location exists") {
             Location::AtArea(a) => {
                 if !p.route.is_empty() || !areas.contains(&a) {
                     return Err(fail());
@@ -2033,7 +2047,10 @@ fn validate_physical(
             || actor.vitals.health > physical::rules_for(s, *id).max_health
             || actor.vitals.fatigue > rules.fatigue_limit
             || (carried > u128::from(physical::rules_for(s, *id).carrying_capacity.0)
-                && matches!(p.location, Location::InTransit { .. }))
+                && matches!(
+                    *s.components.location(p.id).expect("location exists"),
+                    Location::InTransit { .. }
+                ))
             || (p.hunger_exempt && (actor.vitals.hunger != 0 || !actor.vitals.alive))
             || (!actor.vitals.alive && actor.vitals.health != 0)
         {

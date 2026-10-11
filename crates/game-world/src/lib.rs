@@ -89,10 +89,10 @@ pub struct Area {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Person {
     pub id: PersonId,
     pub role: Role,
-    pub location: Location,
     pub inventory: InventoryId,
     pub work_units: u64,
     pub work_remainder: u64,
@@ -148,7 +148,7 @@ pub struct CanonicalState {
     #[serde(default)]
     pub combat: Option<combat::World>,
     #[serde(default)]
-    pub environment: Option<environment::World>,
+    pub environment: Option<environment::Runtime>,
     pub agriculture: Option<game_agriculture::Runtime>,
     #[serde(default)]
     pub agreements: Option<agreements::World>,
@@ -195,6 +195,7 @@ pub struct Simulation {
     dependent_index: BTreeMap<AreaId, BTreeSet<PersonId>>,
     agriculture_queries: game_agriculture::Queries,
     physical_query: game_ecs::Query2Optional<game_physiology::Body, Activity, game_workshop::Job>,
+    environment_queries: game_environment::Queries,
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
@@ -510,7 +511,6 @@ impl Simulation {
             state.people.push(Person {
                 id,
                 role,
-                location: Location::AtArea(village),
                 inventory,
                 work_units: 0,
                 work_remainder: 0,
@@ -518,6 +518,9 @@ impl Simulation {
                 route: Vec::new(),
                 hunger_exempt: role == Role::Guardian,
             });
+            state
+                .components
+                .set_location(id, Location::AtArea(village))?;
             state.inventories.insert(
                 inventory,
                 Inventory {
@@ -601,7 +604,8 @@ impl Simulation {
         let mut dependent_index = BTreeMap::<AreaId, BTreeSet<PersonId>>::new();
         if let Some(world) = &state.development {
             for p in &state.people {
-                if let Location::AtArea(area) = p.location
+                if let Location::AtArea(area) =
+                    *state.components.location(p.id).expect("location exists")
                     && matches!(
                         world.lives[&p.id].stage,
                         LifeStage::Infant | LifeStage::Child
@@ -621,6 +625,7 @@ impl Simulation {
         let physical_query = state
             .components
             .query2_optional::<game_physiology::Body, Activity, game_workshop::Job>();
+        let environment_queries = game_environment::Runtime::bind(&mut state.components);
         let sim = Self {
             state,
             engine,
@@ -634,6 +639,7 @@ impl Simulation {
             dependent_index,
             agriculture_queries,
             physical_query,
+            environment_queries,
         };
         sim.validate_environment()?;
         sim.validate_agriculture()?;
@@ -681,8 +687,14 @@ impl Simulation {
             .iter()
             .filter(|a| {
                 a.id != origin
-                    || matches!(ruler.location, Location::InTransit { .. })
-                        && !ruler.route.is_empty()
+                    || matches!(
+                        *self
+                            .state
+                            .components
+                            .location(ruler.id)
+                            .expect("location exists"),
+                        Location::InTransit { .. }
+                    ) && !ruler.route.is_empty()
             })
             .filter(|a| {
                 known_routes.map_or_else(
@@ -799,7 +811,11 @@ impl Simulation {
             }
         }
         if !matches!(
-            ruler.location,
+            *self
+                .state
+                .components
+                .location(ruler.id)
+                .expect("location exists"),
             Location::AtArea(_) | Location::InTransit { .. }
         ) {
             available_commands.retain(|command| !matches!(command, Command::Move { .. }));
@@ -917,7 +933,12 @@ impl Simulation {
             revision: self.revision,
             time: self.state.time,
             ruler: ruler.id,
-            location: ruler.location.clone(),
+            location: (*self
+                .state
+                .components
+                .location(ruler.id)
+                .expect("location exists"))
+            .clone(),
             known_areas: self
                 .state
                 .areas
@@ -997,7 +1018,12 @@ impl Simulation {
                         ),
                     explanation: guardian.explanation.clone(),
                     guardian: *id,
-                    location: self.state.people[self.person_index[id]].location.clone(),
+                    location: (*self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[id]].id)
+                        .expect("location exists"))
+                    .clone(),
                     target: guardian.target,
                     goal: match guardian.goal {
                         lineage::GuardianGoal::Waiting => GuardianGoalView::Waiting,
@@ -1024,7 +1050,7 @@ impl Simulation {
         }) {
             return Vec::new();
         }
-        self.state.people.iter().filter(|p| p.id != ruler.id && matches!((&p.location, &ruler.location), (Location::AtArea(a), Location::AtArea(b)) if a == b))
+        self.state.people.iter().filter(|p| p.id != ruler.id && matches!((self.state.components.location(p.id).expect("location exists"), self.state.components.location(ruler.id).expect("location exists")), (Location::AtArea(a), Location::AtArea(b)) if a == b))
             .skip(offset).take(limit.min(100)).map(|p| (p.id, p.role)).collect()
     }
 
@@ -1116,7 +1142,12 @@ impl Simulation {
         if !self.state.areas.iter().any(|a| a.id == destination) {
             return Err(Error::UnknownArea);
         }
-        let origin = match self.state.people[index].location {
+        let origin = match *self
+            .state
+            .components
+            .location(self.state.people[index].id)
+            .expect("location exists")
+        {
             Location::AtArea(a) => a,
             Location::InTransit { to, .. } => to,
             Location::StoppedOnRoad { .. } | Location::Carried { .. } => {
@@ -1131,12 +1162,25 @@ impl Simulation {
             self.path(origin, destination)?
         };
         if path.is_empty()
-            && (matches!(self.state.people[index].location, Location::AtArea(_))
-                || self.state.people[index].route.is_empty())
+            && (matches!(
+                *self
+                    .state
+                    .components
+                    .location(self.state.people[index].id)
+                    .expect("location exists"),
+                Location::AtArea(_)
+            ) || self.state.people[index].route.is_empty())
         {
             return Err(Error::AlreadyThere);
         }
-        let departure = if matches!(self.state.people[index].location, Location::AtArea(_)) {
+        let departure = if matches!(
+            *self
+                .state
+                .components
+                .location(self.state.people[index].id)
+                .expect("location exists"),
+            Location::AtArea(_)
+        ) {
             Some(self.departure(origin, path[0])?)
         } else {
             None
@@ -1209,7 +1253,11 @@ impl Simulation {
             people.remove(&actor);
         }
         self.state.people[index].route.remove(0);
-        self.state.people[index].location = Location::InTransit {
+        *self
+            .state
+            .components
+            .location_mut(self.state.people[index].id)
+            .expect("location exists") = Location::InTransit {
             from,
             to,
             departed: self.state.time,
@@ -1241,6 +1289,7 @@ impl Simulation {
         while self.state.time < requested {
             self.agriculture_queries.refresh(&self.state.components)?;
             self.physical_query.refresh(&self.state.components)?;
+            self.environment_queries.refresh(&self.state.components)?;
             if let Some(warning) = self.required_invocation_input() {
                 return Ok(AdvanceResult {
                     requested,
@@ -1312,8 +1361,14 @@ impl Simulation {
             .map(|p| compute::ProgressInput {
                 units: p.work_units,
                 remainder: p.work_remainder,
-                units_per_minute: if matches!(p.location, Location::AtArea(_))
-                    && self.physically_working(p.id)
+                units_per_minute: if matches!(
+                    *self
+                        .state
+                        .components
+                        .location(p.id)
+                        .expect("location exists"),
+                    Location::AtArea(_)
+                ) && self.physically_working(p.id)
                     && equipment.get(&p.id).copied().unwrap_or(true)
                 {
                     p.work_rate
@@ -1366,7 +1421,12 @@ impl Simulation {
                 Due::Arrive(id) => {
                     let p = &self.state.people[self.person_index[id]];
                     if let Some(to) = p.route.first() {
-                        let Location::InTransit { to: from, .. } = p.location else {
+                        let Location::InTransit { to: from, .. } = *self
+                            .state
+                            .components
+                            .location(p.id)
+                            .expect("location exists")
+                        else {
                             return Err(Error::InvalidSave("arrival outside transit".into()));
                         };
                         let duration = self
@@ -1588,7 +1648,7 @@ impl Simulation {
                 .environment
                 .as_ref()
                 .ok_or(Error::Unavailable)?
-                .admit(step)?;
+                .admit(&self.state.components, &mut self.environment_queries, step)?;
         }
         if let Some(batch) = &agriculture_output {
             self.state
@@ -1665,8 +1725,17 @@ impl Simulation {
                         continue;
                     }
                     let index = self.person_index[&id];
-                    if let Location::InTransit { to, .. } = self.state.people[index].location {
-                        self.state.people[index].location = Location::AtArea(to);
+                    if let Location::InTransit { to, .. } = *self
+                        .state
+                        .components
+                        .location(self.state.people[index].id)
+                        .expect("location exists")
+                    {
+                        *self
+                            .state
+                            .components
+                            .location_mut(self.state.people[index].id)
+                            .expect("location exists") = Location::AtArea(to);
                         self.index_dependent(id, to);
                         self.emit(EventKind::Arrived {
                             actor: id,
@@ -1794,7 +1863,12 @@ impl Simulation {
                 && self.transport_can_depart(actor);
             let index = self.person_index[&actor];
             if ready
-                && self.state.people[index].location == Location::AtArea(origin)
+                && *self
+                    .state
+                    .components
+                    .location(self.state.people[index].id)
+                    .expect("location exists")
+                    == Location::AtArea(origin)
                 && self.state.people[index].route.first() == Some(&destination)
             {
                 let (_, arrival) = self.departure(origin, destination)?;

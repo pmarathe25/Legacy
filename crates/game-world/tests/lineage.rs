@@ -514,7 +514,13 @@ fn guardian_spectating_exists_only_in_the_gap_and_never_reveals_a_future_child()
                 .iter()
                 .find(|p| p.id == guardian.guardian)
                 .unwrap();
-            assert_eq!(guardian.location, person.location);
+            assert_eq!(
+                guardian.location,
+                *sim.canonical_state()
+                    .components
+                    .location(person.id)
+                    .expect("location exists")
+            );
         }
     }
     assert_eq!(sim.canonical_state(), &before);
@@ -821,7 +827,10 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
             .find(|p| p.id == *guardian)
             .unwrap();
         assert_eq!(
-            person.location,
+            *sim.canonical_state()
+                .components
+                .location(person.id)
+                .expect("location exists"),
             Location::InTransit {
                 from: AreaId(3),
                 to: AreaId(1),
@@ -845,12 +854,7 @@ fn guardians_follow_the_connection_using_real_travel_and_real_food() {
     .unwrap();
     sim.advance(SimDuration(179_999)).unwrap();
     assert!(guardians.iter().all(|id| matches!(
-        sim.canonical_state()
-            .people
-            .iter()
-            .find(|p| p.id == *id)
-            .unwrap()
-            .location,
+        *sim.canonical_state().components.location(*id).expect("location exists"),
         Location::InTransit { .. }
     )));
     sim.advance(SimDuration(60_001)).unwrap();
@@ -886,11 +890,9 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
     kill_ruler(&mut sim);
     let location = sim
         .canonical_state()
-        .people
-        .iter()
-        .find(|p| p.id == guardian)
-        .unwrap()
-        .location
+        .components
+        .location(guardian)
+        .expect("location exists")
         .clone();
     let health = sim
         .canonical_state()
@@ -916,12 +918,10 @@ fn destruction_recovers_in_place_without_changing_the_search_target() {
         .expect("body exists");
     assert_eq!(body.vitals.health, 60_000);
     assert_eq!(
-        sim.canonical_state()
-            .people
-            .iter()
-            .find(|p| p.id == guardian)
-            .unwrap()
-            .location,
+        *sim.canonical_state()
+            .components
+            .location(guardian)
+            .expect("location exists"),
         location
     );
     assert_eq!(

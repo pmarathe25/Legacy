@@ -19,13 +19,11 @@ fn role(sim: &Simulation) -> PersonId {
 }
 fn travel(sim: &mut Simulation, who: PersonId, destination: AreaId) {
     sim.debug_move_actor(who, destination).unwrap();
-    let Location::InTransit { arrives, .. } = sim
+    let Location::InTransit { arrives, .. } = *sim
         .canonical_state()
-        .people
-        .iter()
-        .find(|p| p.id == who)
-        .unwrap()
-        .location
+        .components
+        .location(who)
+        .expect("location exists")
     else {
         panic!("traveler did not depart")
     };
@@ -446,12 +444,10 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
             .is_empty()
     );
     assert_eq!(
-        sim.canonical_state()
-            .people
-            .iter()
-            .find(|p| p.id == officer)
-            .unwrap()
-            .location,
+        *sim.canonical_state()
+            .components
+            .location(officer)
+            .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
     sim.advance(MINUTE).unwrap();
@@ -494,11 +490,9 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     for _ in 0..15 {
         let location = sim
             .canonical_state()
-            .people
-            .iter()
-            .find(|p| p.id == officer)
-            .unwrap()
-            .location
+            .components
+            .location(officer)
+            .expect("location exists")
             .clone();
         if let Location::InTransit {
             to: AreaId(3),

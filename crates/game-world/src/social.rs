@@ -65,10 +65,16 @@ impl Simulation {
             .is_some_and(|life| matches!(life.stage, LifeStage::Adult | LifeStage::Elder))
     }
     fn social_speech(&self, actor: PersonId) -> bool {
-        self.person_index
-            .get(&actor)
-            .is_some_and(|index| matches!(self.state.people[*index].location, Location::AtArea(_)))
-            && self.independent(actor)
+        self.person_index.get(&actor).is_some_and(|index| {
+            matches!(
+                *self
+                    .state
+                    .components
+                    .location(self.state.people[*index].id)
+                    .expect("location exists"),
+                Location::AtArea(_)
+            )
+        }) && self.independent(actor)
             && !self.in_combat(actor)
             && self
                 .state
@@ -90,8 +96,16 @@ impl Simulation {
         first != second
             && self.social_speech(first)
             && self.social_speech(second)
-            && self.state.people[self.person_index[&first]].location
-                == self.state.people[self.person_index[&second]].location
+            && *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[&first]].id)
+                .expect("location exists")
+                == *self
+                    .state
+                    .components
+                    .location(self.state.people[self.person_index[&second]].id)
+                    .expect("location exists")
     }
     fn relationship(&self, first: PersonId, second: PersonId) -> decisions::Relationship {
         self.state.decisions.as_ref().unwrap().minds[&first]
@@ -208,7 +222,11 @@ impl Simulation {
         good: Good,
         quantity: Quantity,
     ) -> Option<InventoryId> {
-        let Location::AtArea(area) = self.state.people[*self.person_index.get(&actor)?].location
+        let Location::AtArea(area) = *self
+            .state
+            .components
+            .location(self.state.people[*self.person_index.get(&actor)?].id)
+            .expect("location exists")
         else {
             return None;
         };
@@ -350,9 +368,15 @@ impl Simulation {
                                         .map(|(_, value)| value)
                                         .any(|field| {
                                             field.area
-                                                == match self.state.people
-                                                    [self.person_index[&teacher]]
-                                                    .location
+                                                == match *self
+                                                    .state
+                                                    .components
+                                                    .location(
+                                                        self.state.people
+                                                            [self.person_index[&teacher]]
+                                                            .id,
+                                                    )
+                                                    .expect("location exists")
                                                 {
                                                     Location::AtArea(a) => a,
                                                     _ => unreachable!(),
@@ -553,11 +577,19 @@ impl Simulation {
         }) {
             return false;
         }
-        let location = &self.state.people[self.person_index[&actors[0]]].location;
+        let location = self
+            .state
+            .components
+            .location(self.state.people[self.person_index[&actors[0]]].id)
+            .expect("location exists");
         if !matches!(location, Location::AtArea(_))
-            || actors
-                .iter()
-                .any(|actor| &self.state.people[self.person_index[actor]].location != location)
+            || actors.iter().any(|actor| {
+                self.state
+                    .components
+                    .location(self.state.people[self.person_index[actor]].id)
+                    .expect("location exists")
+                    != location
+            })
         {
             return false;
         }
@@ -811,16 +843,24 @@ impl Simulation {
                     .unwrap()
                     .development
                     .insert(child, record);
-                let location = self.state.people[self.person_index[&child]]
-                    .location
-                    .clone();
+                let location = (*self
+                    .state
+                    .components
+                    .location(self.state.people[self.person_index[&child]].id)
+                    .expect("location exists"))
+                .clone();
                 let witnesses: Vec<_> = self
                     .state
                     .people
                     .iter()
                     .filter(|person| {
                         person.id != child
-                            && person.location == location
+                            && *self
+                                .state
+                                .components
+                                .location(person.id)
+                                .expect("location exists")
+                                == location
                             && self
                                 .state
                                 .components
@@ -955,7 +995,11 @@ impl Simulation {
         let mut local: BTreeMap<AreaId, Vec<PersonId>> = BTreeMap::new();
         let mut declarations: BTreeMap<AreaId, Vec<Offer>> = BTreeMap::new();
         for teacher in &speakers {
-            let Location::AtArea(area) = self.state.people[self.person_index[teacher]].location
+            let Location::AtArea(area) = *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[teacher]].id)
+                .expect("location exists")
             else {
                 continue;
             };
@@ -998,7 +1042,11 @@ impl Simulation {
             offers.sort_by_key(|offer| offer.teacher);
         }
         for observer in &speakers {
-            let Location::AtArea(area) = self.state.people[self.person_index[observer]].location
+            let Location::AtArea(area) = *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[observer]].id)
+                .expect("location exists")
             else {
                 continue;
             };
@@ -1037,7 +1085,11 @@ impl Simulation {
                 continue;
             }
             let mind = &self.state.decisions.as_ref().unwrap().minds[&actor];
-            let Location::AtArea(area) = self.state.people[self.person_index[&actor]].location
+            let Location::AtArea(area) = *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[&actor]].id)
+                .expect("location exists")
             else {
                 continue;
             };
@@ -1216,8 +1268,18 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             let person = people.get(actor).ok_or_else(fail)?;
             let body = state.components.body(*actor).ok_or_else(fail)?;
             if !body.vitals.alive
-                || !matches!(person.location, Location::AtArea(_))
-                || person.location != people[&actors[0]].location
+                || !matches!(
+                    *state
+                        .components
+                        .location(person.id)
+                        .expect("location exists"),
+                    Location::AtArea(_)
+                )
+                || *state
+                    .components
+                    .location(person.id)
+                    .expect("location exists")
+                    != *state.components.location(actors[0]).ok_or_else(fail)?
             {
                 return Err(fail());
             }
@@ -1340,7 +1402,10 @@ mod tests {
         .unwrap();
         let village = sim.state.areas[0].id;
         for person in &mut sim.state.people {
-            person.location = Location::AtArea(village);
+            *sim.state
+                .components
+                .location_mut(person.id)
+                .expect("location exists") = Location::AtArea(village);
             person.route.clear();
         }
         sim.state

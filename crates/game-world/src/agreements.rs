@@ -536,7 +536,15 @@ impl Simulation {
             .state
             .people
             .iter()
-            .find(|p| p.role == Role::Citizen && p.location == Location::AtArea(local))
+            .find(|p| {
+                p.role == Role::Citizen
+                    && *sim
+                        .state
+                        .components
+                        .location(p.id)
+                        .expect("location exists")
+                        == Location::AtArea(local)
+            })
             .unwrap()
             .id;
         let custodians = sim
@@ -1696,7 +1704,12 @@ impl Simulation {
         {
             return Err(Error::Unavailable);
         }
-        match p.location {
+        match *self
+            .state
+            .components
+            .location(p.id)
+            .ok_or(Error::Unavailable)?
+        {
             Location::AtArea(area) => Ok(area),
             _ => Err(Error::Unavailable),
         }
@@ -2319,7 +2332,11 @@ impl Simulation {
                         .is_some_and(|k| k.values().any(|e| e.site == site))
                         || self.state.agriculture.as_ref().is_some_and(|w| {
                             w.field(&self.state.components, site).is_some_and(|f| {
-                                self.state.people[self.person_index[&actor]].location
+                                *self
+                                    .state
+                                    .components
+                                    .location(self.state.people[self.person_index[&actor]].id)
+                                    .expect("location exists")
                                     == Location::AtArea(f.area)
                             })
                         })

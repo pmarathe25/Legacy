@@ -142,8 +142,11 @@ impl Simulation {
             return Err(Error::Unavailable);
         }
         let mut anchor = actor;
-        while let Location::Carried { carrier } =
-            self.state.people[self.person_index[&anchor]].location
+        while let Location::Carried { carrier } = *self
+            .state
+            .components
+            .location(self.state.people[self.person_index[&anchor]].id)
+            .expect("location exists")
         {
             anchor = carrier;
         }
@@ -428,8 +431,11 @@ impl Simulation {
         };
         for actor in &ids {
             let mut anchor = *actor;
-            while let Location::Carried { carrier } =
-                self.state.people[self.person_index[&anchor]].location
+            while let Location::Carried { carrier } = *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[&anchor]].id)
+                .expect("location exists")
             {
                 anchor = carrier;
             }
@@ -691,8 +697,11 @@ impl Simulation {
             .keys()
             .filter_map(|actor| {
                 let mut anchor = *actor;
-                while let Location::Carried { carrier } =
-                    self.state.people[self.person_index[&anchor]].location
+                while let Location::Carried { carrier } = *self
+                    .state
+                    .components
+                    .location(self.state.people[self.person_index[&anchor]].id)
+                    .expect("location exists")
                 {
                     anchor = carrier;
                 }
@@ -841,7 +850,11 @@ impl Simulation {
         let map = w.map(e.map).expect("encounter map");
         let position = w.turn_position(id, actor, movement)?;
         if matches!(
-            self.state.people[self.person_index[&actor]].location,
+            *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[&actor]].id)
+                .expect("location exists"),
             Location::Carried { .. }
         ) && movement.is_some_and(|point| point != e.fighters[&actor].position)
         {
@@ -903,7 +916,11 @@ impl Simulation {
             }
             CombatAction::Retreat { destination } => {
                 if matches!(
-                    self.state.people[self.person_index[&actor]].location,
+                    *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[&actor]].id)
+                        .expect("location exists"),
                     Location::Carried { .. }
                 ) {
                     return Err(Error::Unavailable);
@@ -975,8 +992,11 @@ impl Simulation {
                 None,
             )?;
             let mut anchor = target;
-            while let Location::Carried { carrier } =
-                self.state.people[self.person_index[&anchor]].location
+            while let Location::Carried { carrier } = *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[&anchor]].id)
+                .expect("location exists")
             {
                 anchor = carrier;
             }
@@ -1111,8 +1131,11 @@ impl Simulation {
                     .keys()
                     .filter_map(|person| {
                         let mut current = *person;
-                        while let Location::Carried { carrier } =
-                            self.state.people[self.person_index[&current]].location
+                        while let Location::Carried { carrier } = *self
+                            .state
+                            .components
+                            .location(self.state.people[self.person_index[&current]].id)
+                            .expect("location exists")
                         {
                             current = carrier;
                         }
@@ -1386,7 +1409,11 @@ impl Simulation {
         let e = self.state.combat.as_ref().unwrap().encounters[&id].clone();
         for f in e.fighters.values().filter(|f| f.retreat.is_some()) {
             if matches!(
-                self.state.people[self.person_index[&f.actor]].location,
+                *self
+                    .state
+                    .components
+                    .location(self.state.people[self.person_index[&f.actor]].id)
+                    .expect("location exists"),
                 Location::Carried { .. }
             ) {
                 continue;
@@ -1409,14 +1436,24 @@ impl Simulation {
                 .unwrap()
                 .retreat = None;
         }
-        for f in e.fighters.values().filter(|f| {
-            f.retreat.is_some()
-                && matches!(
-                    self.state.people[self.person_index[&f.actor]].location,
-                    Location::Carried { .. }
-                )
-        }) {
-            *self.state.components.activity_mut(f.actor).unwrap() = Activity::Idle;
+        let carried_retreats: Vec<_> = e
+            .fighters
+            .values()
+            .filter(|f| {
+                f.retreat.is_some()
+                    && matches!(
+                        *self
+                            .state
+                            .components
+                            .location(self.state.people[self.person_index[&f.actor]].id)
+                            .expect("location exists"),
+                        Location::Carried { .. }
+                    )
+            })
+            .map(|fighter| fighter.actor)
+            .collect();
+        for actor in carried_retreats {
+            *self.state.components.activity_mut(actor).unwrap() = Activity::Idle;
             self.state
                 .combat
                 .as_mut()
@@ -1425,7 +1462,7 @@ impl Simulation {
                 .get_mut(&id)
                 .unwrap()
                 .fighters
-                .get_mut(&f.actor)
+                .get_mut(&actor)
                 .unwrap()
                 .retreat = None;
         }
@@ -1557,7 +1594,6 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     };
     let fail = || Error::InvalidSave("inconsistent combat state".into());
     let people: BTreeSet<_> = s.people.iter().map(|p| p.id).collect();
-    let people_by_id: BTreeMap<_, _> = s.people.iter().map(|person| (person.id, person)).collect();
     let locations = transport::resolved_locations_for(s)?;
     if w.rules.round.0 == 0
         || !w.rules.capacity_valid()
@@ -1688,7 +1724,9 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         for (actor, f) in &e.fighters {
             if e.active && !f.withdrawn {
                 let mut anchor = *actor;
-                while let Location::Carried { carrier } = people_by_id[&anchor].location {
+                while let Location::Carried { carrier } =
+                    *s.components.location(anchor).ok_or_else(fail)?
+                {
                     anchor = carrier;
                 }
                 if anchor != *actor
@@ -1772,7 +1810,12 @@ mod reinforcement_tests {
         sim.debug_move_actor(reinforcement, AreaId(2)).unwrap();
         sim.advance(SimDuration(120_000)).unwrap();
         sim.debug_move_actor(reinforcement, AreaId(1)).unwrap();
-        let arrival = match sim.state.people[sim.person_index[&reinforcement]].location {
+        let arrival = match *sim
+            .state
+            .components
+            .location(sim.state.people[sim.person_index[&reinforcement]].id)
+            .expect("location exists")
+        {
             Location::InTransit { arrives, .. } => arrives,
             _ => panic!("reinforcements must travel"),
         };

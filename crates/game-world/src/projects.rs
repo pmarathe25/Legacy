@@ -40,8 +40,14 @@ impl Simulation {
         let farmer = sim.state.people[3].id;
         let supporter = sim.state.people[5].id;
         let area = AreaId(1);
-        sim.state.people[sim.person_index[&farmer]].location = Location::AtArea(area);
-        sim.state.people[sim.person_index[&supporter]].location = Location::AtArea(area);
+        *sim.state
+            .components
+            .location_mut(sim.state.people[sim.person_index[&farmer]].id)
+            .expect("location exists") = Location::AtArea(area);
+        *sim.state
+            .components
+            .location_mut(sim.state.people[sim.person_index[&supporter]].id)
+            .expect("location exists") = Location::AtArea(area);
         sim.debug_add_plot(area, Some(farmer), BTreeSet::from([farmer]), 900)?;
         for (good, quantity, capacity, custodian, access) in [
             (Good::Timber, 0, 50_000, farmer, BTreeSet::from([farmer])),
@@ -299,12 +305,7 @@ impl Simulation {
         if !body.vitals.alive || body.vitals.health == 0 {
             return None;
         }
-        match self
-            .state
-            .people
-            .get(*self.person_index.get(&actor)?)?
-            .location
-        {
+        match *self.state.components.location(actor)? {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -2017,7 +2018,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     for (actor, job) in &world.jobs {
         let plan = world.projects.get(&job.project).ok_or_else(fail)?;
         if !people.contains_key(actor)
-            || people[actor].location != Location::AtArea(plan.area)
+            || *state.components.location(*actor).ok_or_else(fail)? != Location::AtArea(plan.area)
             || state.components.body(*actor).is_none_or(|body| {
                 !body.vitals.alive
                     || state.components.activity(*actor)
@@ -2223,7 +2224,7 @@ mod farm_tests {
         environment.climate.seasonal_rain = [30; 4];
         environment.climate.rainfall_variation = 0;
         environment
-            .reset_epoch(sim.state.time, sim.state.seed)
+            .reset_epoch(&mut sim.state.components, sim.state.time, sim.state.seed)
             .unwrap();
         let agriculture = sim.state.agriculture.as_mut().unwrap();
         agriculture.content = None;
@@ -2306,7 +2307,7 @@ mod farm_tests {
         let mut calendar = environment.calendar.clone();
         calendar.day = SimDuration(u64::MAX / calendar.year_days());
         sim.state.environment = Some(
-            game_environment::World::new(
+            game_environment::Runtime::new(
                 game_environment::Config {
                     calendar,
                     climate: environment.climate.clone(),

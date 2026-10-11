@@ -127,12 +127,7 @@ impl Simulation {
         if !body.vitals.alive {
             return None;
         }
-        match self
-            .state
-            .people
-            .get(*self.person_index.get(&actor)?)?
-            .location
-        {
+        match *self.state.components.location(actor)? {
             Location::AtArea(area) => Some(area),
             _ => None,
         }
@@ -1255,9 +1250,13 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         let incident = &world.incidents[id];
         let body = state.components.body(*actor).ok_or_else(fail)?;
         if !body.vitals.alive
-            || people
-                .get(actor)
-                .is_none_or(|person| person.location != Location::AtArea(incident.area))
+            || people.get(actor).is_none_or(|person| {
+                *state
+                    .components
+                    .location(person.id)
+                    .expect("location exists")
+                    != Location::AtArea(incident.area)
+            })
             || !matches!(*state.components.activity(*actor).ok_or_else(fail)?, Activity::Take { source, destination, quantity, completes }
                 if source == incident.source && destination == incident.destination && quantity == incident.quantity && completes == incident.completes)
             || !state.due.get(&incident.completes).is_some_and(|due| {
@@ -1270,7 +1269,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     }
     for (sender, report) in &world.reports {
         if !known_sender(&report.snapshot)
-            || [*sender, report.recipient].iter().any(|actor| people.get(actor).is_none_or(|person| person.location != Location::AtArea(report.area)))
+            || [*sender, report.recipient].iter().any(|actor| people.get(actor).is_none_or(|person| *state.components.location(person.id).expect("location exists") != Location::AtArea(report.area)))
             || !state.components.body(report.recipient).is_some_and(|body| body.vitals.alive)
             || !state.components.activity(report.recipient).is_some_and(|activity| matches!(activity, Activity::Idle | Activity::Rest))
             || !state.components.body(*sender).is_some_and(|body| body.vitals.alive)

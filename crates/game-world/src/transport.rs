@@ -34,21 +34,10 @@ impl Simulation {
         Ok(sim)
     }
     pub(crate) fn resolved_location(&self, actor: PersonId) -> Location {
-        let mut current = actor;
-        let mut seen = BTreeSet::new();
-        while seen.insert(current) {
-            match self.state.people[self.person_index[&current]]
-                .location
-                .clone()
-            {
-                Location::Carried { carrier } => current = carrier,
-                location => return location,
-            }
-        }
-        self.state.people[self.person_index[&actor]]
-            .location
-            .clone()
+        game_spatial::resolve(&self.state.components, game_ecs::StableId(actor.0))
+            .expect("validated physical location")
     }
+
     pub(crate) fn transport_position(&self, actor: PersonId) -> Option<Position> {
         if !self.person_index.contains_key(&actor) {
             return None;
@@ -66,7 +55,12 @@ impl Simulation {
         let anchor = |mut actor: PersonId| {
             let mut visited = BTreeSet::new();
             while visited.insert(actor) {
-                match self.state.people[self.person_index[&actor]].location {
+                match *self
+                    .state
+                    .components
+                    .location(actor)
+                    .expect("location exists")
+                {
                     Location::Carried { carrier } => actor = carrier,
                     _ => break,
                 }
@@ -100,7 +94,11 @@ impl Simulation {
     }
     pub(crate) fn transport_exerting(&self, actor: PersonId) -> bool {
         matches!(
-            self.state.people[self.person_index[&actor]].location,
+            *self
+                .state
+                .components
+                .location(actor)
+                .expect("location exists"),
             Location::InTransit { .. }
         ) || self.state.physical.as_ref().is_some_and(|_| {
             matches!(
@@ -155,7 +153,14 @@ impl Simulation {
                     && body.vitals.fatigue < limits.fatigue_limit
                     && self.independent(person.id)
                     && !self.combat_restricts(person.id)
-                    && !matches!(person.location, Location::Carried { .. });
+                    && !matches!(
+                        *self
+                            .state
+                            .components
+                            .location(person.id)
+                            .expect("location exists"),
+                        Location::Carried { .. }
+                    );
                 let can_bear = can_walk
                     && matches!(
                         *self.state.components.activity(person.id).unwrap(),
@@ -285,8 +290,11 @@ impl Simulation {
             return;
         };
         let members = w.component(actor);
-        let location = self.state.people[self.person_index[&actor]]
-            .location
+        let location = self
+            .state
+            .components
+            .location(actor)
+            .expect("location exists")
             .clone();
         let Location::InTransit {
             from, to, arrives, ..
@@ -311,7 +319,11 @@ impl Simulation {
                 dependents.remove(&member);
             }
             let person = &mut self.state.people[self.person_index[&member]];
-            person.location = location.clone();
+            *self
+                .state
+                .components
+                .location_mut(member)
+                .expect("location exists") = location.clone();
             person.route.clear();
             let deadline = approach.as_ref().map_or(arrives, |a| a.completes);
             if let Some(approach) = &approach {
@@ -350,7 +362,12 @@ impl Simulation {
         let positions: Vec<_> = members
             .iter()
             .filter_map(|id| {
-                let location = self.state.people[self.person_index[id]].location.clone();
+                let location = self
+                    .state
+                    .components
+                    .location(*id)
+                    .expect("location exists")
+                    .clone();
                 if matches!(location, Location::InTransit { .. }) {
                     location_position(&location, self.state.time)
                         .ok()
@@ -362,7 +379,12 @@ impl Simulation {
             .collect();
         for (member, position) in positions {
             self.clear_transport_arrival(member);
-            let destination = match self.state.people[self.person_index[&member]].location {
+            let destination = match *self
+                .state
+                .components
+                .location(member)
+                .expect("location exists")
+            {
                 Location::InTransit { to, .. } => Some(to),
                 _ => None,
             };
@@ -374,7 +396,11 @@ impl Simulation {
                     w.paused_approaches.insert(member, approach.target);
                 }
             }
-            self.state.people[self.person_index[&member]].location = position_location(position);
+            *self
+                .state
+                .components
+                .location_mut(member)
+                .expect("location exists") = position_location(position);
             self.state.people[self.person_index[&member]].route.clear();
             self.emit(EventKind::Interrupted { actor: member });
         }
@@ -382,7 +408,11 @@ impl Simulation {
     pub(crate) fn transport_death(&mut self, actor: PersonId) {
         self.interrupt_transport_lift(actor);
         if !matches!(
-            self.state.people[self.person_index[&actor]].location,
+            *self
+                .state
+                .components
+                .location(actor)
+                .expect("location exists"),
             Location::Carried { .. }
         ) {
             self.stop_transport_component(actor);
@@ -451,11 +481,18 @@ impl Simulation {
                 world.paused_approaches.remove(&member);
                 world.approaches.remove(&member);
                 if !matches!(
-                    self.state.people[self.person_index[&member]].location,
+                    *self
+                        .state
+                        .components
+                        .location(member)
+                        .expect("location exists"),
                     Location::Carried { .. }
                 ) {
-                    self.state.people[self.person_index[&member]].location =
-                        Location::AtArea(destination);
+                    *self
+                        .state
+                        .components
+                        .location_mut(member)
+                        .expect("location exists") = Location::AtArea(destination);
                     self.emit(EventKind::Arrived {
                         actor: member,
                         area: destination,
@@ -464,7 +501,11 @@ impl Simulation {
             }
             return Ok(());
         };
-        self.state.people[self.person_index[&actor]].location = Location::InTransit {
+        *self
+            .state
+            .components
+            .location_mut(actor)
+            .expect("location exists") = Location::InTransit {
             from: leg.from,
             to: leg.to,
             departed: leg.departed,
@@ -507,7 +548,11 @@ impl Simulation {
             .unwrap()
             .groups
             .remove(&target);
-        self.state.people[self.person_index[&target]].location = position_location(position);
+        *self
+            .state
+            .components
+            .location_mut(target)
+            .expect("location exists") = position_location(position);
         if let Position::Area(area) = position {
             self.index_dependent(target, area);
         }
@@ -530,7 +575,11 @@ impl Simulation {
             .attach_newborn(child, gestator, self.state.time, &bodies)
             .expect("newborn colocated with actual gestator");
         self.clear_transport_arrival(child);
-        self.state.people[self.person_index[&child]].location = Location::Carried {
+        *self
+            .state
+            .components
+            .location_mut(child)
+            .expect("location exists") = Location::Carried {
             carrier: group.anchor,
         };
         self.state.people[self.person_index[&child]].route.clear();
@@ -637,7 +686,11 @@ impl Simulation {
         for (id, body) in &bodies {
             if (!body.can_walk || body.cargo > body.capacity)
                 && matches!(
-                    self.state.people[self.person_index[id]].location,
+                    *self
+                        .state
+                        .components
+                        .location(*id)
+                        .expect("location exists"),
                     Location::InTransit { .. }
                 )
             {
@@ -656,7 +709,16 @@ impl Simulation {
             .state
             .people
             .iter()
-            .filter(|p| matches!(p.location, Location::StoppedOnRoad { .. }))
+            .filter(|p| {
+                matches!(
+                    *self
+                        .state
+                        .components
+                        .location(p.id)
+                        .expect("location exists"),
+                    Location::StoppedOnRoad { .. }
+                )
+            })
             .map(|p| p.id)
             .collect();
         self.state
@@ -814,10 +876,13 @@ impl Simulation {
                 for dependents in self.dependent_index.values_mut() {
                     dependents.remove(&group.passenger);
                 }
-                self.state.people[self.person_index[&group.passenger]].location =
-                    Location::Carried {
-                        carrier: group.anchor,
-                    };
+                *self
+                    .state
+                    .components
+                    .location_mut(group.passenger)
+                    .expect("location exists") = Location::Carried {
+                    carrier: group.anchor,
+                };
                 self.state.people[self.person_index[&group.passenger]]
                     .route
                     .clear();
@@ -863,7 +928,11 @@ impl Simulation {
             .approaches
             .remove(&actor);
         let position = Position::Road(approach.target);
-        self.state.people[self.person_index[&actor]].location = position_location(position);
+        *self
+            .state
+            .components
+            .location_mut(actor)
+            .expect("location exists") = position_location(position);
         self.state.people[self.person_index[&actor]].route.clear();
         self.emit(EventKind::Interrupted { actor });
         true
@@ -925,7 +994,11 @@ impl Simulation {
             .remove(&actor);
         self.leave_shelter_on_movement(actor);
         let p = &mut self.state.people[self.person_index[&actor]];
-        p.location = Location::InTransit {
+        *self
+            .state
+            .components
+            .location_mut(actor)
+            .expect("location exists") = Location::InTransit {
             from: leg.from,
             to: leg.to,
             departed: leg.departed,
@@ -1100,8 +1173,11 @@ impl Simulation {
                     .as_mut()
                     .unwrap()
                     .remove_group(*passenger);
-                self.state.people[self.person_index[passenger]].location =
-                    position_location(position);
+                *self
+                    .state
+                    .components
+                    .location_mut(*passenger)
+                    .expect("location exists") = position_location(position);
                 if let Position::Area(area) = position {
                     self.index_dependent(*passenger, area);
                 }
@@ -1111,7 +1187,11 @@ impl Simulation {
                 if !self.independent(actor)
                     || !self.state.components.body(actor).unwrap().vitals.alive
                     || !matches!(
-                        self.state.people[self.person_index[&actor]].location,
+                        *self
+                            .state
+                            .components
+                            .location(actor)
+                            .expect("location exists"),
                         Location::InTransit { .. }
                     )
                 {
@@ -1142,7 +1222,11 @@ impl Simulation {
                     to,
                     progress,
                     duration,
-                } = self.state.people[self.person_index[&actor]].location
+                } = *self
+                    .state
+                    .components
+                    .location(actor)
+                    .expect("location exists")
                 else {
                     return Err(Error::Unavailable);
                 };
@@ -1177,7 +1261,11 @@ impl Simulation {
                 )?;
                 self.ensure_event_capacity(self.state.people.len() + 1)?;
                 self.interrupt_actor_activity(actor);
-                self.state.people[self.person_index[&actor]].location = Location::InTransit {
+                *self
+                    .state
+                    .components
+                    .location_mut(actor)
+                    .expect("location exists") = Location::InTransit {
                     from: leg.from,
                     to: leg.to,
                     departed: leg.departed,
@@ -1499,7 +1587,11 @@ impl Simulation {
             actions.push(Action::Stop);
         } else {
             if matches!(
-                self.state.people[self.person_index[&actor]].location,
+                *self
+                    .state
+                    .components
+                    .location(actor)
+                    .expect("location exists"),
                 Location::StoppedOnRoad { .. }
             ) && self.transport_can_depart(actor)
             {
@@ -1631,7 +1723,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         };
         let cargo = cargo_by_actor.get(&p.id).copied().unwrap_or(0);
         let position = location_position(&resolved[&p.id], state.time).map_err(|_| fail())?;
-        if let Location::Carried { carrier } = p.location {
+        if let Location::Carried { carrier } = *state.components.location(p.id).ok_or_else(fail)? {
             if !w.groups.get(&p.id).is_some_and(|g| g.anchor == carrier) || !p.route.is_empty() {
                 return Err(fail());
             }
@@ -1687,12 +1779,16 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
 pub(crate) fn resolved_locations_for(
     state: &CanonicalState,
 ) -> Result<BTreeMap<PersonId, Location>, Error> {
-    let catalog = state
-        .people
-        .iter()
-        .map(|p| (p.id, p.location.clone()))
-        .collect();
-    game_transport::resolve_locations(&catalog)
+    let locations = game_spatial::resolve_locations(
+        state
+            .components
+            .locations()
+            .map(|(id, location)| (game_ecs::StableId(id.0), location)),
+    )?;
+    Ok(locations
+        .into_iter()
+        .map(|(id, location)| (PersonId(id.0), location))
+        .collect())
 }
 
 #[cfg(test)]
@@ -1704,7 +1800,10 @@ mod connected_tests {
         let mut sim = Simulation::transport_fixture(1, Execution::default()).unwrap();
         let actor = sim.state.ruler;
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
-        sim.state.people[sim.person_index[&actor]].location = Location::StoppedOnRoad {
+        *sim.state
+            .components
+            .location_mut(actor)
+            .expect("location exists") = Location::StoppedOnRoad {
             from: AreaId(1),
             to: AreaId(3),
             progress: SimDuration(0),
@@ -1739,7 +1838,10 @@ mod connected_tests {
         let holder = sim.state.people[3].id;
         for person in [actor, holder] {
             sim.debug_actor_command(person, Command::Cancel).unwrap();
-            sim.state.people[sim.person_index[&person]].location = Location::StoppedOnRoad {
+            *sim.state
+                .components
+                .location_mut(person)
+                .expect("location exists") = Location::StoppedOnRoad {
                 from: AreaId(1),
                 to: AreaId(3),
                 progress: SimDuration(90_000),
@@ -1881,7 +1983,10 @@ mod connected_tests {
     fn actual_newborn_follows_the_carrier_on_later_legs_without_own_arrival() {
         let (mut sim, mother, child) = traveling_birth(1);
         assert_eq!(
-            sim.state.people[sim.person_index[&child]].location,
+            *sim.state
+                .components
+                .location(child)
+                .expect("location exists"),
             Location::Carried { carrier: mother }
         );
         assert!(sim.observe().available_commands.iter().any(|c| matches!(
@@ -1937,7 +2042,10 @@ mod connected_tests {
             duration: SimDuration(180_000),
         };
         assert_eq!(
-            sim.state.people[sim.person_index[&mother]].location,
+            *sim.state
+                .components
+                .location(mother)
+                .expect("location exists"),
             stopped
         );
         assert_eq!(sim.resolved_location(child), stopped);
@@ -1979,7 +2087,10 @@ mod connected_tests {
         assert!(sim.state.transport.as_ref().unwrap().groups.is_empty());
         sim.advance(SimDuration(1)).unwrap();
         assert_eq!(
-            sim.state.people[sim.person_index[&passenger]].location,
+            *sim.state
+                .components
+                .location(passenger)
+                .expect("location exists"),
             Location::Carried { carrier }
         );
         assert_eq!(
@@ -1989,7 +2100,10 @@ mod connected_tests {
         sim.transport_command(passenger, &Action::PutDown { passenger })
             .unwrap();
         assert_eq!(
-            sim.state.people[sim.person_index[&passenger]].location,
+            *sim.state
+                .components
+                .location(passenger)
+                .expect("location exists"),
             Location::AtArea(AreaId(1))
         );
     }
@@ -2203,7 +2317,10 @@ mod connected_tests {
         let enemy = sim.state.people[8].id;
         let outsider = sim.state.people[9].id;
         for actor in [enemy, outsider] {
-            sim.state.people[sim.person_index[&actor]].location = Location::AtArea(AreaId(3));
+            *sim.state
+                .components
+                .location_mut(actor)
+                .expect("location exists") = Location::AtArea(AreaId(3));
         }
         sim.debug_start_encounter(vec![(mother, 0), (enemy, 1)])
             .unwrap();
@@ -2270,7 +2387,10 @@ mod connected_tests {
             })
             .unwrap();
         assert_eq!(
-            sim.state.people[sim.person_index[&child]].location,
+            *sim.state
+                .components
+                .location(child)
+                .expect("location exists"),
             Location::Carried { carrier: bearer }
         );
         assert_eq!(
@@ -2394,7 +2514,10 @@ mod connected_tests {
         assert!(sim.state.transport.as_ref().unwrap().groups.is_empty());
         sim.advance(SimDuration(1)).unwrap();
         assert_eq!(
-            sim.state.people[sim.person_index[&passenger]].location,
+            *sim.state
+                .components
+                .location(passenger)
+                .expect("location exists"),
             Location::Carried { carrier: ruler }
         );
         let declining = sim.state.people[9].id;

@@ -202,13 +202,14 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
             .people
             .iter()
             .filter(|p| people.contains(&p.id))
-            .all(|p| p.location == Location::AtArea(forest))
-            && state
-                .people
-                .iter()
-                .find(|p| p.id == state.ruler)
-                .unwrap()
-                .location
+            .all(|p| {
+                *state.components.location(p.id).expect("location exists")
+                    == Location::AtArea(forest)
+            })
+            && *state
+                .components
+                .location(state.ruler)
+                .expect("location exists")
                 == Location::AtArea(forest)
     });
     (sim, army, missions, people, enemy)

@@ -1,4 +1,4 @@
-use game_core::{Error, SimDuration, SimTime};
+use game_core::{AreaId, Error, SimDuration, SimTime};
 use game_environment::{Config, DayFacts, Step, Weather};
 use game_sim::*;
 use serde::{Deserialize, Serialize};
@@ -33,15 +33,52 @@ struct Row {
     remainder: u64,
 }
 // Deliberately not Clone: the driver never copies the containing world.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct World {
     clock: Clock,
     seed: u64,
-    environment: Option<game_environment::World>,
+    environment: Option<game_environment::Runtime>,
+    #[serde(with = "component_save")]
+    components: game_ecs::Store,
+    #[serde(skip)]
+    environment_queries: Option<game_environment::Queries>,
     rows: Vec<Row>,
     days: Vec<DayRecord>,
     marks: Vec<SimTime>,
     observed_weather_day: Option<u64>,
+}
+fn schema() -> game_ecs::Schema {
+    let mut schema = game_ecs::Schema::new();
+    game_environment::register_components(&mut schema).unwrap();
+    schema
+}
+mod component_save {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        store: &game_ecs::Store,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        store
+            .snapshot()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<game_ecs::Store, D::Error> {
+        let saved = game_ecs::Snapshot::deserialize(deserializer)?;
+        game_ecs::Store::restore(schema(), saved).map_err(serde::de::Error::custom)
+    }
+}
+impl World {
+    fn rebind(&mut self) {
+        if let Some(environment) = &self.environment {
+            environment
+                .validate(&self.components, self.clock.time, self.seed)
+                .unwrap();
+            self.environment_queries = Some(game_environment::Runtime::bind(&mut self.components));
+        }
+    }
 }
 impl ClockWorld for World {
     fn clock(&self) -> Clock {
@@ -59,10 +96,36 @@ fn world(weather: bool, extra: bool) -> World {
         },
         ..Config::default()
     };
+    let mut components = game_ecs::Store::with_schema(schema());
+    let environment =
+        weather.then(|| game_environment::Runtime::new(config, SimTime(0), 17).unwrap());
+    if let Some(environment) = &environment {
+        environment
+            .register_cell(
+                &mut components,
+                AreaId(1),
+                game_environment::LocalClimate::default(),
+            )
+            .unwrap();
+        environment
+            .register_cell(
+                &mut components,
+                AreaId(2),
+                game_environment::LocalClimate {
+                    temperature_offset: 2,
+                    rain_multiplier_milli: 500,
+                    evaporation_multiplier_milli: 1_000,
+                },
+            )
+            .unwrap();
+    }
+    let environment_queries = weather.then(|| game_environment::Runtime::bind(&mut components));
     World {
         clock: Clock::default(),
         seed: 17,
-        environment: weather.then(|| game_environment::World::new(config, SimTime(0), 17).unwrap()),
+        environment,
+        components,
+        environment_queries,
         rows: if extra {
             (0..512)
                 .rev()
@@ -128,6 +191,8 @@ fn prepare(
     for phase in phases {
         if *phase == key(WEATHER, PREPARE) {
             weather = Some(world.environment.as_ref().unwrap().advance(
+                &world.components,
+                world.environment_queries.as_ref().unwrap(),
                 interval.from,
                 interval.to,
                 world.seed,
@@ -186,7 +251,16 @@ impl Transaction<World, u8> for Prepared {
                 if let Some(day) = step.elapsed_day.clone() {
                     world.days.push(day.into());
                 }
-                world.environment.as_mut().unwrap().commit(step).unwrap();
+                world
+                    .environment
+                    .as_mut()
+                    .unwrap()
+                    .commit(
+                        &mut world.components,
+                        world.environment_queries.as_mut().unwrap(),
+                        step,
+                    )
+                    .unwrap();
             } else if phase == key(EXTRA, COMMIT) {
                 world.rows = self.rows.take().unwrap();
                 // The declared dependency makes closing weather visible here.
@@ -201,28 +275,35 @@ impl Transaction<World, u8> for Prepared {
     }
 }
 fn reference(
-    mut environment: game_environment::World,
+    mut environment: game_environment::Runtime,
+    mut components: game_ecs::Store,
     target: SimTime,
-) -> (game_environment::World, Vec<DayRecord>) {
+) -> (game_environment::Runtime, game_ecs::Store, Vec<DayRecord>) {
+    let mut queries = game_environment::Runtime::bind(&mut components);
     let mut at = SimTime(0);
     let mut days = Vec::new();
     while at < target {
         let next = environment.boundary(at, target).unwrap();
-        let step = environment.advance(at, next, 17).unwrap();
+        let step = environment
+            .advance(&components, &queries, at, next, 17)
+            .unwrap();
         if let Some(day) = step.elapsed_day.clone() {
             days.push(day.into());
         }
-        environment.commit(step).unwrap();
+        environment
+            .commit(&mut components, &mut queries, step)
+            .unwrap();
         at = next;
     }
-    (environment, days)
+    (environment, components, days)
 }
 
 #[test]
 fn a_real_module_plugs_in_without_engine_feature_imports_or_world_cloning() {
     let mut world = world(true, true);
-    let (expected, days) = reference(
+    let (expected, expected_components, days) = reference(
         world.environment.as_ref().unwrap().clone(),
+        world.components.clone(),
         SimTime(9_000_123),
     );
     let engine = engine(true, true, Execution::default(), false);
@@ -230,6 +311,7 @@ fn a_real_module_plugs_in_without_engine_feature_imports_or_world_cloning() {
         .advance(&mut world, SimDuration(9_000_123), prepare)
         .unwrap();
     assert_eq!(world.environment, Some(expected));
+    assert_eq!(world.components, expected_components);
     assert_eq!(world.days, days);
     assert_eq!(world.days.len(), 15);
     assert_eq!(world.observed_weather_day, Some(15));
@@ -270,6 +352,13 @@ fn worker_chunk_registration_order_save_restore_and_passive_queries_preserve_fac
                 let before = serde_json::to_vec(&world).unwrap();
                 for _ in 0..3 {
                     std::hint::black_box((&world.environment, &world.days, engine.phases()));
+                    std::hint::black_box(
+                        world
+                            .environment
+                            .as_ref()
+                            .unwrap()
+                            .observe_cell(&world.components, AreaId(2)),
+                    );
                 }
                 assert_eq!(before, serde_json::to_vec(&world).unwrap());
                 let remaining = target - world.clock.time.0;
@@ -279,6 +368,8 @@ fn worker_chunk_registration_order_save_restore_and_passive_queries_preserve_fac
                 // Actual serialization/restoration of the containing state,
                 // excluding the noncanonical publication counter.
                 world = serde_json::from_slice(&serde_json::to_vec(&world).unwrap()).unwrap();
+                assert!(world.environment_queries.is_none());
+                world.rebind();
             }
             assert_eq!(serde_json::to_vec(&world).unwrap(), expected);
         }

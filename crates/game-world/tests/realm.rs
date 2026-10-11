@@ -18,13 +18,11 @@ fn travel(sim: &mut Simulation, p: PersonId, to: AreaId) {
     } else {
         sim.debug_move_actor(p, to).unwrap();
     }
-    let Location::InTransit { arrives, .. } = sim
+    let Location::InTransit { arrives, .. } = *sim
         .canonical_state()
-        .people
-        .iter()
-        .find(|q| q.id == p)
-        .unwrap()
-        .location
+        .components
+        .location(p)
+        .expect("location exists")
     else {
         panic!("travel not started")
     };

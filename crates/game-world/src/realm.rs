@@ -98,7 +98,10 @@ impl Simulation {
             sim.interrupt_actor_activity(actor);
         }
         for actor in [b, bv] {
-            sim.state.people[sim.person_index[&actor]].location = Location::AtArea(AreaId(3));
+            *sim.state
+                .components
+                .location_mut(sim.state.people[sim.person_index[&actor]].id)
+                .expect("location exists") = Location::AtArea(AreaId(3));
         }
         let food_a = sim.debug_add_inventory(
             Good::Food,

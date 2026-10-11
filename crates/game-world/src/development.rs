@@ -181,7 +181,12 @@ impl Simulation {
             actor,
             alive: body.vitals.alive,
             health: body.vitals.health,
-            position: person.location.clone(),
+            position: self
+                .state
+                .components
+                .location(person.id)
+                .ok_or(Error::Unavailable)?
+                .clone(),
             action_restricted: self.combat_restricts(actor),
             attempt: match *self
                 .state
@@ -476,7 +481,6 @@ impl Simulation {
         self.state.people.push(Person {
             id: child,
             role: Role::Citizen,
-            location: location.clone(),
             inventory,
             work_units: 0,
             work_remainder: 0,
@@ -484,6 +488,10 @@ impl Simulation {
             route: Vec::new(),
             hunger_exempt: false,
         });
+        self.state
+            .components
+            .set_location(child, location.clone())
+            .expect("validated birth location");
         if let Location::InTransit { arrives, .. } = location {
             self.state
                 .due
@@ -565,8 +573,16 @@ impl Simulation {
         // Kinship changes a directed initial relationship. It grants no assets,
         // permissions, office, compulsory care, or legal guardianship.
         for parent in parents {
-            if self.state.people[self.person_index[&parent]].location
-                != self.state.people[self.person_index[&child]].location
+            if *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[&parent]].id)
+                .expect("location exists")
+                != *self
+                    .state
+                    .components
+                    .location(self.state.people[self.person_index[&child]].id)
+                    .expect("location exists")
             {
                 continue;
             }
@@ -586,7 +602,12 @@ impl Simulation {
                 },
             );
         }
-        if let Location::AtArea(area) = self.state.people[self.person_index[&child]].location {
+        if let Location::AtArea(area) = *self
+            .state
+            .components
+            .location(self.state.people[self.person_index[&child]].id)
+            .expect("location exists")
+        {
             self.index_dependent(child, area);
         }
         self.record_genetic_birth(id, child)
@@ -770,7 +791,11 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                     actor: person.id,
                     alive: body.vitals.alive,
                     health: body.vitals.health,
-                    position: person.location.clone(),
+                    position: (*state
+                        .components
+                        .location(person.id)
+                        .expect("location exists"))
+                    .clone(),
                     action_restricted: false,
                     attempt,
                 },

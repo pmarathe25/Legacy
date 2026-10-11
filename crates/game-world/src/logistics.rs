@@ -87,7 +87,7 @@ impl Simulation {
             offers: additional_offers,
             resources,
         } = providers;
-        let Some(person) = self
+        let Some(_) = self
             .person_index
             .get(&actor)
             .map(|i| &self.state.people[*i])
@@ -126,7 +126,14 @@ impl Simulation {
                     .expect("activity exists"),
                 Activity::Idle | Activity::Rest | Activity::Work { .. }
             )
-            && !matches!(person.location, Location::Carried { .. })
+            && !matches!(
+                *self
+                    .state
+                    .components
+                    .location(actor)
+                    .expect("location exists"),
+                Location::Carried { .. }
+            )
             && !self.health_actor_busy(actor)
             && !self.property_actor_talking(actor)
             && !self.army_actor_talking(actor)

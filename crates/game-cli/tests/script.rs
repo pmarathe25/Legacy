@@ -797,11 +797,9 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
         for _ in 0..12 {
             if matches!(
                 sim.canonical_state()
-                    .people
-                    .iter()
-                    .find(|p| p.id == teacher)
-                    .unwrap()
-                    .location,
+                    .components
+                    .location(teacher)
+                    .expect("location exists"),
                 Location::AtArea(_)
             ) {
                 sim.debug_actor_command(teacher, Command::Rest).unwrap();

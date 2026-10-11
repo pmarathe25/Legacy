@@ -122,7 +122,10 @@ impl Simulation {
         let farm = sim.state.areas[1].id;
         // This resident starts physically at the farm; later workers must travel.
         let farmer = sim.state.people[3].id;
-        sim.state.people[sim.person_index[&farmer]].location = Location::AtArea(farm);
+        *sim.state
+            .components
+            .location_mut(sim.state.people[sim.person_index[&farmer]].id)
+            .expect("location exists") = Location::AtArea(farm);
         let people = sim
             .state
             .people
@@ -166,7 +169,7 @@ impl Simulation {
             stock.quantity = Quantity(3_000_000);
         }
         let id = SiteId(allocate(&mut sim.state)?);
-        sim.state.environment = Some(game_environment::World::new(
+        sim.state.environment = Some(game_environment::Runtime::new(
             config.environment,
             sim.state.time,
             seed,
@@ -337,9 +340,13 @@ impl Simulation {
             .body(actor)
             .ok_or(Error::Unavailable)?;
         let environment = self.state.environment.as_ref();
-        let area = match self.state.people
-            [*self.person_index.get(&actor).ok_or(Error::Unavailable)?]
-        .location
+        let area = match *self
+            .state
+            .components
+            .location(
+                self.state.people[*self.person_index.get(&actor).ok_or(Error::Unavailable)?].id,
+            )
+            .expect("location exists")
         {
             Location::AtArea(area) => area,
             _ => return Err(Error::Unavailable),
@@ -392,7 +399,7 @@ impl Simulation {
             seed_room: room(land.seed),
             day_of_year: environment.map(|w| w.calendar.day_of_year(self.state.time)),
             temperature_c: environment
-                .and_then(|w| w.local_weather(land.area))
+                .and_then(|w| w.local_weather(&self.state.components, land.area))
                 .map(|w| w.temperature),
         })
     }
@@ -576,7 +583,12 @@ impl Simulation {
         if !body.vitals.alive {
             return None;
         }
-        let Location::AtArea(area) = self.state.people[self.person_index[&actor]].location else {
+        let Location::AtArea(area) = *self
+            .state
+            .components
+            .location(self.state.people[self.person_index[&actor]].id)
+            .expect("location exists")
+        else {
             return None;
         };
         Some(AgricultureView {
@@ -728,7 +740,11 @@ impl Simulation {
             };
             if !self.person_index.contains_key(actor)
                 || job.completes <= self.state.time
-                || self.state.people[self.person_index[actor]].location
+                || *self
+                    .state
+                    .components
+                    .location(self.state.people[self.person_index[actor]].id)
+                    .expect("location exists")
                     != Location::AtArea(field.area)
                 || self
                     .state

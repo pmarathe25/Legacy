@@ -29,6 +29,7 @@ pub(crate) struct Outcome {
     opening_body: game_physiology::Body,
     opening_activity: Activity,
     opening_job: Option<Job>,
+    opening_location: Location,
     vitals: Vitals,
     fatigue_remainder: u16,
     health_remainder: u16,
@@ -548,7 +549,14 @@ impl Simulation {
                     .get(&recipient)
                     .map(|i| &self.state.people[*i])
                     .ok_or(Error::Unavailable)?;
-                if recipient == actor || receiver.location != Location::AtArea(area) {
+                if recipient == actor
+                    || *self
+                        .state
+                        .components
+                        .location(receiver.id)
+                        .expect("location exists")
+                        != Location::AtArea(area)
+                {
                     return Err(Error::Unavailable);
                 }
                 let completes = SimTime(
@@ -1186,6 +1194,12 @@ impl Simulation {
                     opening_body: (*body).clone(),
                     opening_activity: (*activity).clone(),
                     opening_job: job.cloned(),
+                    opening_location: self
+                        .state
+                        .components
+                        .location(id)
+                        .ok_or(Error::Unavailable)?
+                        .clone(),
                     vitals,
                     fatigue_remainder,
                     health_remainder,
@@ -1202,6 +1216,7 @@ impl Simulation {
                 self.state.components.body(outcome.id) != Some(&outcome.opening_body)
                     || self.state.components.activity(outcome.id) != Some(&outcome.opening_activity)
                     || self.state.components.job(outcome.id) != outcome.opening_job.as_ref()
+                    || self.state.components.location(outcome.id) != Some(&outcome.opening_location)
             })
         {
             return Err(Error::InvalidSave("stale physical component batch".into()));
@@ -1235,7 +1250,11 @@ impl Simulation {
                             Activity::Work { .. }
                         )
                         && matches!(
-                            self.state.people[self.person_index[actor]].location,
+                            *self
+                                .state
+                                .components
+                                .location(self.state.people[self.person_index[actor]].id)
+                                .expect("location exists"),
                             Location::AtArea(_)
                         ),
                     *equipped,
@@ -1455,8 +1474,24 @@ impl Simulation {
                 let sender = &self.state.people[self.person_index[&actor]];
                 let receiver = &self.state.people[self.person_index[&recipient]];
                 let receiver_body = &self.state.components.body(recipient).expect("body exists");
-                if sender.location == receiver.location
-                    && matches!(sender.location, Location::AtArea(_))
+                if *self
+                    .state
+                    .components
+                    .location(sender.id)
+                    .expect("location exists")
+                    == *self
+                        .state
+                        .components
+                        .location(receiver.id)
+                        .expect("location exists")
+                    && matches!(
+                        *self
+                            .state
+                            .components
+                            .location(sender.id)
+                            .expect("location exists"),
+                        Location::AtArea(_)
+                    )
                     && receiver_body.vitals.alive
                     && receiver_body.vitals.health > 0
                     && matches!(
@@ -1832,11 +1867,16 @@ impl Simulation {
     }
 
     pub fn debug_injure(&mut self, actor: PersonId, damage: u64) -> Result<(), Error> {
-        if !self
-            .person_index
-            .get(&actor)
-            .is_some_and(|i| matches!(self.state.people[*i].location, Location::AtArea(_)))
-        {
+        if !self.person_index.get(&actor).is_some_and(|i| {
+            matches!(
+                *self
+                    .state
+                    .components
+                    .location(self.state.people[*i].id)
+                    .expect("location exists"),
+                Location::AtArea(_)
+            )
+        }) {
             return Err(Error::InvalidFixture(
                 "fixture injuries require a stationary actor".into(),
             ));

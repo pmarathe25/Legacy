@@ -52,7 +52,11 @@ impl Simulation {
                 || !body.vitals.alive
                 || body.vitals.health == 0
                 || !matches!(
-                    self.state.people[self.person_index[actor]].location,
+                    *self
+                        .state
+                        .components
+                        .location(self.state.people[self.person_index[actor]].id)
+                        .expect("location exists"),
                     Location::AtArea(_)
                 )
             {

@@ -149,7 +149,11 @@ impl Simulation {
             Location::AtArea(area) | Location::StoppedOnRoad { from: area, .. } => Some(area),
             Location::InTransit { from, .. }
                 if matches!(
-                    self.state.people[*self.person_index.get(&actor)?].location,
+                    *self
+                        .state
+                        .components
+                        .location(self.state.people[*self.person_index.get(&actor)?].id)
+                        .expect("location exists"),
                     Location::Carried { .. }
                 ) =>
             {

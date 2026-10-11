@@ -948,7 +948,12 @@ impl Simulation {
         encounter: EncounterId,
     ) -> Result<(), Error> {
         let area = self.army_area(actor)?;
-        if self.state.people[self.person_index[&actor]].location != Location::AtArea(area)
+        if *self
+            .state
+            .components
+            .location(self.state.people[self.person_index[&actor]].id)
+            .expect("location exists")
+            != Location::AtArea(area)
             || self.army_actor_talking(actor)
             || self
                 .state
@@ -1045,7 +1050,12 @@ impl Simulation {
                 .vitals
                 .fatigue
                 >= self.body_rules(a.actor).fatigue_limit
-            || self.state.people[self.person_index[&a.actor]].location != Location::AtArea(a.area)
+            || *self
+                .state
+                .components
+                .location(self.state.people[self.person_index[&a.actor]].id)
+                .expect("location exists")
+                != Location::AtArea(a.area)
             || (army.commander != a.actor
                 && !self.mission_force_willing(a.actor, a.mission, a.target))
             || self.army_personal_force_target(a.actor, a.army, a.mission, a.area) != Some(a.target)
