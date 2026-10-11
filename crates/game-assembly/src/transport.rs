@@ -1389,164 +1389,91 @@ impl Simulation {
                 .collect(),
         })
     }
-    fn record_transport_response(
-        &mut self,
-        passenger: PersonId,
-        bearer: PersonId,
-        kind: game_transport::ResponseKind,
-        reason: &str,
-    ) {
-        let owner_now = self.host.clock().time;
-        let world = self.host.state.transport.as_mut().unwrap();
-        let response = game_transport::Response {
-            passenger,
-            bearer,
-            kind,
-            reason: reason.into(),
-            observed_at: owner_now,
-        };
-        if !world
-            .responses
-            .iter()
-            .rev()
-            .take(64)
-            .any(|r| r.passenger == passenger && r.bearer == bearer && r.kind == kind)
-        {
-            world.responses.push(response);
-            if world.responses.len() > 64 {
-                world.responses.remove(0);
-            }
-        }
-    }
     pub(crate) fn review_transport_choices(&mut self) -> Result<(), Error> {
-        let owner_now = self.host.clock().time;
+        let now = self.host.clock().time;
         let Some(world) = &self.host.state.transport else {
             return Ok(());
         };
         let recipients: Vec<_> = world.offers.keys().copied().collect();
         for passenger in recipients {
-            if passenger == self.host.state.ruler
-                || !self.independent(passenger)
-                || !game_physiology::body(&self.host.storage, passenger)
-                    .unwrap()
-                    .vitals
-                    .alive
-                || self.combat_restricts(passenger)
-                || self.host.state.transport.as_ref().unwrap().busy(passenger)
-            {
-                continue;
-            }
-            let offers: Vec<_> = self
+            let body =
+                game_physiology::body(&self.host.storage, passenger).ok_or(Error::Unavailable)?;
+            let mind = game_characters::decisions::mind::<game_api::Command>(
+                &self.host.storage,
+                passenger,
+            )
+            .ok_or(Error::Unavailable)?;
+            let rules = self.body_rules(passenger);
+            let facts = game_transport::OfferResponseFacts {
+                autonomous: passenger != self.host.state.ruler && self.independent(passenger),
+                alive: body.vitals.alive,
+                combat_restricted: self.combat_restricts(passenger),
+                idle_or_resting: matches!(
+                    self.host.storage.activity(passenger).unwrap(),
+                    Activity::Idle | Activity::Rest
+                ),
+                health: body.vitals.health,
+                max_health: rules.max_health,
+                hunger: body.vitals.hunger,
+                hunger_harm: rules.hunger_harm,
+                fatigue: body.vitals.fatigue,
+                fatigue_limit: rules.fatigue_limit,
+                independence_goal: mind.dream == decisions::Aspiration::Independence,
+            };
+            if !self
                 .host
                 .state
                 .transport
                 .as_ref()
                 .unwrap()
-                .offers
-                .get(&passenger)
-                .into_iter()
-                .flat_map(|o| o.values())
-                .filter(|o| o.expires > owner_now && self.transport_same_place(passenger, o.bearer))
-                .cloned()
-                .collect();
-            if offers.is_empty() {
+                .has_offer_to_review(passenger, now, facts, |bearer| {
+                    self.transport_same_place(passenger, bearer)
+                })
+            {
                 continue;
             }
-            let bearers: BTreeSet<_> = offers.iter().map(|o| o.bearer).collect();
             let bodies = self.transport_bodies()?;
-            let mut candidate = self.host.state.transport.as_ref().unwrap().clone();
-            let sufficient = candidate
-                .begin_lift(
-                    passenger,
-                    bearers.clone(),
-                    Permission {
-                        passenger_accepted: true,
-                        ..Permission::default()
-                    },
-                    owner_now,
-                    &bodies,
-                )
-                .is_ok();
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
-                &self.host.storage,
+            let choice = self.host.state.transport.as_ref().unwrap().offer_response(
                 passenger,
-            )
-            .unwrap();
-            let relation = mind
-                .relationships
-                .get(&offers[0].bearer)
-                .cloned()
-                .unwrap_or(decisions::Relationship {
-                    trust: 0,
-                    affection: 0,
-                });
-            let body = game_physiology::body(&self.host.storage, passenger).unwrap();
-            let rules = self.body_rules(passenger);
-            let (kind, reason) = game_transport::judge_offer(game_transport::OfferChoice {
-                need_help: body.vitals.health < rules.max_health
-                    || body.vitals.fatigue >= rules.fatigue_limit / 3,
-                urgent_own_need: body.vitals.hunger >= rules.hunger_harm,
-                busy: !matches!(
-                    self.host.storage.activity(passenger).unwrap(),
-                    Activity::Idle | Activity::Rest
-                ),
-                trust: relation.trust,
-                affection: relation.affection,
-                independence_goal: mind.dream == decisions::Aspiration::Independence,
-                sufficient_support: sufficient,
-            });
-            self.record_transport_response(passenger, offers[0].bearer, kind, reason);
-            match kind {
-                game_transport::ResponseKind::Accepted => self.transport_command(
+                now,
+                &bodies,
+                facts,
+                |bearer| {
+                    mind.relationships
+                        .get(&bearer)
+                        .map(|relation| game_transport::RelationFacts {
+                            trust: relation.trust,
+                            affection: relation.affection,
+                        })
+                },
+                |bearer| self.transport_same_place(passenger, bearer),
+            );
+            let Some(choice) = choice else { continue };
+            self.host
+                .state
+                .transport
+                .as_mut()
+                .unwrap()
+                .record_response(choice.response);
+            for action in choice.actions {
+                self.transport_command(passenger, &action)?;
+            }
+            if let Some(request) = choice.support {
+                let present = game_transport::support_observers(
                     passenger,
-                    &Action::AcceptCarry {
-                        bearers: bearers.into_iter().collect(),
-                    },
-                )?,
-                game_transport::ResponseKind::Refused => {
-                    for offer in offers {
-                        self.transport_command(
-                            passenger,
-                            &Action::RefuseCarry {
-                                bearer: offer.bearer,
-                            },
-                        )?;
-                    }
-                }
-                game_transport::ResponseKind::WaitingForSupport => {
-                    let expires = offers.iter().map(|o| o.expires).min().unwrap();
-                    let observers: Vec<_> = self
-                        .host
+                    self.host
                         .state
                         .people
                         .iter()
-                        .map(|p| p.id)
-                        .filter(|id| *id != passenger && self.transport_same_place(*id, passenger))
-                        .take(64)
-                        .collect();
-                    for observer in observers {
-                        let known = self
-                            .host
-                            .state
-                            .transport
-                            .as_mut()
-                            .unwrap()
-                            .known_support
-                            .entry(observer)
-                            .or_default();
-                        if known.len() < 64 || known.contains_key(&passenger) {
-                            known.insert(
-                                passenger,
-                                game_transport::SupportRequest {
-                                    passenger,
-                                    requester: passenger,
-                                    observed_at: owner_now,
-                                    expires,
-                                },
-                            );
-                        }
-                    }
-                }
+                        .map(|person| person.id)
+                        .filter(|observer| self.transport_same_place(*observer, passenger)),
+                );
+                self.host
+                    .state
+                    .transport
+                    .as_mut()
+                    .unwrap()
+                    .observe_support(&request, present);
             }
         }
         let requests: Vec<_> = self
@@ -1564,66 +1491,60 @@ impl Simulation {
             })
             .collect();
         for (actor, request) in requests {
-            if actor == self.host.state.ruler
-                || request.expires <= owner_now
-                || !self.transport_same_place(actor, request.passenger)
-                || self
-                    .host
-                    .state
-                    .transport
-                    .as_ref()
-                    .unwrap()
-                    .groups
-                    .contains_key(&request.passenger)
-                || self.host.state.transport.as_ref().unwrap().busy(actor)
-                || self
-                    .host
-                    .state
-                    .transport
-                    .as_ref()
-                    .unwrap()
-                    .offers
-                    .get(&request.passenger)
-                    .is_some_and(|o| o.contains_key(&actor))
+            if !self
+                .host
+                .state
+                .transport
+                .as_ref()
+                .unwrap()
+                .has_support_to_review(
+                    actor,
+                    &request,
+                    now,
+                    actor != self.host.state.ruler,
+                    self.transport_same_place(actor, request.passenger),
+                )
             {
                 continue;
             }
             let mind =
-                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                    .unwrap();
-            let body = game_physiology::body(&self.host.storage, actor).unwrap();
+                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+                    .ok_or(Error::Unavailable)?;
+            let body =
+                game_physiology::body(&self.host.storage, actor).ok_or(Error::Unavailable)?;
             let rules = self.body_rules(actor);
-            let relation = mind
-                .relationships
-                .get(&request.requester)
-                .cloned()
-                .unwrap_or(decisions::Relationship {
-                    trust: 0,
-                    affection: 0,
-                });
-            let physical = self.transport_bodies()?;
-            if game_transport::willing_support(game_transport::SupportChoice {
-                empathy: mind.personality.empathy,
-                trust: relation.trust,
-                affection: relation.affection,
-                own_need: body.vitals.hunger >= rules.meal_relief
-                    || body.vitals.fatigue >= rules.fatigue_limit / 2,
-                busy: !matches!(
-                    self.host.storage.activity(actor).unwrap(),
-                    Activity::Idle | Activity::Rest
-                ) || self.lineage_handles(actor)
-                    || self.health_actor_busy(actor)
-                    || self.mission_actor_busy(actor),
-                has_capacity: physical
-                    .get(&actor)
-                    .is_some_and(|b| b.can_bear && b.capacity.0 > b.cargo.0),
-            }) {
-                match self.transport_command(
-                    actor,
-                    &Action::JoinCarry {
-                        passenger: request.passenger,
-                    },
-                ) {
+            let relation = mind.relationships.get(&request.requester).map_or(
+                game_transport::RelationFacts::default(),
+                |relation| game_transport::RelationFacts {
+                    trust: relation.trust,
+                    affection: relation.affection,
+                },
+            );
+            let bodies = self.transport_bodies()?;
+            let action = self.host.state.transport.as_ref().unwrap().support_intent(
+                actor,
+                &request,
+                now,
+                &bodies,
+                game_transport::SupportFacts {
+                    autonomous: actor != self.host.state.ruler,
+                    empathy: mind.personality.empathy,
+                    relation,
+                    hunger: body.vitals.hunger,
+                    meal_relief: rules.meal_relief,
+                    fatigue: body.vitals.fatigue,
+                    fatigue_limit: rules.fatigue_limit,
+                    occupied: !matches!(
+                        self.host.storage.activity(actor).unwrap(),
+                        Activity::Idle | Activity::Rest
+                    ) || self.lineage_handles(actor)
+                        || self.health_actor_busy(actor)
+                        || self.mission_actor_busy(actor),
+                    co_present: self.transport_same_place(actor, request.passenger),
+                },
+            );
+            if let Some(action) = action {
+                match self.transport_command(actor, &action) {
                     Ok(()) | Err(Error::Unavailable) => {}
                     Err(error) => return Err(error),
                 }
@@ -1632,64 +1553,27 @@ impl Simulation {
         Ok(())
     }
     pub(crate) fn available_transport_commands(&self, actor: PersonId) -> Vec<Command> {
-        let Some(w) = &self.host.state.transport else {
+        let Some(world) = &self.host.state.transport else {
             return Vec::new();
         };
-        let mut actions = Vec::new();
-        if let Some(group) = w.groups.get(&actor) {
-            if self.independent(actor) && !self.combat_restricts(actor) {
-                actions.push(Action::PutDown {
-                    passenger: group.passenger,
-                });
-            }
-        } else if self.transport_is_moving(actor) {
-            actions.push(Action::Stop);
-        } else {
-            if matches!(
-                *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                    .expect("location exists"),
-                Location::StoppedOnRoad { .. }
-            ) && self.transport_can_depart(actor)
-            {
-                actions.push(Action::Resume);
-                if let Location::StoppedOnRoad { from, to, .. } = self.resolved_location(actor) {
-                    actions.push(Action::ReturnToArea { destination: from });
-                    actions.push(Action::ReturnToArea { destination: to });
-                }
-            }
-            if let Ok(bodies) = self.transport_bodies() {
-                if bodies.get(&actor).is_some_and(|b| b.can_bear) {
-                    for (id, body) in &bodies {
-                        if *id != actor
-                            && body.position == bodies[&actor].position
-                            && !w.groups.contains_key(id)
-                            && !self.transport_is_moving(*id)
-                        {
-                            actions.push(Action::OfferCarry { passenger: *id });
-                        }
-                    }
-                }
-                if let Some(offers) = w.offers.get(&actor) {
-                    let bearers: Vec<_> = offers
-                        .values()
-                        .filter(|o| o.expires > self.host.clock().time)
-                        .map(|o| o.bearer)
-                        .collect();
-                    if !bearers.is_empty() {
-                        actions.push(Action::AcceptCarry { bearers });
-                    }
-                    for bearer in offers.keys() {
-                        actions.push(Action::RefuseCarry { bearer: *bearer });
-                    }
-                }
-            }
-        }
-        for group in w.groups.values().filter(|g| g.bearers.contains(&actor)) {
-            actions.push(Action::PutDown {
-                passenger: group.passenger,
-            });
-        }
-        actions
+        world
+            .available_actions(
+                actor,
+                self.host.clock().time,
+                game_transport::AvailableActionFacts {
+                    independent: self.independent(actor),
+                    combat_restricted: self.combat_restricts(actor),
+                    moving: self.transport_is_moving(actor),
+                    stopped_on_road: matches!(
+                        game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)),
+                        Some(Location::StoppedOnRoad { .. })
+                    ),
+                    position: self.transport_position(actor),
+                },
+                || self.transport_bodies().ok(),
+                |passenger| self.transport_is_moving(passenger),
+                || self.transport_can_depart(actor),
+            )
             .into_iter()
             .map(|action| Command::Transport { action })
             .collect()

@@ -18,6 +18,15 @@ fn domain_kernels_cannot_depend_on_the_coordinator_or_client_facade() {
     let mut domains = 0;
     for package in metadata["packages"].as_array().unwrap() {
         let name = package["name"].as_str().unwrap();
+        if name != "game-ecs" {
+            for dependency in package["dependencies"].as_array().unwrap() {
+                let dependency = dependency["name"].as_str().unwrap();
+                assert!(
+                    !["bevy_ecs", "legion", "hecs"].contains(&dependency),
+                    "{name} must use the game-ecs boundary instead of importing {dependency}"
+                );
+            }
+        }
         if name == "game-session" {
             for dependency in package["dependencies"].as_array().unwrap() {
                 assert_ne!(
