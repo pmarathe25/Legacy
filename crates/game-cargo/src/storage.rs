@@ -58,3 +58,75 @@ pub fn validate_storage(store: &Store) -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// Creation and physical splits retain Cargo's canonical balance and identity.
+#[derive(Clone, Debug)]
+pub struct PreparedInventoryCreation {
+    source: Option<(Inventory, Inventory)>,
+    receiving: Inventory,
+}
+pub fn prepare_inventory_creation(
+    store: &Store,
+    receiving: Inventory,
+) -> Result<PreparedInventoryCreation, Error> {
+    receiving.validate()?;
+    if store.contains(StableId(receiving.id.0)) {
+        return Err(Error::Unavailable);
+    }
+    Ok(PreparedInventoryCreation {
+        source: None,
+        receiving,
+    })
+}
+/// Split into an empty, newly allocated compartment. The caller supplies
+/// factual authorization; Cargo owns quantity, good, identity, and capacity.
+/// A split leaves the original compartment's last-granted history unchanged.
+pub fn prepare_inventory_split(
+    store: &Store,
+    source: InventoryId,
+    mut receiving: Inventory,
+    quantity: game_core::Quantity,
+) -> Result<PreparedInventoryCreation, Error> {
+    receiving.validate()?;
+    let before = inventory(store, source).ok_or(Error::Unavailable)?;
+    before.validate()?;
+    if quantity.0 == 0
+        || receiving.quantity.0 != 0
+        || receiving.good != before.good
+        || store.contains(StableId(receiving.id.0))
+        || receiving.room()? < quantity
+    {
+        return Err(Error::Unavailable);
+    }
+    let mut after = before.clone();
+    after.quantity.0 = after
+        .quantity
+        .0
+        .checked_sub(quantity.0)
+        .ok_or(Error::Unavailable)?;
+    receiving.quantity = quantity;
+    Ok(PreparedInventoryCreation {
+        source: Some((before.clone(), after)),
+        receiving,
+    })
+}
+impl PreparedInventoryCreation {
+    pub fn receiving(&self) -> &Inventory {
+        &self.receiving
+    }
+    pub fn stage_into(self, store: &Store, batch: &mut game_ecs::Batch) -> Result<(), Error> {
+        if store.contains(StableId(self.receiving.id.0))
+            || self
+                .source
+                .as_ref()
+                .is_some_and(|(before, _)| inventory(store, before.id) != Some(before))
+        {
+            return Err(Error::Unavailable);
+        }
+        if let Some((_, after)) = self.source {
+            batch.insert(StableId(after.id.0), after);
+        }
+        batch.insert(StableId(self.receiving.id.0), self.receiving);
+        Ok(())
+    }
+}

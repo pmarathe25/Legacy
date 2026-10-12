@@ -81,3 +81,74 @@ fn intrinsic_restore_does_not_replace_owner_identity_validation() {
     assert!(validate_storage(&restored).is_err());
     assert_eq!(store, restored);
 }
+
+#[test]
+fn fresh_receiving_split_and_creation_are_guarded_atomic_cargo_effects() {
+    let mut schema = Schema::new();
+    register_components(&mut schema).unwrap();
+    let mut store = Store::with_schema(schema);
+    let source = Inventory {
+        id: InventoryId(10),
+        good: Good::Record,
+        location: InventoryLocation::Area(AreaId(1)),
+        quantity: Quantity(2000),
+        capacity: Quantity(5000),
+        access: BTreeSet::new(),
+        last_granted: Some(PersonId(1)),
+        spoils_at: None,
+    };
+    insert_inventory(&mut store, source.clone()).unwrap();
+    let mut receiving = source.clone();
+    receiving.id = InventoryId(11);
+    receiving.quantity = Quantity(0);
+    receiving.capacity = Quantity(1000);
+    receiving.last_granted = None;
+    for amount in [0, 1001, 2001] {
+        assert!(
+            prepare_inventory_split(&store, source.id, receiving.clone(), Quantity(amount))
+                .is_err()
+        );
+    }
+    let plan =
+        prepare_inventory_split(&store, source.id, receiving.clone(), Quantity(1000)).unwrap();
+    inventory_mut(&mut store, source.id)
+        .unwrap()
+        .access
+        .insert(PersonId(2));
+    let stale = store.clone();
+    assert!(
+        plan.stage_into(&store, &mut game_ecs::Batch::new())
+            .is_err()
+    );
+    assert_eq!(store, stale);
+    let plan =
+        prepare_inventory_split(&store, source.id, receiving.clone(), Quantity(1000)).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    plan.stage_into(&store, &mut batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        inventory(&store, source.id).unwrap().quantity,
+        Quantity(1000)
+    );
+    assert_eq!(
+        inventory(&store, source.id).unwrap().last_granted,
+        Some(PersonId(1))
+    );
+    assert_eq!(
+        inventory(&store, receiving.id).unwrap().quantity,
+        Quantity(1000)
+    );
+    assert!(prepare_inventory_creation(&store, receiving.clone()).is_err());
+    receiving.id = InventoryId(12);
+    receiving.quantity = Quantity(1000);
+    let mut batch = game_ecs::Batch::new();
+    prepare_inventory_creation(&store, receiving)
+        .unwrap()
+        .stage_into(&store, &mut batch)
+        .unwrap();
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        inventory(&store, InventoryId(12)).unwrap().quantity,
+        Quantity(1000)
+    );
+}

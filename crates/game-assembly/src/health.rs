@@ -2315,7 +2315,9 @@ impl Simulation {
             let w = self.host.state.invocation.as_ref()?;
             let active = w.control.active.as_ref()?;
             let life = active.dominant?;
-            return Some(&w.history.get(&life)?.mind);
+            return Some(
+                &game_invocation::archive::<game_api::Command>(&self.host.storage, life)?.mind,
+            );
         }
         game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
     }

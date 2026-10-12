@@ -636,10 +636,12 @@ dependencies = [
 name = "game-invocation"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
  "game-characters",
  "game-core",
  "game-ecs",
  "game-physiology",
+ "game-society",
  "serde",
  "serde_json",
 ]

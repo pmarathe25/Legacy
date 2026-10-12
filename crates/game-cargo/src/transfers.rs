@@ -102,6 +102,29 @@ pub struct ValidatedTransfers {
     remaining: std::vec::IntoIter<TransferEffect>,
 }
 impl ValidatedTransfers {
+    /// Stage one ordered physical transfer for composition with a receiving
+    /// owner's receipt. Publishing the caller's combined batch precedes the
+    /// next call; a rejected batch abandons this transient phase.
+    pub fn stage_next_into(
+        &mut self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<Option<(TransferIntent, bool)>, Error> {
+        let Some(effect) = self.remaining.as_slice().first() else {
+            return Ok(None);
+        };
+        effect.validate_opening(store)?;
+        if effect.granted {
+            store.validate_batch(&effect.batch())?;
+            if let Some((_, after)) = &effect.rows {
+                for row in after {
+                    batch.insert(StableId(row.id.0), row.clone());
+                }
+            }
+        }
+        let effect = self.remaining.next().expect("checked phase effect");
+        Ok(Some((effect.intent, effect.granted)))
+    }
     pub fn apply_next(
         &mut self,
         store: &mut Store,

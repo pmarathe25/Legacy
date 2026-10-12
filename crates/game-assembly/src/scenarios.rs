@@ -488,9 +488,6 @@ impl Simulation {
         }
         self.host.state.invocation = Some(invocation::World {
             control: game_invocation::ControlState::new(config.invocation.clone())?,
-            history: BTreeMap::new(),
-            records: BTreeMap::new(),
-            actions: BTreeMap::new(),
         });
         self.host.state.force = Some(force::World {
             yielded: BTreeMap::new(),
@@ -1681,13 +1678,8 @@ mod tests {
                     && matches!(event.event, EventKind::Died { actor } if actor == previous.person))
         );
         assert!(
-            sim.host
-                .state
-                .invocation
-                .as_ref()
-                .unwrap()
-                .history
-                .contains_key(&previous.person)
+            game_invocation::archive::<game_api::Command>(&sim.host.storage, previous.person)
+                .is_some()
         );
         assert!(sim.own_skill_level(previous.person, Skill::Craft) > 0);
         assert!(

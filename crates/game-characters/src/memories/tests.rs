@@ -72,3 +72,59 @@ fn historical_routes_fill_missing_edges_while_current_routes_keep_priority() {
     assert_eq!(mind.routes[&AreaId(1)][&AreaId(2)], SimDuration(100));
     assert_eq!(mind.routes[&AreaId(1)][&AreaId(3)], SimDuration(300));
 }
+
+#[test]
+fn prepared_learning_preserves_current_priority_and_unrelated_mind_updates() {
+    let actor = PersonId(10);
+    let mut schema = game_ecs::Schema::new();
+    crate::decisions::register_minds::<u8>(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    crate::decisions::insert_mind(&mut store, actor, mind()).unwrap();
+    let receipt = prepare_memory_stock::<u8>(
+        &store,
+        actor,
+        SimTime(30),
+        fact(10, true),
+        KnowledgeSource::Reported(PersonId(3)),
+    )
+    .unwrap();
+    crate::decisions::mind_mut::<u8>(&mut store, actor)
+        .unwrap()
+        .dream = Aspiration::Comfort;
+    let batch = game_ecs::Batch::new();
+    receipt.validate_batch::<u8>(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    receipt.finish::<u8>(&mut store);
+    let row = crate::decisions::mind::<u8>(&store, actor).unwrap();
+    assert_eq!(row.dream, Aspiration::Comfort);
+    assert!(!row.knowledge[&InventoryId(1)].accessible);
+    crate::decisions::mind_mut::<u8>(&mut store, actor)
+        .unwrap()
+        .knowledge
+        .insert(InventoryId(1), fact(20, true));
+    let receipt = prepare_memory_stock::<u8>(
+        &store,
+        actor,
+        SimTime(40),
+        fact(10, false),
+        KnowledgeSource::Reported(PersonId(3)),
+    )
+    .unwrap();
+    receipt
+        .validate_batch::<u8>(&store, &game_ecs::Batch::new())
+        .unwrap();
+    receipt.finish::<u8>(&mut store);
+    assert_eq!(
+        crate::decisions::mind::<u8>(&store, actor)
+            .unwrap()
+            .knowledge[&InventoryId(1)],
+        fact(20, true)
+    );
+    for (origin, destination, duration) in [
+        (AreaId(0), AreaId(2), SimDuration(1)),
+        (AreaId(1), AreaId(1), SimDuration(1)),
+        (AreaId(1), AreaId(2), SimDuration(0)),
+    ] {
+        assert!(prepare_memory_route::<u8>(&store, actor, origin, destination, duration).is_err());
+    }
+}

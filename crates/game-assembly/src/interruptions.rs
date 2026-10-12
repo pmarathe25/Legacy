@@ -22,7 +22,6 @@ enum Removal {
     Mission(game_missions::PendingTalk),
     Restraint(PersonId, force::Restraint),
     Escape(PersonId, force::Escape),
-    Memory(invocation::MemoryAction),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MetadataStep {
@@ -212,13 +211,10 @@ impl MetadataPlan {
                     }
                 }
             }
-            if let Some(w) = &sim.host.state.invocation {
-                for action in w.actions.values().filter(|a|a.actor==actor || matches!(a.work,invocation::MemoryWork::Teach{recipient,..}if recipient==actor)) {
-                    if !removed.insert((6,action.actor.0)) {continue;}
-                    let mut ids=vec![action.actor];
-                    if let invocation::MemoryWork::Teach{recipient,..}=action.work {ids.push(recipient);}
-                    for id in ids {plan.idle_if(sim,id,|a|matches!(a,Activity::WritingMemory{..}|Activity::ReadingMemory{..}|Activity::TeachingMemory{..}|Activity::MovingRecord{..}));}
-                    step.removals.push(Removal::Memory(action.clone()));
+            if let Some(runtime) = &sim.host.state.invocation {
+                let ending = runtime.prepare_memory_ending(&sim.host.storage, &[actor]);
+                for id in ending.activity_resets(&invocation::MemoryBindings(sim)) {
+                    plan.activities.insert(id, Activity::Idle);
                 }
             }
             if let Some(Activity::Lesson {
@@ -328,6 +324,7 @@ pub(crate) struct PreparedInterruptions {
     agriculture: Option<game_agriculture::PreparedCultivationCancellation>,
     ecology: Option<game_ecology::PreparedGatheringCancellation>,
     projects: Option<game_projects::PreparedChange>,
+    memory: Option<game_invocation::PreparedMemoryEnding>,
 }
 impl Simulation {
     pub(crate) fn prepare_interruptions(
@@ -436,6 +433,12 @@ impl Simulation {
                 .ecology
                 .as_ref()
                 .map(|w| w.prepare_cancel_gathering(&self.host.storage, &actors)),
+            memory: self
+                .host
+                .state
+                .invocation
+                .as_ref()
+                .map(|runtime| runtime.prepare_memory_ending(&self.host.storage, &actors)),
             actors,
             now,
             metadata,
@@ -458,6 +461,15 @@ impl PreparedInterruptions {
         sim: &Simulation,
         batch: &mut Batch,
         final_activities: &BTreeMap<PersonId, Activity>,
+    ) -> Result<InterruptionFinalization, Error> {
+        self.stage_into_with_memory_replacement(sim, batch, final_activities, None)
+    }
+    pub(crate) fn stage_into_with_memory_replacement(
+        self,
+        sim: &Simulation,
+        batch: &mut Batch,
+        final_activities: &BTreeMap<PersonId, Activity>,
+        memory_replacement: Option<&game_invocation::MemoryReplacement>,
     ) -> Result<InterruptionFinalization, Error> {
         if self.now != sim.host.clock().time {
             return Err(Error::Unavailable);
@@ -498,6 +510,18 @@ impl PreparedInterruptions {
         }
         for (actor, activity) in &metadata.activities {
             batch.insert(StableId(actor.0), activity.clone());
+        }
+        if let Some(change) = self.memory {
+            change.stage_into_composed(
+                sim.host
+                    .state
+                    .invocation
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?,
+                store,
+                memory_replacement,
+                batch,
+            )?;
         }
         if let Some(change) = self.health {
             change.stage_into(
@@ -664,15 +688,6 @@ impl InterruptionFinalization {
                 }
                 Removal::Escape(a, _) => {
                     sim.host.state.force.as_mut().unwrap().escapes.remove(&a);
-                }
-                Removal::Memory(a) => {
-                    sim.host
-                        .state
-                        .invocation
-                        .as_mut()
-                        .unwrap()
-                        .actions
-                        .remove(&a.actor);
                 }
             }
         }

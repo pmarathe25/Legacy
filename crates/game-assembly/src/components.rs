@@ -16,6 +16,7 @@ pub(crate) fn schema() -> Result<Schema, Error> {
     game_property::register_components(&mut schema)?;
     game_projects::register_components(&mut schema)?;
     game_invocation::register_components(&mut schema)?;
+    game_invocation::register_memory_components::<game_api::Command>(&mut schema)?;
     game_transport::register_components(&mut schema)?;
     game_society::register_components(&mut schema)?;
     game_characters::decisions::register_minds::<game_api::Command>(&mut schema)?;

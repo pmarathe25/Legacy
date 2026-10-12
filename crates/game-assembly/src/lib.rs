@@ -1905,7 +1905,25 @@ impl Simulation {
             .prepare_cargo_transfers(transfers, Some(&opening_stock))?
             .begin(&self.host.storage)?;
         self.profile.arbitration_ns += arbitration_started.elapsed().as_nanos();
-        while let Some((intent, granted)) = resolved.apply_next(&mut self.host.storage)? {
+        loop {
+            let mut batch = game_ecs::Batch::new();
+            let Some((intent, granted)) =
+                resolved.stage_next_into(&self.host.storage, &mut batch)?
+            else {
+                break;
+            };
+            if granted && let Some(runtime) = self.host.state.invocation.as_ref() {
+                runtime
+                    .prepare_record_transfer(
+                        &self.host.storage,
+                        intent.source,
+                        intent.destination,
+                        intent.quantity,
+                        None,
+                    )?
+                    .stage_into(&self.host.storage, &mut batch)?;
+            }
+            self.host.storage.apply_batch(batch)?;
             if granted {
                 self.emit(EventKind::Transferred {
                     actor: intent.actor,

@@ -8,6 +8,7 @@ pub(crate) enum ActivityOwner {
     Health,
     Property,
     Transport,
+    Invocation,
 }
 
 impl Simulation {

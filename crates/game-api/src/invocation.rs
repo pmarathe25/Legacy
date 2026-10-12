@@ -4,65 +4,8 @@ use std::collections::BTreeSet;
 
 pub use game_invocation::{InvocationCost, InvocationWarning};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InvocationAction {
-    Activate {
-        lives: BTreeSet<PersonId>,
-    },
-    Dismiss,
-    AcceptWarning {
-        warning: WarningId,
-    },
-    RecordMemory {
-        life: PersonId,
-        inventory: InventoryId,
-        material: InventoryId,
-        tool: InventoryId,
-    },
-    RecordRoute {
-        life: PersonId,
-        origin: AreaId,
-        destination: AreaId,
-        material: InventoryId,
-        tool: InventoryId,
-    },
-    ReadRecord {
-        record: RecordId,
-    },
-    MoveRecord {
-        record: RecordId,
-        destination: StockPosition,
-    },
-    TeachMemory {
-        life: PersonId,
-        inventory: InventoryId,
-        recipient: PersonId,
-    },
-}
+pub use game_invocation::{InvocationAction, InvokedLifeView, MemoryRecordView, RecordedMemory};
 
-pub use game_invocation::RecordedMemory;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MemoryRecordView {
-    pub id: RecordId,
-    pub inventory: InventoryId,
-    pub content: Option<RecordedMemory>,
-    pub written_at: SimTime,
-    pub author: PersonId,
-    pub position: StockPosition,
-    pub can_read: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InvokedLifeView {
-    pub person: PersonId,
-    pub died_at: SimTime,
-    pub skills: Vec<SkillView>,
-    pub stocks: Vec<StockKnowledge>,
-    pub routes: Vec<(AreaId, AreaId, SimDuration)>,
-    pub institutions: Vec<InstitutionView>,
-    pub cases: Vec<SocialCaseView>,
-}
 pub use game_invocation::InvocationPreview;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

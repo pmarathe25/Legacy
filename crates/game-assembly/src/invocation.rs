@@ -4,233 +4,212 @@ use crate::*;
 
 pub use game_invocation::{Activation, Active, Burden, Consent, Episode, Rules, Warning, severity};
 
+pub type World = game_invocation::Runtime;
+pub type PastLife = game_invocation::PastLife<game_api::Command>;
+pub use game_invocation::{MemoryAction, MemoryWork, Record};
+
+pub(crate) fn memory_activity(activity: &Activity) -> game_invocation::MemoryActivity {
+    use game_invocation::MemoryActivity;
+    match activity {
+        Activity::WritingMemory { completes } => MemoryActivity::Write(*completes),
+        Activity::ReadingMemory { completes } => MemoryActivity::Read(*completes),
+        Activity::MovingRecord { completes } => MemoryActivity::Move(*completes),
+        Activity::TeachingMemory { completes } => MemoryActivity::Teach(*completes),
+        _ => MemoryActivity::Other,
+    }
+}
+fn bound_memory_activity(activity: game_invocation::MemoryActivity) -> Activity {
+    use game_invocation::MemoryActivity;
+    match activity {
+        MemoryActivity::Write(completes) => Activity::WritingMemory { completes },
+        MemoryActivity::Read(completes) => Activity::ReadingMemory { completes },
+        MemoryActivity::Move(completes) => Activity::MovingRecord { completes },
+        MemoryActivity::Teach(completes) => Activity::TeachingMemory { completes },
+        MemoryActivity::Other => Activity::Idle,
+    }
+}
+struct MemorySaveFacts<'a, 'b>(&'a CanonicalState<'b>);
+impl game_invocation::MemoryReferences for MemorySaveFacts<'_, '_> {
+    fn person(&self, id: PersonId) -> Option<game_invocation::MemoryValidationPerson> {
+        self.0.state.people.iter().find(|person| person.id == id)?;
+        let body = game_physiology::body(self.0.components, id)?;
+        Some(game_invocation::MemoryValidationPerson {
+            alive: body.vitals.alive,
+            activity: memory_activity(self.0.components.activity(id)?),
+        })
+    }
+    fn death(&self, id: PersonId) -> Option<SimTime> {
+        self.0
+            .state
+            .lineage
+            .as_ref()?
+            .incarnations
+            .iter()
+            .find(|life| life.person == id)?
+            .died_at
+    }
+    fn area_exists(&self, id: AreaId) -> bool {
+        self.0.state.areas.iter().any(|area| area.id == id)
+    }
+    fn memory_activities(
+        &self,
+    ) -> impl Iterator<Item = (PersonId, game_invocation::MemoryActivity)> {
+        self.0
+            .components
+            .activities()
+            .map(|(id, activity)| (id, memory_activity(activity)))
+    }
+}
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
-    let Some(w) = &s.state.invocation else {
-        return game_invocation::validate_absent(s.components);
+    let Some(runtime) = &s.state.invocation else {
+        return game_invocation::validate_absent_memory::<game_api::Command>(s.components);
     };
     let fail = || Error::InvalidSave("invalid invocation state".into());
     let lineage = s.state.lineage.as_ref().ok_or_else(fail)?;
-    s.state.physical.as_ref().ok_or_else(fail)?;
-    if s.state.decisions.is_none() || s.state.skills.is_none() {
+    if s.state.physical.is_none() || s.state.decisions.is_none() || s.state.skills.is_none() {
         return Err(fail());
     }
-    let people: BTreeSet<_> = s.state.people.iter().map(|p| p.id).collect();
-    let lives: BTreeSet<_> = lineage
-        .incarnations
-        .iter()
-        .map(|life| life.person)
-        .collect();
-    let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
-    let source_valid = |source: &KnowledgeSource| match source {
-        KnowledgeSource::Observed(actor) | KnowledgeSource::Reported(actor) => {
-            people.contains(actor)
-        }
-        KnowledgeSource::Recorded(record) => w.records.contains_key(record),
-    };
-    let fact_valid = |fact: &StockKnowledge| {
-        game_cargo::inventory(s.components, fact.inventory)
-            .is_some_and(|inventory| inventory.good == fact.good)
-            && areas.contains(&fact.area)
-            && fact.observed_at <= fact.learned_at
-            && fact.learned_at <= s.time
-            && source_valid(&fact.source)
-    };
-    for (id, past) in &w.history {
-        if *id != past.person
-            || !lineage
-                .incarnations
-                .iter()
-                .any(|life| life.person == *id && life.died_at == Some(past.died_at))
-            || past.died_at > s.time
-            || game_physiology::body(s.components, *id)
-                .unwrap()
-                .vitals
-                .alive
-            || past
-                .mind
-                .knowledge
-                .values()
-                .any(|fact| !fact_valid(fact) || fact.observed_at > past.died_at)
-            || past
-                .mind
-                .relationships
-                .keys()
-                .any(|id| !people.contains(id))
-            || past.mind.routes.iter().any(|(from, links)| {
-                !areas.contains(from)
-                    || links
-                        .iter()
-                        .any(|(to, duration)| !areas.contains(to) || duration.0 == 0)
-            })
-        {
-            return Err(fail());
-        }
-        let mut skills = BTreeSet::new();
-        if past
-            .skills
-            .iter()
-            .any(|skill| !skills.insert(skill.skill) || skill.level > 100)
-        {
-            return Err(fail());
-        }
-    }
-    w.control.validate(
+    runtime.validate_memory::<game_api::Command>(
         s.components,
-        game_invocation::ControlValidation {
+        &MemorySaveFacts(s),
+        game_invocation::MemoryValidation {
             now: s.time,
             next_id: s.next_id,
             current: lineage.current(),
-            incarnations: &lives,
-            archived: &w.history.keys().copied().collect(),
+            incarnations: &lineage
+                .incarnations
+                .iter()
+                .map(|life| life.person)
+                .collect(),
         },
-    )?;
-    let content_valid = |content: &RecordedMemory| match content {
-        RecordedMemory::Stock { life, fact } => w.history.contains_key(life) && fact_valid(fact),
-        RecordedMemory::Route {
-            life,
-            origin,
-            destination,
-            duration,
-        } => {
-            w.history.contains_key(life)
-                && areas.contains(origin)
-                && areas.contains(destination)
-                && origin != destination
-                && duration.0 > 0
-        }
-    };
-    let mut totals: BTreeMap<InventoryId, u64> = BTreeMap::new();
-    for (id, record) in &w.records {
-        let stock = game_cargo::inventory(s.components, record.inventory).ok_or_else(fail)?;
-        if id.0 == 0
-            || id.0 >= s.next_id
-            || *id != record.id
-            || !people.contains(&record.author)
-            || !record.readers.is_subset(&people)
-            || record.written_at > s.time
-            || !content_valid(&record.content)
-            || stock.good != Good::Record
-        {
-            return Err(fail());
-        }
-        if record.intact {
-            *totals.entry(record.inventory).or_default() += 1_000;
-        }
+    )
+}
+pub(crate) struct MemoryBindings<'a>(pub(crate) &'a Simulation);
+impl game_invocation::MemoryFacts for MemoryBindings<'_> {
+    fn person(&self, id: PersonId, other: PersonId) -> Option<game_invocation::MemoryPerson> {
+        let sim = self.0;
+        let body = game_physiology::body(&sim.host.storage, id)?;
+        let mind = game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, id)?;
+        let activity = sim.host.storage.activity(id)?;
+        Some(game_invocation::MemoryPerson {
+            location: game_spatial::location(&sim.host.storage, game_ecs::StableId(id.0))?.clone(),
+            independent: sim.independent(id),
+            in_combat: sim.in_combat(id),
+            restricted: sim.combat_restricts(id),
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            idle_or_resting: matches!(activity, Activity::Idle | Activity::Rest),
+            teaching_completes: match activity {
+                Activity::TeachingMemory { completes } => Some(*completes),
+                _ => None,
+            },
+            sociability: mind.personality.sociability,
+            trust: mind
+                .relationships
+                .get(&other)
+                .map_or(0, |relationship| relationship.trust),
+            hunger: body.vitals.hunger,
+            meal_relief: sim.host.state.physical.as_ref()?.rules.meal_relief,
+        })
     }
-    for stock in game_cargo::inventories(s.components)
-        .map(|(_, row)| row)
-        .filter(|stock| stock.good == Good::Record)
-    {
-        if stock.quantity.0 != totals.get(&stock.id).copied().unwrap_or(0) {
-            return Err(fail());
-        }
+    fn stock_area(&self, id: InventoryId) -> Option<AreaId> {
+        self.0
+            .inventory_area(game_cargo::inventory(&self.0.host.storage, id)?)
     }
-    for (actor, action) in &w.actions {
-        if *actor != action.actor
-            || !people.contains(actor)
-            || !areas.contains(&action.area)
-            || action.completes <= s.time
-            || !game_physiology::body(s.components, *actor)
-                .unwrap()
+    fn has_access(&self, actor: PersonId, id: InventoryId) -> bool {
+        game_cargo::inventory(&self.0.host.storage, id)
+            .is_some_and(|stock| self.0.has_stock_access(actor, stock))
+    }
+    fn tool_available(&self, actor: PersonId, id: InventoryId) -> bool {
+        self.0.tool_available_for(actor, id)
+    }
+    fn unreserved(&self, actor: PersonId, id: InventoryId) -> u64 {
+        self.0.unreserved_stock(id, actor)
+    }
+    fn carried_quantity(&self, actor: PersonId) -> u128 {
+        self.0
+            .inventory_index
+            .get(&InventoryLocation::Carried(actor))
+            .into_iter()
+            .flatten()
+            .filter_map(|id| game_cargo::inventory(&self.0.host.storage, *id))
+            .map(|stock| u128::from(stock.quantity.0))
+            .sum()
+    }
+    fn carrying_capacity(&self, _: PersonId) -> u64 {
+        self.0
+            .host
+            .state
+            .physical
+            .as_ref()
+            .unwrap()
+            .rules
+            .carrying_capacity
+            .0
+    }
+    fn creation_body_capacity(&self, actor: PersonId) -> u64 {
+        self.0.body_rules(actor).carrying_capacity.0
+    }
+    fn creation_transport_capacity(&self, actor: PersonId, quantity: Quantity) -> bool {
+        self.0.transport_transfer_capacity(actor, quantity.0)
+    }
+}
+impl game_invocation::MemoryReferences for MemoryBindings<'_> {
+    fn person(&self, id: PersonId) -> Option<game_invocation::MemoryValidationPerson> {
+        Some(game_invocation::MemoryValidationPerson {
+            alive: game_physiology::body(&self.0.host.storage, id)?
                 .vitals
-                .alive
-        {
-            return Err(fail());
-        }
-        let activity = s.components.activity(*actor).unwrap();
-        let valid = match &action.work {
-            MemoryWork::Write {
-                content,
-                material,
-                tool,
-            } => {
-                content_valid(content)
-                    && game_cargo::inventory(s.components, *(material))
-                        .is_some_and(|i| i.good == Good::Timber)
-                    && game_cargo::inventory(s.components, *(tool))
-                        .is_some_and(|i| i.good == Good::Tool)
-                    && matches!(activity,Activity::WritingMemory {completes}if *completes==action.completes)
-            }
-            MemoryWork::Read { record } => {
-                w.records.contains_key(record)
-                    && matches!(activity,Activity::ReadingMemory {completes}if *completes==action.completes)
-            }
-            MemoryWork::Move {
-                record,
-                destination,
-            } => {
-                w.records.contains_key(record)
-                    && match destination {
-                        StockPosition::Area(area) => areas.contains(area),
-                        StockPosition::Carried(actor) => people.contains(actor),
-                    }
-                    && matches!(activity,Activity::MovingRecord {completes}if *completes==action.completes)
-            }
-            MemoryWork::Teach { content, recipient } => {
-                content_valid(content)
-                    && people.contains(recipient)
-                    && recipient != actor
-                    && matches!(activity,Activity::TeachingMemory {completes}if *completes==action.completes)
-                    && matches!(*s.components.activity(*recipient).unwrap(),Activity::TeachingMemory {completes}if completes==action.completes)
-            }
-        };
-        if !valid {
-            return Err(fail());
-        }
+                .alive,
+            activity: memory_activity(self.0.host.storage.activity(id)?),
+        })
     }
-    Ok(())
+    fn death(&self, id: PersonId) -> Option<SimTime> {
+        self.0
+            .host
+            .state
+            .lineage
+            .as_ref()?
+            .incarnations
+            .iter()
+            .find(|life| life.person == id)?
+            .died_at
+    }
+    fn area_exists(&self, id: AreaId) -> bool {
+        self.0.host.state.areas.iter().any(|area| area.id == id)
+    }
+    fn memory_activities(
+        &self,
+    ) -> impl Iterator<Item = (PersonId, game_invocation::MemoryActivity)> {
+        self.0
+            .host
+            .storage
+            .activities()
+            .map(|(id, activity)| (id, memory_activity(activity)))
+    }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PastLife {
-    pub person: PersonId,
-    pub died_at: SimTime,
-    pub mind: decisions::Mind,
-    pub skills: Vec<SkillView>,
-    pub institutions: Vec<InstitutionView>,
-    pub cases: Vec<SocialCaseView>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Record {
-    pub id: RecordId,
-    pub inventory: InventoryId,
-    pub content: RecordedMemory,
-    pub author: PersonId,
-    pub written_at: SimTime,
-    pub readers: BTreeSet<PersonId>,
-    pub intact: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MemoryWork {
-    Write {
-        content: RecordedMemory,
-        material: InventoryId,
-        tool: InventoryId,
-    },
-    Read {
-        record: RecordId,
-    },
-    Move {
-        record: RecordId,
-        destination: StockPosition,
-    },
-    Teach {
-        content: RecordedMemory,
-        recipient: PersonId,
-    },
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MemoryAction {
-    pub actor: PersonId,
-    pub area: AreaId,
-    pub completes: SimTime,
-    pub work: MemoryWork,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub control: game_invocation::ControlState,
-    pub history: BTreeMap<PersonId, PastLife>,
-    pub records: BTreeMap<RecordId, Record>,
-    pub actions: BTreeMap<PersonId, MemoryAction>,
+impl game_invocation::ArchiveFacts<game_api::Command> for MemoryBindings<'_> {
+    fn incarnations(&self) -> impl Iterator<Item = (PersonId, Option<SimTime>)> {
+        self.0
+            .host
+            .state
+            .lineage
+            .as_ref()
+            .into_iter()
+            .flat_map(|lineage| &lineage.incarnations)
+            .map(|life| (life.person, life.died_at))
+    }
+    fn mind(&self, id: PersonId) -> Option<&decisions::Mind> {
+        game_characters::decisions::mind::<game_api::Command>(&self.0.host.storage, id)
+    }
+    fn skills(&self, id: PersonId) -> Vec<SkillView> {
+        self.0.own_skill_view(id)
+    }
+    fn institutions(&self, id: PersonId) -> Vec<InstitutionView> {
+        self.0.institution_view(id)
+    }
+    fn cases(&self, id: PersonId) -> Vec<SocialCaseView> {
+        self.0.social_case_view(id)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingInvocation {
@@ -255,9 +234,6 @@ impl Simulation {
         };
         sim.host.state.invocation = Some(World {
             control: game_invocation::ControlState::new(Rules::fixture())?,
-            history: BTreeMap::new(),
-            records: BTreeMap::new(),
-            actions: BTreeMap::new(),
         });
         // Separate compressed fixture rates leave room for sustained-use tests.
         let development = sim.host.state.development.as_mut().unwrap();
@@ -302,54 +278,15 @@ impl Simulation {
         let Some(lineage) = &self.host.state.lineage else {
             return Ok(());
         };
-        let ended: Vec<_> = lineage
-            .incarnations
-            .iter()
-            .filter_map(|life| life.died_at.map(|time| (life.person, time)))
-            .filter(|(id, _)| !w.history.contains_key(id))
-            .collect();
-        let fresh: Vec<_> = lineage
-            .incarnations
-            .iter()
-            .filter(|life| {
-                life.died_at == Some(self.host.clock().time) && w.history.contains_key(&life.person)
-            })
-            .map(|life| life.person)
-            .collect();
-        for person in fresh {
-            let skills = self.own_skill_view(person);
-            self.host
-                .state
-                .invocation
-                .as_mut()
-                .unwrap()
-                .history
-                .get_mut(&person)
-                .unwrap()
-                .skills = skills;
-        }
-        for (person, died_at) in ended {
-            let snapshot = PastLife {
-                person,
-                died_at,
-                mind: game_characters::decisions::mind::<game_api::Command>(
-                    &self.host.storage,
-                    person,
-                )
-                .expect("mind exists")
-                .clone(),
-                skills: self.own_skill_view(person),
-                institutions: self.institution_view(person),
-                cases: self.social_case_view(person),
-            };
-            self.host
-                .state
-                .invocation
-                .as_mut()
-                .unwrap()
-                .history
-                .insert(person, snapshot);
-        }
+        let _ = lineage;
+        let now = self.host.clock().time;
+        let facts = MemoryBindings(self);
+        let archives = w.prepare_archives(&self.host.storage, &facts, now)?;
+        let mut batch = game_ecs::Batch::new();
+        let finish = archives.stage_into(&self.host.storage, &facts, now, &mut batch)?;
+        finish.validate_batch(&self.host.storage, &batch)?;
+        self.host.storage.apply_batch(batch)?;
+        finish.finish(&mut self.host.storage);
         let dead = game_invocation::burdens(&self.host.storage)
             .map(|(actor, _)| actor)
             .chain(self.invocation_control_actor())
@@ -404,15 +341,8 @@ impl Simulation {
                 .unwrap()
                 .rules
                 .fatigue_limit,
-            archived: self
-                .host
-                .state
-                .invocation
-                .as_ref()
-                .unwrap()
-                .history
-                .keys()
-                .copied()
+            archived: game_invocation::archives::<game_api::Command>(&self.host.storage)
+                .map(|(id, _)| id)
                 .collect(),
         }
     }
@@ -509,14 +439,6 @@ impl Simulation {
             )?;
             self.apply_invocation_control(prepared)
         } else {
-            if self.past_life_controls_actor(actor)
-                || !game_physiology::body(&self.host.storage, actor)
-                    .is_some_and(|b| b.vitals.alive && b.vitals.health > 0)
-            {
-                return Err(Error::Unavailable);
-            }
-            self.ensure_event_capacity(8)?;
-            self.host.next_id().checked_add(4).ok_or(Error::Overflow)?;
             self.start_memory_action(actor, action)
         }
     }
@@ -608,6 +530,10 @@ impl Simulation {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let effects = prepared.effects.clone();
+        let runtime = self.host.state.invocation.as_ref().unwrap();
+        let memory_ending = runtime.prepare_memory_control_reactions(&self.host.storage, &effects);
+        let canonical = self.canonical_state();
+        let memory_resets = memory_ending.activity_resets(&MemorySaveFacts(&canonical));
         let mut batch = game_ecs::Batch::new();
         let finish = prepared.stage_into(
             &self.host.state.invocation.as_ref().unwrap().control,
@@ -616,6 +542,10 @@ impl Simulation {
         )?;
         for charge in charges {
             charge.stage_into(&self.host.storage, &mut batch)?;
+        }
+        memory_ending.stage_into(runtime, &self.host.storage, None, &mut batch)?;
+        for actor in memory_resets {
+            batch.insert(game_ecs::StableId(actor.0), Activity::Idle);
         }
         self.host.storage.apply_batch(batch)?;
         finish.finish(&mut self.host.state.invocation.as_mut().unwrap().control);
@@ -633,26 +563,9 @@ impl Simulation {
                 }
                 ControlEffect::FatigueCharge { .. } => {}
                 ControlEffect::Started { actor, lives } => {
-                    if self
-                        .host
-                        .state
-                        .invocation
-                        .as_ref()
-                        .unwrap()
-                        .actions
-                        .get(&actor)
-                        .is_some_and(|a| match &a.work {
-                            MemoryWork::Write { content, .. }
-                            | MemoryWork::Teach { content, .. } => !lives.contains(&content.life()),
-                            _ => false,
-                        })
-                    {
-                        self.cancel_recollection_actions(actor);
-                    }
                     self.emit(EventKind::InvocationStarted { actor, lives });
                 }
                 ControlEffect::Dismissed { actor } => {
-                    self.cancel_recollection_actions(actor);
                     self.dismiss_recalled_route(actor);
                     self.emit(EventKind::InvocationDismissed { actor });
                 }
@@ -688,7 +601,7 @@ impl Simulation {
                     }
                 }
                 ControlEffect::LifespanChanged { actor } => self.reschedule_invocation_age(actor),
-                ControlEffect::DeathCleanup { actor } => self.cancel_invocation_action(actor),
+                ControlEffect::DeathCleanup { .. } => {}
                 ControlEffect::ControllerSelected { .. } => {}
             }
         }
@@ -799,7 +712,7 @@ impl Simulation {
         // Existing bounded control/cost publications and native continuation
         // reserve, plus up to three publications per memory action. Expose the
         // same checked demand to the composed opening resource envelope.
-        let event_demand = (w.actions.len() as u64)
+        let event_demand = (self.host.storage.count::<game_invocation::MemoryAction>() as u64)
             .checked_mul(3)
             .and_then(|n| n.checked_add(16))
             .ok_or(Error::Overflow)?;
@@ -818,16 +731,7 @@ impl Simulation {
         let Some(w) = &self.host.state.invocation else {
             return 0;
         };
-        let actions = w
-            .actions
-            .values()
-            .filter(|action| action.completes <= next)
-            .map(|action| match action.work {
-                MemoryWork::Write { .. } => 2,
-                MemoryWork::Move { .. } => 1,
-                _ => 0,
-            })
-            .sum::<u64>();
+        let actions = w.memory_allocation_bound(&self.host.storage, next);
         let warning = u64::from(w.control.active.is_some() || w.control.activation.is_some());
         let controller = if w
             .control
@@ -875,11 +779,7 @@ impl Simulation {
         let mut next =
             w.control
                 .boundary(&self.host.storage, self.host.clock().time, limit, &alive);
-        for action in w.actions.values() {
-            if action.completes > self.host.clock().time {
-                next = next.min(action.completes);
-            }
-        }
+        next = w.memory_boundary(&self.host.storage, self.host.clock().time, next);
         next
     }
 
@@ -891,7 +791,8 @@ impl Simulation {
             return 0;
         };
         game_invocation::borrowed_level(a.lives.iter().map(|id| {
-            w.history[id]
+            game_invocation::archive::<game_api::Command>(&self.host.storage, *id)
+                .unwrap()
                 .skills
                 .iter()
                 .find(|entry| entry.skill == skill)
@@ -971,29 +872,27 @@ impl Simulation {
                 .routes;
         Some(game_invocation::recalled_routes(
             current,
-            a.lives.iter().map(|id| &w.history[id].mind.routes),
+            a.lives.iter().map(|id| {
+                &game_invocation::archive::<game_api::Command>(&self.host.storage, *id)
+                    .unwrap()
+                    .mind
+                    .routes
+            }),
         ))
     }
     fn dismiss_recalled_route(&mut self, actor: PersonId) {
         let person = &self.host.state.people[self.person_index[&actor]];
-        let Some(destination) = person.route.last().copied() else {
-            return;
-        };
-        let origin =
-            match *game_spatial::location(&self.host.storage, game_ecs::StableId((person.id).0))
-                .expect("location exists")
-            {
-                Location::AtArea(area) => area,
-                Location::InTransit { to, .. } => to,
-                Location::StoppedOnRoad { .. } | Location::Carried { .. } => return,
-            };
-        let owned =
+        let location = game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
+            .expect("location exists");
+        let current =
             &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .expect("mind exists")
                 .routes;
-        let route = decisions::known_path(owned, origin, destination)
-            .map_or_else(|_| Vec::new(), |(path, _)| path);
-        self.host.state.people[self.person_index[&actor]].route = route;
+        if let Some(route) =
+            game_invocation::retained_route_after_dismissal(current, location, &person.route)
+        {
+            self.host.state.people[self.person_index[&actor]].route = route;
+        }
     }
     pub(crate) fn invocation_personality(&self, actor: PersonId) -> Option<decisions::Personality> {
         let w = self.host.state.invocation.as_ref()?;
@@ -1002,7 +901,10 @@ impl Simulation {
         let empty = game_invocation::Burden::default();
         let burden = game_invocation::burden(&self.host.storage, actor).unwrap_or(&empty);
         Some(game_invocation::controller_personality(
-            &w.history[&life].mind.personality,
+            &game_invocation::archive::<game_api::Command>(&self.host.storage, life)
+                .unwrap()
+                .mind
+                .personality,
             burden,
         ))
     }
@@ -1068,7 +970,9 @@ impl Simulation {
             .active
             .as_ref()
             .unwrap();
-        let past = &self.host.state.invocation.as_ref().unwrap().history[&life].mind;
+        let past = &game_invocation::archive::<game_api::Command>(&self.host.storage, life)
+            .unwrap()
+            .mind;
         let current = game_characters::decisions::mind::<game_api::Command>(
             &self.host.storage,
             controller_actor,
@@ -1107,7 +1011,8 @@ impl Simulation {
             .lives
             .iter()
             .map(|id| {
-                &self.host.state.invocation.as_ref().unwrap().history[id]
+                &game_invocation::archive::<game_api::Command>(&self.host.storage, *id)
+                    .unwrap()
                     .mind
                     .routes
             })
@@ -1206,7 +1111,8 @@ impl Simulation {
             &self.invocation_admission(self.host.state.ruler),
             lives,
             |life, skill| {
-                w.history[&life]
+                game_invocation::archive::<game_api::Command>(&self.host.storage, life)
+                    .unwrap()
                     .skills
                     .iter()
                     .find(|entry| entry.skill == skill)
@@ -1222,30 +1128,8 @@ impl Simulation {
             .unwrap_or_default();
         let active = w.control.active.as_ref().filter(|a| a.actor == actor);
         let lives = active.map_or_else(BTreeSet::new, |a| a.lives.clone());
-        let memories = lives
-            .iter()
-            .map(|id| {
-                let life = &w.history[id];
-                InvokedLifeView {
-                    person: *id,
-                    died_at: life.died_at,
-                    skills: life.skills.clone(),
-                    stocks: life.mind.knowledge.values().take(64).cloned().collect(),
-                    routes: life
-                        .mind
-                        .routes
-                        .iter()
-                        .flat_map(|(from, links)| {
-                            links.iter().map(|(to, duration)| (*from, *to, *duration))
-                        })
-                        .take(128)
-                        .collect(),
-                    institutions: life.institutions.clone(),
-                    cases: life.cases.clone(),
-                }
-            })
-            .collect();
-        let records=w.records.values().filter_map(|record|{let inventory=game_cargo::inventory(&self.host.storage, record.inventory)?;let local=game_spatial::location(&self.host.storage,game_ecs::StableId((actor).0)).expect("location exists");let visible=matches!((&inventory.location,local),(InventoryLocation::Carried(id),_)if *id==actor)||matches!((&inventory.location,local),(InventoryLocation::Area(a),Location::AtArea(b))if a==b);if !visible||!record.intact{return None}Some(MemoryRecordView {id:record.id,inventory:record.inventory,content:record.readers.contains(&actor).then(||record.content.clone()),written_at:record.written_at,author:record.author,position:match inventory.location {InventoryLocation::Area(area)=>StockPosition::Area(area),InventoryLocation::Carried(person)=>StockPosition::Carried(person)},can_read:self.can_read_record(actor,record.id)})}).take(64).collect();
+        let memories = w.invoked_life_views::<game_api::Command>(&self.host.storage, actor);
+        let records = w.record_views(&self.host.storage, &MemoryBindings(self), actor);
         let preview_lives = w
             .control
             .activation
@@ -1265,7 +1149,7 @@ impl Simulation {
         };
         Some(InvocationView {
             ready: self.invocation_ready(actor),
-            available_lives: w.history.keys().copied().collect(),
+            available_lives: w.available_lives::<game_api::Command>(&self.host.storage),
             active_lives: lives,
             burden: b.burden,
             exposure: SimDuration(b.exposure),
@@ -1307,700 +1191,215 @@ impl Simulation {
                 }
             })
             .collect();
-        for record in w
-            .records
-            .values()
-            .filter(|record| self.can_read_record(actor, record.id))
-            .take(32)
-        {
-            actions.push(InvocationAction::ReadRecord { record: record.id });
-        }
+        actions.extend(w.available_memory_actions(
+            &self.host.storage,
+            &MemoryBindings(self),
+            actor,
+        ));
         actions
             .into_iter()
             .map(|action| Command::Invocation { action })
             .collect()
     }
 
-    fn memory_area(&self, actor: PersonId) -> Result<AreaId, Error> {
-        if !self.independent(actor) || self.in_combat(actor) || self.combat_restricts(actor) {
-            return Err(Error::Unavailable);
-        }
-        match *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-            .expect("location exists")
-        {
-            Location::AtArea(area) => Ok(area),
-            _ => Err(Error::Unavailable),
-        }
-    }
-    fn local_memory_input(
-        &self,
-        actor: PersonId,
-        inventory: InventoryId,
-        good: Good,
-        quantity: u64,
-    ) -> bool {
-        game_cargo::inventory(&self.host.storage, inventory).is_some_and(|stock| {
-            stock.good == good
-                && stock.quantity.0 >= quantity
-                && (good != Good::Timber || self.unreserved_stock(inventory, actor) >= quantity)
-                && (good != Good::Tool || self.tool_available_for(actor, inventory))
-                && self.has_stock_access(actor, stock)
-                && self.inventory_area(stock) == self.memory_area(actor).ok()
-        })
-    }
     pub(crate) fn invocation_selected_tool(&self, actor: PersonId) -> Option<InventoryId> {
-        match &self
-            .host
+        self.host
             .state
             .invocation
             .as_ref()?
-            .actions
-            .get(&actor)?
-            .work
-        {
-            MemoryWork::Write { tool, .. } => Some(*tool),
-            _ => None,
-        }
-    }
-    fn recalled_stock(
-        &self,
-        actor: PersonId,
-        life: PersonId,
-        inventory: InventoryId,
-    ) -> Result<RecordedMemory, Error> {
-        let w = self
-            .host
-            .state
-            .invocation
-            .as_ref()
-            .ok_or(Error::Unavailable)?;
-        if !w
-            .control
-            .active
-            .as_ref()
-            .is_some_and(|a| a.actor == actor && a.lives.contains(&life))
-        {
-            return Err(Error::Unavailable);
-        }
-        let fact = w.history[&life]
-            .mind
-            .knowledge
-            .get(&inventory)
-            .cloned()
-            .ok_or(Error::Unavailable)?;
-        Ok(RecordedMemory::Stock { life, fact })
-    }
-    fn can_read_record(&self, actor: PersonId, record: RecordId) -> bool {
-        let Some(w) = &self.host.state.invocation else {
-            return false;
-        };
-        let Some(record) = w.records.get(&record).filter(|r| r.intact) else {
-            return false;
-        };
-        let Some(stock) = game_cargo::inventory(&self.host.storage, record.inventory) else {
-            return false;
-        };
-        game_physiology::body(&self.host.storage, actor)
-            .is_some_and(|a| a.vitals.alive && a.vitals.health > 0)
-            && self
-                .memory_area(actor)
-                .ok()
-                .is_some_and(|area| self.inventory_area(stock) == Some(area))
-            && stock.good == Good::Record
-            && stock.quantity.0 >= 1_000
-            && self.has_stock_access(actor, stock)
+            .selected_memory_tool(&self.host.storage, actor)
     }
     fn start_memory_action(
         &mut self,
         actor: PersonId,
-        action: &InvocationAction,
+        request: &InvocationAction,
     ) -> Result<(), Error> {
-        let area = self.memory_area(actor)?;
-        let r = self
+        let runtime = self
             .host
             .state
             .invocation
             .as_ref()
-            .unwrap()
-            .control
-            .rules
-            .clone();
-        let (work, duration) = match action {
-            InvocationAction::RecordMemory {
-                life,
-                inventory,
-                material,
-                tool,
-            } => {
-                let content = self.recalled_stock(actor, *life, *inventory)?;
-                if !self.local_memory_input(actor, *material, Good::Timber, 1_000)
-                    || !self.local_memory_input(actor, *tool, Good::Tool, 1_000)
-                {
-                    return Err(Error::Unavailable);
-                }
-                (
-                    MemoryWork::Write {
-                        content,
-                        material: *material,
-                        tool: *tool,
-                    },
-                    r.writing_time,
-                )
-            }
-            InvocationAction::RecordRoute {
-                life,
-                origin,
-                destination,
-                material,
-                tool,
-            } => {
-                let w = self.host.state.invocation.as_ref().unwrap();
-                if !w
-                    .control
-                    .active
-                    .as_ref()
-                    .is_some_and(|a| a.actor == actor && a.lives.contains(life))
-                {
-                    return Err(Error::Unavailable);
-                }
-                let duration = w.history[life]
-                    .mind
-                    .routes
-                    .get(origin)
-                    .and_then(|links| links.get(destination))
-                    .copied()
-                    .ok_or(Error::Unavailable)?;
-                if !self.local_memory_input(actor, *material, Good::Timber, 1_000)
-                    || !self.local_memory_input(actor, *tool, Good::Tool, 1_000)
-                {
-                    return Err(Error::Unavailable);
-                }
-                (
-                    MemoryWork::Write {
-                        content: RecordedMemory::Route {
-                            life: *life,
-                            origin: *origin,
-                            destination: *destination,
-                            duration,
-                        },
-                        material: *material,
-                        tool: *tool,
-                    },
-                    r.writing_time,
-                )
-            }
-            InvocationAction::ReadRecord { record } => {
-                if !self.can_read_record(actor, *record) {
-                    return Err(Error::Unavailable);
-                }
-                (MemoryWork::Read { record: *record }, r.reading_time)
-            }
-            InvocationAction::MoveRecord {
-                record,
-                destination,
-            } => {
-                if !self.can_read_record(actor, *record) {
-                    return Err(Error::Unavailable);
-                }
-                match destination {
-                    StockPosition::Area(target) if *target != area => {
-                        return Err(Error::Unavailable);
-                    }
-                    StockPosition::Carried(person)
-                        if self.memory_area(*person).ok() != Some(area) =>
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                    _ => {}
-                }
-                let record_data = &self.host.state.invocation.as_ref().unwrap().records[record];
-                let source = game_cargo::inventory(&self.host.storage, record_data.inventory)
-                    .expect("inventory exists");
-                let desired = match destination {
-                    StockPosition::Area(area) => InventoryLocation::Area(*area),
-                    StockPosition::Carried(actor) => InventoryLocation::Carried(*actor),
-                };
-                if source.location == desired
-                    || !matches!(source.location,InventoryLocation::Carried(holder)if holder==actor)
-                        && source.location != InventoryLocation::Area(area)
-                {
-                    return Err(Error::Unavailable);
-                }
-                if let InventoryLocation::Carried(carrier) = desired {
-                    let held: u128 = self
-                        .inventory_index
-                        .get(&InventoryLocation::Carried(carrier))
-                        .into_iter()
-                        .flatten()
-                        .map(|id| {
-                            u128::from(
-                                game_cargo::inventory(&self.host.storage, *(id))
-                                    .expect("inventory exists")
-                                    .quantity
-                                    .0,
-                            )
-                        })
-                        .sum();
-                    if held + 1_000
-                        > u128::from(
-                            self.host
-                                .state
-                                .physical
-                                .as_ref()
-                                .unwrap()
-                                .rules
-                                .carrying_capacity
-                                .0,
-                        )
-                    {
-                        return Err(Error::Unavailable);
-                    }
-                }
-                (
-                    MemoryWork::Move {
-                        record: *record,
-                        destination: destination.clone(),
-                    },
-                    r.moving_time,
-                )
-            }
-            InvocationAction::TeachMemory {
-                life,
-                inventory,
-                recipient,
-            } => {
-                let content = self.recalled_stock(actor, *life, *inventory)?;
-                if *recipient == actor
-                    || self.memory_area(*recipient).ok() != Some(area)
-                    || !game_physiology::body(&self.host.storage, *recipient)
-                        .unwrap()
-                        .vitals
-                        .alive
-                    || !matches!(
-                        *self.host.storage.activity(*recipient).unwrap(),
-                        Activity::Idle | Activity::Rest
-                    )
-                {
-                    return Err(Error::Unavailable);
-                }
-                let mind = &game_characters::decisions::mind::<game_api::Command>(
-                    &self.host.storage,
-                    *recipient,
-                )
-                .expect("mind exists");
-                let trust = mind.relationships.get(&actor).map_or(0, |r| r.trust);
-                if i64::from(mind.personality.sociability) + i64::from(trust) < 200
-                    || game_physiology::body(&self.host.storage, *recipient)
-                        .unwrap()
-                        .vitals
-                        .hunger
-                        >= self.host.state.physical.as_ref().unwrap().rules.meal_relief
-                {
-                    return Err(Error::Unavailable);
-                }
-                (
-                    MemoryWork::Teach {
-                        content,
-                        recipient: *recipient,
-                    },
-                    r.teaching_time,
-                )
-            }
-            _ => return Err(Error::Unavailable),
-        };
-        let completes = SimTime(
-            self.host
-                .clock()
-                .time
-                .0
-                .checked_add(duration.0)
-                .ok_or(Error::Overflow)?,
-        );
-        self.interrupt_actor_activity(actor);
-        if let MemoryWork::Write { material, .. } = work {
-            game_cargo::inventory_mut(&mut self.host.storage, material)
-                .unwrap()
-                .quantity
-                .0 -= 1_000;
+            .ok_or(Error::Unavailable)?;
+        let now = self.host.clock().time;
+        let plan = runtime.prepare_memory_start::<game_api::Command>(
+            &self.host.storage,
+            &MemoryBindings(self),
+            actor,
+            request,
+            now,
+        )?;
+        self.host.next_id().checked_add(4).ok_or(Error::Overflow)?;
+        let action = plan.action().clone();
+        let participants = action.starting_participants();
+        let actors: Vec<_> = participants.iter().map(|(id, _)| *id).collect();
+        let final_activities: BTreeMap<_, _> = participants
+            .into_iter()
+            .map(|(id, activity)| (id, bound_memory_activity(activity)))
+            .collect();
+        let interruption =
+            self.prepare_interruptions(&actors, crate::commands::ActivityOwner::Invocation)?;
+        self.ensure_event_capacity(
+            usize::try_from(
+                interruption
+                    .event_count()?
+                    .checked_add(u64::from(action.material_consumption().is_some()))
+                    .ok_or(Error::Overflow)?,
+            )
+            .map_err(|_| Error::Overflow)?
+            .max(8),
+        )?;
+        let mut batch = game_ecs::Batch::new();
+        let (_, replacement) = plan.stage_into_with_replacement::<game_api::Command>(
+            runtime,
+            &self.host.storage,
+            &MemoryBindings(self),
+            now,
+            &mut batch,
+        )?;
+        let mut interruption = interruption.stage_into_with_memory_replacement(
+            self,
+            &mut batch,
+            &final_activities,
+            Some(&replacement),
+        )?;
+        self.host.storage.apply_batch(batch)?;
+        interruption.finish_actor(self, actor);
+        if let Some((source, quantity)) = action.material_consumption() {
             self.emit(EventKind::Consumed {
                 actor,
-                source: material,
-                quantity: Quantity(1_000),
+                source,
+                quantity,
             });
         }
-        if let MemoryWork::Teach { recipient, .. } = work {
-            self.interrupt_actor_activity(recipient);
-            *self.host.storage.activity_mut(recipient).unwrap() =
-                Activity::TeachingMemory { completes };
+        for participant in actors.into_iter().filter(|id| *id != actor) {
+            interruption.finish_actor(self, participant);
         }
-        let activity = match work {
-            MemoryWork::Write { .. } => Activity::WritingMemory { completes },
-            MemoryWork::Read { .. } => Activity::ReadingMemory { completes },
-            MemoryWork::Move { .. } => Activity::MovingRecord { completes },
-            MemoryWork::Teach { .. } => Activity::TeachingMemory { completes },
-        };
-        *self.host.storage.activity_mut(actor).unwrap() = activity;
-        self.host.state.invocation.as_mut().unwrap().actions.insert(
-            actor,
-            MemoryAction {
-                actor,
-                area,
-                completes,
-                work,
-            },
-        );
         Ok(())
     }
     pub(crate) fn cancel_invocation_action(&mut self, actor: PersonId) {
-        let Some(w) = &self.host.state.invocation else {
+        let Some(runtime) = self.host.state.invocation.as_ref() else {
             return;
         };
-        let affected: Vec<_> = w
-            .actions
-            .values()
-            .filter(|action| {
-                action.actor == actor
-                    || matches!(action.work,MemoryWork::Teach {recipient,..}if recipient==actor)
-            })
-            .cloned()
-            .collect();
-        for action in affected {
-            self.host
-                .state
-                .invocation
-                .as_mut()
-                .unwrap()
-                .actions
-                .remove(&action.actor);
-            let mut actors = vec![action.actor];
-            if let MemoryWork::Teach { recipient, .. } = action.work {
-                actors.push(recipient);
-            }
-            for id in actors {
-                if let Some(activity) = self.host.storage.activity_mut(id)
-                    && matches!(
-                        *activity,
-                        Activity::WritingMemory { .. }
-                            | Activity::ReadingMemory { .. }
-                            | Activity::TeachingMemory { .. }
-                            | Activity::MovingRecord { .. }
-                    )
-                {
-                    *activity = Activity::Idle;
-                }
-            }
+        let ending = runtime.prepare_memory_ending(&self.host.storage, &[actor]);
+        let canonical = self.canonical_state();
+        let participants = ending.activity_resets(&MemorySaveFacts(&canonical));
+        let mut batch = game_ecs::Batch::new();
+        for id in participants {
+            batch.insert(game_ecs::StableId(id.0), Activity::Idle);
         }
-    }
-    fn cancel_recollection_actions(&mut self, actor: PersonId) {
-        if self
-            .host
-            .state
-            .invocation
-            .as_ref()
-            .unwrap()
-            .actions
-            .get(&actor)
-            .is_some_and(|a| matches!(a.work, MemoryWork::Write { .. } | MemoryWork::Teach { .. }))
-        {
-            self.cancel_invocation_action(actor);
-        }
-    }
-    fn install_recorded_memory(
-        &mut self,
-        actor: PersonId,
-        content: &RecordedMemory,
-        source: KnowledgeSource,
-    ) {
-        let owner_now = self.host.clock().time;
-        let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-            &mut self.host.storage,
-            actor,
-        )
-        .unwrap();
-        content.teach_into(mind, owner_now, source);
+        ending
+            .stage_into(runtime, &self.host.storage, None, &mut batch)
+            .expect("current memory ending");
+        self.host
+            .storage
+            .apply_batch(batch)
+            .expect("registered memory ending");
     }
     fn finish_memory_actions(&mut self) -> Result<(), Error> {
-        let owner_now = self.host.clock().time;
-        let actions: Vec<_> = self
+        let now = self.host.clock().time;
+        let due = self
             .host
             .state
             .invocation
             .as_ref()
             .unwrap()
-            .actions
-            .values()
-            .filter(|action| action.completes <= owner_now)
-            .cloned()
-            .collect();
-        for action in actions {
-            let actor = action.actor;
-            if self.memory_area(actor).ok() != Some(action.area)
-                || !game_physiology::body(&self.host.storage, actor)
-                    .unwrap()
-                    .vitals
-                    .alive
-            {
-                self.cancel_invocation_action(actor);
-                continue;
+            .due_memory_actions(&self.host.storage, now);
+        for actor in due {
+            let runtime = self.host.state.invocation.as_ref().unwrap();
+            let plan = runtime.prepare_memory_completion::<game_api::Command>(
+                &self.host.storage,
+                &MemoryBindings(self),
+                actor,
+                now,
+                self.host.next_id(),
+            )?;
+            let allocation_demand = plan.allocation_demand();
+            let canonical = self.canonical_state();
+            let participants = plan.activity_resets(&MemorySaveFacts(&canonical));
+            self.ensure_event_capacity(1)?;
+            self.host
+                .next_id()
+                .checked_add(allocation_demand)
+                .ok_or(Error::Overflow)?;
+            let mut batch = game_ecs::Batch::new();
+            let finish = plan.stage_into::<game_api::Command>(
+                runtime,
+                &self.host.storage,
+                &MemoryBindings(self),
+                now,
+                &mut batch,
+            )?;
+            for id in participants {
+                batch.insert(game_ecs::StableId(id.0), Activity::Idle);
             }
-            let mut success = false;
-            match &action.work {
-                MemoryWork::Write { content, tool, .. } => {
-                    let life = content.life();
-                    let held: u128 = self
-                        .inventory_index
-                        .get(&InventoryLocation::Carried(actor))
-                        .into_iter()
-                        .flatten()
-                        .map(|id| {
-                            u128::from(
-                                game_cargo::inventory(&self.host.storage, *(id))
-                                    .expect("inventory exists")
-                                    .quantity
-                                    .0,
-                            )
-                        })
-                        .sum();
-                    if self
-                        .host
-                        .state
-                        .invocation
-                        .as_ref()
-                        .unwrap()
-                        .control
-                        .active
-                        .as_ref()
-                        .is_some_and(|a| a.actor == actor && a.lives.contains(&life))
-                        && self.local_memory_input(actor, *tool, Good::Tool, 1_000)
-                        && held + 1_000
-                            <= u128::from(
-                                self.host
-                                    .state
-                                    .physical
-                                    .as_ref()
-                                    .unwrap()
-                                    .rules
-                                    .carrying_capacity
-                                    .0,
-                            )
-                    {
-                        let record = RecordId(self.host.allocate_id()?.0);
-                        let inventory = self.debug_add_inventory(
-                            Good::Record,
-                            InventoryLocation::Carried(actor),
-                            Quantity(1_000),
-                            Quantity(10_000),
-                            BTreeSet::from([actor]),
-                        )?;
-                        self.host.state.invocation.as_mut().unwrap().records.insert(
-                            record,
-                            Record {
-                                id: record,
-                                inventory,
-                                content: content.clone(),
-                                author: actor,
-                                written_at: owner_now,
-                                readers: BTreeSet::new(),
-                                intact: true,
-                            },
-                        );
-                        self.emit(EventKind::MemoryRecorded {
-                            record,
-                            actor,
-                            inventory,
-                        });
-                        success = true;
-                    }
+            finish.validate_batch::<game_api::Command>(&self.host.storage, &batch)?;
+            self.host.storage.apply_batch(batch)?;
+            let effect = finish.effect.clone();
+            finish.finish_learning::<game_api::Command>(&mut self.host.storage);
+            self.host
+                .allocate_ids(allocation_demand)
+                .expect("admitted memory allocation");
+            let receiving = match &effect {
+                game_invocation::MemoryEffect::Recorded { inventory, .. } => Some(*inventory),
+                game_invocation::MemoryEffect::Transferred { destination, .. } => {
+                    Some(*destination)
                 }
-                MemoryWork::Read { record } => {
-                    if self.can_read_record(actor, *record) {
-                        let content = self.host.state.invocation.as_ref().unwrap().records[record]
-                            .content
-                            .clone();
-                        self.install_recorded_memory(
-                            actor,
-                            &content,
-                            KnowledgeSource::Recorded(*record),
-                        );
-                        self.host
-                            .state
-                            .invocation
-                            .as_mut()
-                            .unwrap()
-                            .records
-                            .get_mut(record)
-                            .unwrap()
-                            .readers
-                            .insert(actor);
-                        self.emit(EventKind::MemoryRead {
-                            record: *record,
-                            actor,
-                        });
-                        success = true;
-                    }
-                }
-                MemoryWork::Teach { content, recipient } => {
-                    let life = content.life();
-                    if self
-                        .host
-                        .state
-                        .invocation
-                        .as_ref()
-                        .unwrap()
-                        .control
-                        .active
-                        .as_ref()
-                        .is_some_and(|a| a.actor == actor && a.lives.contains(&life))
-                        && self.memory_area(*recipient).ok() == Some(action.area)
-                        && matches!(*self.host.storage.activity(*recipient).unwrap(),Activity::TeachingMemory {completes}if completes==action.completes)
-                    {
-                        self.install_recorded_memory(
-                            *recipient,
-                            content,
-                            KnowledgeSource::Reported(actor),
-                        );
-                        self.emit(EventKind::MemoryTaught {
-                            actor,
-                            recipient: *recipient,
-                            life,
-                        });
-                        success = true;
-                    }
-                }
-                MemoryWork::Move {
+                _ => None,
+            };
+            if let Some(id) = receiving {
+                let stock = game_cargo::inventory(&self.host.storage, id)
+                    .expect("admitted memory inventory");
+                self.inventory_index
+                    .entry(stock.location.clone())
+                    .or_default()
+                    .push(id);
+            }
+            match effect {
+                game_invocation::MemoryEffect::Recorded {
                     record,
-                    destination,
-                } => {
-                    if self.can_read_record(actor, *record) {
-                        let source =
-                            self.host.state.invocation.as_ref().unwrap().records[record].inventory;
-                        let location = match destination {
-                            StockPosition::Area(area) => InventoryLocation::Area(*area),
-                            StockPosition::Carried(carrier) => InventoryLocation::Carried(*carrier),
-                        };
-                        let valid = match destination {
-                            StockPosition::Area(area) => *area == action.area,
-                            StockPosition::Carried(carrier) => {
-                                self.memory_area(*carrier).ok() == Some(action.area)
-                                    && self
-                                        .inventory_index
-                                        .get(&location)
-                                        .into_iter()
-                                        .flatten()
-                                        .map(|id| {
-                                            u128::from(
-                                                game_cargo::inventory(&self.host.storage, *(id))
-                                                    .expect("inventory exists")
-                                                    .quantity
-                                                    .0,
-                                            )
-                                        })
-                                        .sum::<u128>()
-                                        + 1_000
-                                        <= u128::from(
-                                            self.host
-                                                .state
-                                                .physical
-                                                .as_ref()
-                                                .unwrap()
-                                                .rules
-                                                .carrying_capacity
-                                                .0,
-                                        )
-                            }
-                        };
-                        if valid {
-                            let mut access = game_cargo::inventory(&self.host.storage, source)
-                                .expect("inventory exists")
-                                .access
-                                .clone();
-                            if let StockPosition::Carried(carrier) = destination {
-                                access.insert(*carrier);
-                            }
-                            let target = self.debug_add_inventory(
-                                Good::Record,
-                                location,
-                                Quantity(0),
-                                Quantity(10_000),
-                                access,
-                            )?;
-                            game_cargo::inventory_mut(&mut self.host.storage, source)
-                                .unwrap()
-                                .quantity
-                                .0 -= 1_000;
-                            game_cargo::inventory_mut(&mut self.host.storage, target)
-                                .unwrap()
-                                .quantity
-                                .0 += 1_000;
-                            let original: Vec<_> = self
-                                .host
-                                .state
-                                .invocation
-                                .as_ref()
-                                .unwrap()
-                                .records
-                                .values()
-                                .filter(|r| r.intact && r.inventory == source)
-                                .map(|r| r.id)
-                                .collect();
-                            self.emit(EventKind::Transferred {
-                                actor,
-                                source,
-                                destination: target,
-                                quantity: Quantity(1_000),
-                            });
-                            for id in original {
-                                self.host
-                                    .state
-                                    .invocation
-                                    .as_mut()
-                                    .unwrap()
-                                    .records
-                                    .get_mut(&id)
-                                    .unwrap()
-                                    .inventory = if id == *record { target } else { source };
-                            }
-                            success = true;
-                        }
-                    }
+                    actor,
+                    inventory,
+                } => self.emit(EventKind::MemoryRecorded {
+                    record,
+                    actor,
+                    inventory,
+                }),
+                game_invocation::MemoryEffect::Read { record, actor } => {
+                    self.emit(EventKind::MemoryRead { record, actor })
                 }
-            }
-            self.cancel_invocation_action(actor);
-            if !success {
-                self.emit(EventKind::Interrupted { actor });
+                game_invocation::MemoryEffect::Taught {
+                    actor,
+                    recipient,
+                    life,
+                } => self.emit(EventKind::MemoryTaught {
+                    actor,
+                    recipient,
+                    life,
+                }),
+                game_invocation::MemoryEffect::Transferred {
+                    actor,
+                    source,
+                    destination,
+                    quantity,
+                } => self.emit(EventKind::Transferred {
+                    actor,
+                    source,
+                    destination,
+                    quantity,
+                }),
+                game_invocation::MemoryEffect::Interrupted { actor } => {
+                    self.emit(EventKind::Interrupted { actor })
+                }
+                game_invocation::MemoryEffect::Cancelled => {}
             }
         }
         Ok(())
     }
     pub(crate) fn record_quantity_increment(&self, source: InventoryId) -> Quantity {
-        Quantity(
-            if game_cargo::inventory(&self.host.storage, source)
-                .is_some_and(|stock| stock.good == Good::Record)
-            {
-                1_000
-            } else {
-                1
-            },
-        )
+        game_invocation::record_quantity_increment(&self.host.storage, source)
     }
     pub(crate) fn record_transfer_allowed(&self, source: InventoryId, quantity: Quantity) -> bool {
-        let Some(stock) = game_cargo::inventory(&self.host.storage, source) else {
-            return false;
-        };
-        if stock.good != Good::Record {
-            return true;
-        }
-        let Some(w) = &self.host.state.invocation else {
-            return false;
-        };
-        let increment = self.record_quantity_increment(source).0;
-        quantity.0 > 0
-            && quantity.0.is_multiple_of(increment)
-            && w.records
-                .values()
-                .filter(|record| record.intact && record.inventory == source)
-                .count() as u64
-                >= quantity.0 / increment
+        game_invocation::record_transfer_allowed(&self.host.storage, source, quantity)
     }
     pub(crate) fn relocate_record_transfer(
         &mut self,
@@ -2008,21 +1407,14 @@ impl Simulation {
         destination: InventoryId,
         quantity: Quantity,
     ) {
-        if game_cargo::inventory(&self.host.storage, source).is_none_or(|s| s.good != Good::Record)
-        {
-            return;
-        }
-        let Some(w) = self.host.state.invocation.as_mut() else {
+        let Some(runtime) = self.host.state.invocation.as_ref() else {
             return;
         };
-        for record in w
-            .records
-            .values_mut()
-            .filter(|record| record.intact && record.inventory == source)
-            .take((quantity.0 / 1_000) as usize)
-        {
-            record.inventory = destination;
-        }
+        runtime
+            .prepare_record_receipt(&self.host.storage, source, destination, quantity)
+            .expect("admitted record receipt")
+            .commit(&mut self.host.storage)
+            .expect("admitted record receipt schema");
     }
 }
 
@@ -2151,15 +1543,10 @@ mod tests {
         sim
     }
     fn past(sim: &Simulation) -> PersonId {
-        *sim.host
-            .state
-            .invocation
-            .as_ref()
-            .unwrap()
-            .history
-            .keys()
+        game_invocation::archives::<game_api::Command>(&sim.host.storage)
             .next()
             .unwrap()
+            .0
     }
     fn activate(sim: &mut Simulation, lives: BTreeSet<PersonId>) {
         act(sim, InvocationAction::Activate { lives }).unwrap();
@@ -2396,7 +1783,8 @@ mod tests {
         let mut sim = ready(1);
         let actor = sim.host.state.ruler;
         let life = past(&sim);
-        let remote = sim.host.state.invocation.as_ref().unwrap().history[&life]
+        let remote = game_invocation::archive::<game_api::Command>(&sim.host.storage, life)
+            .unwrap()
             .mind
             .knowledge
             .values()
@@ -2445,26 +1833,12 @@ mod tests {
             Quantity(1_000)
         );
         sim.advance(SimDuration(59_999)).unwrap();
-        assert!(
-            sim.host
-                .state
-                .invocation
-                .as_ref()
-                .unwrap()
-                .records
-                .is_empty()
-        );
+        assert!(game_invocation::records(&sim.host.storage).next().is_none());
         sim.advance(SimDuration(1)).unwrap();
-        let record = *sim
-            .host
-            .state
-            .invocation
-            .as_ref()
-            .unwrap()
-            .records
-            .keys()
+        let record = game_invocation::records(&sim.host.storage)
             .next()
-            .unwrap();
+            .unwrap()
+            .0;
         for _ in 0..10 {
             assert!(sim.invocation_view().unwrap().records[0].content.is_none());
         }
@@ -2607,16 +1981,10 @@ mod tests {
             decisions::Aspiration::Independence,
         )
         .unwrap();
-        let archived = &mut sim
-            .host
-            .state
-            .invocation
-            .as_mut()
-            .unwrap()
-            .history
-            .get_mut(&life)
-            .unwrap()
-            .mind;
+        let archived =
+            &mut game_invocation::archive_mut::<game_api::Command>(&mut sim.host.storage, life)
+                .unwrap()
+                .mind;
         archived.dream = decisions::Aspiration::Comfort;
         archived.goal = decisions::Goal::Practice;
         activate(&mut sim, BTreeSet::from([life]));
@@ -2737,6 +2105,147 @@ mod tests {
                 Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
                     .is_err(),
                 "invocation restore attack {attack}"
+            );
+            assert_eq!(sim.save().unwrap(), saved);
+        }
+    }
+    #[test]
+    fn native_memory_archives_actions_and_records_restore_and_reject_malformed_rows() {
+        let mut sim = ready(1);
+        let actor = sim.host.state.ruler;
+        let life = past(&sim);
+        let remote = game_invocation::archive::<game_api::Command>(&sim.host.storage, life)
+            .unwrap()
+            .mind
+            .knowledge
+            .keys()
+            .next()
+            .copied()
+            .unwrap();
+        let material = sim
+            .debug_add_inventory(
+                Good::Timber,
+                InventoryLocation::Carried(actor),
+                Quantity(2000),
+                Quantity(2000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        let tool = sim
+            .debug_add_inventory(
+                Good::Tool,
+                InventoryLocation::Carried(actor),
+                Quantity(1000),
+                Quantity(1000),
+                BTreeSet::from([actor]),
+            )
+            .unwrap();
+        activate(&mut sim, BTreeSet::from([life]));
+        act(
+            &mut sim,
+            InvocationAction::RecordMemory {
+                life,
+                inventory: remote,
+                material,
+                tool,
+            },
+        )
+        .unwrap();
+        let saved = sim.save().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(
+            value["state"]["state"]["invocation"]
+                .as_object()
+                .unwrap()
+                .len(),
+            1
+        );
+        for column in ["invocation/archive", "invocation/action"] {
+            assert!(
+                !value["state"]["components"]["columns"][column]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        for attack in 0..7 {
+            let mut forged = value.clone();
+            match attack {
+                0 => forged["state"]["state"]["invocation"]["history"] = serde_json::json!({}),
+                1 => {
+                    forged["state"]["components"]["columns"]["invocation/archive"][0]["value"]["person"] =
+                        serde_json::json!(actor.0)
+                }
+                2 => {
+                    forged["state"]["components"]["columns"]["invocation/action"][0]["value"]["actor"] =
+                        serde_json::json!(life.0)
+                }
+                3 => {
+                    forged["state"]["components"]["columns"]["invocation/action"][0]["value"]["completes"] =
+                        serde_json::json!(sim.host.clock().time.0)
+                }
+                4 => {
+                    forged["state"]["components"]["columns"]["invocation/action"][0]["value"]["area"] =
+                        serde_json::json!(u64::MAX)
+                }
+                5 => {
+                    forged["state"]["components"]["columns"]["invocation/action"] =
+                        serde_json::json!([])
+                }
+                _ => forged["state"]["state"]["invocation"] = serde_json::Value::Null,
+            }
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err(),
+                "memory restore attack {attack}"
+            );
+            assert_eq!(sim.save().unwrap(), saved);
+        }
+        let mut restored = Simulation::load(
+            &saved,
+            Execution {
+                workers: 4,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        sim.advance(MINUTE).unwrap();
+        for _ in 0..12 {
+            restored.advance(SimDuration(5000)).unwrap();
+        }
+        assert_eq!(sim.canonical_state(), restored.canonical_state());
+        let saved = sim.save().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert!(
+            !value["state"]["components"]["columns"]["invocation/record"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        for attack in 0..4 {
+            let mut forged = value.clone();
+            match attack {
+                0 => {
+                    forged["state"]["components"]["columns"]["invocation/record"][0]["value"]["id"] =
+                        serde_json::json!(u64::MAX)
+                }
+                1 => {
+                    forged["state"]["components"]["columns"]["invocation/record"][0]["value"]["readers"] =
+                        serde_json::json!([u64::MAX])
+                }
+                2 => {
+                    forged["state"]["components"]["columns"]["invocation/record"][0]["value"]["intact"] =
+                        serde_json::json!(false)
+                }
+                _ => {
+                    forged["state"]["components"]["columns"]["invocation/record"][0]["value"]["inventory"] =
+                        serde_json::json!(material.0)
+                }
+            }
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err(),
+                "record restore attack {attack}"
             );
             assert_eq!(sim.save().unwrap(), saved);
         }

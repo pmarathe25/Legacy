@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 45;
+const SAVE_VERSION: u32 = 46;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -298,10 +298,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.invocation {
+    if s.state.invocation.is_some() {
         for id in game_invocation::warnings(s.components)
             .map(|(id, _)| id.0)
-            .chain(world.records.keys().map(|id| id.0))
+            .chain(game_invocation::records(s.components).map(|(id, _)| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
@@ -1346,11 +1346,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
             EventKind::InvocationStarted { actor, ref lives } => {
                 if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .invocation
-                        .as_ref()
-                        .is_some_and(|w| lives.iter().all(|id| w.history.contains_key(id)))
+                    || !s.state.invocation.as_ref().is_some_and(|_| {
+                        lives.iter().all(|id| {
+                            game_invocation::archive::<game_api::Command>(s.components, *id)
+                                .is_some()
+                        })
+                    })
                 {
                     return Err(fail());
                 }
@@ -1385,7 +1386,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .invocation
                         .as_ref()
-                        .is_some_and(|w| w.records.contains_key(&record))
+                        .is_some_and(|_| game_invocation::record(s.components, record).is_some())
                 {
                     return Err(fail());
                 }
@@ -1396,7 +1397,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .invocation
                         .as_ref()
-                        .is_some_and(|w| w.records.contains_key(&record))
+                        .is_some_and(|_| game_invocation::record(s.components, record).is_some())
                 {
                     return Err(fail());
                 }
@@ -1408,11 +1409,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&recipient)
-                    || !s
-                        .state
-                        .invocation
-                        .as_ref()
-                        .is_some_and(|w| w.history.contains_key(&life))
+                    || !s.state.invocation.as_ref().is_some_and(|_| {
+                        game_invocation::archive::<game_api::Command>(s.components, life).is_some()
+                    })
                 {
                     return Err(fail());
                 }
