@@ -123,6 +123,15 @@ impl Batch {
         let key = (id, std::any::TypeId::of::<C>());
         self.edits.iter().any(|edit| edit.key() == key)
     }
+    /// Typed row identities in submission order, including removals and repeated
+    /// edits. Owners validate their final composed footprint before publication.
+    pub fn edited_ids<C: Component>(&self) -> impl Iterator<Item = StableId> + '_ {
+        let component = std::any::TypeId::of::<C>();
+        self.edits.iter().filter_map(move |edit| {
+            let (id, kind) = edit.key();
+            (kind == component).then_some(id)
+        })
+    }
 }
 impl Store {
     pub fn with_schema(schema: Schema) -> Self {
@@ -818,6 +827,27 @@ mod tests {
         assert!(!batch.touches::<Name>(StableId(1)));
         assert!(!batch.touches::<Count>(StableId(8)));
         assert!(!batch.touches::<Count>(StableId(2)));
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+    #[test]
+    fn typed_edited_ids_preserve_submission_order_and_expose_duplicate_conflicts() {
+        let mut batch = Batch::new();
+        batch.insert(StableId(9), Count(90));
+        batch.remove::<Name>(StableId(2));
+        batch.remove::<Count>(StableId(8));
+        batch.insert(StableId(9), Count(99));
+        assert_eq!(
+            batch.edited_ids::<Count>().collect::<Vec<_>>(),
+            vec![StableId(9), StableId(8), StableId(9)]
+        );
+        assert_eq!(
+            batch.edited_ids::<Name>().collect::<Vec<_>>(),
+            vec![StableId(2)]
+        );
+        assert!(batch.edited_ids::<Wide>().next().is_none());
+        let mut store = fixture(false);
+        let before = store.snapshot().unwrap();
+        assert!(store.apply_batch(batch).is_err());
         assert_eq!(store.snapshot().unwrap(), before);
     }
 }
