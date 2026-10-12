@@ -4,6 +4,8 @@
 
 The crate owns action validation, work transitions, treatment consent, shelter admission, and clinical calculations. It plans water procurement from a person's remembered stocks, springs, and routes. The world adapter supplies physical and contact facts, then applies inventory, movement, activity, and event effects.
 
+Local action admission distinguishes passive care from independent agency. It requests restriction, independence and resolved-position facts only when needed, so dependent or incapacitated people can participate in care without gaining physical actions.
+
 All health state lives in the host's shared component store. Clinical state, jobs, occupancy, knowledge, and caregiver offers attach to person entities; water quality attaches to inventory entities and shelters use shelter entities. `Runtime` retains only rules and the last review time. Prepared actions guard their affected rows and exact related job, offer, and occupant membership, then apply one atomic batch before returning effects. Intrinsic schema checks validate each row's structure; catalog validation checks clock, person, stock, location, and activity references.
 
 `prepare_interval` advances supplied clinical and job rows through the same numerical rules and retains sparse guarded changes. The host validates the prepared interval before publishing other frame writes, then commits through the atomic batch. Closing job policy can preserve intentional cancellation without accepting replacement work or recreating a removed job.

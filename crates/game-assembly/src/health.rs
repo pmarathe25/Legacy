@@ -291,20 +291,17 @@ impl Simulation {
             .as_ref()
             .and_then(|_| game_physiology::body(&self.host.storage, actor))
             .ok_or(Error::Unavailable)?;
-        if !body.vitals.alive
-            || self.in_combat(actor)
-            || (agency
-                && (body.vitals.health == 0
-                    || self.combat_restricts(actor)
-                    || !self.independent(actor)))
-        {
-            return Err(Error::Unavailable);
-        }
-        match self.resolved_location(actor) {
-            Location::AtArea(area) => Ok(area),
-            Location::StoppedOnRoad { from, .. } => Ok(from),
-            _ => Err(Error::Unavailable),
-        }
+        game_health::local_action_area(
+            game_health::LocalAgencyFacts {
+                alive: body.vitals.alive,
+                health: body.vitals.health,
+                in_combat: self.in_combat(actor),
+            },
+            agency,
+            || self.combat_restricts(actor),
+            || self.independent(actor),
+            || self.resolved_location(actor),
+        )
     }
     fn medical_level(&self, actor: PersonId) -> u16 {
         self.own_skill_level(actor, Skill::Medicine)
