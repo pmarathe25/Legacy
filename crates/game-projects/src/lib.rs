@@ -3,6 +3,8 @@ use game_core::*;
 use game_ecs::{Batch, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod output_reads;
+pub use output_reads::{SiteOutputGuard, SiteOutputRead, prepare_site_output_read};
 mod types;
 pub use types::*;
 mod storage;
@@ -138,12 +140,5 @@ pub fn site_output(
     site: game_core::SiteId,
     good: game_core::Good,
 ) -> Option<game_core::InventoryId> {
-    projects(store)
-        .map(|(_, row)| row)
-        .find(|row| matches!(row.kind,ProjectKind::Farm{plot,..} if plot==site))
-        .and_then(|row| match good {
-            game_core::Good::Food => Some(row.output),
-            game_core::Good::Seed => Some(row.input),
-            _ => None,
-        })
+    output_reads::site_output(store, site, good)
 }
