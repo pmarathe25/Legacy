@@ -14,6 +14,8 @@ Local exposure and observation systems consume temporary spatial, activity, body
 
 Individual affordances can resolve shelter through a small carrier-chain lookup or inspect symptoms and pair visibility directly, without indexing the population.
 
+Medical review owns work-pause decisions, care responses, accepted treatment instructions and healer selection. It preserves phase-opening work and offers while reading current physical availability, trust and patient contact. The adapter executes the selected intentions; review timing and publication bounds remain in Health.
+
 Collected water mixes its contamination load with existing water and updates the holder's own observations. Clean water added to an unknown or unsafe stock does not erase that history. Prepared water and memory writes can join a cargo deposit in one guarded batch.
 
 Prepared placements select the actual effective shelter through a small factual carrier/activity/body port. They guard every consulted actor, Occupancy and Shelter row, coalesce departures and compatible placements, and stage projected shelter observations in the same shared batch as motion. A receiving owner supplies projected physical facts; Health owns occupancy inheritance and visibility policy.

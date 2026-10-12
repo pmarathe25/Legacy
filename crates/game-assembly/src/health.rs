@@ -1835,29 +1835,28 @@ impl Simulation {
         })
     }
     pub(crate) fn review_health(&mut self) -> Result<(), Error> {
+        let now = self.host.clock().time;
         let Some(w) = &self.host.state.health else {
             return Ok(());
         };
-        if w.last_review == self.host.clock().time
-            || !self.host.clock().time.0.is_multiple_of(60_000)
-        {
+        if !w.review_due(now) {
             return Ok(());
         }
-        self.preflight_health(self.host.clock().time)?;
-        self.host.state.health.as_mut().unwrap().last_review = self.host.clock().time;
+        self.preflight_health(now)?;
+        self.host.state.health.as_mut().unwrap().record_review(now);
         self.observe_health();
-        let jobs: Vec<_> = game_health::jobs(&self.host.storage)
-            .map(|(_, job)| job)
-            .cloned()
-            .collect();
+        let jobs = self
+            .host
+            .state
+            .health
+            .as_ref()
+            .unwrap()
+            .review_work(&self.host.storage);
         for job in jobs {
-            if job.actor == self.host.state.ruler && !self.past_life_controls_actor(job.actor) {
-                continue;
-            }
             let body = game_physiology::body(&self.host.storage, job.actor).unwrap();
             let physical = self.body_rules(job.actor);
-            if game_health::should_pause_work(
-                &job.work,
+            if job.should_pause(
+                job.actor == self.host.state.ruler && !self.past_life_controls_actor(job.actor),
                 game_health::WorkNeeds {
                     hunger: body.vitals.hunger,
                     meal_relief: physical.meal_relief,
@@ -1871,59 +1870,51 @@ impl Simulation {
                 let _ = self.debug_actor_command(job.actor, Command::Rest);
             }
         }
-        let offers: Vec<_> = game_health::all_offers(&self.host.storage)
-            .map(|(_, _, offer)| offer)
-            .cloned()
-            .collect();
-        for offer in offers {
-            if offer.patient == self.host.state.ruler
-                && !self.past_life_controls_actor(offer.patient)
-                || offer.accepted
-                || self.health_area(offer.patient, false).is_err()
-                || self.health_area(offer.caregiver, true).is_err()
-                || !self.can_observe_health(offer.patient, offer.caregiver)
-            {
-                continue;
-            }
-            let Some(patient) = self.health_mind(offer.patient) else {
-                continue;
-            };
-            let symptoms = self.visible_symptoms(offer.patient);
-            let trust = patient
-                .relationships
-                .get(&offer.caregiver)
-                .map_or(0, |r| r.trust);
-            let action = game_health::offer_response(offer.caregiver, &symptoms, trust);
-            let _ = self.health_command(offer.patient, &action);
-        }
-        let offers: Vec<_> = game_health::all_offers(&self.host.storage)
-            .map(|(_, _, offer)| offer)
-            .filter(|o| o.accepted && o.caregiver != self.host.state.ruler)
-            .cloned()
-            .collect();
-        for offer in offers {
-            let _ = self.health_command(
-                offer.caregiver,
-                &HealthAction::Treat {
-                    patient: offer.patient,
-                    herbs: offer.herbs,
-                    water: offer.water,
-                },
-            );
-        }
-        let healers: Vec<_> = self
+        let offers = self
             .host
             .state
-            .people
-            .iter()
-            .filter(|p| {
-                p.id != self.host.state.ruler
-                    && self.medical_level(p.id) > 0
-                    && self.health_area(p.id, true).is_ok()
-                    && !self.health_actor_busy(p.id)
-            })
-            .map(|p| p.id)
-            .collect();
+            .health
+            .as_ref()
+            .unwrap()
+            .review_offers(&self.host.storage);
+        for offer in offers {
+            let patient = offer.patient();
+            let caregiver = offer.caregiver();
+            let facts = game_health::OfferReviewFacts {
+                player_controlled: patient == self.host.state.ruler
+                    && !self.past_life_controls_actor(patient),
+                patient_present: self.health_area(patient, false).is_ok(),
+                caregiver_capable: self.health_area(caregiver, true).is_ok(),
+                contact: self.can_observe_health(patient, caregiver),
+                trust: self.health_mind(patient).map(|mind| {
+                    mind.relationships
+                        .get(&caregiver)
+                        .map_or(0, |relation| relation.trust)
+                }),
+            };
+            if let Some(action) = offer.response(facts, || self.visible_symptoms(patient)) {
+                let _ = self.health_command(patient, &action);
+            }
+        }
+        let treatments = self
+            .host
+            .state
+            .health
+            .as_ref()
+            .unwrap()
+            .accepted_treatments(&self.host.storage, self.host.state.ruler);
+        for (caregiver, action) in treatments {
+            let _ = self.health_command(caregiver, &action);
+        }
+        let healers = self.host.state.health.as_ref().unwrap().review_healers(
+            self.host.state.people.iter().map(|person| person.id),
+            |actor| game_health::HealerReviewFacts {
+                is_ruler: actor == self.host.state.ruler,
+                medicine: self.medical_level(actor),
+                capable: self.health_area(actor, true).is_ok(),
+                busy: self.health_actor_busy(actor),
+            },
+        );
         for caregiver in healers {
             let mind = &game_characters::decisions::mind::<game_api::Command>(
                 &self.host.storage,
@@ -1931,36 +1922,46 @@ impl Simulation {
             )
             .expect("mind exists");
             let body = game_physiology::body(&self.host.storage, caregiver).unwrap();
-            let rules = &self.host.state.health.as_ref().unwrap().rules;
             let physical = self.body_rules(caregiver);
             let stocks = self.remembered_health_stocks(caregiver, None);
-            let patients = game_health::knowledge(&self.host.storage, caregiver)
-                .into_iter()
-                .flat_map(|k| k.people.values())
-                .map(|symptoms| game_health::PatientOpportunity {
-                    symptoms: symptoms.clone(),
-                    contact: self.can_observe_health(caregiver, symptoms.person),
-                    offer_exists: game_health::offer(
-                        &self.host.storage,
-                        caregiver,
-                        symptoms.person,
-                    )
-                    .is_some(),
-                    busy: self.health_patient_resting(symptoms.person),
-                })
-                .collect::<Vec<_>>();
-            let facts = game_health::WillingCare {
-                capable: self.health_area(caregiver, true).is_ok(),
-                medicine: self.medical_level(caregiver),
-                busy: self.health_actor_busy(caregiver),
-                hungry: body.vitals.hunger >= physical.meal_relief,
-                fatigued: body.vitals.fatigue >= physical.fatigue_limit / 2,
-                urgent_dependent: false,
+            let patients = self
+                .host
+                .state
+                .health
+                .as_ref()
+                .unwrap()
+                .remembered_patients(
+                    &self.host.storage,
+                    caregiver,
+                    |patient| self.can_observe_health(caregiver, patient),
+                    |patient| self.health_patient_resting(patient),
+                );
+            let facts = game_health::CareReviewFacts {
+                healer: game_health::HealerReviewFacts {
+                    is_ruler: caregiver == self.host.state.ruler,
+                    medicine: self.medical_level(caregiver),
+                    capable: self.health_area(caregiver, true).is_ok(),
+                    busy: self.health_actor_busy(caregiver),
+                },
+                body: game_health::WorkNeeds {
+                    hunger: body.vitals.hunger,
+                    meal_relief: physical.meal_relief,
+                    fatigue: body.vitals.fatigue,
+                    fatigue_limit: physical.fatigue_limit,
+                    health: body.vitals.health,
+                    max_health: physical.max_health,
+                },
                 empathy: mind.personality.empathy,
-                trust: 0,
                 stocks: &stocks,
             };
-            if let Some(action) = game_health::proactive_offer(caregiver, rules, facts, &patients) {
+            if let Some(action) = self
+                .host
+                .state
+                .health
+                .as_ref()
+                .unwrap()
+                .proactive_review_offer(caregiver, facts, &patients)
+            {
                 let _ = self.health_command(caregiver, &action);
             }
         }
@@ -1974,11 +1975,11 @@ impl Simulation {
             .map_or(0, |w| w.allocation_bound(&self.host.storage, next))
     }
     pub(crate) fn health_event_bound(&self) -> usize {
-        self.host.state.health.as_ref().map_or(0, |_| {
-            game_health::clinicals(&self.host.storage).count() * 8
-                + game_health::jobs(&self.host.storage).count() * 8
-                + game_health::all_offers(&self.host.storage).count() * 4
-        })
+        self.host
+            .state
+            .health
+            .as_ref()
+            .map_or(0, |owner| owner.review_event_bound(&self.host.storage))
     }
     pub(crate) fn preflight_health(&self, next: SimTime) -> Result<(), Error> {
         let Some(w) = &self.host.state.health else {
