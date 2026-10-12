@@ -1,6 +1,8 @@
 use crate::*;
+use crate::{mission as stored_mission, recruitment as stored_recruitment};
 use game_agreements::AgreementView;
 use game_core::*;
+use game_ecs::Store;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Receipts come only after the owning physical operation committed. They
@@ -92,9 +94,10 @@ fn terminal(s: MissionStatus) -> bool {
     )
 }
 
-impl World {
+impl Runtime {
     pub fn prepare_receipt(
         &self,
+        store: &Store,
         sequence: EventId,
         receipt: &MissionReceipt,
     ) -> Result<PreparedMission, Error> {
@@ -109,9 +112,9 @@ impl World {
         let mut changed: BTreeMap<MissionId, Mission> = BTreeMap::new();
         match receipt {
             MissionReceipt::Captured { actor, target, at } => {
-                plan.guard_membership(self, *actor);
-                if let Some(id) = self.membership(*actor) {
-                    let old = self.missions.get(&id).ok_or(Error::Unavailable)?;
+                plan.guard_membership(self, store, *actor);
+                if let Some(id) = self.membership(store, *actor) {
+                    let old = stored_mission(store, id).ok_or(Error::Unavailable)?;
                     if let Some(member) = old.members.get(actor)
                         && matches!(member.directive,MissionObjective::Confine {person,..} if person==*target)
                     {
@@ -127,7 +130,10 @@ impl World {
                 }
             }
             MissionReceipt::Released { actor, target, at } => {
-                for old in self.missions.values().filter(|m| !terminal(m.status)) {
+                for old in missions(store)
+                    .map(|(_, row)| row)
+                    .filter(|m| !terminal(m.status))
+                {
                     let relevant=old.members.values().any(|p|p.confinement.is_some() && matches!(p.directive,MissionObjective::Confine {person,..}if person==*target));
                     if !relevant {
                         continue;
@@ -150,9 +156,9 @@ impl World {
                 }
             }
             MissionReceipt::Departed { actor, from } => {
-                plan.guard_membership(self, *actor);
-                if let Some(id) = self.membership(*actor) {
-                    let mut m = self.missions[&id].clone();
+                plan.guard_membership(self, store, *actor);
+                if let Some(id) = self.membership(store, *actor) {
+                    let mut m = stored_mission(store, id).expect("guarded mission").clone();
                     m.members
                         .get_mut(actor)
                         .ok_or(Error::Unavailable)?
@@ -167,11 +173,11 @@ impl World {
                 contacts,
             } => {
                 for observer in observers {
-                    plan.guard_membership(self, *observer);
-                    if let Some(id) = self.membership(*observer) {
-                        let m = changed
-                            .entry(id)
-                            .or_insert_with(|| self.missions[&id].clone());
+                    plan.guard_membership(self, store, *observer);
+                    if let Some(id) = self.membership(store, *observer) {
+                        let m = changed.entry(id).or_insert_with(|| {
+                            stored_mission(store, id).expect("guarded mission").clone()
+                        });
                         m.members
                             .get_mut(observer)
                             .ok_or(Error::Unavailable)?
@@ -179,11 +185,11 @@ impl World {
                             .insert(*actor, *area);
                     }
                 }
-                plan.guard_membership(self, *actor);
-                if let Some(id) = self.membership(*actor) {
-                    let m = changed
-                        .entry(id)
-                        .or_insert_with(|| self.missions[&id].clone());
+                plan.guard_membership(self, store, *actor);
+                if let Some(id) = self.membership(store, *actor) {
+                    let m = changed.entry(id).or_insert_with(|| {
+                        stored_mission(store, id).expect("guarded mission").clone()
+                    });
                     let p = m.members.get_mut(actor).ok_or(Error::Unavailable)?;
                     p.visited.insert(*area);
                     for contact in contacts.iter().take(64) {
@@ -201,7 +207,10 @@ impl World {
                 if source == destination && quantity.0 > 0 {
                     return Err(Error::Unavailable);
                 }
-                for old in self.missions.values().filter(|m| !terminal(m.status)) {
+                for old in missions(store)
+                    .map(|(_, row)| row)
+                    .filter(|m| !terminal(m.status))
+                {
                     let relevant = old.members.values().any(|p| {
                         p.supply_cargo
                             .values()
@@ -304,7 +313,7 @@ impl World {
                 }
             }
             MissionReceipt::Lost { source, quantity } => {
-                for old in self.missions.values().filter(|m| {
+                for old in missions(store).map(|(_, row)| row).filter(|m| {
                     m.members.values().any(|p| {
                         p.cargo.contains_key(source)
                             || p.supply_cargo
@@ -337,7 +346,7 @@ impl World {
             }
         }
         for m in changed.into_values() {
-            plan.mission(self, m);
+            plan.mission(store, m);
         }
         // A receipt updates facts; receiving observers are projected separately.
         plan.notices.clear();
@@ -345,10 +354,11 @@ impl World {
     }
     pub fn prepare_outcome(
         &self,
+        store: &Store,
         id: MissionId,
         f: &OutcomeFacts,
     ) -> Result<PreparedMission, Error> {
-        let old = self.missions.get(&id).ok_or(Error::Unavailable)?;
+        let old = stored_mission(store, id).ok_or(Error::Unavailable)?;
         let mut plan = PreparedMission::default();
         if terminal(old.status) {
             return Ok(plan);
@@ -511,7 +521,7 @@ impl World {
             }
         }
         if &m != old {
-            plan.mission(self, m);
+            plan.mission(store, m);
         }
         plan.notices.clear(); // Knowing an outcome requires actual observation.
         Ok(plan)
@@ -612,15 +622,19 @@ pub struct DefectionFacts {
     pub own_team: u32,
     pub opponents: BTreeMap<PersonId, ObservedOpponent>,
 }
-impl World {
-    fn payment_failed(&self, actor: PersonId, id: MissionId, motives: &ServiceMotives) -> bool {
-        let Some(member) = self.missions.get(&id).and_then(|m| m.members.get(&actor)) else {
+impl Runtime {
+    fn payment_failed(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        id: MissionId,
+        motives: &ServiceMotives,
+    ) -> bool {
+        let Some(member) = stored_mission(store, id).and_then(|m| m.members.get(&actor)) else {
             return false;
         };
-        let Some(agreement) = self
-            .recruitments
-            .get(&member.recruitment)
-            .and_then(|r| r.agreement)
+        let Some(agreement) =
+            stored_recruitment(store, member.recruitment).and_then(|r| r.agreement)
         else {
             return false;
         };
@@ -634,25 +648,27 @@ impl World {
     }
     pub fn service_withdrawal(
         &self,
+        store: &Store,
         actor: PersonId,
         id: MissionId,
         motives: &ServiceMotives,
     ) -> Option<MissionAction> {
-        if self.missions.get(&id)?.members.get(&actor)?.status != CompanionStatus::Accepted {
+        if stored_mission(store, id)?.members.get(&actor)?.status != CompanionStatus::Accepted {
             return None;
         }
         (motives.guardian_duty
-            || self.payment_failed(actor, id, motives) && motives.honesty < 800
+            || self.payment_failed(store, actor, id, motives) && motives.honesty < 800
             || motives.leader_trust < -500)
             .then_some(MissionAction::Leave { mission: id })
     }
     pub fn prepare_defection(
         &self,
+        store: &Store,
         actor: PersonId,
         id: MissionId,
         f: &DefectionFacts,
     ) -> Result<Option<PreparedMission>, Error> {
-        let old = self.missions.get(&id).ok_or(Error::Unavailable)?;
+        let old = stored_mission(store, id).ok_or(Error::Unavailable)?;
         let member = old.members.get(&actor).ok_or(Error::Unavailable)?;
         if member.status != CompanionStatus::Accepted || f.motives.honesty >= 500 {
             return Ok(None);
@@ -666,7 +682,7 @@ impl World {
             return Ok(None);
         };
         if i64::from(other.trust) < i64::from(f.motives.leader_trust) + 500
-            || !(self.payment_failed(actor, id, &f.motives) || f.motives.leader_trust < -500)
+            || !(self.payment_failed(store, actor, id, &f.motives) || f.motives.leader_trust < -500)
         {
             return Ok(None);
         }
@@ -676,12 +692,9 @@ impl World {
         p.declared_explanation = "Changed allegiance during combat".into();
         p.explanation = "Chose a trusted opponent over a distrusted or defaulting leader".into();
         let mut plan = PreparedMission::default();
-        let offer = self
-            .recruitments
-            .get(&member.recruitment)
-            .ok_or(Error::Unavailable)?;
-        plan.recruitment(self, offer.clone());
-        plan.mission(self, m);
+        let offer = stored_recruitment(store, member.recruitment).ok_or(Error::Unavailable)?;
+        plan.recruitment(store, offer.clone());
+        plan.mission(store, m);
         plan.notices.clear();
         plan.allegiance = Some(AllegianceEffect {
             actor,
@@ -704,4 +717,49 @@ pub fn combat_retreat_wanted(
 ) -> bool {
     health < max_health / 2 && risk_tolerance < 600
         || known_status == Some(MissionStatus::Returning)
+}
+pub struct CombatDefectionFacts<'a> {
+    pub player: PersonId,
+    pub motives: ServiceMotives,
+    pub own_team: u32,
+    pub relationships: &'a BTreeMap<PersonId, game_characters::decisions::Relationship>,
+}
+impl Runtime {
+    pub fn prepare_combat_defection<'a>(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        id: MissionId,
+        facts: CombatDefectionFacts<'_>,
+        opponents: impl IntoIterator<Item = &'a game_conflict::Fighter>,
+    ) -> Result<Option<PreparedMission>, Error> {
+        if actor == facts.player {
+            return Ok(None);
+        }
+        let opponents = opponents
+            .into_iter()
+            .map(|other| {
+                (
+                    other.actor,
+                    ObservedOpponent {
+                        team: other.team,
+                        trust: facts
+                            .relationships
+                            .get(&other.actor)
+                            .map_or(-1000, |r| r.trust),
+                    },
+                )
+            })
+            .collect();
+        self.prepare_defection(
+            store,
+            actor,
+            id,
+            &DefectionFacts {
+                motives: facts.motives,
+                own_team: facts.own_team,
+                opponents,
+            },
+        )
+    }
 }

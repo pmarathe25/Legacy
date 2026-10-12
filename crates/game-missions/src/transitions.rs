@@ -1,6 +1,8 @@
 use crate::*;
+use crate::{mission as stored_mission, recruitment as stored_recruitment};
 use game_agreements::{AgreementTerm, PermissionAsset, TermsContext};
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Only referenced asset identities and kinds, never remote balances/locations.
@@ -119,6 +121,11 @@ pub struct ServiceConsent {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MissionEvent {
+    Reported {
+        mission: MissionId,
+        speaker: PersonId,
+        recipient: PersonId,
+    },
     Proposed {
         mission: MissionId,
         sponsor: PersonId,
@@ -164,7 +171,13 @@ pub struct PreparedMission {
     pub allegiance: Option<AllegianceEffect>,
 }
 impl PreparedMission {
-    pub fn check(&self, state: &World) -> Result<(), Error> {
+    pub fn created_missions(&self) -> impl Iterator<Item = MissionId> {
+        self.missions
+            .iter()
+            .filter(|patch| patch.before.is_none())
+            .map(|patch| patch.after.id)
+    }
+    pub fn check(&self, state: &Runtime, store: &Store) -> Result<(), Error> {
         let fresh = self
             .missions
             .iter()
@@ -179,19 +192,19 @@ impl PreparedMission {
         if self
             .receipt_cursor
             .is_some_and(|(before, _)| state.last_event != before)
-            || fresh.into_iter().any(|id| mission_id_exists(state, id))
+            || fresh.into_iter().any(|id| mission_id_exists(store, id))
             || self
                 .missions
                 .iter()
-                .any(|p| state.missions.get(&p.after.id) != p.before.as_ref())
+                .any(|p| stored_mission(store, p.after.id) != p.before.as_ref())
             || self
                 .recruitments
                 .iter()
-                .any(|p| state.recruitments.get(&p.after.id) != p.before.as_ref())
+                .any(|p| stored_recruitment(store, p.after.id) != p.before.as_ref())
             || self
                 .memberships
                 .iter()
-                .any(|(person, old)| state.membership(*person) != *old)
+                .any(|(person, old)| state.membership(store, *person) != *old)
         {
             return Err(Error::Unavailable);
         }
@@ -199,46 +212,70 @@ impl PreparedMission {
     }
     /// The coordinator preflights and commits the exact compensation effect in
     /// the same transaction. This changes service records only, never stocks.
-    pub fn commit(self, state: &mut World) -> Result<(), Error> {
-        self.check(state)?;
-        if let Some((_, after)) = self.receipt_cursor {
-            state.last_event = after;
+    pub fn stage_into(
+        self,
+        state: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<MissionFinalization, Error> {
+        self.check(state, store)?;
+        if self
+            .missions
+            .iter()
+            .any(|p| batch.touches::<Mission>(StableId(p.after.id.0)))
+            || self
+                .recruitments
+                .iter()
+                .any(|p| batch.touches::<Recruitment>(StableId(p.after.id.0)))
+        {
+            return Err(Error::Unavailable);
         }
-        for p in self.missions {
-            state.missions.insert(p.after.id, p.after);
+        for patch in self.missions {
+            patch.after.validate()?;
+            batch.insert(StableId(patch.after.id.0), patch.after);
         }
-        for p in self.recruitments {
-            state.recruitments.insert(p.after.id, p.after);
+        for patch in self.recruitments {
+            patch.after.validate()?;
+            batch.insert(StableId(patch.after.id.0), patch.after);
         }
+        Ok(MissionFinalization {
+            receipt_cursor: self.receipt_cursor.map(|(_, after)| after),
+        })
+    }
+    pub fn commit(self, state: &mut Runtime, store: &mut Store) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        let finish = self.stage_into(state, store, &mut batch)?;
+        store.apply_batch(batch)?;
+        finish.finish(state);
         Ok(())
     }
-    pub(crate) fn guard_membership(&mut self, state: &World, actor: PersonId) {
-        self.memberships.push((actor, state.membership(actor)));
+    pub(crate) fn guard_membership(&mut self, state: &Runtime, store: &Store, actor: PersonId) {
+        self.memberships
+            .push((actor, state.membership(store, actor)));
     }
-    pub(crate) fn mission(&mut self, state: &World, after: Mission) {
+    pub(crate) fn mission(&mut self, store: &Store, after: Mission) {
         self.notices.insert(after.id);
         self.missions.push(MissionPatch {
-            before: state.missions.get(&after.id).cloned(),
+            before: stored_mission(store, after.id).cloned(),
             after,
         });
     }
-    pub(crate) fn recruitment(&mut self, state: &World, after: Recruitment) {
+    pub(crate) fn recruitment(&mut self, store: &Store, after: Recruitment) {
         self.recruitments.push(RecruitmentPatch {
-            before: state.recruitments.get(&after.id).cloned(),
+            before: stored_recruitment(store, after.id).cloned(),
             after,
         });
     }
 }
-impl World {
+impl Runtime {
     /// A distant outcome releases a remembered commitment only after an actual
     /// observation/report. Authoritative status is not private knowledge.
-    pub fn membership(&self, actor: PersonId) -> Option<MissionId> {
-        self.missions
-            .values()
+    pub fn membership(&self, store: &Store, actor: PersonId) -> Option<MissionId> {
+        missions(store)
+            .map(|(_, row)| row)
             .find(|m| {
-                !self
-                    .known
-                    .get(&actor)
+                !knowledge(store, actor)
+                    .map(|row| &row.missions)
                     .and_then(|k| k.get(&m.id))
                     .is_some_and(|view| terminal(view.status))
                     && m.members
@@ -249,6 +286,7 @@ impl World {
     }
     pub fn prepare_command(
         &self,
+        store: &Store,
         actor: PersonId,
         action: &MissionAction,
         f: &CommandFacts,
@@ -270,7 +308,7 @@ impl World {
                     || proposal.deadline <= f.now
                     || proposal.home != f.area
                     || !people.is_subset(&f.available)
-                    || people.iter().any(|p| self.membership(*p).is_some())
+                    || people.iter().any(|p| self.membership(store, *p).is_some())
                     || !f.assets.objective_valid(&proposal.objective, f.now)
                     || matches!(&proposal.objective,MissionObjective::Defeat {person}|MissionObjective::Confine {person,..} if people.contains(person)||*person==actor)
                     || matches!(proposal.objective,MissionObjective::Confine {until,..} if until>proposal.deadline)
@@ -298,24 +336,25 @@ impl World {
                     .chain([id.0])
                     .collect();
                 if id.0 == 0
-                    || mission_id_exists(self, id.0)
+                    || mission_id_exists(store, id.0)
                     || ids.recruitments.keys().copied().collect::<BTreeSet<_>>() != people
                     || unique.len() != people.len() + 1
                     || unique.contains(&0)
                     || ids
                         .recruitments
                         .values()
-                        .any(|id| mission_id_exists(self, id.0))
+                        .any(|id| mission_id_exists(store, id.0))
                     || ids.backing.is_some()
                 {
                     return Err(Error::Unavailable);
                 }
                 let mut members = BTreeMap::new();
                 for person in people {
-                    plan.memberships.push((person, self.membership(person)));
+                    plan.memberships
+                        .push((person, self.membership(store, person)));
                     let recruitment = ids.recruitments[&person];
                     plan.recruitment(
-                        self,
+                        store,
                         Recruitment {
                             id: recruitment,
                             mission: id,
@@ -355,7 +394,7 @@ impl World {
                     );
                 }
                 plan.mission(
-                    self,
+                    store,
                     Mission {
                         id,
                         sponsor: actor,
@@ -377,14 +416,8 @@ impl World {
             | MissionAction::Refuse { recruitment }
             | MissionAction::AcceptCounteroffer { recruitment }
             | MissionAction::Counteroffer { recruitment, .. } => {
-                let offer = self
-                    .recruitments
-                    .get(recruitment)
-                    .ok_or(Error::Unavailable)?;
-                let old = self
-                    .missions
-                    .get(&offer.mission)
-                    .ok_or(Error::Unavailable)?;
+                let offer = stored_recruitment(store, *recruitment).ok_or(Error::Unavailable)?;
+                let old = stored_mission(store, offer.mission).ok_or(Error::Unavailable)?;
                 let mut m = old.clone();
                 let mut r = offer.clone();
                 let member = m.members.get_mut(&offer.person).ok_or(Error::Unavailable)?;
@@ -392,7 +425,7 @@ impl World {
                     MissionAction::Accept { .. } => {
                         if offer.person != actor
                             || f.duties.contains(&actor)
-                            || self.membership(actor).is_some_and(|id| id != m.id)
+                            || self.membership(store, actor).is_some_and(|id| id != m.id)
                             || offer.countered
                             || m.status != MissionStatus::Preparing
                             || member.status != CompanionStatus::Offered
@@ -406,7 +439,8 @@ impl World {
                         {
                             return Err(Error::Unavailable);
                         }
-                        plan.memberships.push((actor, self.membership(actor)));
+                        plan.memberships
+                            .push((actor, self.membership(store, actor)));
                         if !offer.compensation.is_empty() {
                             let agreement = ids
                                 .backing
@@ -475,11 +509,11 @@ impl World {
                     }
                     _ => unreachable!(),
                 }
-                plan.recruitment(self, r);
-                plan.mission(self, m);
+                plan.recruitment(store, r);
+                plan.mission(store, m);
             }
             MissionAction::Depart { mission } => {
-                let old = self.missions.get(mission).ok_or(Error::Unavailable)?;
+                let old = stored_mission(store, *mission).ok_or(Error::Unavailable)?;
                 if actor != old.sponsor && actor != old.proposal.leader
                     || old.status != MissionStatus::Preparing
                     || old
@@ -495,14 +529,12 @@ impl World {
                 m.status = MissionStatus::Traveling;
                 m.departed_at = Some(f.now);
                 m.explanation = "Gathering supplies and setting out".into();
-                plan.mission(self, m);
+                plan.mission(store, m);
                 plan.events
                     .push(MissionEvent::Departed { mission: *mission });
             }
             MissionAction::Leave { mission } => {
-                let mut m = self
-                    .missions
-                    .get(mission)
+                let mut m = stored_mission(store, *mission)
                     .ok_or(Error::Unavailable)?
                     .clone();
                 let member = m
@@ -513,7 +545,7 @@ impl World {
                 member.status = CompanionStatus::Withdrawn;
                 member.declared_explanation = "Withdrew service".into();
                 member.explanation = "Withdrew service; existing payment obligations remain".into();
-                plan.mission(self, m);
+                plan.mission(store, m);
                 plan.events.push(MissionEvent::RecruitmentChanged {
                     mission: *mission,
                     person: actor,
@@ -521,7 +553,7 @@ impl World {
                 });
             }
             MissionAction::Objective { mission, .. } | MissionAction::Retreat { mission } => {
-                let old = self.missions.get(mission).ok_or(Error::Unavailable)?;
+                let old = stored_mission(store, *mission).ok_or(Error::Unavailable)?;
                 let retreat = matches!(action, MissionAction::Retreat { .. });
                 if actor != old.sponsor && actor != old.proposal.leader
                     || !f.available.contains(&old.proposal.leader)
@@ -557,9 +589,8 @@ impl World {
                 if *recipient == actor || !f.available.contains(recipient) {
                     return Err(Error::Unavailable);
                 }
-                let snapshot = self
-                    .known
-                    .get(&actor)
+                let snapshot = knowledge(store, actor)
+                    .map(|row| &row.missions)
                     .and_then(|k| k.get(mission))
                     .cloned()
                     .ok_or(Error::Unavailable)?;
@@ -604,16 +635,17 @@ pub struct OrderFacts {
     pub heard: BTreeMap<PersonId, ServiceChoice>,
     pub assets: MissionAssets,
 }
-impl World {
+impl Runtime {
     pub fn prepare_order(
         &self,
+        store: &Store,
         id: MissionId,
         leader: PersonId,
         objective: &MissionObjective,
         f: &OrderFacts,
         retreat: bool,
     ) -> Result<PreparedMission, Error> {
-        let old = self.missions.get(&id).ok_or(Error::Unavailable)?;
+        let old = stored_mission(store, id).ok_or(Error::Unavailable)?;
         if old.proposal.leader != leader
             || terminal(old.status)
             || old
@@ -639,15 +671,12 @@ impl World {
                 .get_mut(actor)
                 .filter(|p| p.status == CompanionStatus::Accepted)
                 .ok_or(Error::Unavailable)?;
-            let offer = self
-                .recruitments
-                .get(&member.recruitment)
-                .ok_or(Error::Unavailable)?;
+            let offer = stored_recruitment(store, member.recruitment).ok_or(Error::Unavailable)?;
             if offer.person != *actor || offer.mission != id {
                 return Err(Error::Unavailable);
             }
             // Guard the original compensation used for the actual judgment.
-            plan.recruitment(self, offer.clone());
+            plan.recruitment(store, offer.clone());
             let willing = match choice {
                 ServiceChoice::DeclaredAcceptance => true,
                 ServiceChoice::Personal(input) => {
@@ -691,7 +720,7 @@ impl World {
             m.explanation =
                 "Leader communicated a retreat; participants decide whether to return".into();
         }
-        plan.mission(self, m);
+        plan.mission(store, m);
         plan.events.push(MissionEvent::ObjectiveChanged {
             mission: id,
             leader,
@@ -700,14 +729,15 @@ impl World {
     }
     pub fn recruitment_response(
         &self,
+        store: &Store,
         id: RecruitmentId,
         input: RecruitmentInput,
         area: AreaId,
         self_inventory: InventoryId,
         known_supplies: &[StockKnowledge],
     ) -> Option<MissionAction> {
-        let offer = self.recruitments.get(&id)?;
-        let mission = self.missions.get(&offer.mission)?;
+        let offer = stored_recruitment(store, id)?;
+        let mission = stored_mission(store, offer.mission)?;
         if offer.person != input.actor
             || mission.status != MissionStatus::Preparing
             || offer.countered
@@ -751,21 +781,21 @@ impl World {
     }
 }
 
-fn mission_id_exists(state: &World, id: u64) -> bool {
-    state.missions.contains_key(&MissionId(id))
-        || state.recruitments.contains_key(&RecruitmentId(id))
+fn mission_id_exists(store: &Store, id: u64) -> bool {
+    store.contains(StableId(id))
 }
-impl World {
+impl Runtime {
     /// A tactical or completed conversation authorizes the named leader's
     /// service objective, never other bodies' force actions or private stocks.
     pub fn validate_order(
         &self,
+        store: &Store,
         actor: PersonId,
         id: MissionId,
         objective: &MissionObjective,
         f: &CommandFacts,
     ) -> Result<(), Error> {
-        let m = self.missions.get(&id).ok_or(Error::Unavailable)?;
+        let m = stored_mission(store, id).ok_or(Error::Unavailable)?;
         if !f.available.contains(&actor)
             || actor != m.sponsor && actor != m.proposal.leader
             || !f.available.contains(&m.proposal.leader)
@@ -779,5 +809,16 @@ impl World {
             return Err(Error::Unavailable);
         }
         Ok(())
+    }
+}
+
+pub struct MissionFinalization {
+    receipt_cursor: Option<u64>,
+}
+impl MissionFinalization {
+    pub fn finish(self, state: &mut Runtime) {
+        if let Some(after) = self.receipt_cursor {
+            state.last_event = after;
+        }
     }
 }

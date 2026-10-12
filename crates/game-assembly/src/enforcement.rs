@@ -142,11 +142,7 @@ impl Simulation {
             )
             .expect("location exists") = Location::AtArea(court);
         }
-        sim.host.state.missions = Some(missions::World {
-            missions: BTreeMap::new(),
-            recruitments: BTreeMap::new(),
-            known: BTreeMap::new(),
-            talks: BTreeMap::new(),
+        sim.host.state.missions = Some(missions::Runtime {
             last_event: sim.host.next_event() - 1,
             last_review: sim.host.clock().time,
         });
@@ -1400,14 +1396,8 @@ impl Simulation {
                 proposal: proposal.clone(),
             },
         )?;
-        let mission = self
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .values()
+        let mission = game_missions::missions(&self.host.storage)
+            .map(|(_, row)| row)
             .find(|m| m.id.0 >= next && m.sponsor == actor)
             .unwrap()
             .id;
@@ -1707,7 +1697,7 @@ impl Simulation {
                     .state
                     .missions
                     .as_ref()
-                    .and_then(|w| w.missions.get(&mission))
+                    .and_then(|_| game_missions::mission(&self.host.storage, mission))
                     .and_then(|m| match m.status {
                         MissionStatus::Completed => Some(EnforcementStatus::Completed),
                         MissionStatus::Failed | MissionStatus::Cancelled => {
@@ -2469,7 +2459,7 @@ impl Simulation {
                     .state
                     .missions
                     .as_ref()
-                    .and_then(|w| w.missions.get(&id))
+                    .and_then(|_| game_missions::mission(&self.host.storage, id))
                     .ok_or_else(bad)?;
                 if !matches!(case.judgment.as_ref().map(|j|&j.remedy),Some(EnforcementRemedy::Confine {until}) if mission.proposal.objective==MissionObjective::Confine {person:case.target,until:*until})
                 {

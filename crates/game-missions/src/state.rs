@@ -81,12 +81,9 @@ pub struct PendingTalk {
     pub completes: SimTime,
     pub conversation: Conversation,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub missions: BTreeMap<MissionId, Mission>,
-    pub recruitments: BTreeMap<RecruitmentId, Recruitment>,
-    pub known: BTreeMap<PersonId, BTreeMap<MissionId, MissionView>>,
-    pub talks: BTreeMap<PersonId, PendingTalk>,
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
     pub last_event: u64,
     pub last_review: SimTime,
 }

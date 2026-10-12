@@ -165,7 +165,7 @@ pub struct AssemblyState {
     #[serde(default)]
     pub force: Option<force::World>,
     #[serde(default)]
-    pub missions: Option<missions::World>,
+    pub missions: Option<missions::Runtime>,
     #[serde(default)]
     pub ecology: Option<ecology::Runtime>,
     #[serde(default)]
@@ -222,6 +222,7 @@ pub struct Simulation {
     physical_query: game_ecs::Query2Optional<game_physiology::Body, Activity, game_workshop::Job>,
     environment_queries: game_environment::Queries,
     ecology_queries: game_ecology::Queries,
+    mission_membership: game_missions::MembershipIndex,
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
@@ -648,6 +649,7 @@ impl Simulation {
                 }
             }
         }
+        let mission_membership = game_missions::MembershipIndex::build(&host.storage);
         let agriculture_queries = game_agriculture::Runtime::bind(&mut host.storage);
         let physical_query = host
             .storage
@@ -665,6 +667,7 @@ impl Simulation {
             care_index,
             dependent_index,
             agriculture_queries,
+            mission_membership,
             physical_query,
             environment_queries,
             ecology_queries,

@@ -19,7 +19,6 @@ enum Removal {
             game_society::enforcement::ComplaintInterruption,
         )>,
     ),
-    Mission(game_missions::PendingTalk),
     Restraint(PersonId, force::Restraint),
     Escape(PersonId, force::Escape),
 }
@@ -68,6 +67,7 @@ impl MetadataPlan {
         health: &BTreeMap<PersonId, &[game_health::HealthEffect]>,
         property: &BTreeMap<PersonId, &[game_property::Effect]>,
         life: &BTreeMap<PersonId, &[LifeEffect]>,
+        missions: &BTreeMap<PersonId, &[game_missions::ClearTalk]>,
         preserve_transport: bool,
     ) -> Self {
         let mut plan = Self {
@@ -185,18 +185,16 @@ impl MetadataPlan {
                     );
                 }
             }
-            if let Some(w) = &sim.host.state.missions {
-                for talk in w
-                    .talks
-                    .values()
-                    .filter(|t| t.speaker == actor || t.listener == actor)
-                {
-                    if !removed.insert((4, talk.speaker.0)) {
-                        continue;
-                    }
-                    plan.idle_if(sim,talk.speaker,|a|matches!(a,Activity::MissionTalk{completes}if *completes==talk.completes));
-                    step.removals.push(Removal::Mission(talk.clone()));
-                }
+            for talk in missions
+                .get(&actor)
+                .into_iter()
+                .flat_map(|effects| effects.iter())
+            {
+                plan.idle_if(
+                    sim,
+                    talk.speaker,
+                    |a| matches!(a,Activity::MissionTalk{completes}if *completes==talk.completes),
+                );
             }
             if let Some(w) = &sim.host.state.force {
                 if let Some(row) = w.restraints.get(&actor) {
@@ -324,6 +322,7 @@ pub(crate) struct PreparedInterruptions {
     agriculture: Option<game_agriculture::PreparedCultivationCancellation>,
     ecology: Option<game_ecology::PreparedGatheringCancellation>,
     projects: Option<game_projects::PreparedChange>,
+    missions: Option<game_missions::PreparedTalkCancellations>,
     memory: Option<game_invocation::PreparedMemoryEnding>,
 }
 impl Simulation {
@@ -366,6 +365,16 @@ impl Simulation {
             .development
             .as_ref()
             .map(|w| w.prepare_interruptions(&self.host.storage, &requests));
+        let missions = self
+            .host
+            .state
+            .missions
+            .as_ref()
+            .map(|w| w.prepare_cancel_talks(&self.host.storage, &actors));
+        let mm = missions
+            .as_ref()
+            .map(|p| p.effects().collect())
+            .unwrap_or_default();
         let hm = health
             .as_ref()
             .map(|p| p.effects().collect())
@@ -384,6 +393,7 @@ impl Simulation {
             &hm,
             &pm,
             &lm,
+            &mm,
             preserve == ActivityOwner::Transport,
         );
         let genes = self
@@ -413,6 +423,7 @@ impl Simulation {
                 .as_ref()
                 .filter(|_| preserve != ActivityOwner::Transport)
                 .map(|runtime| runtime.prepare_cancel_lifts(&self.host.storage, &actors)),
+            missions,
             projects: self
                 .host
                 .state
@@ -471,9 +482,33 @@ impl PreparedInterruptions {
         final_activities: &BTreeMap<PersonId, Activity>,
         memory_replacement: Option<&game_invocation::MemoryReplacement>,
     ) -> Result<InterruptionFinalization, Error> {
+        self.stage_into_with_replacements(sim, batch, final_activities, memory_replacement, None)
+    }
+    pub(crate) fn stage_into_with_mission_replacement(
+        self,
+        sim: &Simulation,
+        batch: &mut Batch,
+        final_activities: &BTreeMap<PersonId, Activity>,
+        replacement: &game_missions::TalkReplacement,
+    ) -> Result<InterruptionFinalization, Error> {
+        self.stage_into_with_replacements(sim, batch, final_activities, None, Some(replacement))
+    }
+    fn stage_into_with_replacements(
+        self,
+        sim: &Simulation,
+        batch: &mut Batch,
+        final_activities: &BTreeMap<PersonId, Activity>,
+        memory_replacement: Option<&game_invocation::MemoryReplacement>,
+        mission_replacement: Option<&game_missions::TalkReplacement>,
+    ) -> Result<InterruptionFinalization, Error> {
         if self.now != sim.host.clock().time {
             return Err(Error::Unavailable);
         }
+        let mm = self
+            .missions
+            .as_ref()
+            .map(|p| p.effects().collect())
+            .unwrap_or_default();
         let hm = self
             .health
             .as_ref()
@@ -490,7 +525,15 @@ impl PreparedInterruptions {
             .map(|p| p.effects().collect())
             .unwrap_or_default();
         if self.metadata
-            != MetadataPlan::collect(sim, &self.actors, &hm, &pm, &lm, self.preserve_transport)
+            != MetadataPlan::collect(
+                sim,
+                &self.actors,
+                &hm,
+                &pm,
+                &lm,
+                &mm,
+                self.preserve_transport,
+            )
         {
             return Err(Error::Unavailable);
         }
@@ -587,6 +630,9 @@ impl PreparedInterruptions {
                 )
             })
             .transpose()?;
+        if let Some(change) = self.missions {
+            change.stage_into_composed(store, batch, mission_replacement)?;
+        }
         // Schema admission remains shared with all caller-owner writes.
         Ok(InterruptionFinalization {
             steps: metadata.steps.into_iter().map(|s| (s.actor, s)).collect(),
@@ -673,15 +719,6 @@ impl InterruptionFinalization {
                         case.changed_at = change.changed_at;
                         case.explanation = change.explanation.into();
                     }
-                }
-                Removal::Mission(t) => {
-                    sim.host
-                        .state
-                        .missions
-                        .as_mut()
-                        .unwrap()
-                        .talks
-                        .remove(&t.speaker);
                 }
                 Removal::Restraint(a, _) => {
                     sim.host.state.force.as_mut().unwrap().restraints.remove(&a);

@@ -138,13 +138,9 @@ fn unreported_distant_taking_does_not_summon_officers_and_unknown_evidence_is_in
             .is_empty()
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .is_empty()
+        game_missions::missions(sim.canonical_state().components)
+            .next()
+            .is_none()
     );
     assert!(
         !sim.property_view(judge)
@@ -243,12 +239,8 @@ fn an_officer_can_refuse_a_funded_order_without_physical_capture_or_spending() {
         .mission
         .unwrap();
     assert!(
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(sim.canonical_state().components, mission)
             .unwrap()
-            .missions[&mission]
             .members
             .values()
             .all(|p| p.status == CompanionStatus::Refused)
@@ -504,12 +496,8 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
         .mission
         .unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(sim.canonical_state().components, mission)
             .unwrap()
-            .missions[&mission]
             .members[&officer]
             .status,
         CompanionStatus::Accepted
@@ -603,12 +591,7 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
         .unwrap_or_else(|| {
             panic!(
                 "not captured: mission={:#?}, target={:#?}, recent events={:#?}",
-                sim.canonical_state()
-                    .state
-                    .missions
-                    .as_ref()
-                    .unwrap()
-                    .missions[&mission],
+                game_missions::mission(sim.canonical_state().components, mission).unwrap(),
                 sim.canonical_state()
                     .state
                     .people
@@ -693,12 +676,8 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     assert!(sim.canonical_state().events.iter().any(|e| e.at >= until
         && matches!(e.event,EventKind::Released {actor,target:t} if actor==officer && t==target)));
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(sim.canonical_state().components, mission)
             .unwrap()
-            .missions[&mission]
             .status,
         MissionStatus::Returning
     );

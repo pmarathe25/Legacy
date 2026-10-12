@@ -56,7 +56,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-lifecycle` | `game-ecs`; `game-genetics` (optional) | Life and pregnancy components; guarded age and birth transitions; opaque inheritable reproductive characteristics |
 | `game-invocation` | `game-ecs`, `game-characters`, `game-cargo`, `game-society` | Native costs, warnings, archives, records and memory actions; Cargo conservation; sparse current learning; historical institutional snapshots |
 | `game-lineage` | `game-logistics`, `game-transport`, `game-ecs` | Care provision delivery requirements and receipts; guardian rescue from personal observations and actual carrying support |
-| `game-missions` | `game-agreements`, `game-conflict`, `game-logistics`, `game-transport` | Objective terms, member delivery plans, travel and tactical intentions, reinforcement and engagement participants |
+| `game-missions` | `game-ecs`, `game-agreements`, `game-cargo`, `game-characters`, `game-conflict`, `game-logistics`, `game-spatial`, `game-transport` | Four native commitment, recruitment, knowledge and talk columns; sparse receipts and speech; material, tactical and reinforcement effects |
 | `game-openings` | `game-content`, `game-ecology`, `game-property` | Authored opening and settlement declarations, validated independently of simulation startup |
 | `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components and numerical integration; opaque inheritable physical characteristics |
 | `game-projects` | `game-ecs`, `game-agreements`, `game-workshop` | Native plans, enterprises, construction and personal knowledge; guarded material funding and selected-recipe accounts |

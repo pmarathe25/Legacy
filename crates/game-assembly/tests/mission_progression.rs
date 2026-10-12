@@ -65,17 +65,14 @@ fn autonomous_member_collects_real_supplies_then_completes_the_route_across_save
         )
         .unwrap();
     let state = serial.canonical_state();
-    let mission = *state
-        .state
-        .missions
-        .as_ref()
-        .unwrap()
-        .missions
-        .keys()
+    let mission = game_missions::missions(state.components)
+        .map(|(id, _)| id)
         .last()
         .unwrap();
-    let recruitment =
-        state.state.missions.as_ref().unwrap().missions[&mission].members[&leader].recruitment;
+    let recruitment = game_missions::mission(state.components, mission)
+        .unwrap()
+        .members[&leader]
+        .recruitment;
     serial
         .debug_actor_command(
             leader,
@@ -127,13 +124,8 @@ fn autonomous_member_collects_real_supplies_then_completes_the_route_across_save
         Quantity(2000)
     );
     assert_eq!(
-        serial
-            .canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(serial.canonical_state().components, mission)
             .unwrap()
-            .missions[&mission]
             .members[&leader]
             .supply_cargo[&food]
             .values()
@@ -147,13 +139,8 @@ fn autonomous_member_collects_real_supplies_then_completes_the_route_across_save
     }
     assert_eq!(serial.canonical_state(), reordered.canonical_state());
     assert_eq!(
-        serial
-            .canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(serial.canonical_state().components, mission)
             .unwrap()
-            .missions[&mission]
             .status,
         MissionStatus::Completed
     );

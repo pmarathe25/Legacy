@@ -1,4 +1,5 @@
 use super::*;
+use crate::fixture::Fixture;
 use crate::transition_tests::*;
 use game_conflict::{Fighter, SearchState};
 use std::collections::BTreeMap;
@@ -51,14 +52,14 @@ fn encounter(id: u64) -> Encounter {
         active: true,
     }
 }
-fn world() -> World {
+fn world() -> Fixture {
     let mut w = state();
     let f = facts();
     let mut p = proposal();
     p.objective = MissionObjective::Defeat { person: ENEMY };
     start(&mut w, p, &f);
     accept(&mut w, A, OFFER, &f);
-    let m = w.missions.get_mut(&ID).unwrap();
+    let m = mission_mut(&mut w.store, ID).unwrap();
     m.members.get_mut(&A).unwrap().last_leg_from = Some(AWAY);
     m.members.get_mut(&B).unwrap().status = CompanionStatus::Accepted;
     w
@@ -98,7 +99,7 @@ fn only_current_arrivals_choose_first_eligible_encounter_and_ally_team() {
     let w = world();
     let mut facts = fixture();
     assert_eq!(
-        w.reinforcements(SimTime(5), &facts),
+        w.reinforcements(&w.store, SimTime(5), &facts),
         vec![Reinforcement {
             encounter: EncounterId(3),
             actor: A,
@@ -106,26 +107,26 @@ fn only_current_arrivals_choose_first_eligible_encounter_and_ally_team() {
             from: AWAY
         }]
     );
-    assert!(w.reinforcements(SimTime(6), &facts).is_empty());
+    assert!(w.reinforcements(&w.store, SimTime(6), &facts).is_empty());
     facts.encounters[1]
         .fighters
         .get_mut(&B)
         .unwrap()
         .surrendered = true;
     assert_eq!(
-        w.reinforcements(SimTime(5), &facts)[0].encounter,
+        w.reinforcements(&w.store, SimTime(5), &facts)[0].encounter,
         EncounterId(8)
     );
     facts.body.player = true;
-    assert!(w.reinforcements(SimTime(5), &facts).is_empty());
+    assert!(w.reinforcements(&w.store, SimTime(5), &facts).is_empty());
 }
 #[test]
 fn busy_members_and_arrivals_elsewhere_do_not_join() {
     let w = world();
     let mut facts = fixture();
     facts.body.in_combat = true;
-    assert!(w.reinforcements(SimTime(5), &facts).is_empty());
+    assert!(w.reinforcements(&w.store, SimTime(5), &facts).is_empty());
     facts.body.in_combat = false;
     facts.arrivals[0].area = AWAY;
-    assert!(w.reinforcements(SimTime(5), &facts).is_empty());
+    assert!(w.reinforcements(&w.store, SimTime(5), &facts).is_empty());
 }

@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 46;
+const SAVE_VERSION: u32 = 47;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -279,12 +279,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.missions {
-        for id in world
-            .missions
-            .keys()
-            .map(|id| id.0)
-            .chain(world.recruitments.keys().map(|id| id.0))
+    if s.state.missions.is_some() {
+        for id in game_missions::missions(s.components)
+            .map(|(id, _)| id.0)
+            .chain(game_missions::recruitments(s.components).map(|(id, _)| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
@@ -844,7 +842,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .missions
                         .as_ref()
-                        .is_some_and(|w| w.missions.contains_key(&mission))
+                        .is_some_and(|_| game_missions::mission(s.components, mission).is_some())
                 {
                     return Err(fail());
                 }
@@ -1000,7 +998,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .missions
                         .as_ref()
-                        .is_some_and(|w| w.missions.contains_key(&mission))
+                        .is_some_and(|_| game_missions::mission(s.components, mission).is_some())
                 {
                     return Err(fail());
                 }
@@ -1017,7 +1015,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .missions
                         .as_ref()
-                        .is_some_and(|w| w.missions.contains_key(&mission))
+                        .is_some_and(|_| game_missions::mission(s.components, mission).is_some())
                 {
                     return Err(fail());
                 }
@@ -1033,7 +1031,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .missions
                         .as_ref()
-                        .is_some_and(|w| w.missions.contains_key(&mission))
+                        .is_some_and(|_| game_missions::mission(s.components, mission).is_some())
                 {
                     return Err(fail());
                 }
@@ -1043,7 +1041,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .missions
                     .as_ref()
-                    .is_some_and(|w| w.missions.contains_key(&mission))
+                    .is_some_and(|_| game_missions::mission(s.components, mission).is_some())
                 {
                     return Err(fail());
                 }

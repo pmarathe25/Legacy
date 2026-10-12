@@ -150,6 +150,80 @@ pub fn choose(candidates: &[CandidateScore], current: ChoiceContext) -> Option<u
     Some(index)
 }
 
+/// A receiving relationship reaction reads and changes only affected fields.
+#[derive(Clone, Copy, Debug)]
+pub struct TrustDelta {
+    pub observer: PersonId,
+    pub subject: PersonId,
+    pub delta: i32,
+}
+pub struct PreparedTrustReactions {
+    changes: Vec<(PersonId, PersonId, Option<Relationship>, Relationship)>,
+}
+impl PreparedTrustReactions {
+    pub fn prepare<A: game_ecs::Component>(
+        store: &game_ecs::Store,
+        effects: impl IntoIterator<Item = TrustDelta>,
+    ) -> Result<Self, Error> {
+        let mut changes: Vec<(PersonId, PersonId, Option<Relationship>, Relationship)> = Vec::new();
+        for effect in effects {
+            let mind = mind::<A>(store, effect.observer).ok_or(Error::Unavailable)?;
+            if let Some((_, _, _, after)) = changes.iter_mut().find(|(observer, subject, _, _)| {
+                *observer == effect.observer && *subject == effect.subject
+            }) {
+                after.trust = (after.trust + effect.delta).clamp(-1000, 1000);
+                continue;
+            }
+            let before = mind.relationships.get(&effect.subject).cloned();
+            let mut after = before.clone().unwrap_or(Relationship {
+                trust: 0,
+                affection: 0,
+            });
+            after.trust = (after.trust + effect.delta).clamp(-1000, 1000);
+            changes.push((effect.observer, effect.subject, before, after));
+        }
+        Ok(Self { changes })
+    }
+    pub fn check<A: game_ecs::Component>(&self, store: &game_ecs::Store) -> Result<(), Error> {
+        for (observer, subject, before, _) in &self.changes {
+            if mind::<A>(store, *observer)
+                .ok_or(Error::Unavailable)?
+                .relationships
+                .get(subject)
+                != before.as_ref()
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        Ok(())
+    }
+    pub fn check_batch<A: game_ecs::Component>(
+        &self,
+        store: &game_ecs::Store,
+        batch: &game_ecs::Batch,
+    ) -> Result<(), Error> {
+        self.check::<A>(store)?;
+        if self
+            .changes
+            .iter()
+            .any(|(observer, _, _, _)| batch.touches::<Mind<A>>(game_ecs::StableId(observer.0)))
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    pub fn commit<A: game_ecs::Component>(self, store: &mut game_ecs::Store) -> Result<(), Error> {
+        self.check::<A>(store)?;
+        for (observer, subject, _, after) in self.changes {
+            mind_mut::<A>(store, observer)
+                .unwrap()
+                .relationships
+                .insert(subject, after);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

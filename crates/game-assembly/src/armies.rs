@@ -235,11 +235,7 @@ impl Simulation {
                 })
                 .collect(),
         });
-        sim.host.state.missions = Some(missions::World {
-            missions: BTreeMap::new(),
-            recruitments: BTreeMap::new(),
-            known: BTreeMap::new(),
-            talks: BTreeMap::new(),
+        sim.host.state.missions = Some(missions::Runtime {
             last_event: sim.host.next_event() - 1,
             last_review: sim.host.clock().time,
         });
@@ -302,7 +298,7 @@ impl Simulation {
             .state
             .missions
             .as_ref()
-            .and_then(|w| w.missions.get(&mission))
+            .and_then(|_| game_missions::mission(&self.host.storage, mission))
             .ok_or(Error::Unavailable)?;
         Ok(DetachmentFacts {
             mission,
@@ -384,7 +380,8 @@ impl Simulation {
                     objective,
                 } => self.validate_mission_combat_order(*leader, *mission, objective)?,
                 Effect::OfferRetreat { mission, leader } => {
-                    let home = self.host.state.missions.as_ref().unwrap().missions[mission]
+                    let home = game_missions::mission(&self.host.storage, *mission)
+                        .expect("record exists")
                         .proposal
                         .home;
                     self.validate_mission_combat_order(
@@ -398,7 +395,8 @@ impl Simulation {
                     leader,
                     reason: Departure::Defect,
                 } => {
-                    if self.host.state.missions.as_ref().unwrap().missions[mission]
+                    if game_missions::mission(&self.host.storage, *mission)
+                        .expect("record exists")
                         .members
                         .get(leader)
                         .is_none_or(|m| m.status != CompanionStatus::Accepted)
@@ -419,7 +417,8 @@ impl Simulation {
                     objective,
                 } => self.apply_accepted_leader_objective(leader, mission, objective)?,
                 Effect::OfferRetreat { mission, leader } => {
-                    let home = self.host.state.missions.as_ref().unwrap().missions[&mission]
+                    let home = game_missions::mission(&self.host.storage, mission)
+                        .expect("record exists")
                         .proposal
                         .home;
                     self.apply_accepted_leader_objective(
@@ -427,15 +426,7 @@ impl Simulation {
                         mission,
                         MissionObjective::Visit { destination: home },
                     )?;
-                    let m = self
-                        .host
-                        .state
-                        .missions
-                        .as_mut()
-                        .unwrap()
-                        .missions
-                        .get_mut(&mission)
-                        .unwrap();
+                    let m = game_missions::mission_mut(&mut self.host.storage, mission).unwrap();
                     m.status = MissionStatus::Returning;
                     m.succeeded = false;
                     m.explanation="The leader chose to retreat after an army order; companions retain their choices".into();
@@ -905,7 +896,7 @@ impl Simulation {
     ) -> Option<PersonId> {
         let w = self.host.state.armies.as_ref()?;
         let a = w.kernel.armies.get(&army)?;
-        let m = self.host.state.missions.as_ref()?.missions.get(&mission)?;
+        let m = game_missions::mission(&self.host.storage, mission)?;
         if let Some(member) = m.members.get(&actor) {
             let target = member
                 .directive
@@ -1082,7 +1073,9 @@ impl Simulation {
                 && !self.mission_force_willing(a.actor, a.mission, a.target))
             || self.army_personal_force_target(a.actor, a.army, a.mission, a.area) != Some(a.target)
             || !matches!(
-                self.host.state.missions.as_ref().unwrap().missions[&a.mission].status,
+                game_missions::mission(&self.host.storage, a.mission)
+                    .expect("record exists")
+                    .status,
                 MissionStatus::Traveling | MissionStatus::Operating
             )
             || e.fighters
@@ -1105,7 +1098,8 @@ impl Simulation {
                 linked
                     .iter()
                     .any(|id| {
-                        self.host.state.missions.as_ref().unwrap().missions[id]
+                        game_missions::mission(&self.host.storage, *id)
+                            .expect("record exists")
                             .members
                             .get(&f.actor)
                             .is_some_and(|m| m.status == CompanionStatus::Accepted)
@@ -1349,7 +1343,8 @@ impl Simulation {
                         continue;
                     }
                     let mission = d.value.mission;
-                    let objective = &self.host.state.missions.as_ref().unwrap().missions[&mission]
+                    let objective = &game_missions::mission(&self.host.storage, mission)
+                        .expect("record exists")
                         .members[&actor]
                         .directive;
                     let accept = self
@@ -1448,7 +1443,8 @@ impl Simulation {
                             && !f.surrendered
                             && map.clear(entry, f.position)
                             && linked.iter().any(|id| {
-                                self.host.state.missions.as_ref().unwrap().missions[id]
+                                game_missions::mission(&self.host.storage, *id)
+                                    .expect("record exists")
                                     .members
                                     .get(&f.actor)
                                     .is_some_and(|p| p.status == CompanionStatus::Accepted)
@@ -1568,9 +1564,11 @@ impl Simulation {
         };
         w.rules.validate()?;
         let bad = || Error::InvalidSave("Invalid army communication or native references".into());
-        let missions = self.host.state.missions.as_ref().ok_or_else(bad)?;
+        self.host.state.missions.as_ref().ok_or_else(bad)?;
         let people = self.person_index.keys().copied().collect();
-        let mission_ids = missions.missions.keys().copied().collect();
+        let mission_ids = game_missions::missions(&self.host.storage)
+            .map(|(id, _)| id)
+            .collect();
         w.kernel.validate(
             &game_armies::ValidationCatalog {
                 people: &people,
@@ -1744,8 +1742,8 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
     let bad = || Error::InvalidSave("Invalid dated army mission report".into());
     let people: BTreeSet<_> = s.state.people.iter().map(|p| p.id).collect();
     let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
-    let missions = s.state.missions.as_ref().ok_or_else(bad)?;
-    if !missions.missions.contains_key(&v.id)
+    s.state.missions.as_ref().ok_or_else(bad)?;
+    if !game_missions::mission(s.components, v.id).is_some()
         || !people.contains(&v.sponsor)
         || !people.contains(&v.leader)
         || !areas.contains(&v.home)
@@ -1795,9 +1793,7 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
         }
     }
     for r in &v.recruitments {
-        if !missions
-            .recruitments
-            .get(&r.id)
+        if !game_missions::recruitment(s.components, r.id)
             .is_some_and(|a| a.person == r.person && a.mission == v.id)
             || r.payment_agreement.is_some_and(|id| {
                 s.state

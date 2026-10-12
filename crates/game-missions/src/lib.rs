@@ -1,5 +1,5 @@
-//! Mission commitments and individual service decisions. World scheduling,
-//! communication, carrying and force are executed by the coordinator.
+//! Native service commitments, personal choices, local perception and progression.
+//! The assembly binds factual rows and applies owner-prepared physical effects.
 mod api;
 use game_core::PersonId;
 mod state;
@@ -48,3 +48,32 @@ pub use tactics::*;
 
 mod reinforcements;
 pub use reinforcements::*;
+
+mod storage;
+pub use storage::*;
+
+mod validation;
+
+#[cfg(test)]
+mod fixture;
+
+#[cfg(test)]
+mod component_tests;
+
+mod cancellation;
+pub use cancellation::*;
+
+mod context;
+pub use context::*;
+
+mod boundaries;
+mod presence;
+pub use presence::*;
+mod availability;
+pub use availability::*;
+mod declarations;
+pub use declarations::*;
+mod communications;
+pub use communications::*;
+#[cfg(test)]
+mod native_flow_tests;

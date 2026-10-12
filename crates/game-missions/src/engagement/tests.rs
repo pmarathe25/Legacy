@@ -1,4 +1,5 @@
 use super::*;
+use crate::fixture::Fixture;
 use crate::transition_tests::*;
 use std::collections::BTreeMap;
 struct Facts {
@@ -34,7 +35,7 @@ fn body() -> FighterFacts {
         },
     }
 }
-fn world() -> World {
+fn world() -> Fixture {
     let mut w = state();
     let f = facts();
     let mut p = proposal();
@@ -67,19 +68,18 @@ fn target_encounter_priority_is_stable_and_precedes_roster_reads() {
         bodies: BTreeMap::new(),
     };
     assert_eq!(
-        w.engagement_plan(ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
+        w.engagement_plan(&w.store, ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
         EngagementPlan::Approach(EncounterId(5))
     );
     assert_eq!(
-        w.engagement_plan(ID, ENEMY, None, &BTreeSet::from([ID]), &f),
+        w.engagement_plan(&w.store, ID, ENEMY, None, &BTreeSet::from([ID]), &f),
         EngagementPlan::Keep
     );
 }
 #[test]
 fn local_accepted_qualified_nonplayer_allies_join_in_stable_id_order() {
     let mut w = world();
-    w.missions
-        .get_mut(&ID)
+    mission_mut(&mut w.store, ID)
         .unwrap()
         .members
         .get_mut(&B)
@@ -103,17 +103,17 @@ fn local_accepted_qualified_nonplayer_allies_join_in_stable_id_order() {
     };
     let expected = EngagementPlan::Start(vec![(A, 0), (B, 0), (ENEMY, 1)]);
     assert_eq!(
-        w.engagement_plan(ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
+        w.engagement_plan(&w.store, ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
         expected
     );
     f.bodies.get_mut(&B).unwrap().in_combat = true;
     assert_eq!(
-        w.engagement_plan(ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
+        w.engagement_plan(&w.store, ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
         EngagementPlan::Start(vec![(A, 0), (ENEMY, 1)])
     );
     f.bodies.get_mut(&A).unwrap().player = true;
     assert_eq!(
-        w.engagement_plan(ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
+        w.engagement_plan(&w.store, ID, ENEMY, Some(HOME), &BTreeSet::from([ID]), &f),
         EngagementPlan::Start(vec![(ENEMY, 1)])
     );
 }
@@ -121,11 +121,23 @@ fn local_accepted_qualified_nonplayer_allies_join_in_stable_id_order() {
 fn allied_service_keeps_individual_refusal_without_cloning_a_proposed_mission() {
     let mut w = world();
     let other = MissionId(30);
-    let mut m = w.missions[&ID].clone();
-    m.id = other;
-    m.members.retain(|p, _| *p == B);
-    m.members.get_mut(&B).unwrap().status = CompanionStatus::Accepted;
-    w.missions.insert(other, m);
+    let mut proposal = proposal();
+    proposal.leader = B;
+    proposal.recruits.clear();
+    proposal.supplies.clear();
+    proposal.objective = MissionObjective::Defeat { person: ENEMY };
+    command(
+        &mut w,
+        SP,
+        MissionAction::Propose { proposal },
+        &facts(),
+        MissionIds {
+            mission: Some(other),
+            recruitments: BTreeMap::from([(B, RecruitmentId(31))]),
+            backing: None,
+        },
+    );
+    accept(&mut w, B, RecruitmentId(31), &facts());
     let mut refusal = body();
     refusal.recruitment.actor = B;
     refusal.recruitment.sponsor_trust = -1000;
@@ -133,12 +145,19 @@ fn allied_service_keeps_individual_refusal_without_cloning_a_proposed_mission() 
         encounters: Vec::new(),
         bodies: BTreeMap::from([(A, body()), (B, refusal)]),
     };
-    assert!(!w.force_willing(B, other, ENEMY, refusal.recruitment, false));
+    assert!(!w.force_willing(&w.store, B, other, ENEMY, refusal.recruitment, false));
     assert_eq!(
-        w.engagement_plan(ID, ENEMY, Some(HOME), &BTreeSet::from([ID, other]), &f),
+        w.engagement_plan(
+            &w.store,
+            ID,
+            ENEMY,
+            Some(HOME),
+            &BTreeSet::from([ID, other]),
+            &f
+        ),
         EngagementPlan::Start(vec![(A, 0), (ENEMY, 1)])
     );
     let mut guardian = body();
     guardian.recruitment.guardian_duty = true;
-    assert!(!w.force_willing(A, ID, ENEMY, guardian.recruitment, true));
+    assert!(!w.force_willing(&w.store, A, ID, ENEMY, guardian.recruitment, true));
 }

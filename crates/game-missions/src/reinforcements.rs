@@ -1,7 +1,9 @@
 //! Arrival receipts and communicated alliances qualify a later initiative entry.
+use crate::mission as stored_mission;
 use crate::*;
 use game_conflict::Encounter;
 use game_core::*;
+use game_ecs::Store;
 use std::collections::BTreeSet;
 #[derive(Clone, Copy, Debug)]
 pub struct ArrivalFacts {
@@ -30,9 +32,10 @@ pub struct Reinforcement {
     pub team: u32,
     pub from: AreaId,
 }
-impl World {
+impl Runtime {
     pub fn reinforcements(
         &self,
+        store: &Store,
         now: SimTime,
         facts: &impl ReinforcementFacts,
     ) -> Vec<Reinforcement> {
@@ -42,10 +45,10 @@ impl World {
             .map(|r| (r.actor, r.area))
             .collect();
         let mut candidates = Vec::new();
-        for m in self.missions.values() {
+        for m in missions(store).map(|(_, row)| row) {
             for member in m.members.values() {
                 if member.status != CompanionStatus::Accepted
-                    || self.membership(member.person) != Some(m.id)
+                    || self.membership(store, member.person) != Some(m.id)
                 {
                     continue;
                 }
@@ -74,8 +77,7 @@ impl World {
                             .filter(|f| !f.withdrawn && !f.surrendered)
                             .filter(|f| {
                                 linked.iter().any(|id| {
-                                    self.missions
-                                        .get(id)
+                                    stored_mission(store, *id)
                                         .and_then(|m| m.members.get(&f.actor))
                                         .is_some_and(|p| {
                                             p.status == CompanionStatus::Accepted
@@ -85,6 +87,7 @@ impl World {
                                                         .target_person()
                                                         .is_some_and(|target| {
                                                             self.force_willing(
+                                                                store,
                                                                 member.person,
                                                                 m.id,
                                                                 target,

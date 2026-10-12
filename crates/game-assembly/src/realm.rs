@@ -934,14 +934,8 @@ impl Simulation {
             Request::Protection { patrol, .. } => {
                 let before = self.host.next_id();
                 self.mission_command(actor, &MissionAction::Propose { proposal: patrol })?;
-                let id = self
-                    .host
-                    .state
-                    .missions
-                    .as_ref()
-                    .unwrap()
-                    .missions
-                    .values()
+                let id = game_missions::missions(&self.host.storage)
+                    .map(|(_, row)| row)
                     .find(|m| m.id.0 >= before && m.sponsor == actor)
                     .ok_or(Error::Unavailable)?
                     .id;
@@ -1218,7 +1212,8 @@ impl Simulation {
                     }
                 }
                 (PendingOwner::Mission(id), Term::Protection { patrol, .. }) => {
-                    let m = &self.host.state.missions.as_ref().unwrap().missions[id];
+                    let m =
+                        &game_missions::mission(&self.host.storage, *id).expect("record exists");
                     if m.proposal.objective != patrol.objective {
                         Some(WorkReceipt::ProtectionOpened {
                             mission: *id,
@@ -1285,7 +1280,8 @@ impl Simulation {
                     })
                 }
                 Backing::Protection { mission } => {
-                    let m = &self.host.state.missions.as_ref().unwrap().missions[&mission];
+                    let m = &game_missions::mission(&self.host.storage, mission)
+                        .expect("record exists");
                     let promised = &self.host.state.realm.as_ref().unwrap().kernel.commitments
                         [&key.commitment]
                         .revision(key.revision)
@@ -1722,7 +1718,11 @@ impl Simulation {
                 .state
                 .missions
                 .as_ref()
-                .map_or_else(BTreeSet::new, |w| w.missions.keys().copied().collect()),
+                .map_or_else(BTreeSet::new, |_| {
+                    game_missions::missions(&self.host.storage)
+                        .map(|(id, _)| id)
+                        .collect()
+                }),
             records: BTreeSet::new(),
         };
         world.kernel.validate(&refs, self.host.clock().time)?;
@@ -1786,7 +1786,7 @@ impl Simulation {
                         .state
                         .missions
                         .as_ref()
-                        .and_then(|w| w.missions.get(id))
+                        .and_then(|_| game_missions::mission(&self.host.storage, *id))
                         .is_none_or(|m| {
                             m.sponsor != pending.actor || m.proposal.leader != patrol.leader
                         })

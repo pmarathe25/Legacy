@@ -1,6 +1,8 @@
 //! Local ally selection preserves communicated service and individual judgment.
 use crate::*;
+use crate::{mission as stored_mission, recruitment as stored_recruitment};
 use game_core::*;
+use game_ecs::Store;
 use std::collections::BTreeSet;
 #[derive(Clone, Copy, Debug)]
 pub struct EncounterFacts {
@@ -26,16 +28,17 @@ pub enum EngagementPlan {
     Approach(EncounterId),
     Start(Vec<(PersonId, u32)>),
 }
-impl World {
+impl Runtime {
     pub fn force_willing(
         &self,
+        store: &Store,
         actor: PersonId,
         id: MissionId,
         target: PersonId,
         mut input: RecruitmentInput,
         player: bool,
     ) -> bool {
-        let Some(m) = self.missions.get(&id) else {
+        let Some(m) = stored_mission(store, id) else {
             return false;
         };
         let Some(member) = m.members.get(&actor) else {
@@ -50,13 +53,12 @@ impl World {
         }
         input.violent = member.directive.requires_force();
         player
-            || self
-                .recruitments
-                .get(&member.recruitment)
+            || stored_recruitment(store, member.recruitment)
                 .is_some_and(|offer| recruitment_score(input, &offer.compensation) >= 0)
     }
     pub fn engagement_plan(
         &self,
+        store: &Store,
         mission: MissionId,
         target: PersonId,
         area: Option<AreaId>,
@@ -75,7 +77,7 @@ impl World {
         }
         let allies: BTreeSet<_> = linked
             .iter()
-            .filter_map(|id| self.missions.get(id).map(|m| (*id, m)))
+            .filter_map(|id| stored_mission(store, *id).map(|m| (*id, m)))
             .flat_map(|(id, m)| m.members.values().map(move |member| (id, member)))
             .filter_map(|(id, member)| {
                 if member.status != CompanionStatus::Accepted
@@ -91,6 +93,7 @@ impl World {
                     && !body.in_combat
                     && (id == mission
                         || self.force_willing(
+                            store,
                             member.person,
                             id,
                             target,

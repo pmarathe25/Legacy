@@ -1,7 +1,8 @@
 use super::*;
+use crate::fixture::Fixture;
 use crate::transition_tests::*;
 use game_conflict::ObstacleView;
-fn world(objective: MissionObjective) -> World {
+fn world(objective: MissionObjective) -> Fixture {
     let mut w = state();
     let f = facts();
     let mut p = proposal();
@@ -86,6 +87,7 @@ fn retreat_uses_known_reachable_exits_or_surrenders_without_them() {
     let routes = KnownRoutes::from([(HOME, BTreeMap::from([(AWAY, SimDuration(10))]))]);
     let result = w
         .tactical_decision(
+            &w.store,
             ID,
             TacticalInput {
                 health: 49,
@@ -98,6 +100,7 @@ fn retreat_uses_known_reachable_exits_or_surrenders_without_them() {
     let missing = KnownRoutes::new();
     let result = w
         .tactical_decision(
+            &w.store,
             ID,
             TacticalInput {
                 health: 49,
@@ -109,6 +112,7 @@ fn retreat_uses_known_reachable_exits_or_surrenders_without_them() {
     assert_eq!(result.action, TacticAction::Surrender);
     assert!(
         w.tactical_decision(
+            &w.store,
             ID,
             TacticalInput {
                 player: true,
@@ -130,13 +134,14 @@ fn surrender_capture_and_release_remain_distinct_owned_choices() {
         until: SimTime(10),
     });
     assert_eq!(
-        w.tactical_decision(ID, input(&map, &roster, &routes), &capabilities())
+        w.tactical_decision(&w.store, ID, input(&map, &roster, &routes), &capabilities())
             .unwrap()
             .action,
         TacticAction::Capture(ENEMY)
     );
     assert_eq!(
         w.tactical_decision(
+            &w.store,
             ID,
             TacticalInput {
                 binding_available: false,
@@ -157,7 +162,7 @@ fn surrender_capture_and_release_remain_distinct_owned_choices() {
         ..capabilities().0
     });
     assert_eq!(
-        w.tactical_decision(ID, input(&map, &roster, &routes), &ready)
+        w.tactical_decision(&w.store, ID, input(&map, &roster, &routes), &ready)
             .unwrap()
             .action,
         TacticAction::Release(ENEMY)
@@ -170,14 +175,14 @@ fn stale_remembered_point_does_not_authorize_attack_at_new_actual_position() {
     let mut roster = roster();
     let routes = KnownRoutes::new();
     assert_eq!(
-        w.tactical_decision(ID, input(&map, &roster, &routes), &capabilities())
+        w.tactical_decision(&w.store, ID, input(&map, &roster, &routes), &capabilities())
             .unwrap()
             .action,
         TacticAction::Attack(ENEMY)
     );
     roster.get_mut(&ENEMY).unwrap().position = Point { x: 9000, y: 1000 };
     assert_eq!(
-        w.tactical_decision(ID, input(&map, &roster, &routes), &capabilities())
+        w.tactical_decision(&w.store, ID, input(&map, &roster, &routes), &capabilities())
             .unwrap()
             .action,
         TacticAction::Defend
@@ -197,7 +202,7 @@ fn exploration_ignores_unseen_people_and_preserves_owner_search_progress() {
     roster.get_mut(&A).unwrap().known.clear();
     let routes = KnownRoutes::new();
     let first = w
-        .tactical_decision(ID, input(&map, &roster, &routes), &capabilities())
+        .tactical_decision(&w.store, ID, input(&map, &roster, &routes), &capabilities())
         .unwrap();
     assert!(first.search.is_some());
     assert_eq!(first.action, TacticAction::Defend);
@@ -206,7 +211,7 @@ fn exploration_ignores_unseen_people_and_preserves_owner_search_progress() {
         y: 19_000,
     };
     assert_eq!(
-        w.tactical_decision(ID, input(&map, &roster, &routes), &capabilities())
+        w.tactical_decision(&w.store, ID, input(&map, &roster, &routes), &capabilities())
             .unwrap(),
         first
     );
@@ -230,8 +235,9 @@ fn commitment_busy_thresholds_are_owned_and_preserve_signed_urgency() {
         restricted: false,
         care_urgency: -1,
     };
-    assert!(w.member_busy(A, ready));
+    assert!(w.member_busy(&w.store, A, ready));
     assert!(!w.member_busy(
+        &w.store,
         A,
         ServiceAvailability {
             guardian_due: true,
@@ -239,6 +245,7 @@ fn commitment_busy_thresholds_are_owned_and_preserve_signed_urgency() {
         }
     ));
     assert!(!w.member_busy(
+        &w.store,
         A,
         ServiceAvailability {
             care_urgency: 20_000,
@@ -246,6 +253,7 @@ fn commitment_busy_thresholds_are_owned_and_preserve_signed_urgency() {
         }
     ));
     assert!(!w.member_busy(
+        &w.store,
         A,
         ServiceAvailability {
             health: 50,

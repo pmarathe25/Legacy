@@ -1,7 +1,9 @@
 # game-missions
 
-This crate defines mission objectives, proposals, recruitment decisions, and the state recorded for missions and their companions. Missions move through preparation, travel, operation, return, and terminal states; companion records track acceptance, directives, visits, cargo, contacts, and confinement observations. Recruitment scoring weighs compensation and personal circumstances, while guardian duty blocks an offer.
+Missions owns recruitment, directives, individual service choices, communication, observation, cargo attribution, and progress from committed physical receipts. Member decisions compose Logistics and Transport intentions; engagement, tactics, and reinforcement selection use Conflict facts. The assembly binds factual rows and executes these prepared effects.
 
-The crate owns proposals, recruitment, orders, progress transitions, and judgments from recorded evidence. The world adapter supplies physical receipts and dated observations, then carries out travel, communication, delivery, and force. Mission records describe actual commitments and progress; they do not create supplies or grant remote knowledge.
+`Mission` and `Recruitment` live on their stable entity IDs in the shared component store. `Knowledge` and `PendingTalk` live on person IDs. A bounded companion roster stays inside its mission record. `Runtime` contains only event and review cursors; the membership index holds derived IDs and reads live status and dated knowledge from the store.
 
-Member progression owns the order of personal needs, provisions, delivery, and objectives. It composes Logistics and Transport from factual observations, chooses rescue and confinement followups, and selects willing local allies; adapters execute its typed attempts.
+Public entry points cover commands, available intentions, elapsed conversations, cancellation, local perception, review selection, deadlines, budgets, contextual validation, and receipt and outcome preparation. Sparse prepared changes guard the affected rows and reject foreign batch writes before publication. Physical transfer receipts qualify actual origin cargo; promised supplies alone cannot prove delivery. Reports retain their original observation date and provenance.
+
+Owner tests use the native store directly. Composed game tests preserve local consent, supply conservation, force and guardian obligations, worker and storage ordering, equivalent time slices, and save/resume behavior.

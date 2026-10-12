@@ -496,11 +496,7 @@ impl Simulation {
             restraints: BTreeMap::new(),
             last_event: self.host.next_event() - 1,
         });
-        self.host.state.missions = Some(missions::World {
-            missions: BTreeMap::new(),
-            recruitments: BTreeMap::new(),
-            known: BTreeMap::new(),
-            talks: BTreeMap::new(),
+        self.host.state.missions = Some(missions::Runtime {
             last_event: self.host.next_event() - 1,
             last_review: self.host.clock().time,
         });

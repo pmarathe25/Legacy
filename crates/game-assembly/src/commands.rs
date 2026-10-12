@@ -8,6 +8,7 @@ pub(crate) enum ActivityOwner {
     Health,
     Property,
     Transport,
+    Missions,
     Invocation,
 }
 
@@ -24,10 +25,14 @@ impl Simulation {
                     .values()
                     .any(|t| t.speaker == actor || t.listener == actor)
             })
-            && self.host.state.missions.as_ref().is_none_or(|w| {
-                !w.talks
-                    .values()
-                    .any(|t| t.speaker == actor || t.listener == actor)
+            && self.host.state.missions.as_ref().is_none_or(|_| {
+                !self
+                    .host
+                    .state
+                    .missions
+                    .as_ref()
+                    .unwrap()
+                    .actor_talking(&self.host.storage, actor)
             })
             && self.host.state.realm.as_ref().is_none_or(|w| {
                 !w.talks.contains_key(&actor) && !w.talks.values().any(|t| t.recipient == actor)

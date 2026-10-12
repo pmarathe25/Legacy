@@ -227,3 +227,44 @@ fn a_stricter_mind_schema_cannot_publish_partial_replacements_or_entities() {
         .empathy = 1_001;
     assert!(Store::restore(store.schema().clone(), store.snapshot().unwrap()).is_err());
 }
+
+#[test]
+fn sparse_trust_reaction_preserves_other_mind_fields_and_rejects_stale_or_foreign_footprints() {
+    let mut store = Store::with_schema(schema());
+    insert_mind(&mut store, PersonId(1), row()).unwrap();
+    let effects = || {
+        [
+            TrustDelta {
+                observer: PersonId(1),
+                subject: PersonId(2),
+                delta: 50,
+            },
+            TrustDelta {
+                observer: PersonId(1),
+                subject: PersonId(2),
+                delta: 70,
+            },
+        ]
+    };
+    let change = PreparedTrustReactions::prepare::<OpaqueAction>(&store, effects()).unwrap();
+    mind_mut::<OpaqueAction>(&mut store, PersonId(1))
+        .unwrap()
+        .retry_after = SimTime(88);
+    change.commit::<OpaqueAction>(&mut store).unwrap();
+    let mind = mind::<OpaqueAction>(&store, PersonId(1)).unwrap();
+    assert_eq!(mind.retry_after, SimTime(88));
+    assert_eq!(mind.relationships[&PersonId(2)].trust, 120);
+    let change = PreparedTrustReactions::prepare::<OpaqueAction>(&store, effects()).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    batch.remove::<Mind<OpaqueAction>>(StableId(1));
+    assert!(change.check_batch::<OpaqueAction>(&store, &batch).is_err());
+    mind_mut::<OpaqueAction>(&mut store, PersonId(1))
+        .unwrap()
+        .relationships
+        .get_mut(&PersonId(2))
+        .unwrap()
+        .affection = 1;
+    let before = store.clone();
+    assert!(change.commit::<OpaqueAction>(&mut store).is_err());
+    assert_eq!(store, before);
+}

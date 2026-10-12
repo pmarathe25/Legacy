@@ -952,13 +952,15 @@ impl Simulation {
                 });
             }
         }
-        if let Some(missions) = &self.host.state.missions {
-            interactions.extend(missions.talks.values().map(|talk| {
-                game_health::HealthInteraction {
-                    first: talk.speaker,
-                    second: talk.listener,
-                }
-            }));
+        if self.host.state.missions.is_some() {
+            interactions.extend(
+                game_missions::talks(&self.host.storage)
+                    .map(|(_, row)| row)
+                    .map(|talk| game_health::HealthInteraction {
+                        first: talk.speaker,
+                        second: talk.listener,
+                    }),
+            );
         }
         let anchors: BTreeSet<_> = actors.iter().filter_map(|actor| actor.tactical).collect();
         let mut geometry = Vec::new();
@@ -1068,10 +1070,13 @@ impl Simulation {
                 _ => {}
             }
         }
-        self.host.state.missions.as_ref().is_some_and(|w| {
-            w.talks.values().any(|talk| {
-                talk.speaker == a && talk.listener == b || talk.speaker == b && talk.listener == a
-            })
+        self.host.state.missions.as_ref().is_some_and(|_| {
+            game_missions::talks(&self.host.storage)
+                .map(|(_, row)| row)
+                .any(|talk| {
+                    talk.speaker == a && talk.listener == b
+                        || talk.speaker == b && talk.listener == a
+                })
         })
     }
     #[cfg(test)]
@@ -3571,29 +3576,28 @@ mod index_tests {
                 },
             )
             .unwrap();
-            sim.host.state.missions = Some(missions::World {
-                missions: BTreeMap::new(),
-                recruitments: BTreeMap::new(),
-                known: BTreeMap::new(),
-                talks: BTreeMap::from([(
-                    people[0],
-                    missions::PendingTalk {
-                        speaker: people[0],
-                        listener: people[1],
-                        area: sim.host.state.areas[0].id,
-                        completes: SimTime(60_000),
-                        conversation: missions::Conversation::Objective {
-                            mission: MissionId(999),
-                            leader: people[0],
-                            objective: MissionObjective::Visit {
-                                destination: sim.host.state.areas[0].id,
-                            },
-                        },
-                    },
-                )]),
+            sim.host.state.missions = Some(missions::Runtime {
                 last_event: 0,
                 last_review: SimTime(0),
             });
+            game_missions::insert_talk(
+                &mut sim.host.storage,
+                people[0],
+                missions::PendingTalk {
+                    speaker: people[0],
+                    listener: people[1],
+                    area: sim.host.state.areas[0].id,
+                    completes: SimTime(60_000),
+                    conversation: missions::Conversation::Objective {
+                        mission: MissionId(999),
+                        leader: people[0],
+                        objective: MissionObjective::Visit {
+                            destination: sim.host.state.areas[0].id,
+                        },
+                    },
+                },
+            )
+            .unwrap();
             assert_eq!(
                 sim.indexed_health_exposures(),
                 exhaustive_exposures(&sim),
@@ -3609,7 +3613,12 @@ mod index_tests {
                 "phase {phase}"
             );
             sim.cancel_health_activity(people[0]);
-            sim.host.state.missions.as_mut().unwrap().talks.clear();
+            let speakers = game_missions::talks(&sim.host.storage)
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>();
+            for id in speakers {
+                game_missions::remove_talk(&mut sim.host.storage, id).unwrap();
+            }
             game_physiology::body_mut(&mut sim.host.storage, people[1])
                 .unwrap()
                 .vitals

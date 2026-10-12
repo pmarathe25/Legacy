@@ -248,10 +248,13 @@ impl Simulation {
                 property_talk: self.property_actor_talking(actor),
                 army_talk: self.army_actor_talking(actor),
                 realm_busy: self.realm_actor_busy(actor),
-                mission_talk: self.host.state.missions.as_ref().is_some_and(|w| {
-                    w.talks
-                        .values()
-                        .any(|t| t.speaker == actor || t.listener == actor)
+                mission_talk: self.host.state.missions.as_ref().is_some_and(|_| {
+                    self.host
+                        .state
+                        .missions
+                        .as_ref()
+                        .unwrap()
+                        .actor_talking(&self.host.storage, actor)
                 }),
                 social_busy: self
                     .host

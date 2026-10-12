@@ -290,23 +290,12 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
             },
         },
     );
-    let mission = *sim
-        .canonical_state()
-        .state
-        .missions
-        .as_ref()
-        .unwrap()
-        .missions
-        .keys()
-        .next_back()
+    let mission = game_missions::missions(sim.canonical_state().components)
+        .map(|(id, _)| id)
+        .last()
         .unwrap();
-    let recruitment = sim
-        .canonical_state()
-        .state
-        .missions
-        .as_ref()
+    let recruitment = game_missions::mission(sim.canonical_state().components, mission)
         .unwrap()
-        .missions[&mission]
         .members[&leader]
         .recruitment;
     sim.debug_actor_command(
@@ -367,12 +356,8 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
     assert!(companion.search.goal.is_some());
     assert!(companion.defending);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(sim.canonical_state().components, mission)
             .unwrap()
-            .missions[&mission]
             .members[&leader]
             .status,
         CompanionStatus::Accepted

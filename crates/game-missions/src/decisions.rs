@@ -52,6 +52,32 @@ pub fn recruitment_score(input: RecruitmentInput, compensation: &[AgreementTerm]
         }
 }
 
+impl crate::Runtime {
+    pub fn leader_judgment(
+        &self,
+        store: &game_ecs::Store,
+        leader: PersonId,
+        id: MissionId,
+        objective: &crate::MissionObjective,
+        mut input: RecruitmentInput,
+    ) -> Result<i64, Error> {
+        let m = crate::mission(store, id).ok_or(Error::Unavailable)?;
+        if m.proposal.leader != leader || input.actor != leader {
+            return Err(Error::Unavailable);
+        }
+        let offer = crate::recruitment(
+            store,
+            m.members
+                .get(&leader)
+                .ok_or(Error::Unavailable)?
+                .recruitment,
+        )
+        .ok_or(Error::Unavailable)?;
+        input.violent = objective.requires_force();
+        Ok(recruitment_score(input, &offer.compensation))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

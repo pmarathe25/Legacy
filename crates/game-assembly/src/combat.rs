@@ -881,7 +881,8 @@ impl Simulation {
                 ref objective,
             } => {
                 self.validate_mission_combat_order(actor, mission, objective)?;
-                let leader = self.host.state.missions.as_ref().unwrap().missions[&mission]
+                let leader = game_missions::mission(&self.host.storage, mission)
+                    .expect("record exists")
                     .proposal
                     .leader;
                 if leader != actor && !reachable(leader) {

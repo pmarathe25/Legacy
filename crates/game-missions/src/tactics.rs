@@ -1,7 +1,9 @@
 //! Mission tactics select intentions from remembered positions and real geometry.
+use crate::mission as stored_mission;
 use crate::*;
 use game_conflict::{Fighter, Map, SearchState};
 use game_core::*;
+use game_ecs::Store;
 use game_logistics::KnownRoutes;
 use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug)]
@@ -57,9 +59,10 @@ fn search(input: &TacticalInput<'_>) -> TacticalDecision {
         search: Some(search),
     }
 }
-impl World {
+impl Runtime {
     pub fn tactical_decision(
         &self,
+        store: &Store,
         id: MissionId,
         input: TacticalInput<'_>,
         facts: &impl TacticalFacts,
@@ -67,10 +70,9 @@ impl World {
         if input.player {
             return None;
         }
-        let member = self.missions.get(&id)?.members.get(&input.actor)?;
-        let known_status = self
-            .known
-            .get(&input.actor)
+        let member = stored_mission(store, id)?.members.get(&input.actor)?;
+        let known_status = knowledge(store, input.actor)
+            .map(|row| &row.missions)
             .and_then(|known| known.get(&id))
             .map(|view| view.status);
         let f = input.fighter;
@@ -196,9 +198,9 @@ pub struct ServiceAvailability {
     pub restricted: bool,
     pub care_urgency: i64,
 }
-impl World {
-    pub fn member_busy(&self, actor: PersonId, facts: ServiceAvailability) -> bool {
-        self.membership(actor).is_some()
+impl Runtime {
+    pub fn member_busy(&self, store: &Store, actor: PersonId, facts: ServiceAvailability) -> bool {
+        self.membership(store, actor).is_some()
             && !facts.guardian_due
             && facts.alive
             && facts.health > facts.max_health / 2

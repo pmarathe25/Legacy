@@ -1,4 +1,5 @@
 use super::*;
+use crate::fixture::Fixture;
 use crate::transition_tests::*;
 use game_logistics::*;
 use std::cell::RefCell;
@@ -118,7 +119,7 @@ impl MemberFacts<u8> for Facts {
         }
     }
 }
-fn world(objective: MissionObjective) -> World {
+fn world(objective: MissionObjective) -> Fixture {
     let mut w = state();
     let f = facts();
     let mut p = proposal();
@@ -126,7 +127,7 @@ fn world(objective: MissionObjective) -> World {
     p.supplies.clear();
     start(&mut w, p, &f);
     accept(&mut w, A, OFFER, &f);
-    let m = w.missions.get_mut(&ID).unwrap();
+    let m = mission_mut(&mut w.store, ID).unwrap();
     m.status = MissionStatus::Operating;
     m.members.get_mut(&A).unwrap().contacts.insert(ENEMY, HOME);
     w
@@ -183,6 +184,7 @@ fn occupation_care_food_and_recovery_priorities_match_the_scalar_policy() {
     ] {
         assert!(
             w.member_decision(
+                &w.store,
                 ID,
                 MemberInput {
                     activity,
@@ -198,6 +200,7 @@ fn occupation_care_food_and_recovery_priorities_match_the_scalar_policy() {
     }
     assert!(
         w.member_decision(
+            &w.store,
             ID,
             MemberInput {
                 care_urgency: 20_000,
@@ -211,6 +214,7 @@ fn occupation_care_food_and_recovery_priorities_match_the_scalar_policy() {
     // No known food still consumes the pass; it does not fall through to Rest or travel.
     assert_eq!(
         w.member_decision(
+            &w.store,
             ID,
             MemberInput {
                 hunger: 100,
@@ -223,6 +227,7 @@ fn occupation_care_food_and_recovery_priorities_match_the_scalar_policy() {
     );
     assert_eq!(
         w.member_decision(
+            &w.store,
             ID,
             MemberInput {
                 fatigue: 50,
@@ -239,6 +244,7 @@ fn occupation_care_food_and_recovery_priorities_match_the_scalar_policy() {
         ..m
     };
     let decision = w.member_decision(
+        &w.store,
         ID,
         MemberInput {
             activity: MemberActivity::Eat,
@@ -286,6 +292,7 @@ fn food_selection_uses_dated_permission_then_carried_priority_and_stable_id() {
         },
     ];
     let result = w.member_decision(
+        &w.store,
         ID,
         MemberInput {
             hunger: 100,
@@ -316,7 +323,7 @@ fn supply_order_waits_on_the_first_unknown_or_blocked_request() {
         stocks: vec![stock(21)],
         ..Facts::default()
     };
-    let mission = w.missions.get_mut(&ID).unwrap();
+    let mission = mission_mut(&mut w.store, ID).unwrap();
     mission.status = MissionStatus::Traveling;
     mission.proposal.supplies = vec![
         MissionSupply {
@@ -331,7 +338,7 @@ fn supply_order_waits_on_the_first_unknown_or_blocked_request() {
         },
     ];
     assert_eq!(
-        w.member_decision(ID, input(&m), &f).explanation,
+        w.member_decision(&w.store, ID, input(&m), &f).explanation,
         Some(MemberExplanation::SupplyPermission)
     );
     assert!(f.calls.borrow().is_empty());
@@ -339,7 +346,7 @@ fn supply_order_waits_on_the_first_unknown_or_blocked_request() {
     absent.accessible = false;
     f.stocks.insert(0, absent);
     assert_eq!(
-        w.member_decision(ID, input(&m), &f).explanation,
+        w.member_decision(&w.store, ID, input(&m), &f).explanation,
         Some(MemberExplanation::SupplyRoute)
     );
     assert_eq!(*f.calls.borrow(), vec![InventoryId(20)]);
@@ -352,7 +359,7 @@ fn actual_qualified_supply_continues_to_next_delivery_without_using_unrelated_ca
         stocks: vec![stock(20), stock(21)],
         ..Facts::default()
     };
-    let mission = w.missions.get_mut(&ID).unwrap();
+    let mission = mission_mut(&mut w.store, ID).unwrap();
     mission.status = MissionStatus::Traveling;
     mission.proposal.supplies = vec![
         MissionSupply {
@@ -380,7 +387,7 @@ fn actual_qualified_supply_continues_to_next_delivery_without_using_unrelated_ca
         origin_quantity: Quantity(0),
         room: Quantity(4000),
     }];
-    let decision = w.member_decision(ID, input(&m), &f);
+    let decision = w.member_decision(&w.store, ID, input(&m), &f);
     assert_eq!(*f.calls.borrow(), vec![InventoryId(20), InventoryId(21)]);
     assert_eq!(
         decision.attempts[0].action,
@@ -407,7 +414,10 @@ fn confinement_failure_fallback_and_release_deadline_are_owned() {
     });
     let m = motives();
     let mut f = Facts::default();
-    let attempt = w.member_decision(ID, input(&m), &f).attempts.remove(0);
+    let attempt = w
+        .member_decision(&w.store, ID, input(&m), &f)
+        .attempts
+        .remove(0);
     assert_eq!(attempt.action, MemberAction::Restrain(ENEMY));
     assert_eq!(attempt.clone().after_result(true), None);
     assert_eq!(
@@ -416,11 +426,12 @@ fn confinement_failure_fallback_and_release_deadline_are_owned() {
     );
     f.target.captor = Some(A);
     assert_eq!(
-        w.member_decision(ID, input(&m), &f).attempts[0].action,
+        w.member_decision(&w.store, ID, input(&m), &f).attempts[0].action,
         MemberAction::Rest
     );
     assert_eq!(
         w.member_decision(
+            &w.store,
             ID,
             MemberInput {
                 now: SimTime(10),
@@ -433,7 +444,11 @@ fn confinement_failure_fallback_and_release_deadline_are_owned() {
         MemberAction::Free(ENEMY)
     );
     f.target.captor = Some(ENEMY);
-    assert!(w.member_decision(ID, input(&m), &f).attempts.is_empty());
+    assert!(
+        w.member_decision(&w.store, ID, input(&m), &f)
+            .attempts
+            .is_empty()
+    );
 }
 #[test]
 fn rescue_escort_precedes_member_travel_and_has_no_execution_retry() {
@@ -455,7 +470,7 @@ fn rescue_escort_precedes_member_travel_and_has_no_execution_retry() {
         }),
         ..Facts::default()
     };
-    let decision = w.member_decision(ID, input(&m), &f);
+    let decision = w.member_decision(&w.store, ID, input(&m), &f);
     assert_eq!(
         decision.attempts[0].action,
         MemberAction::Move {
@@ -476,7 +491,12 @@ fn rescue_escort_precedes_member_travel_and_has_no_execution_retry() {
         Some(Failure::Explain(MemberExplanation::RouteUnknown))
     );
     f.target.player = true;
-    assert_eq!(w.member_decision(ID, input(&m), &f).attempts.len(), 1);
+    assert_eq!(
+        w.member_decision(&w.store, ID, input(&m), &f)
+            .attempts
+            .len(),
+        1
+    );
 }
 #[test]
 fn selected_delivery_is_admitted_by_real_cargo_without_assembly() {
@@ -498,7 +518,7 @@ fn selected_delivery_is_admitted_by_real_cargo_without_assembly() {
         }),
         ..Facts::default()
     };
-    let decision = w.member_decision(ID, input(&m), &f);
+    let decision = w.member_decision(&w.store, ID, input(&m), &f);
     let MemberAction::Carry { source, quantity } = decision.attempts[0].action else {
         panic!("expected physical pickup")
     };
@@ -556,7 +576,7 @@ fn selected_delivery_is_admitted_by_real_cargo_without_assembly() {
     assert_eq!(job.quantity, Quantity(1000));
     f.stocks.clear();
     assert_eq!(
-        w.member_decision(ID, input(&m), &f).explanation,
+        w.member_decision(&w.store, ID, input(&m), &f).explanation,
         Some(MemberExplanation::SourceUnknown)
     );
 }

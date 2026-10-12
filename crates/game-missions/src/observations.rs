@@ -1,5 +1,7 @@
 use crate::*;
+use crate::{mission as stored_mission, recruitment as stored_recruitment};
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Visibility/hearing belongs to the physical scene owner. Only actual visible
@@ -15,35 +17,63 @@ pub struct PreparedObservation {
     observer: PersonId,
     mission: MissionId,
     before: Option<MissionView>,
+    source: Option<Mission>,
+    offers: Vec<Recruitment>,
     pub snapshot: MissionView,
 }
 impl PreparedObservation {
-    pub fn commit(self, state: &mut World) -> Result<(), Error> {
-        if state
-            .known
-            .get(&self.observer)
-            .and_then(|k| k.get(&self.mission))
-            != self.before.as_ref()
+    pub fn check(&self, store: &Store) -> Result<(), Error> {
+        let personal = knowledge(store, self.observer);
+        if personal.and_then(|k| k.missions.get(&self.mission)) != self.before.as_ref()
+            || self
+                .source
+                .as_ref()
+                .is_some_and(|m| mission(store, self.mission) != Some(m))
+            || self
+                .offers
+                .iter()
+                .any(|r| recruitment(store, r.id) != Some(r))
+            || mission(store, self.mission).is_none()
         {
             return Err(Error::Unavailable);
         }
-        state
-            .known
-            .entry(self.observer)
-            .or_default()
-            .insert(self.mission, self.snapshot);
         Ok(())
     }
+    pub fn stage_into(self, store: &Store, batch: &mut Batch) -> Result<(), Error> {
+        self.check(store)?;
+        if batch.touches::<Knowledge>(StableId(self.observer.0))
+            || batch.touches::<Mission>(StableId(self.mission.0))
+            || self
+                .offers
+                .iter()
+                .any(|r| batch.touches::<Recruitment>(StableId(r.id.0)))
+        {
+            return Err(Error::Unavailable);
+        }
+        let mut personal = knowledge(store, self.observer).cloned().unwrap_or_default();
+        personal.missions.insert(self.mission, self.snapshot);
+        personal.validate()?;
+        batch.insert(StableId(self.observer.0), personal);
+        Ok(())
+    }
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        self.stage_into(store, &mut batch)?;
+        store.apply_batch(batch)
+    }
 }
-impl World {
+impl Runtime {
     pub fn prepare_observation(
         &self,
+        store: &Store,
         observer: PersonId,
         id: MissionId,
         f: &ObservationFacts,
     ) -> Result<PreparedObservation, Error> {
-        let m = self.missions.get(&id).ok_or(Error::Unavailable)?;
-        let old = self.known.get(&observer).and_then(|k| k.get(&id));
+        let m = stored_mission(store, id).ok_or(Error::Unavailable)?;
+        let old = knowledge(store, observer)
+            .map(|row| &row.missions)
+            .and_then(|k| k.get(&id));
         let leader_heard = f.heard.contains(&m.proposal.leader) || observer == m.proposal.leader;
         if !leader_heard && old.is_none() {
             return Err(Error::Unavailable);
@@ -81,10 +111,7 @@ impl World {
                 p.person == observer || observer == m.sponsor && f.heard.contains(&p.person)
             })
             .map(|p| {
-                let offer = self
-                    .recruitments
-                    .get(&p.recruitment)
-                    .ok_or(Error::Unavailable)?;
+                let offer = stored_recruitment(store, p.recruitment).ok_or(Error::Unavailable)?;
                 Ok(RecruitmentView {
                     id: offer.id,
                     person: offer.person,
@@ -130,6 +157,12 @@ impl World {
             observer,
             mission: id,
             before: old.cloned(),
+            source: Some(m.clone()),
+            offers: m
+                .members
+                .values()
+                .filter_map(|member| recruitment(store, member.recruitment).cloned())
+                .collect(),
             snapshot,
         })
     }
@@ -137,6 +170,7 @@ impl World {
     /// current remote mission/body truth, even when newer authority exists.
     pub fn prepare_report(
         &self,
+        store: &Store,
         speaker: PersonId,
         recipient: PersonId,
         snapshot: &MissionView,
@@ -148,7 +182,9 @@ impl World {
         {
             return Err(Error::Unavailable);
         }
-        let before = self.known.get(&recipient).and_then(|k| k.get(&snapshot.id));
+        let before = knowledge(store, recipient)
+            .map(|row| &row.missions)
+            .and_then(|k| k.get(&snapshot.id));
         if before.is_some_and(|old| old.observed_at > snapshot.observed_at) {
             return Ok(None);
         }
@@ -158,6 +194,8 @@ impl World {
             observer: recipient,
             mission: snapshot.id,
             before: before.cloned(),
+            source: None,
+            offers: Vec::new(),
             snapshot: after,
         }))
     }

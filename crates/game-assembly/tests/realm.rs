@@ -788,23 +788,12 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
             },
         },
     );
-    let mission = *sim
-        .canonical_state()
-        .state
-        .missions
-        .as_ref()
-        .unwrap()
-        .missions
-        .keys()
+    let mission = game_missions::missions(sim.canonical_state().components)
+        .map(|(id, _)| id)
         .last()
         .unwrap();
-    let recruitment = sim
-        .canonical_state()
-        .state
-        .missions
-        .as_ref()
+    let recruitment = game_missions::mission(sim.canonical_state().components, mission)
         .unwrap()
-        .missions[&mission]
         .members[&c.av]
         .recruitment;
     sim.debug_actor_command(
@@ -854,12 +843,8 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
         Progress::Defaulted
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(sim.canonical_state().components, mission)
             .unwrap()
-            .missions[&mission]
             .proposal
             .objective,
         MissionObjective::Visit {

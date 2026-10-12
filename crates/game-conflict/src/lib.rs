@@ -617,3 +617,5 @@ mod tests {
 
 mod release;
 pub use release::*;
+mod allegiance;
+pub use allegiance::*;

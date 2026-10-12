@@ -1,6 +1,8 @@
 //! Individual progression from communicated objectives and narrow physical facts.
+use crate::mission as stored_mission;
 use crate::*;
 use game_core::*;
+use game_ecs::Store;
 use game_logistics::{AcquisitionSource, Delivery, DeliveryFacts, KnownDestination, Step};
 use std::collections::BTreeMap;
 
@@ -184,9 +186,10 @@ impl<A> MemberDecision<A> {
         }
     }
 }
-impl World {
+impl Runtime {
     pub fn member_decision<A: Clone>(
         &self,
+        store: &Store,
         id: MissionId,
         input: MemberInput<'_>,
         facts: &impl MemberFacts<A>,
@@ -195,7 +198,7 @@ impl World {
         if input.player || input.in_combat {
             return MemberDecision::default();
         }
-        let Some(m) = self.missions.get(&id) else {
+        let Some(m) = stored_mission(store, id) else {
             return MemberDecision::default();
         };
         let Some(member) = m
@@ -208,14 +211,13 @@ impl World {
         let Some(area) = input.area else {
             return MemberDecision::default();
         };
-        let status = self
-            .known
-            .get(&actor)
+        let status = knowledge(store, actor)
+            .map(|row| &row.missions)
             .and_then(|known| known.get(&id))
             .map_or(m.status, |view| view.status);
         if input.motives.guardian_duty {
             let mut result = self
-                .service_withdrawal(actor, id, input.motives)
+                .service_withdrawal(store, actor, id, input.motives)
                 .map(|action| MemberDecision::action(MemberAction::Mission(action)))
                 .unwrap_or_default();
             result.explanation = Some(MemberExplanation::Guardian);
@@ -240,7 +242,7 @@ impl World {
         if input.fatigue >= input.fatigue_limit / 2 || input.health < input.max_health / 2 {
             return MemberDecision::action(MemberAction::Rest);
         }
-        if let Some(action) = self.service_withdrawal(actor, id, input.motives) {
+        if let Some(action) = self.service_withdrawal(store, actor, id, input.motives) {
             return MemberDecision::action(MemberAction::Mission(action));
         }
         if matches!(status, MissionStatus::Preparing | MissionStatus::Traveling) {

@@ -1429,9 +1429,10 @@ impl Simulation {
             .state
             .missions
             .as_ref()
-            .and_then(|w| w.recruitments.get(&consent.recruitment))
+            .and_then(|_| game_missions::recruitment(&self.host.storage, consent.recruitment))
             .ok_or(Error::Unavailable)?;
-        let mission = &self.host.state.missions.as_ref().unwrap().missions[&offer.mission];
+        let mission =
+            &game_missions::mission(&self.host.storage, offer.mission).expect("record exists");
         if consent.agreement.0 != self.host.next_id()
             || offer.person != consent.recruit
             || mission.sponsor != consent.sponsor

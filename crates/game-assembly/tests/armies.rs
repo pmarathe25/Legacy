@@ -45,13 +45,8 @@ fn advance_until(sim: &mut Simulation, mut ready: impl FnMut(&CanonicalState) ->
             .flat_map(|a| a.orders.values().map(|o| (&o.objective, &o.recipients)))
             .collect::<Vec<_>>(),
         sim.canonical_state().state.armies.as_ref().unwrap().talks,
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .values()
+        game_missions::missions(sim.canonical_state().components)
+            .map(|(_, row)| row)
             .map(|m| m
                 .members
                 .values()
@@ -125,25 +120,16 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
             },
         );
         missions.push(
-            *sim.canonical_state()
-                .state
-                .missions
-                .as_ref()
-                .unwrap()
-                .missions
-                .keys()
-                .next_back()
+            game_missions::missions(sim.canonical_state().components)
+                .map(|(id, _)| id)
+                .last()
                 .unwrap(),
         );
     }
     sim.advance(SimDuration(180_000)).unwrap();
     assert!(missions.iter().all(|m| {
-        sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
+        game_missions::mission(sim.canonical_state().components, *m)
             .unwrap()
-            .missions[m]
             .members
             .values()
             .all(|p| p.status == CompanionStatus::Accepted)
@@ -195,13 +181,8 @@ fn prepared() -> (Simulation, ArmyId, Vec<MissionId>, Vec<PersonId>, PersonId) {
         },
     );
     advance_until(&mut sim, |state| {
-        state
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .values()
+        game_missions::missions(state.components)
+            .map(|(_, row)| row)
             .all(|m| {
                 m.proposal.objective
                     == MissionObjective::Patrol {
@@ -265,7 +246,7 @@ fn battle(
         },
     );
     advance_until(&mut sim, |state| {
-        state.state.missions.as_ref().unwrap().missions.values().all(|m|matches!(m.proposal.objective,MissionObjective::Confine {person,..} if person==enemy)) && state.state.armies.as_ref().unwrap().talks.is_empty()
+        game_missions::missions(state.components).map(|(_, row)| row).all(|m|matches!(m.proposal.objective,MissionObjective::Confine {person,..} if person==enemy)) && state.state.armies.as_ref().unwrap().talks.is_empty()
     });
     if injured_opponent {
         let mut traits = game_assembly::decisions::Personality::industrious();
@@ -339,7 +320,8 @@ fn sixty_five_real_recruits_carry_provisions_travel_and_share_one_initiative_clo
     let roster: BTreeSet<_> = missions
         .iter()
         .flat_map(|m| {
-            state.state.missions.as_ref().unwrap().missions[m]
+            game_missions::mission(state.components, *m)
+                .unwrap()
                 .members
                 .keys()
                 .copied()
@@ -480,7 +462,10 @@ fn individual_death_surrender_and_real_binding_capture_persist_without_replacing
             .any(|e| matches!(e.event,EventKind::Captured {target,..} if target==enemy))
     );
     assert_eq!(
-        state.state.missions.as_ref().unwrap().missions[&missions[0]].members[&lost].status,
+        game_missions::mission(state.components, missions[0])
+            .unwrap()
+            .members[&lost]
+            .status,
         CompanionStatus::Dead
     );
     assert_eq!(
@@ -504,12 +489,8 @@ fn commander_personally_approaches_existing_battle_and_gets_an_individual_turn()
     let (mut sim, army, missions, _, _, encounter) = battle(false);
     let ruler = sim.canonical_state().state.ruler;
     assert!(missions.iter().all(|m| {
-        !sim.canonical_state()
-            .state
-            .missions
-            .as_ref()
+        !game_missions::mission(sim.canonical_state().components, *m)
             .unwrap()
-            .missions[m]
             .members
             .contains_key(&ruler)
     }));
@@ -568,7 +549,8 @@ fn commander_personally_approaches_existing_battle_and_gets_an_individual_turn()
     assert_eq!(sim.observe().combat.unwrap().turn, Some(ruler));
     assert_eq!(state.state.people.len(), 69);
     assert!(missions.iter().all(|m| {
-        !state.state.missions.as_ref().unwrap().missions[m]
+        !game_missions::mission(state.components, *m)
+            .unwrap()
             .members
             .contains_key(&ruler)
     }));
@@ -597,22 +579,12 @@ fn commander_personally_approaches_existing_battle_and_gets_an_individual_turn()
 #[test]
 fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
     let (mut sim, army, missions, _, enemy) = prepared();
-    let leader = sim
-        .canonical_state()
-        .state
-        .missions
-        .as_ref()
+    let leader = game_missions::mission(sim.canonical_state().components, missions[0])
         .unwrap()
-        .missions[&missions[0]]
         .proposal
         .leader;
-    let old = sim
-        .canonical_state()
-        .state
-        .missions
-        .as_ref()
+    let old = game_missions::mission(sim.canonical_state().components, missions[0])
         .unwrap()
-        .missions[&missions[0]]
         .proposal
         .objective
         .clone();
@@ -653,13 +625,17 @@ fn a_leader_refuses_a_new_force_objective_and_remote_orders_are_atomic() {
         game_armies::OrderStatus::Refused
     );
     assert_eq!(
-        state.state.missions.as_ref().unwrap().missions[&missions[0]]
+        game_missions::mission(state.components, missions[0])
+            .unwrap()
             .proposal
             .objective,
         old
     );
     assert_eq!(
-        state.state.missions.as_ref().unwrap().missions[&missions[0]].members[&leader].status,
+        game_missions::mission(state.components, missions[0])
+            .unwrap()
+            .members[&leader]
+            .status,
         CompanionStatus::Accepted
     );
     assert!(state.state.combat.as_ref().unwrap().encounters.is_empty());

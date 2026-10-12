@@ -2,7 +2,7 @@
 use crate::*;
 
 pub use game_missions::{
-    Companion, ConfinementObservation, Conversation, Mission, PendingTalk, Recruitment, World,
+    Companion, ConfinementObservation, Conversation, Mission, PendingTalk, Recruitment, Runtime,
 };
 
 impl Simulation {
@@ -14,15 +14,22 @@ impl Simulation {
         area: AreaId,
         observed_at: SimTime,
     ) -> Result<(), Error> {
-        if !self.person_index.contains_key(&speaker)
-            || !self.person_index.contains_key(&target)
-            || proposal.objective.target_person() != Some(target)
-            || !self.host.state.areas.iter().any(|place| place.id == area)
-            || observed_at > self.host.clock().time
-        {
-            return Err(Error::Unavailable);
-        }
-        Ok(())
+        self.host
+            .state
+            .missions
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .validate_target_report(
+                proposal,
+                target,
+                observed_at,
+                &game_missions::TargetReportFacts {
+                    speaker_exists: self.person_index.contains_key(&speaker),
+                    target_exists: self.person_index.contains_key(&target),
+                    area_exists: self.host.state.areas.iter().any(|a| a.id == area),
+                    now: self.host.clock().time,
+                },
+            )
     }
     pub(crate) fn seed_mission_target_report(
         &mut self,
@@ -32,34 +39,32 @@ impl Simulation {
         area: AreaId,
         observed_at: SimTime,
     ) -> Result<(), Error> {
-        let m = self
+        let runtime = self
             .host
             .state
             .missions
             .as_ref()
-            .and_then(|world| world.missions.get(&mission))
             .ok_or(Error::Unavailable)?;
-        if m.sponsor != speaker {
-            return Err(Error::Unavailable);
-        }
-        self.preflight_mission_target_report(&m.proposal, speaker, target, area, observed_at)?;
-        // This is the sponsor's supplied report; it does not query the target's
-        // current location. Recruits are present for the proposal conversation.
-        for member in self
-            .host
-            .state
-            .missions
-            .as_mut()
-            .unwrap()
-            .missions
-            .get_mut(&mission)
-            .unwrap()
-            .members
-            .values_mut()
-        {
-            member.contacts.insert(target, area);
-        }
-        Ok(())
+        let prepared = runtime.prepare_target_report(
+            &self.host.storage,
+            mission,
+            game_missions::TargetReport {
+                speaker,
+                target,
+                area,
+                observed_at,
+            },
+            &game_missions::TargetReportFacts {
+                speaker_exists: self.person_index.contains_key(&speaker),
+                target_exists: self.person_index.contains_key(&target),
+                area_exists: self.host.state.areas.iter().any(|a| a.id == area),
+                now: self.host.clock().time,
+            },
+        )?;
+        prepared.commit(
+            self.host.state.missions.as_mut().unwrap(),
+            &mut self.host.storage,
+        )
     }
     pub fn mission_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
         let mut sim = Self::combat_fixture(seed, execution)?;
@@ -93,42 +98,46 @@ impl Simulation {
             },
             custodians,
         });
-        sim.host.state.missions = Some(World {
-            missions: BTreeMap::new(),
-            recruitments: BTreeMap::new(),
-            known: BTreeMap::new(),
-            talks: BTreeMap::new(),
+        sim.host.state.missions = Some(Runtime {
             last_event: sim.host.next_event() - 1,
             last_review: sim.host.clock().time,
         });
         Ok(sim)
     }
     fn mission_area(&self, actor: PersonId) -> Result<AreaId, Error> {
-        let index = self.person_index.get(&actor).ok_or(Error::Unavailable)?;
+        let person = *self.person_index.get(&actor).ok_or(Error::Unavailable)?;
         self.host
             .state
             .physical
             .as_ref()
             .ok_or(Error::Unavailable)?;
         let body = game_physiology::body(&self.host.storage, actor).ok_or(Error::Unavailable)?;
-        if !body.vitals.alive
-            || body.vitals.health == 0
-            || !self.independent(actor)
-            || self.host.state.combat.as_ref().is_some_and(|w| {
-                w.captivity.contains_key(&actor) || body.vitals.health <= w.rules.incapacitation
-            })
-        {
-            return Err(Error::Unavailable);
-        }
-        match *game_spatial::location(
-            &self.host.storage,
-            game_ecs::StableId((self.host.state.people[*index].id).0),
-        )
-        .expect("location exists")
-        {
-            Location::AtArea(area) => Ok(area),
-            _ => Err(Error::Unavailable),
-        }
+        let availability = game_missions::ActorAvailability {
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            independent: self.independent(actor),
+            captive: self
+                .host
+                .state
+                .combat
+                .as_ref()
+                .is_some_and(|w| w.captivity.contains_key(&actor)),
+            incapacitation: self
+                .host
+                .state
+                .combat
+                .as_ref()
+                .map(|w| w.rules.incapacitation),
+        };
+        availability
+            .area(
+                game_spatial::location(
+                    &self.host.storage,
+                    game_ecs::StableId(self.host.state.people[person].id.0),
+                )
+                .ok_or(Error::Unavailable)?,
+            )
+            .ok_or(Error::Unavailable)
     }
     fn mission_assets(
         &self,
@@ -218,106 +227,19 @@ impl Simulation {
         area: AreaId,
         action: &MissionAction,
     ) -> Result<game_missions::CommandFacts, Error> {
-        let world = self
-            .host
+        self.host
             .state
             .missions
             .as_ref()
-            .ok_or(Error::Unavailable)?;
-        let mut relevant = BTreeSet::from([actor]);
-        let mut terms = Vec::new();
-        let mut objective = None;
-        let mut supplies = Vec::new();
-        let mut duties = BTreeSet::new();
-        match action {
-            MissionAction::Propose { proposal } => {
-                relevant.extend(proposal.recruits.iter().copied());
-                relevant.insert(proposal.leader);
-                terms.extend(proposal.compensation.values().flatten().cloned());
-                objective = Some(&proposal.objective);
-                supplies = proposal.supplies.clone();
-            }
-            MissionAction::Accept { recruitment }
-            | MissionAction::Refuse { recruitment }
-            | MissionAction::AcceptCounteroffer { recruitment }
-            | MissionAction::Counteroffer { recruitment, .. } => {
-                let offer = world
-                    .recruitments
-                    .get(recruitment)
-                    .ok_or(Error::Unavailable)?;
-                let mission = world
-                    .missions
-                    .get(&offer.mission)
-                    .ok_or(Error::Unavailable)?;
-                relevant.extend([offer.person, mission.sponsor]);
-                terms = if let MissionAction::Counteroffer { compensation, .. } = action {
-                    compensation.clone()
-                } else {
-                    offer.compensation.clone()
-                };
-                if self.guardian_mission_duty(actor, mission.id)
-                    || game_characters::decisions::mind::<game_api::Command>(
-                        &self.host.storage,
-                        actor,
-                    )
-                    .unwrap()
-                    .child_signals
-                    .values()
-                    .any(|signal| signal.urgency >= 20_000)
-                {
-                    duties.insert(actor);
-                }
-            }
-            MissionAction::Depart { mission }
-            | MissionAction::Retreat { mission }
-            | MissionAction::Leave { mission }
-            | MissionAction::Objective { mission, .. } => {
-                let m = world.missions.get(mission).ok_or(Error::Unavailable)?;
-                relevant.insert(m.proposal.leader);
-                if let MissionAction::Objective {
-                    objective: asked, ..
-                } = action
-                {
-                    objective = Some(asked);
-                }
-            }
-            MissionAction::Report { recipient, .. } => {
-                relevant.insert(*recipient);
-            }
-        }
-        let contacts = if matches!(action, MissionAction::Propose { .. }) {
-            self.host
-                .state
-                .people
-                .iter()
-                .filter(|p| {
-                    *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
-                        .expect("location exists")
-                        == Location::AtArea(area)
-                })
-                .map(|p| (p.id, area))
-                .collect::<BTreeMap<_, _>>()
-                .into_iter()
-                .take(64)
-                .collect()
-        } else {
-            BTreeMap::new()
-        };
-        Ok(game_missions::CommandFacts {
-            now: self.host.clock().time,
-            area,
-            available: relevant
-                .into_iter()
-                .filter(|id| {
-                    self.mission_area(*id).ok() == Some(area)
-                        && (!matches!(action, MissionAction::Propose { .. })
-                            || !self.in_combat(*id))
-                })
-                .collect(),
-            duties,
-            contacts,
-            assets: self.mission_assets(objective, &terms, &supplies),
-        })
+            .ok_or(Error::Unavailable)?
+            .command_facts(
+                &self.host.storage,
+                actor,
+                area,
+                action,
+                self.host.clock().time,
+                &MissionPresence { simulation: self },
+            )
     }
     pub(crate) fn mission_command(
         &mut self,
@@ -325,49 +247,29 @@ impl Simulation {
         action: &MissionAction,
     ) -> Result<(), Error> {
         let area = self.mission_area(actor)?;
-        if self.in_combat(actor) {
-            return Err(Error::Unavailable);
-        }
-        let facts = self.mission_command_facts(actor, area, action)?;
-        let mut ids = game_missions::MissionIds::default();
-        let mut next = self.host.next_id();
-        if let MissionAction::Propose { proposal } = action {
-            let people: BTreeSet<_> = proposal
-                .recruits
-                .iter()
-                .copied()
-                .chain([proposal.leader])
-                .collect();
-            next.checked_add(1 + people.len() as u64)
-                .ok_or(Error::Overflow)?;
-            ids.mission = Some(MissionId(next));
-            next += 1;
-            for person in people {
-                ids.recruitments.insert(person, RecruitmentId(next));
-                next += 1;
-            }
-        } else if let MissionAction::Accept { recruitment } = action {
-            let offer = self
-                .host
-                .state
-                .missions
-                .as_ref()
-                .unwrap()
-                .recruitments
-                .get(recruitment)
-                .ok_or(Error::Unavailable)?;
-            if !offer.compensation.is_empty() {
-                ids.backing = Some(AgreementId(next));
-            }
-        }
-        let prepared = self
-            .host
+        self.host
             .state
             .missions
             .as_ref()
-            .unwrap()
-            .prepare_command(actor, action, &facts, &ids)?;
-        prepared.check(self.host.state.missions.as_ref().unwrap())?;
+            .ok_or(Error::Unavailable)?
+            .validate_action_presence(actor, &MissionPresence { simulation: self })?;
+        let facts = self.mission_command_facts(actor, area, action)?;
+        let (ids, next) = self.host.state.missions.as_ref().unwrap().command_ids(
+            &self.host.storage,
+            action,
+            self.host.next_id(),
+        )?;
+        let prepared = self.host.state.missions.as_ref().unwrap().prepare_command(
+            &self.host.storage,
+            actor,
+            action,
+            &facts,
+            &ids,
+        )?;
+        prepared.check(
+            self.host.state.missions.as_ref().unwrap(),
+            &self.host.storage,
+        )?;
         if let Some((listener, conversation)) = prepared.conversation.clone() {
             return self.start_mission_talk(actor, listener, conversation);
         }
@@ -376,6 +278,20 @@ impl Simulation {
             .as_ref()
             .map(|consent| self.prepare_service_agreement(consent))
             .transpose()?;
+        if let Some((plan, after)) = &backing {
+            plan.check(
+                &self
+                    .host
+                    .state
+                    .agreements
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?
+                    .ledger,
+            )?;
+            after
+                .checked_sub(self.host.next_id())
+                .ok_or(Error::Overflow)?;
+        }
         let agreement_events = backing.as_ref().map_or(0, |(p, _)| p.events.len());
         self.ensure_event_capacity(
             prepared
@@ -386,9 +302,13 @@ impl Simulation {
         )?;
         let events = prepared.events.clone();
         let notices = prepared.notices.clone();
+        let created = prepared.created_missions().collect::<Vec<_>>();
         // Both owner plans have passed all guards and effect preflights before
         // either authoritative record set changes. No whole-world rollback.
-        prepared.commit(self.host.state.missions.as_mut().unwrap())?;
+        prepared.commit(
+            self.host.state.missions.as_mut().unwrap(),
+            &mut self.host.storage,
+        )?;
         if let Some((plan, after)) = backing {
             self.apply_prepared_agreement(actor, plan, after)?;
         } else {
@@ -398,6 +318,8 @@ impl Simulation {
                     .ok_or(Error::Overflow)?,
             )?;
         }
+        self.mission_membership
+            .register_created(&self.host.storage, created);
         self.publish_mission_effects(events, notices);
         Ok(())
     }
@@ -409,6 +331,15 @@ impl Simulation {
         use game_missions::MissionEvent;
         for event in events {
             self.emit(match event {
+                MissionEvent::Reported {
+                    mission,
+                    speaker,
+                    recipient,
+                } => EventKind::MissionReported {
+                    mission,
+                    speaker,
+                    recipient,
+                },
                 MissionEvent::Proposed { mission, sponsor } => {
                     EventKind::MissionProposed { mission, sponsor }
                 }
@@ -442,33 +373,44 @@ impl Simulation {
         self.ensure_event_capacity(prepared.events.len())?;
         let events = prepared.events.clone();
         let notices = prepared.notices.clone();
-        let trust = prepared.trust.clone();
-        prepared.commit(
+        let created = prepared.created_missions().collect::<Vec<_>>();
+        let trust = game_characters::decisions::PreparedTrustReactions::prepare::<Command>(
+            &self.host.storage,
+            prepared
+                .trust
+                .iter()
+                .map(|effect| game_characters::decisions::TrustDelta {
+                    observer: effect.observer,
+                    subject: effect.leader,
+                    delta: effect.delta,
+                }),
+        )?;
+        let mut batch = game_ecs::Batch::new();
+        let finish = prepared.stage_into(
             self.host
                 .state
                 .missions
-                .as_mut()
+                .as_ref()
                 .ok_or(Error::Unavailable)?,
+            &self.host.storage,
+            &mut batch,
         )?;
+        self.host.storage.validate_batch(&batch)?;
+        trust.check_batch::<Command>(&self.host.storage, &batch)?;
+        self.host.storage.apply_batch(batch)?;
+        finish.finish(self.host.state.missions.as_mut().unwrap());
+        trust
+            .commit::<Command>(&mut self.host.storage)
+            .expect("validated relationship footprint");
+        self.mission_membership
+            .register_created(&self.host.storage, created);
         self.publish_mission_effects(events, notices);
-        for effect in trust {
-            let relationship = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.host.storage,
-                effect.observer,
-            )
-            .unwrap()
-            .relationships
-            .entry(effect.leader)
-            .or_insert(decisions::Relationship {
-                trust: 0,
-                affection: 0,
-            });
-            relationship.trust = (relationship.trust + effect.delta).clamp(-1000, 1000);
-        }
         Ok(())
     }
     fn mission_membership(&self, actor: PersonId) -> Option<MissionId> {
-        self.host.state.missions.as_ref()?.membership(actor)
+        self.host.state.missions.as_ref()?;
+        self.mission_membership
+            .membership(&self.host.storage, actor)
     }
     pub(crate) fn mission_actor_busy(&self, actor: PersonId) -> bool {
         let Some(id) = self.mission_membership(actor) else {
@@ -478,6 +420,7 @@ impl Simulation {
         let rules = &self.host.state.physical.as_ref().unwrap().rules;
         let mind = game_characters::decisions::mind::<Command>(&self.host.storage, actor).unwrap();
         self.host.state.missions.as_ref().unwrap().member_busy(
+            &self.host.storage,
             actor,
             game_missions::ServiceAvailability {
                 guardian_due: self.guardian_mission_duty(actor, id),
@@ -498,203 +441,131 @@ impl Simulation {
             },
         )
     }
+    fn mission_talk_scene(
+        &self,
+        speaker: PersonId,
+        listener: PersonId,
+    ) -> game_missions::TalkScene {
+        game_missions::TalkScene {
+            speaker_area: self.mission_area(speaker).ok(),
+            listener_area: self.mission_area(listener).ok(),
+            speaker_combat: self.in_combat(speaker),
+            listener_combat: self.in_combat(listener),
+            active_deadline: match self.host.storage.activity(speaker) {
+                Some(Activity::MissionTalk { completes }) => Some(*completes),
+                _ => None,
+            },
+        }
+    }
     fn start_mission_talk(
         &mut self,
         speaker: PersonId,
         listener: PersonId,
         conversation: Conversation,
     ) -> Result<(), Error> {
-        let area = self.mission_area(speaker)?;
-        if self.in_combat(speaker)
-            || self.in_combat(listener)
-            || self.mission_area(listener).ok() != Some(area)
-        {
-            return Err(Error::Unavailable);
-        }
-        let completes = SimTime(
-            self.host
-                .clock()
-                .time
-                .0
-                .checked_add(60_000)
-                .ok_or(Error::Overflow)?,
-        );
-        self.interrupt_actor_activity(speaker);
-        *self.host.storage.activity_mut(speaker).unwrap() = Activity::MissionTalk { completes };
-        self.host.state.missions.as_mut().unwrap().talks.insert(
+        let runtime = self
+            .host
+            .state
+            .missions
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        let prepared = runtime.prepare_talk_start(
+            &self.host.storage,
             speaker,
-            PendingTalk {
-                speaker,
-                listener,
-                area,
-                completes,
-                conversation,
-            },
-        );
+            listener,
+            conversation,
+            self.host.clock().time,
+            self.mission_talk_scene(speaker, listener),
+        )?;
+        let completes = prepared.talk.completes;
+        let interruptions =
+            self.prepare_interruptions(&[speaker], crate::commands::ActivityOwner::Missions)?;
+        self.ensure_event_capacity(
+            interruptions
+                .event_count()?
+                .try_into()
+                .map_err(|_| Error::Overflow)?,
+        )?;
+        let mut batch = game_ecs::Batch::new();
+        let replacement = prepared.stage_into_with_replacement(&self.host.storage, &mut batch)?;
+        let mut finalization = interruptions.stage_into_with_mission_replacement(
+            self,
+            &mut batch,
+            &BTreeMap::from([(speaker, Activity::MissionTalk { completes })]),
+            &replacement,
+        )?;
+        self.host.storage.apply_batch(batch)?;
+        finalization.finish_actor(self, speaker);
         Ok(())
     }
     pub(crate) fn cancel_mission_talk(&mut self, actor: PersonId) {
-        let Some(world) = &self.host.state.missions else {
+        let Some(runtime) = &self.host.state.missions else {
             return;
         };
-        let affected: Vec<_> = world
-            .talks
-            .values()
-            .filter(|talk| talk.speaker == actor || talk.listener == actor)
-            .cloned()
-            .collect();
-        for talk in affected {
-            self.host
-                .state
-                .missions
-                .as_mut()
-                .unwrap()
-                .talks
-                .remove(&talk.speaker);
-            for actor in [talk.speaker] {
-                if matches!(*self.host.storage.activity(actor).expect("body exists"),Activity::MissionTalk {completes}if completes==talk.completes)
-                {
-                    *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
-                }
+        let prepared = runtime.prepare_cancel_talks(&self.host.storage, &[actor]);
+        let mut batch = game_ecs::Batch::new();
+        let groups = prepared
+            .effects()
+            .map(|(_, effects)| effects.to_vec())
+            .collect::<Vec<_>>();
+        for effect in groups.iter().flatten() {
+            if matches!(self.host.storage.activity(effect.speaker),Some(Activity::MissionTalk{completes})if *completes==effect.completes)
+            {
+                batch.insert(game_ecs::StableId(effect.speaker.0), Activity::Idle);
             }
         }
+        prepared
+            .stage_into(&self.host.storage, &mut batch)
+            .expect("immediately prepared speech cancellation");
+        self.host
+            .storage
+            .apply_batch(batch)
+            .expect("valid owner cancellation and idle activity");
     }
     pub(crate) fn mission_boundary(&self, limit: SimTime) -> SimTime {
-        let Some(w) = &self.host.state.missions else {
-            return limit;
-        };
-        w.talks
-            .values()
-            .map(|talk| talk.completes)
-            .chain(
-                w.missions
-                    .values()
-                    .filter(|m| {
-                        !matches!(
-                            m.status,
-                            MissionStatus::Completed
-                                | MissionStatus::Failed
-                                | MissionStatus::Cancelled
-                        )
-                    })
-                    .map(|m| m.proposal.deadline),
-            )
-            .chain(
-                w.missions
-                    .values()
-                    .filter_map(|m| match m.proposal.objective {
-                        MissionObjective::Patrol { until, .. }
-                        | MissionObjective::Confine { until, .. }
-                            if !matches!(
-                                m.status,
-                                MissionStatus::Completed
-                                    | MissionStatus::Failed
-                                    | MissionStatus::Cancelled
-                            ) =>
-                        {
-                            Some(until)
-                        }
-                        _ => None,
-                    }),
-            )
-            .filter(|at| *at > self.host.clock().time)
-            .min()
-            .map_or(limit, |next| next.min(limit))
+        self.host.state.missions.as_ref().map_or(limit, |runtime| {
+            runtime.boundary(&self.host.storage, self.host.clock().time, limit)
+        })
     }
-
     pub(crate) fn mission_view(&self, actor: PersonId) -> Vec<MissionView> {
         self.host
             .state
             .missions
             .as_ref()
-            .and_then(|w| w.known.get(&actor))
-            .map_or_else(Vec::new, |known| {
-                known.values().rev().take(64).cloned().collect()
-            })
+            .map_or_else(Vec::new, |w| w.views(&self.host.storage, actor))
     }
     fn mission_can_observe(&self, observer: PersonId, person: PersonId) -> bool {
-        if observer == person {
-            return true;
-        }
-        let observer_location = self.resolved_location(observer);
-        let location = self.resolved_location(person);
-        if observer_location != location || !matches!(location, Location::AtArea(_)) {
-            return false;
-        }
-        let Some(w) = &self.host.state.combat else {
-            return true;
-        };
-        let encounter = w
-            .encounters
-            .values()
-            .find(|e| e.active && e.fighters.contains_key(&observer));
-        if let Some(e) = encounter {
-            let Some(other) = e.fighters.get(&person) else {
-                return false;
-            };
-            return w
-                .map(e.map)
-                .is_some_and(|map| map.clear(e.fighters[&observer].position, other.position));
-        }
-        !self.in_combat(person)
+        self.host.state.missions.as_ref().unwrap().can_observe(
+            observer,
+            person,
+            &MissionPresence { simulation: self },
+        )
     }
     fn mission_observation_facts(
         &self,
         observer: PersonId,
         id: MissionId,
     ) -> game_missions::ObservationFacts {
-        let m = &self.host.state.missions.as_ref().unwrap().missions[&id];
-        let relevant = m
-            .members
-            .keys()
-            .copied()
-            .chain([m.sponsor])
-            .collect::<BTreeSet<_>>();
-        let visible_locations = relevant
-            .iter()
-            .filter(|p| self.mission_can_observe(observer, **p))
-            .map(|p| {
-                (
-                    *p,
-                    (*game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId((self.host.state.people[self.person_index[p]].id).0),
-                    )
-                    .expect("location exists"))
-                    .clone(),
-                )
-            })
-            .collect();
-        let heard = relevant
-            .into_iter()
-            .filter(|p| {
-                self.mission_area(*p).is_ok()
-                    && self.mission_area(observer).is_ok()
-                    && self.transport_same_place(observer, *p)
-            })
-            .collect();
-        game_missions::ObservationFacts {
-            now: self.host.clock().time,
-            visible_locations,
-            heard,
-        }
+        self.host
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .observation_facts(
+                &self.host.storage,
+                observer,
+                id,
+                self.host.clock().time,
+                &MissionPresence { simulation: self },
+            )
+            .expect("existing mission")
     }
     fn publish_mission(&mut self, id: MissionId) {
-        let m = &self.host.state.missions.as_ref().unwrap().missions[&id];
-        let leader = m.proposal.leader;
-        let people = m
-            .members
-            .keys()
-            .copied()
-            .chain([m.sponsor])
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter(|p| {
-                self.mission_area(leader).is_ok()
-                    && self.mission_area(*p).is_ok()
-                    && self.transport_same_place(*p, leader)
-            })
-            .collect::<Vec<_>>();
+        let people = self.host.state.missions.as_ref().unwrap().receivers(
+            &self.host.storage,
+            id,
+            &MissionPresence { simulation: self },
+        );
         for person in people {
             self.observe_own_mission(person, id);
         }
@@ -707,10 +578,10 @@ impl Simulation {
             .missions
             .as_ref()
             .unwrap()
-            .prepare_observation(actor, id, &facts)
+            .prepare_observation(&self.host.storage, actor, id, &facts)
         {
             prepared
-                .commit(self.host.state.missions.as_mut().unwrap())
+                .commit(&mut self.host.storage)
                 .expect("same personal observation snapshot");
         }
     }
@@ -719,15 +590,11 @@ impl Simulation {
             &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .unwrap();
         let body = &game_physiology::body(&self.host.storage, actor).expect("body exists");
-        let social_disruption = if self
-            .mission_area(actor)
-            .ok()
-            .is_some_and(|area| self.mission_area(m.sponsor).ok() == Some(area))
-        {
-            self.invocation_social_penalty(m.sponsor) / 3
-        } else {
-            0
-        };
+        let social_disruption = game_missions::recruitment_disruption(
+            self.mission_area(actor).ok(),
+            self.mission_area(m.sponsor).ok(),
+            self.invocation_social_penalty(m.sponsor),
+        );
         game_missions::RecruitmentInput {
             actor,
             guardian_duty: self.guardian_mission_duty(actor, m.id),
@@ -741,14 +608,12 @@ impl Simulation {
             urgent_care: mind
                 .child_signals
                 .values()
-                .any(|signal| signal.urgency >= 20_000),
-            hungry: body.vitals.hunger
-                >= self.host.state.physical.as_ref().unwrap().rules.meal_relief,
+                .any(|signal| game_missions::urgent_service_care([signal.urgency])),
+            hungry: game_missions::service_hungry(
+                body.vitals.hunger,
+                self.host.state.physical.as_ref().unwrap().rules.meal_relief,
+            ),
         }
-    }
-
-    fn recruitment_score(&self, actor: PersonId, m: &Mission, offer: &Recruitment) -> i64 {
-        game_missions::recruitment_score(self.recruitment_input(actor, m), &offer.compensation)
     }
 
     fn mission_control_member(&mut self, id: MissionId, actor: PersonId) {
@@ -790,6 +655,7 @@ impl Simulation {
             motives: &motives,
         };
         let decision = world.member_decision(
+            &self.host.storage,
             id,
             input,
             &MissionControlFacts {
@@ -894,50 +760,29 @@ impl Simulation {
         else {
             return;
         };
-        if encounter.active {
-            return;
-        }
         let Some(world) = &self.host.state.missions else {
             return;
         };
-        let responses: Vec<_> = world
-            .missions
-            .values()
-            .filter(|mission| {
-                matches!(
-                    mission.status,
-                    MissionStatus::Traveling | MissionStatus::Operating
-                )
-            })
-            .flat_map(|mission| {
-                mission
-                    .members
-                    .values()
-                    .filter(|member| {
-                        member.status == CompanionStatus::Accepted
-                            && encounter.fighters.contains_key(&member.person)
-                            && matches!(member.directive, MissionObjective::Confine { .. })
-                    })
-                    .map(|member| (mission.id, member.person))
-            })
-            .collect();
+        let responses = world.encounter_end_responses(&self.host.storage, encounter);
         for (mission, actor) in responses {
             self.mission_control_member(mission, actor);
         }
     }
     fn mission_explain(&mut self, id: MissionId, actor: PersonId, message: &str) {
-        self.host
+        let prepared = self
+            .host
             .state
             .missions
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .missions
-            .get_mut(&id)
-            .unwrap()
-            .members
-            .get_mut(&actor)
-            .unwrap()
-            .explanation = message.into();
+            .prepare_explanation(&self.host.storage, id, actor, message)
+            .expect("existing member explanation");
+        prepared
+            .commit(
+                self.host.state.missions.as_mut().unwrap(),
+                &mut self.host.storage,
+            )
+            .expect("immediately prepared explanation");
     }
     fn mission_target_observation(
         &self,
@@ -1006,6 +851,7 @@ impl Simulation {
         };
         let linked = self.army_allied_missions(id);
         let plan = self.host.state.missions.as_ref().unwrap().engagement_plan(
+            &self.host.storage,
             id,
             target,
             area,
@@ -1031,13 +877,11 @@ impl Simulation {
         let Some(world) = &self.host.state.missions else {
             return false;
         };
-        let Some(mission) = world.missions.get(&id) else {
+        let Some(mission) = game_missions::mission(&self.host.storage, id) else {
             return false;
         };
-        if !mission.members.contains_key(&actor) {
-            return false;
-        }
         world.force_willing(
+            &self.host.storage,
             actor,
             id,
             target,
@@ -1052,7 +896,8 @@ impl Simulation {
         objective: MissionObjective,
     ) -> Result<(), Error> {
         self.validate_mission_combat_order(actor, id, &objective)?;
-        let leader = self.host.state.missions.as_ref().unwrap().missions[&id]
+        let leader = game_missions::mission(&self.host.storage, id)
+            .expect("record exists")
             .proposal
             .leader;
         self.apply_mission_order(id, leader, objective);
@@ -1067,15 +912,14 @@ impl Simulation {
         objective: &MissionObjective,
     ) -> Result<i64, Error> {
         self.validate_mission_combat_order(leader, id, objective)?;
-        let m = &self.host.state.missions.as_ref().unwrap().missions[&id];
-        if m.proposal.leader != leader {
-            return Err(Error::Unavailable);
-        }
-        let mut offered = m.clone();
-        offered.proposal.objective = objective.clone();
-        let offer = &self.host.state.missions.as_ref().unwrap().recruitments
-            [&m.members[&leader].recruitment];
-        Ok(self.recruitment_score(leader, &offered, offer))
+        let m = &game_missions::mission(&self.host.storage, id).expect("record exists");
+        self.host.state.missions.as_ref().unwrap().leader_judgment(
+            &self.host.storage,
+            leader,
+            id,
+            objective,
+            self.recruitment_input(leader, m),
+        )
     }
     /// The caller has already completed actual communication and obtained this
     /// named leader's choice. Local companions still choose independently.
@@ -1086,14 +930,12 @@ impl Simulation {
         objective: MissionObjective,
     ) -> Result<(), Error> {
         self.validate_mission_combat_order(leader, id, &objective)?;
-        if self.host.state.missions.as_ref().unwrap().missions[&id]
-            .proposal
-            .leader
-            != leader
-            || self.in_combat(leader)
-        {
-            return Err(Error::Unavailable);
-        }
+        self.host
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .validate_accepted_leader(&self.host.storage, id, leader, self.in_combat(leader))?;
         self.apply_mission_order(id, leader, objective);
         Ok(())
     }
@@ -1104,26 +946,14 @@ impl Simulation {
         objective: &MissionObjective,
         retreat: bool,
     ) -> Result<game_missions::PreparedMission, Error> {
-        let area = self.mission_area(leader)?;
-        let m = &self.host.state.missions.as_ref().unwrap().missions[&id];
-        let heard = m
-            .members
-            .values()
-            .filter(|p| {
-                p.status == CompanionStatus::Accepted
-                    && self.mission_area(p.person).ok() == Some(area)
-                    && self.transport_same_place(p.person, leader)
-            })
-            .map(|p| {
-                let choice = if p.person == self.host.state.ruler {
-                    game_missions::ServiceChoice::DeclaredAcceptance
-                } else {
-                    game_missions::ServiceChoice::Personal(self.recruitment_input(p.person, m))
-                };
-                (p.person, choice)
-            })
-            .collect();
+        let heard = self.host.state.missions.as_ref().unwrap().order_heard(
+            &self.host.storage,
+            id,
+            leader,
+            &MissionPresence { simulation: self },
+        )?;
         self.host.state.missions.as_ref().unwrap().prepare_order(
+            &self.host.storage,
             id,
             leader,
             objective,
@@ -1147,7 +977,10 @@ impl Simulation {
         let events = prepared.events.clone();
         let notices = prepared.notices.clone();
         prepared
-            .commit(self.host.state.missions.as_mut().unwrap())
+            .commit(
+                self.host.state.missions.as_mut().unwrap(),
+                &mut self.host.storage,
+            )
             .expect("preflighted communicated objective");
         self.publish_mission_effects(events, notices);
     }
@@ -1159,19 +992,7 @@ impl Simulation {
         let Some(world) = &self.host.state.missions else {
             return Ok(());
         };
-        self.ensure_event_capacity(
-            world
-                .talks
-                .len()
-                .checked_add(
-                    world
-                        .missions
-                        .len()
-                        .checked_mul(36)
-                        .ok_or(Error::Overflow)?,
-                )
-                .ok_or(Error::Overflow)?,
-        )?;
+        self.ensure_event_capacity(world.reconciliation_event_bound(&self.host.storage)?)?;
         let events = self
             .host
             .events()
@@ -1188,16 +1009,7 @@ impl Simulation {
                 local.entry(area).or_default().insert(person.id);
             }
         }
-        let interested = self
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .values()
-            .flat_map(|m| m.members.keys().copied())
-            .collect::<BTreeSet<_>>();
+        let observers = world.receipt_observers(&self.host.storage);
         for (sequence, event_time, event) in events {
             use game_missions::MissionReceipt;
             let receipt = match event {
@@ -1217,17 +1029,13 @@ impl Simulation {
                 }
                 EventKind::Arrived { actor, area } => {
                     let contacts = local.get(&area).cloned().unwrap_or_default();
-                    let observers = contacts
-                        .intersection(&interested)
-                        .copied()
-                        .filter(|p| self.mission_can_observe(*p, actor))
-                        .collect();
-                    Some(MissionReceipt::Arrived {
+                    Some(observers.arrived(
+                        self.host.state.missions.as_ref().unwrap(),
                         actor,
                         area,
-                        observers,
                         contacts,
-                    })
+                        &MissionPresence { simulation: self },
+                    ))
                 }
                 EventKind::Transferred {
                     actor,
@@ -1269,123 +1077,88 @@ impl Simulation {
                 _ => None,
             };
             if let Some(receipt) = receipt {
-                let prepared = self
-                    .host
-                    .state
-                    .missions
-                    .as_ref()
-                    .unwrap()
-                    .prepare_receipt(sequence, &receipt)?;
-                prepared.commit(self.host.state.missions.as_mut().unwrap())?;
+                let prepared = self.host.state.missions.as_ref().unwrap().prepare_receipt(
+                    &self.host.storage,
+                    sequence,
+                    &receipt,
+                )?;
+                prepared.commit(
+                    self.host.state.missions.as_mut().unwrap(),
+                    &mut self.host.storage,
+                )?;
             }
         }
-        let talks: Vec<_> = self
+        let speakers = self
             .host
             .state
             .missions
             .as_ref()
             .unwrap()
-            .talks
-            .values()
-            .filter(|talk| talk.completes <= self.host.clock().time)
-            .cloned()
-            .collect();
-        for talk in talks {
-            let valid = self.mission_area(talk.speaker).ok() == Some(talk.area)
-                && self.mission_area(talk.listener).ok() == Some(talk.area)
-                && *self
-                    .host
-                    .storage
-                    .activity(talk.speaker)
-                    .expect("body exists")
-                    == Activity::MissionTalk {
-                        completes: talk.completes,
-                    };
-            self.host
+            .due_talks(&self.host.storage, self.host.clock().time);
+        for speaker in speakers {
+            let listener = game_missions::talk(&self.host.storage, speaker)
+                .unwrap()
+                .listener;
+            let order = self
+                .host
                 .state
                 .missions
-                .as_mut()
+                .as_ref()
                 .unwrap()
-                .talks
-                .remove(&talk.speaker);
-            if matches!(*self.host.storage.activity(talk.speaker).expect("body exists"),Activity::MissionTalk { completes } if completes == talk.completes)
+                .completion_order(&self.host.storage, speaker);
+            let authority = order.as_ref().and_then(|order| {
+                self.mission_command_facts(
+                    speaker,
+                    self.mission_area(speaker).ok()?,
+                    &MissionAction::Objective {
+                        mission: order.mission,
+                        objective: order.objective.clone(),
+                    },
+                )
+                .ok()
+            });
+            let prepared = self
+                .host
+                .state
+                .missions
+                .as_ref()
+                .unwrap()
+                .prepare_talk_completion(
+                    &self.host.storage,
+                    speaker,
+                    self.host.clock().time,
+                    self.mission_talk_scene(speaker, listener),
+                    authority.as_ref(),
+                )?;
+            let order = prepared.order.clone();
+            let events = prepared.events.clone();
+            let clear = prepared.clear.clone();
+            let mut batch = game_ecs::Batch::new();
+            if matches!(self.host.storage.activity(clear.speaker), Some(Activity::MissionTalk { completes }) if *completes == clear.completes)
             {
-                *self.host.storage.activity_mut(talk.speaker).unwrap() = Activity::Idle;
+                batch.insert(game_ecs::StableId(clear.speaker.0), Activity::Idle);
             }
-            if !valid {
-                continue;
+            prepared.stage_into(&self.host.storage, &mut batch)?;
+            self.host.storage.apply_batch(batch)?;
+            if let Some(order) = order
+                && let Ok(change) = self.prepare_mission_order(
+                    order.mission,
+                    order.leader,
+                    &order.objective,
+                    order.retreat,
+                )
+            {
+                self.commit_mission_plan(change)?;
             }
-            match talk.conversation {
-                Conversation::Objective {
-                    mission,
-                    leader,
-                    objective,
-                } => {
-                    if self
-                        .validate_mission_combat_order(talk.speaker, mission, &objective)
-                        .is_ok()
-                    {
-                        self.apply_mission_order(mission, leader, objective);
-                    }
-                }
-                Conversation::Retreat { mission, leader } => {
-                    if !matches!(
-                        self.host.state.missions.as_ref().unwrap().missions[&mission].status,
-                        MissionStatus::Traveling | MissionStatus::Operating
-                    ) {
-                        continue;
-                    }
-                    let home = self.host.state.missions.as_ref().unwrap().missions[&mission]
-                        .proposal
-                        .home;
-                    if let Ok(prepared) = self.prepare_mission_order(
-                        mission,
-                        leader,
-                        &MissionObjective::Visit { destination: home },
-                        true,
-                    ) {
-                        let events = prepared.events.clone();
-                        let notices = prepared.notices.clone();
-                        prepared.commit(self.host.state.missions.as_mut().unwrap())?;
-                        self.publish_mission_effects(events, notices);
-                    }
-                }
-                Conversation::Report {
-                    recipient,
-                    snapshot,
-                } => {
-                    let mission = snapshot.id;
-                    if let Some(prepared) =
-                        self.host.state.missions.as_ref().unwrap().prepare_report(
-                            talk.speaker,
-                            recipient,
-                            &snapshot,
-                            self.host.clock().time,
-                        )?
-                    {
-                        prepared.commit(self.host.state.missions.as_mut().unwrap())?;
-                    }
-                    self.emit(EventKind::MissionReported {
-                        mission,
-                        speaker: talk.speaker,
-                        recipient,
-                    });
-                }
-            }
+            self.publish_mission_effects(events, BTreeSet::new());
         }
-        let ids: Vec<_> = self
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .keys()
-            .copied()
+        let ids: Vec<_> = game_missions::missions(&self.host.storage)
+            .map(|(id, _)| id)
             .collect();
         for id in ids {
             self.reconcile_mission_outcome(id);
-            let actors: Vec<_> = self.host.state.missions.as_ref().unwrap().missions[&id]
+            let actors: Vec<_> = game_missions::mission(&self.host.storage, id)
+                .expect("record exists")
                 .members
                 .keys()
                 .copied()
@@ -1395,11 +1168,17 @@ impl Simulation {
             }
             self.publish_mission(id);
         }
-        self.host.state.missions.as_mut().unwrap().last_event = self.host.next_event() - 1;
+        let last_event = self.host.next_event() - 1;
+        self.host
+            .state
+            .missions
+            .as_mut()
+            .unwrap()
+            .advance_receipts(last_event);
         Ok(())
     }
     fn reconcile_mission_outcome(&mut self, id: MissionId) {
-        let m = &self.host.state.missions.as_ref().unwrap().missions[&id];
+        let m = &game_missions::mission(&self.host.storage, id).expect("record exists");
         let bodies = m
             .members
             .keys()
@@ -1422,18 +1201,18 @@ impl Simulation {
             .collect();
         let leader_knowledge =
             self.mission_objective_knowledge(m.proposal.leader, &m.proposal.objective);
-        let receivers = m
-            .members
-            .keys()
-            .copied()
-            .chain([m.sponsor])
-            .collect::<BTreeSet<_>>()
+        let receivers = self
+            .host
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .receivers(
+                &self.host.storage,
+                id,
+                &MissionPresence { simulation: self },
+            )
             .into_iter()
-            .filter(|p| {
-                self.mission_area(m.proposal.leader).is_ok()
-                    && self.mission_area(*p).is_ok()
-                    && self.transport_same_place(*p, m.proposal.leader)
-            })
             .collect();
         let facts = game_missions::OutcomeFacts {
             now: self.host.clock().time,
@@ -1447,7 +1226,7 @@ impl Simulation {
             .missions
             .as_ref()
             .unwrap()
-            .prepare_outcome(id, &facts)
+            .prepare_outcome(&self.host.storage, id, &facts)
             .expect("actual mission body references");
         self.commit_mission_plan(prepared)
             .expect("joint mission event preflight");
@@ -1456,39 +1235,27 @@ impl Simulation {
         let Some(w) = &self.host.state.missions else {
             return Ok(());
         };
-        if self.host.clock().time == w.last_review
-            || !self.host.clock().time.0.is_multiple_of(60_000)
-        {
+        if !w.review_due(self.host.clock().time) {
             return Ok(());
         }
         self.preflight_missions()?;
-        self.host.state.missions.as_mut().unwrap().last_review = self.host.clock().time;
-        let offers: Vec<_> = self
+        let now = self.host.clock().time;
+        self.host.state.missions.as_mut().unwrap().reviewed(now);
+        let offers = self
             .host
             .state
             .missions
             .as_ref()
             .unwrap()
-            .recruitments
-            .values()
-            .cloned()
-            .collect();
-        for offer in offers {
-            if offer.person == self.host.state.ruler {
-                continue;
-            }
-            let m = self.host.state.missions.as_ref().unwrap().missions[&offer.mission].clone();
-            if m.status != MissionStatus::Preparing
-                || m.members[&offer.person].status != CompanionStatus::Offered
-                || offer.countered
-                || self
-                    .mission_area(offer.person)
-                    .ok()
-                    .is_none_or(|area| self.mission_area(m.sponsor).ok() != Some(area))
-            {
-                continue;
-            }
-            let input = self.recruitment_input(offer.person, &m);
+            .recruitment_reviews(
+                &self.host.storage,
+                self.host.state.ruler,
+                &MissionPresence { simulation: self },
+            );
+        for id in offers {
+            let offer = game_missions::recruitment(&self.host.storage, id).unwrap();
+            let m = game_missions::mission(&self.host.storage, offer.mission).unwrap();
+            let input = self.recruitment_input(offer.person, m);
             let area = self.mission_area(offer.person).unwrap();
             let inventory = self.host.state.people[self.person_index[&offer.person]].inventory;
             let known = game_characters::decisions::mind::<game_api::Command>(
@@ -1506,207 +1273,93 @@ impl Simulation {
                 .missions
                 .as_ref()
                 .unwrap()
-                .recruitment_response(offer.id, input, area, inventory, &known)
+                .recruitment_response(&self.host.storage, offer.id, input, area, inventory, &known)
             else {
                 continue;
             };
             // An unavailable material promise remains an unanswered offer; never invent stock.
             let _ = self.mission_command(offer.person, &action);
         }
-        let missions: Vec<_> = self
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .values()
-            .cloned()
-            .collect();
-        for m in missions {
-            if m.status == MissionStatus::Preparing
-                && m.proposal.leader != self.host.state.ruler
-                && m.members[&m.proposal.leader].status == CompanionStatus::Accepted
-                && m.members
-                    .values()
-                    .all(|person| person.status != CompanionStatus::Offered)
+        let missions = game_missions::missions(&self.host.storage)
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        for id in missions {
+            if let Some(leader) = self
+                .host
+                .state
+                .missions
+                .as_ref()
+                .unwrap()
+                .autonomous_departure(&self.host.storage, id, self.host.state.ruler)
             {
-                let _ = self
-                    .mission_command(m.proposal.leader, &MissionAction::Depart { mission: m.id });
+                let _ = self.mission_command(leader, &MissionAction::Depart { mission: id });
             }
-            for person in m.members.keys() {
-                if self.mission_membership(*person) == Some(m.id) {
-                    self.mission_control_member(m.id, *person);
-                }
+            let actors = self.host.state.missions.as_ref().unwrap().control_members(
+                &self.host.storage,
+                &self.mission_membership,
+                id,
+            );
+            for actor in actors {
+                self.mission_control_member(id, actor);
             }
         }
         Ok(())
     }
     pub(crate) fn mission_allocation_bound(&self) -> u64 {
-        self.host.state.missions.as_ref().map_or(0, |w| {
-            w.missions
-                .values()
-                .flat_map(|m| m.members.values())
-                .filter(|member| {
-                    matches!(
-                        member.status,
-                        CompanionStatus::Accepted | CompanionStatus::Offered
-                    )
-                })
-                .count() as u64
-                * 12
-        })
+        self.host
+            .state
+            .missions
+            .as_ref()
+            .map_or(0, |w| w.allocation_bound(&self.host.storage))
     }
     pub(crate) fn mission_event_bound(&self) -> usize {
-        self.host.state.missions.as_ref().map_or(0, |w| {
-            w.missions
-                .values()
-                .map(|m| m.members.len() * 32 + 4)
-                .sum::<usize>()
-                + w.talks.len() * 33
-        })
+        self.host
+            .state
+            .missions
+            .as_ref()
+            .map_or(0, |w| w.event_bound(&self.host.storage))
     }
     pub(crate) fn preflight_missions(&self) -> Result<(), Error> {
-        let Some(w) = &self.host.state.missions else {
+        let Some(runtime) = &self.host.state.missions else {
             return Ok(());
         };
-        let people = w
-            .missions
-            .values()
-            .filter(|m| {
-                !matches!(
-                    m.status,
-                    MissionStatus::Completed | MissionStatus::Failed | MissionStatus::Cancelled
-                )
-            })
-            .map(|m| m.members.len() as u64)
-            .sum::<u64>();
-        self.host
-            .next_id()
-            .checked_add(people.checked_mul(12).ok_or(Error::Overflow)?)
-            .ok_or(Error::Overflow)?;
         self.ensure_event_capacity(
-            people
-                .checked_mul(32)
-                .and_then(|n| n.checked_add(w.talks.len() as u64 * 2 + w.missions.len() as u64 * 4))
-                .ok_or(Error::Overflow)?
-                .try_into()
-                .map_err(|_| Error::Overflow)?,
+            runtime.preflight_budget(&self.host.storage, self.host.next_id())?,
         )
     }
 }
 
 impl Simulation {
     pub(crate) fn available_mission_commands(&self, actor: PersonId) -> Vec<Command> {
-        let Ok(area) = self.mission_area(actor) else {
-            return Vec::new();
-        };
-        if self.in_combat(actor) {
-            return Vec::new();
-        }
-        let Some(w) = &self.host.state.missions else {
-            return Vec::new();
-        };
-        let mut actions = Vec::new();
-        for view in self.mission_view(actor) {
-            let Some(m) = w.missions.get(&view.id) else {
-                continue;
-            };
-            for offer in &view.recruitments {
-                if offer.status != CompanionStatus::Offered {
-                    continue;
-                }
-                if offer.person == actor && self.mission_area(m.sponsor).ok() == Some(area) {
-                    if !offer.countered
-                        && view.status == MissionStatus::Preparing
-                        && !self.guardian_mission_duty(actor, m.id)
-                        && !game_characters::decisions::mind::<game_api::Command>(
-                            &self.host.storage,
-                            actor,
-                        )
-                        .unwrap()
-                        .child_signals
-                        .values()
-                        .any(|signal| signal.urgency >= 20_000)
-                    {
-                        actions.push(MissionAction::Accept {
-                            recruitment: offer.id,
-                        });
-                    }
-                    actions.push(MissionAction::Refuse {
-                        recruitment: offer.id,
-                    });
-                } else if actor == m.sponsor
-                    && offer.countered
-                    && self.mission_area(offer.person).ok() == Some(area)
-                {
-                    actions.push(MissionAction::AcceptCounteroffer {
-                        recruitment: offer.id,
-                    });
-                }
-            }
-            if m.members
-                .get(&actor)
-                .is_some_and(|member| member.status == CompanionStatus::Accepted)
-            {
-                actions.push(MissionAction::Leave { mission: m.id });
-            }
-            if self.mission_area(m.proposal.leader).ok() == Some(area)
-                && (actor == m.sponsor || actor == m.proposal.leader)
-            {
-                if view.status == MissionStatus::Preparing
-                    && m.members[&m.proposal.leader].status == CompanionStatus::Accepted
-                {
-                    actions.push(MissionAction::Depart { mission: m.id });
-                }
-                if matches!(
-                    view.status,
-                    MissionStatus::Traveling | MissionStatus::Operating
-                ) {
-                    actions.push(MissionAction::Retreat { mission: m.id });
-                }
-            }
-            for recipient in self
-                .host
-                .state
-                .people
-                .iter()
-                .filter(|p| {
-                    p.id != actor
-                        && *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
-                            .expect("location exists")
-                            == Location::AtArea(area)
-                })
-                .map(|p| p.id)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .take(64)
-            {
-                if self.mission_area(recipient).is_ok() {
-                    actions.push(MissionAction::Report {
-                        mission: m.id,
-                        recipient,
-                    });
-                }
-            }
-        }
-        actions
-            .into_iter()
-            .map(|action| Command::Mission { action })
-            .collect()
+        self.host
+            .state
+            .missions
+            .as_ref()
+            .map_or_else(Vec::new, |runtime| {
+                runtime
+                    .available_commands(
+                        &self.host.storage,
+                        actor,
+                        &MissionPresence { simulation: self },
+                    )
+                    .into_iter()
+                    .map(|action| Command::Mission { action })
+                    .collect()
+            })
     }
     fn mission_service_motives(
         &self,
         actor: PersonId,
         id: MissionId,
     ) -> game_missions::ServiceMotives {
-        let m = &self.host.state.missions.as_ref().unwrap().missions[&id];
+        let m = &game_missions::mission(&self.host.storage, id).expect("record exists");
         let mind =
             &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .unwrap();
-        let agreement = self.host.state.missions.as_ref().unwrap().recruitments
-            [&m.members[&actor].recruitment]
-            .agreement;
+        let agreement =
+            game_missions::recruitment(&self.host.storage, m.members[&actor].recruitment)
+                .expect("record exists")
+                .agreement;
         let payment = agreement.and_then(|id| {
             self.agreement_view(actor)
                 .into_iter()
@@ -1725,93 +1378,88 @@ impl Simulation {
     /// Tactical observation supplies real opponents; service owns deliberation.
     /// The combat owner effect applies only to this actual existing fighter.
     pub(crate) fn review_mission_combat(&mut self, encounter: EncounterId, actor: PersonId) {
-        if actor == self.host.state.ruler {
-            return;
-        }
         let Some(id) = self.mission_membership(actor) else {
             return;
         };
-        let Some(w) = &self.host.state.combat else {
+        let Some(conflict) = &self.host.state.combat else {
             return;
         };
-        let Some(e) = w.encounters.get(&encounter) else {
+        let Some(fighter) = conflict
+            .encounters
+            .get(&encounter)
+            .and_then(|e| e.fighters.get(&actor))
+        else {
             return;
         };
-        let Some(f) = e.fighters.get(&actor) else {
-            return;
-        };
-        let map = w.map(e.map).unwrap();
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap();
-        let opponents = f
-            .known
-            .keys()
-            .filter_map(|person| {
-                e.fighters
-                    .get(person)
-                    .filter(|other| {
-                        other.team != f.team
-                            && !other.withdrawn
-                            && !other.surrendered
-                            && map.clear(f.position, other.position)
-                    })
-                    .map(|other| {
-                        (
-                            *person,
-                            game_missions::ObservedOpponent {
-                                team: other.team,
-                                trust: mind.relationships.get(person).map_or(-1000, |r| r.trust),
-                            },
-                        )
-                    })
-            })
-            .collect();
-        let facts = game_missions::DefectionFacts {
-            motives: self.mission_service_motives(actor, id),
-            own_team: f.team,
-            opponents,
-        };
+        let own_team = fighter.team;
+        let mind = game_characters::decisions::mind::<Command>(&self.host.storage, actor).unwrap();
         let Ok(Some(prepared)) = self
             .host
             .state
             .missions
             .as_ref()
             .unwrap()
-            .prepare_defection(actor, id, &facts)
+            .prepare_combat_defection(
+                &self.host.storage,
+                actor,
+                id,
+                game_missions::CombatDefectionFacts {
+                    player: self.host.state.ruler,
+                    own_team,
+                    motives: self.mission_service_motives(actor, id),
+                    relationships: &mind.relationships,
+                },
+                conflict.visible_opponents(encounter, actor),
+            )
         else {
             return;
         };
         let effect = prepared.allegiance.expect("prepared defection allegiance");
         if self.ensure_event_capacity(prepared.events.len()).is_err()
             || prepared
-                .check(self.host.state.missions.as_ref().unwrap())
+                .check(
+                    self.host.state.missions.as_ref().unwrap(),
+                    &self.host.storage,
+                )
                 .is_err()
         {
             return;
         }
-        // No action or observation occurs between the guarded service commit
-        // and the actual named fighter's team change in this exclusive turn.
-        let current = &self.host.state.combat.as_ref().unwrap().encounters[&encounter];
-        if current.fighters[&actor].team != facts.own_team
-            || current.fighters[&effect.opponent].team != effect.team
+        let Ok(allegiance) = self.host.state.combat.as_ref().unwrap().prepare_allegiance(
+            encounter,
+            actor,
+            effect.opponent,
+            own_team,
+            effect.team,
+        ) else {
+            return;
+        };
+        let events = prepared.events.clone();
+        let notices = prepared.notices.clone();
+        let mut batch = game_ecs::Batch::new();
+        let Ok(finish) = prepared.stage_into(
+            self.host.state.missions.as_ref().unwrap(),
+            &self.host.storage,
+            &mut batch,
+        ) else {
+            return;
+        };
+        if self.host.storage.validate_batch(&batch).is_err()
+            || allegiance
+                .check(self.host.state.combat.as_ref().unwrap())
+                .is_err()
         {
             return;
         }
         self.host
-            .state
-            .combat
-            .as_mut()
-            .unwrap()
-            .encounters
-            .get_mut(&encounter)
-            .unwrap()
-            .fighters
-            .get_mut(&actor)
-            .unwrap()
-            .team = effect.team;
-        self.commit_mission_plan(prepared)
-            .expect("preflighted fighter allegiance");
+            .storage
+            .apply_batch(batch)
+            .expect("validated service footprint");
+        finish.finish(self.host.state.missions.as_mut().unwrap());
+        allegiance
+            .commit(self.host.state.combat.as_mut().unwrap())
+            .expect("validated fighter allegiance");
+        self.publish_mission_effects(events, notices);
         self.observe_own_mission(actor, id);
     }
     pub(crate) fn mission_combat_action(
@@ -1828,6 +1476,7 @@ impl Simulation {
         let mind = game_characters::decisions::mind::<Command>(&self.host.storage, actor)?;
         let body = game_physiology::body(&self.host.storage, actor)?;
         let decision = world.tactical_decision(
+            &self.host.storage,
             id,
             game_missions::TacticalInput {
                 actor,
@@ -1877,6 +1526,7 @@ impl Simulation {
             .map_or_else(Vec::new, |world| {
                 world
                     .reinforcements(
+                        &self.host.storage,
                         self.host.clock().time,
                         &MissionReinforcementFacts { simulation: self },
                     )
@@ -1887,355 +1537,74 @@ impl Simulation {
     }
 }
 
+struct MissionValidationFacts<'a> {
+    state: &'a CanonicalState<'a>,
+}
+impl game_missions::ValidationFacts for MissionValidationFacts<'_> {
+    fn inventory(&self, id: InventoryId) -> Option<&game_cargo::Inventory> {
+        game_cargo::inventory(self.state.components, id)
+    }
+    fn agreement_parties(&self, id: AgreementId) -> Option<&BTreeSet<PersonId>> {
+        self.state
+            .state
+            .agreements
+            .as_ref()?
+            .agreements
+            .get(&id)
+            .map(|a| &a.parties)
+    }
+    fn talk_deadline(&self, actor: PersonId) -> Option<SimTime> {
+        match self.state.components.activity(actor) {
+            Some(Activity::MissionTalk { completes }) => Some(*completes),
+            _ => None,
+        }
+    }
+    fn at_area(&self, actor: PersonId) -> Option<AreaId> {
+        match game_spatial::location(self.state.components, game_ecs::StableId(actor.0)) {
+            Some(Location::AtArea(area)) => Some(*area),
+            _ => None,
+        }
+    }
+    fn talking_people(&self) -> impl Iterator<Item = PersonId> {
+        self.state
+            .components
+            .activities()
+            .filter_map(|(id, a)| matches!(a, Activity::MissionTalk { .. }).then_some(id))
+    }
+}
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
-    let Some(w) = &s.state.missions else {
+    let Some(runtime) = &s.state.missions else {
+        if game_missions::missions(s.components).next().is_some()
+            || game_missions::recruitments(s.components).next().is_some()
+            || game_missions::knowledges(s.components).next().is_some()
+            || game_missions::talks(s.components).next().is_some()
+        {
+            return Err(Error::InvalidSave(
+                "mission components without runtime".into(),
+            ));
+        }
         return Ok(());
     };
     let fail = || Error::InvalidSave("inconsistent expedition commitments".into());
-    let people: BTreeSet<_> = s.state.people.iter().map(|p| p.id).collect();
-    let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
     let physical = s.state.physical.as_ref().ok_or_else(fail)?;
-    let agreements = s.state.agreements.as_ref().ok_or_else(fail)?;
-    if s.state.decisions.is_none()
-        || s.state.combat.is_none()
-        || w.last_event >= s.next_event
-        || w.last_review > s.time
-    {
+    if s.state.decisions.is_none() || s.state.combat.is_none() || s.state.agreements.is_none() {
         return Err(fail());
     }
-    let objective_valid = |objective: &MissionObjective| match objective {
-        MissionObjective::Visit { destination } => areas.contains(destination),
-        MissionObjective::Deliver {
-            source,
-            destination,
-            quantity,
-        } => {
-            quantity.0 > 0
-                && game_cargo::inventory(s.components, *(source))
-                    .zip(game_cargo::inventory(s.components, *(destination)))
-                    .is_some_and(|(a, b)| {
-                        a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
-                    })
-        }
-        MissionObjective::Defeat { person } | MissionObjective::Confine { person, .. } => {
-            people.contains(person)
-        }
-        MissionObjective::Rescue { person, return_to } => {
-            people.contains(person) && areas.contains(return_to)
-        }
-        MissionObjective::Patrol {
-            areas: selected, ..
-        } => {
-            !selected.is_empty()
-                && selected.len() <= 16
-                && selected.iter().all(|a| areas.contains(a))
-        }
-    };
-    for (id, m) in &w.missions {
-        let roster: BTreeSet<_> = m
-            .proposal
-            .recruits
-            .iter()
-            .copied()
-            .chain([m.proposal.leader])
-            .collect();
-        if *id != m.id
-            || id.0 == 0
-            || id.0 >= s.next_id
-            || !people.contains(&m.sponsor)
-            || !areas.contains(&m.proposal.home)
-            || !objective_valid(&m.proposal.objective)
-            || !(1..=32).contains(&m.members.len())
-            || roster != m.members.keys().copied().collect()
-            || m.created_at > s.time
-            || m.proposal.deadline <= m.created_at
-            || m.departed_at
-                .is_some_and(|at| at < m.created_at || at > s.time)
-            || m.proposal.supplies.len() > 32
-        {
-            return Err(fail());
-        }
-        for (person, terms) in &m.proposal.compensation {
-            if !m.members.contains_key(person)
-                || terms.len() > 8
-                || terms.iter().any(|term| {
-                    term.amount() == 0
-                        || term.parties()[0] == term.parties()[1]
-                        || term
-                            .parties()
-                            .iter()
-                            .any(|p| *p != m.sponsor && *p != *person)
-                        || match term {
-                            AgreementTerm::Delivery {
-                                source,
-                                destination,
-                                quantity,
-                                ..
-                            } => !game_cargo::inventory(s.components, *(source))
-                                .zip(game_cargo::inventory(s.components, *(destination)))
-                                .is_some_and(|(a, b)| {
-                                    a.id != b.id && a.good == b.good && quantity.0 <= b.capacity.0
-                                }),
-                            AgreementTerm::Access { inventory, .. } => {
-                                !game_cargo::inventory(s.components, *(inventory)).is_some()
-                            }
-                            _ => true,
-                        }
-                })
-            {
-                return Err(fail());
-            }
-        }
-        for supply in &m.proposal.supplies {
-            if !m.members.contains_key(&supply.carrier)
-                || !game_cargo::inventory(s.components, supply.source).is_some()
-                || supply.quantity.0 == 0
-                || supply.quantity > physical.rules.carrying_capacity
-            {
-                return Err(fail());
-            }
-        }
-        for (person, member) in &m.members {
-            let offer = w.recruitments.get(&member.recruitment).ok_or_else(fail)?;
-            if *person != member.person
-                || !people.contains(person)
-                || offer.mission != *id
-                || offer.person != *person
-                || member.received_at > s.time
-                || !objective_valid(&member.directive)
-                || member.visited.iter().any(|a| !areas.contains(a))
-                || member
-                    .contacts
-                    .iter()
-                    .any(|(p, a)| !people.contains(p) || !areas.contains(a))
-                || member
-                    .last_leg_from
-                    .is_some_and(|area| !areas.contains(&area))
-                || member.explanation.len() > 4096
-                || member.declared_explanation.len() > 4096
-            {
-                return Err(fail());
-            }
-            if let Some(record) = &member.confinement
-                && (member.directive.target_person() != Some(record.person)
-                    || !matches!(member.directive, MissionObjective::Confine { .. })
-                    || record.captured_at > s.time
-                    || record
-                        .released_at
-                        .is_some_and(|at| at > s.time || at < record.captured_at))
-            {
-                return Err(fail());
-            }
-            if let MissionObjective::Deliver { quantity, .. } = member.directive
-                && member.delivered > quantity.0
-            {
-                return Err(fail());
-            }
-            let mut attributed = BTreeMap::<InventoryId, u128>::new();
-            for (source, tags) in &member.supply_cargo {
-                let supply = m
-                    .proposal
-                    .supplies
-                    .iter()
-                    .filter(|supply| supply.carrier == *person && supply.source == *source)
-                    .max_by_key(|supply| supply.quantity)
-                    .ok_or_else(fail)?;
-                let good = game_cargo::inventory(s.components, *(source))
-                    .ok_or_else(fail)?
-                    .good;
-                let mut total = 0u128;
-                if tags.is_empty() {
-                    return Err(fail());
-                }
-                for (inventory, quantity) in tags {
-                    if *quantity == 0
-                        || !game_cargo::inventory(s.components, *(inventory)).is_some_and(|stock| {
-                            stock.good == good
-                                && stock.location == InventoryLocation::Carried(*person)
-                        })
-                    {
-                        return Err(fail());
-                    }
-                    total += u128::from(*quantity);
-                    *attributed.entry(*inventory).or_default() += u128::from(*quantity);
-                }
-                if total > u128::from(supply.quantity.0) {
-                    return Err(fail());
-                }
-            }
-            if attributed.iter().any(|(inventory, q)| {
-                *q > u128::from(
-                    game_cargo::inventory(s.components, *(inventory))
-                        .expect("inventory exists")
-                        .quantity
-                        .0,
-                )
-            }) {
-                return Err(fail());
-            }
-            for (inventory, quantity) in &member.cargo {
-                if *quantity == 0
-                    || !game_cargo::inventory(s.components, *(inventory)).is_some_and(|i| {
-                        i.location == InventoryLocation::Carried(*person)
-                            && i.quantity.0 >= *quantity
-                    })
-                {
-                    return Err(fail());
-                }
-            }
-        }
-    }
-    for (id, offer) in &w.recruitments {
-        let m = w.missions.get(&offer.mission).ok_or_else(fail)?;
-        if *id != offer.id
-            || id.0 == 0
-            || id.0 >= s.next_id
-            || !m
-                .members
-                .get(&offer.person)
-                .is_some_and(|person| person.recruitment == *id)
-            || offer.compensation.len() > 8
-            || offer.agreement.is_some_and(|id| {
-                !agreements
-                    .agreements
-                    .get(&id)
-                    .is_some_and(|a| a.parties == BTreeSet::from([m.sponsor, offer.person]))
-            })
-        {
-            return Err(fail());
-        }
-        for term in &offer.compensation {
-            if term.amount() == 0
-                || term.parties()[0] == term.parties()[1]
-                || term
-                    .parties()
-                    .iter()
-                    .any(|p| *p != m.sponsor && *p != offer.person)
-                || !matches!(
-                    term,
-                    AgreementTerm::Delivery { .. } | AgreementTerm::Access { .. }
-                )
-            {
-                return Err(fail());
-            }
-            match term {
-                AgreementTerm::Delivery {
-                    source,
-                    destination,
-                    ..
-                } if !game_cargo::inventory(s.components, *(source)).is_some()
-                    || !game_cargo::inventory(s.components, *(destination)).is_some() =>
-                {
-                    return Err(fail());
-                }
-                AgreementTerm::Access { inventory, .. }
-                    if !game_cargo::inventory(s.components, *(inventory)).is_some() =>
-                {
-                    return Err(fail());
-                }
-                _ => {}
-            }
-        }
-    }
-    for (observer, views) in &w.known {
-        if !people.contains(observer) {
-            return Err(fail());
-        }
-        for (id, view) in views {
-            if *id != view.id
-                || !w.missions.contains_key(id)
-                || view.observed_at > s.time
-                || !people.contains(&view.sponsor)
-                || !people.contains(&view.leader)
-                || !areas.contains(&view.home)
-                || !objective_valid(&view.objective)
-                || view.companions.len() > 32
-                || view.recruitments.len() > 32
-                || view.reported_by.is_some_and(|p| !people.contains(&p))
-            {
-                return Err(fail());
-            }
-            for companion in &view.companions {
-                if !people.contains(&companion.person) || companion.observed_at > s.time {
-                    return Err(fail());
-                }
-            }
-            for recruitment in &view.recruitments {
-                if !w
-                    .recruitments
-                    .get(&recruitment.id)
-                    .is_some_and(|offer| offer.person == recruitment.person && offer.mission == *id)
-                {
-                    return Err(fail());
-                }
-            }
-        }
-    }
-    let mut occupied = BTreeSet::new();
-    for (speaker, talk) in &w.talks {
-        if *speaker != talk.speaker
-            || !people.contains(speaker)
-            || !people.contains(&talk.listener)
-            || !areas.contains(&talk.area)
-            || talk.completes <= s.time
-        {
-            return Err(fail());
-        }
-        if !occupied.insert(talk.speaker)
-            || *s.components.activity(talk.speaker).expect("body exists")
-                != (Activity::MissionTalk {
-                    completes: talk.completes,
-                })
-            || ![talk.speaker, talk.listener].iter().all(|actor| {
-                s.state.people.iter().any(|p| {
-                    p.id == *actor
-                        && *game_spatial::location(s.components, game_ecs::StableId((p.id).0))
-                            .expect("location exists")
-                            == Location::AtArea(talk.area)
-                })
-            })
-        {
-            return Err(fail());
-        }
-        match &talk.conversation {
-            Conversation::Objective {
-                mission,
-                leader,
-                objective,
-            } => {
-                if !w.missions.get(mission).is_some_and(|m| {
-                    m.proposal.leader == *leader && (m.sponsor == *speaker || *leader == *speaker)
-                }) || !objective_valid(objective)
-                {
-                    return Err(fail());
-                }
-            }
-            Conversation::Retreat { mission, leader } => {
-                if !w.missions.get(mission).is_some_and(|m| {
-                    m.proposal.leader == *leader && (m.sponsor == *speaker || *leader == *speaker)
-                }) {
-                    return Err(fail());
-                }
-            }
-            Conversation::Report {
-                recipient,
-                snapshot,
-            } => {
-                if *recipient != talk.listener
-                    || !w.missions.contains_key(&snapshot.id)
-                    || snapshot.observed_at > s.time
-                {
-                    return Err(fail());
-                }
-            }
-        }
-    }
-    for (actor, activity) in s.components.activities() {
-        if matches!(activity, Activity::MissionTalk { .. }) != occupied.contains(&actor) {
-            return Err(fail());
-        }
-    }
-    Ok(())
+    let people = s.state.people.iter().map(|p| p.id).collect();
+    let areas = s.state.areas.iter().map(|a| a.id).collect();
+    game_missions::validate_context(
+        runtime,
+        s.components,
+        game_missions::ValidationCatalog {
+            now: s.time,
+            next_id: s.next_id,
+            next_event: s.next_event,
+            people: &people,
+            areas: &areas,
+            carrying_capacity: physical.rules.carrying_capacity,
+        },
+        &MissionValidationFacts { state: s },
+    )
 }
 
 impl Simulation {
@@ -2260,15 +1629,17 @@ impl Simulation {
             .missions
             .as_ref()
             .ok_or(Error::Unavailable)?;
-        world.validate_order(actor, id, objective, &facts)?;
-        self.ensure_event_capacity(world.missions[&id].members.len() + 1)
+        world.validate_order(&self.host.storage, actor, id, objective, &facts)?;
+        self.ensure_event_capacity(world.order_event_bound(&self.host.storage, id)?)
     }
 
     pub(crate) fn guardian_mission_duty(&self, actor: PersonId, id: MissionId) -> bool {
         let Some(lineage) = &self.host.state.lineage else {
             return false;
         };
-        let sponsor = self.host.state.missions.as_ref().unwrap().missions[&id].sponsor;
+        let sponsor = game_missions::mission(&self.host.storage, id)
+            .expect("record exists")
+            .sponsor;
         let signal = game_characters::decisions::mind::<Command>(&self.host.storage, actor)
             .and_then(|mind| mind.child_signals.get(&sponsor));
         lineage.guardian_service_due(game_lineage::GuardianServiceFacts {
@@ -2326,14 +1697,7 @@ impl game_missions::ReinforcementFacts for MissionReinforcementFacts<'_> {
             })
     }
     fn body(&self, mission: MissionId, person: PersonId) -> game_missions::ReinforcementBody {
-        let m = &self
-            .simulation
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions[&mission];
+        let m = game_missions::mission(&self.simulation.host.storage, mission).unwrap();
         game_missions::ReinforcementBody {
             player: person == self.simulation.host.state.ruler,
             can_fight: self.simulation.can_fight(person),
@@ -2376,7 +1740,7 @@ impl game_missions::EngagementFacts for MissionEngagementFacts<'_> {
     }
     fn fighter(&self, mission: MissionId, person: PersonId) -> game_missions::FighterFacts {
         let sim = self.simulation;
-        let m = &sim.host.state.missions.as_ref().unwrap().missions[&mission];
+        let m = &game_missions::mission(&sim.host.storage, mission).expect("record exists");
         game_missions::FighterFacts {
             player: person == sim.host.state.ruler,
             at_area: match game_spatial::location(&sim.host.storage, game_ecs::StableId(person.0)) {
@@ -2531,6 +1895,97 @@ impl game_missions::MemberFacts<Command> for MissionControlFacts<'_> {
     }
 }
 
+struct MissionPresence<'a> {
+    simulation: &'a Simulation,
+}
+impl game_missions::PresenceFacts for MissionPresence<'_> {
+    fn location(&self, person: PersonId) -> Location {
+        self.simulation.resolved_location(person)
+    }
+    fn raw_location(&self, person: PersonId) -> Location {
+        game_spatial::location(&self.simulation.host.storage, game_ecs::StableId(person.0))
+            .expect("person location")
+            .clone()
+    }
+    fn area(&self, person: PersonId) -> Option<AreaId> {
+        self.simulation.mission_area(person).ok()
+    }
+    fn same_place(&self, a: PersonId, b: PersonId) -> bool {
+        self.simulation.transport_same_place(a, b)
+    }
+    fn in_combat(&self, person: PersonId) -> bool {
+        self.simulation.in_combat(person)
+    }
+    fn combat_scene(
+        &self,
+        person: PersonId,
+    ) -> Option<(&game_conflict::Encounter, &game_conflict::Map)> {
+        let combat = self.simulation.host.state.combat.as_ref()?;
+        let encounter = combat
+            .encounters
+            .values()
+            .find(|e| e.active && e.fighters.contains_key(&person))?;
+        Some((encounter, combat.map(encounter.map)?))
+    }
+}
+impl game_missions::CommandAvailabilityFacts for MissionPresence<'_> {
+    fn area(&self, person: PersonId) -> Option<AreaId> {
+        self.simulation.mission_area(person).ok()
+    }
+    fn in_combat(&self, person: PersonId) -> bool {
+        self.simulation.in_combat(person)
+    }
+    fn urgent_care(&self, person: PersonId) -> bool {
+        game_missions::urgent_service_care(
+            game_characters::decisions::mind::<Command>(&self.simulation.host.storage, person)
+                .into_iter()
+                .flat_map(|mind| mind.child_signals.values())
+                .map(|signal| signal.urgency),
+        )
+    }
+    fn guardian_duty(&self, person: PersonId, mission: MissionId) -> bool {
+        self.simulation.guardian_mission_duty(person, mission)
+    }
+    fn local_people(&self, area: AreaId) -> impl Iterator<Item = PersonId> {
+        self.simulation
+            .host
+            .state
+            .people
+            .iter()
+            .filter(move |person| {
+                game_spatial::location(
+                    &self.simulation.host.storage,
+                    game_ecs::StableId(person.id.0),
+                ) == Some(&Location::AtArea(area))
+            })
+            .map(|p| p.id)
+    }
+}
+
+impl game_missions::OrderHearingFacts for MissionPresence<'_> {
+    fn player(&self) -> PersonId {
+        self.simulation.host.state.ruler
+    }
+    fn recruitment(
+        &self,
+        person: PersonId,
+        mission: &game_missions::Mission,
+    ) -> game_missions::RecruitmentInput {
+        self.simulation.recruitment_input(person, mission)
+    }
+}
+
+impl game_missions::CommandFactSource for MissionPresence<'_> {
+    fn assets(
+        &self,
+        objective: Option<&MissionObjective>,
+        terms: &[AgreementTerm],
+        supplies: &[MissionSupply],
+    ) -> game_missions::MissionAssets {
+        self.simulation.mission_assets(objective, terms, supplies)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2568,19 +2023,16 @@ mod tests {
             },
         )
         .unwrap();
-        *sim.host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .keys()
-            .next_back()
+        game_missions::missions(&sim.host.storage)
+            .map(|(id, _)| id)
+            .last()
             .unwrap()
     }
     fn accept(sim: &mut Simulation, id: MissionId, person: PersonId) {
-        let recruitment =
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&person].recruitment;
+        let recruitment = game_missions::mission(&sim.host.storage, id)
+            .expect("record exists")
+            .members[&person]
+            .recruitment;
         sim.mission_command(person, &MissionAction::Accept { recruitment })
             .unwrap();
     }
@@ -2658,7 +2110,9 @@ mod tests {
         ));
         sim.advance(SimDuration(600_000)).unwrap();
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .status,
             MissionStatus::Completed
         );
         assert!(
@@ -2726,7 +2180,9 @@ mod tests {
             opening
         );
         assert!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor]
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
                 .supply_cargo
                 .is_empty()
         );
@@ -2743,7 +2199,9 @@ mod tests {
                 .quantity,
             Quantity(2000)
         );
-        let tags = &sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor]
+        let tags = &game_missions::mission(&sim.host.storage, id)
+            .expect("record exists")
+            .members[&actor]
             .supply_cargo[&source];
         assert_eq!(tags.values().sum::<u64>(), 2000);
         assert!(matches!(
@@ -2854,7 +2312,10 @@ mod tests {
             Quantity(2000)
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor].delivered,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
+                .delivered,
             1000
         );
     }
@@ -2881,7 +2342,10 @@ mod tests {
         );
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&recruit].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&recruit]
+                .status,
             CompanionStatus::Refused
         );
         let farm = sim.host.state.areas[1].id;
@@ -2892,19 +2356,21 @@ mod tests {
             vec![],
         );
         sim.advance(MINUTE).unwrap();
-        let offer = sim.host.state.missions.as_ref().unwrap().recruitments[&sim
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions[&id]
-            .members[&recruit]
-            .recruitment]
-            .clone();
+        let offer = game_missions::recruitment(
+            &sim.host.storage,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&recruit]
+                .recruitment,
+        )
+        .expect("record exists")
+        .clone();
         assert!(offer.countered);
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&recruit].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&recruit]
+                .status,
             CompanionStatus::Offered
         );
         sim.mission_command(
@@ -2915,10 +2381,14 @@ mod tests {
         )
         .unwrap();
         sim.advance(MINUTE).unwrap();
-        let offer = &sim.host.state.missions.as_ref().unwrap().recruitments[&offer.id];
+        let offer =
+            &game_missions::recruitment(&sim.host.storage, offer.id).expect("record exists");
         assert!(offer.agreement.is_some());
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&recruit].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&recruit]
+                .status,
             CompanionStatus::Accepted
         );
         let obligations = &sim.host.state.agreements.as_ref().unwrap().obligations;
@@ -2951,17 +2421,25 @@ mod tests {
         sim.advance(SimDuration(240_000)).unwrap();
         let ruler = sim.host.state.ruler;
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().known[&ruler][&id].status,
+            game_missions::knowledge(&sim.host.storage, ruler)
+                .unwrap()
+                .missions[&id]
+                .status,
             MissionStatus::Traveling
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .status,
             MissionStatus::Returning
         );
         let snapshot = sim.mission_view(leader)[0].clone();
         assert!(
             snapshot.observed_at
-                > sim.host.state.missions.as_ref().unwrap().known[&ruler][&id].observed_at
+                > game_missions::knowledge(&sim.host.storage, ruler)
+                    .unwrap()
+                    .missions[&id]
+                    .observed_at
         );
         assert!(
             sim.mission_command(
@@ -3041,7 +2519,9 @@ mod tests {
             Location::AtArea(sim.host.state.areas[0].id)
         );
         assert!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&leader]
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&leader]
                 .explanation
                 .contains("personally known")
         );
@@ -3089,7 +2569,10 @@ mod tests {
         sim.mission_command(actor, &MissionAction::Depart { mission: id })
             .unwrap();
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor].delivered,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
+                .delivered,
             0
         );
         sim.debug_actor_command(
@@ -3103,11 +2586,17 @@ mod tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor].delivered,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
+                .delivered,
             0
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor].cargo[&carried],
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
+                .cargo[&carried],
             1_000
         );
         sim.debug_actor_command(
@@ -3127,11 +2616,16 @@ mod tests {
             Quantity(1_000)
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor].delivered,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
+                .delivered,
             1_000
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .status,
             MissionStatus::Completed
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -3149,7 +2643,9 @@ mod tests {
             vec![],
         );
         accept(&mut sim, id, leader);
-        let old = sim.host.state.missions.as_ref().unwrap().missions[&id].members[&leader]
+        let old = game_missions::mission(&sim.host.storage, id)
+            .expect("record exists")
+            .members[&leader]
             .directive
             .clone();
         sim.mission_command(
@@ -3161,12 +2657,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&leader].directive,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&leader]
+                .directive,
             old
         );
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&leader].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&leader]
+                .status,
             CompanionStatus::Withdrawn
         );
         assert!(
@@ -3199,15 +2701,9 @@ mod tests {
             },
         )
         .unwrap();
-        let id = *sim
-            .host
-            .state
-            .missions
-            .as_ref()
-            .unwrap()
-            .missions
-            .keys()
-            .next_back()
+        let id = game_missions::missions(&sim.host.storage)
+            .map(|(id, _)| id)
+            .last()
             .unwrap();
         accept(&mut sim, id, leader);
         accept(&mut sim, id, actor);
@@ -3254,7 +2750,10 @@ mod tests {
             1
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
+                .status,
             CompanionStatus::Defected
         );
         assert_eq!(
@@ -3459,7 +2958,10 @@ mod tests {
             Location::AtArea(sim.host.state.areas[0].id)
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&leader].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&leader]
+                .status,
             CompanionStatus::Captured
         );
         assert!(
@@ -3509,8 +3011,10 @@ mod tests {
             },
             vec![],
         );
-        let recruitment =
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&guardian].recruitment;
+        let recruitment = game_missions::mission(&sim.host.storage, id)
+            .expect("record exists")
+            .members[&guardian]
+            .recruitment;
         let before = sim.canonical_snapshot().unwrap();
         assert!(
             sim.mission_command(guardian, &MissionAction::Accept { recruitment })
@@ -3639,7 +3143,11 @@ mod tests {
                 .captivity
                 .contains_key(&target)
         );
-        assert!(!sim.host.state.missions.as_ref().unwrap().missions[&id].succeeded);
+        assert!(
+            !game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .succeeded
+        );
         sim.debug_actor_command(actor, Command::FreeCaptive { target })
             .unwrap();
         sim.advance(MINUTE).unwrap();
@@ -3653,7 +3161,9 @@ mod tests {
                 .contains_key(&target)
         );
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].status,
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .status,
             MissionStatus::Completed
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -3679,8 +3189,10 @@ mod tests {
         sim.seed_mission_target_report(id, actor, target, reported_area, SimTime(0))
             .unwrap();
         assert_eq!(
-            sim.host.state.missions.as_ref().unwrap().missions[&id].members[&actor].contacts
-                [&target],
+            game_missions::mission(&sim.host.storage, id)
+                .expect("record exists")
+                .members[&actor]
+                .contacts[&target],
             reported_area
         );
         assert_eq!(
@@ -3761,10 +3273,159 @@ mod tests {
             sim.host.state.combat.as_ref().unwrap().captivity[&target].captor,
             leader
         );
-        let record = sim.host.state.missions.as_ref().unwrap().missions[&id].members[&leader]
+        let record = game_missions::mission(&sim.host.storage, id)
+            .expect("record exists")
+            .members[&leader]
             .confinement
             .as_ref()
             .unwrap();
         assert!(record.captured_at.0 < MINUTE.0);
+    }
+    #[test]
+    fn native_mission_save_contains_four_columns_and_no_runtime_entity_maps() {
+        let mut sim = fixture();
+        let ruler = sim.host.state.ruler;
+        let leader = sim.host.state.people[5].id;
+        let home = sim.host.state.areas[0].id;
+        let away = sim.host.state.areas[1].id;
+        let id = propose(
+            &mut sim,
+            leader,
+            MissionObjective::Visit { destination: away },
+            vec![],
+        );
+        accept(&mut sim, id, leader);
+        sim.mission_command(
+            ruler,
+            &MissionAction::Objective {
+                mission: id,
+                objective: MissionObjective::Visit { destination: home },
+            },
+        )
+        .unwrap();
+        let saved = sim.save().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(
+            value["state"]["state"]["missions"]
+                .as_object()
+                .unwrap()
+                .len(),
+            2
+        );
+        for column in [
+            "missions/mission",
+            "missions/recruitment",
+            "missions/knowledge",
+            "missions/talk",
+        ] {
+            assert!(
+                !value["state"]["components"]["columns"][column]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let mut reversed = value.clone();
+        for column in [
+            "missions/mission",
+            "missions/recruitment",
+            "missions/knowledge",
+            "missions/talk",
+        ] {
+            reversed["state"]["components"]["columns"][column]
+                .as_array_mut()
+                .unwrap()
+                .reverse();
+        }
+        assert!(
+            Simulation::load(
+                &serde_json::to_vec(&reversed).unwrap(),
+                Execution::default()
+            )
+            .is_err()
+        );
+        let rows = game_missions::missions(&sim.host.storage)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<Vec<_>>();
+        for (id, row) in rows.into_iter().rev() {
+            game_missions::remove_mission(&mut sim.host.storage, id).unwrap();
+            game_missions::insert_mission(&mut sim.host.storage, id, row).unwrap();
+        }
+        let rows = game_missions::recruitments(&sim.host.storage)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<Vec<_>>();
+        for (id, row) in rows.into_iter().rev() {
+            game_missions::remove_recruitment(&mut sim.host.storage, id).unwrap();
+            game_missions::insert_recruitment(&mut sim.host.storage, id, row).unwrap();
+        }
+        let rows = game_missions::knowledges(&sim.host.storage)
+            .map(|(id, row)| (id, row.clone()))
+            .collect::<Vec<_>>();
+        for (id, row) in rows.into_iter().rev() {
+            game_missions::remove_knowledge(&mut sim.host.storage, id).unwrap();
+            game_missions::insert_knowledge(&mut sim.host.storage, id, row).unwrap();
+        }
+        assert_eq!(sim.save().unwrap(), saved);
+        let replay = Simulation::load(
+            &saved,
+            Execution {
+                workers: 2,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(replay.canonical_state(), sim.canonical_state());
+        assert_eq!(replay.save().unwrap(), saved);
+        for attack in 0..8 {
+            let mut forged = value.clone();
+            match attack {
+                0 => forged["state"]["state"]["missions"] = serde_json::Value::Null,
+                1 => {
+                    forged["state"]["components"]["columns"]["missions/mission"][0]["value"]["id"] =
+                        serde_json::json!(home.0)
+                }
+                2 => {
+                    forged["state"]["components"]["columns"]["missions/mission"][0]["entity"] =
+                        serde_json::json!(home.0)
+                }
+                3 => {
+                    forged["state"]["components"]["columns"]["missions/recruitment"][0]["value"]["mission"] =
+                        serde_json::json!(999999)
+                }
+                4 => {
+                    forged["state"]["components"]["columns"]["missions/knowledge"][0]["entity"] =
+                        serde_json::json!(home.0)
+                }
+                5 => {
+                    forged["state"]["components"]["columns"]["missions/talk"][0]["value"]["speaker"] =
+                        serde_json::json!(leader.0)
+                }
+                6 => forged["state"]["next_id"] = serde_json::json!(id.0),
+                _ => forged["state"]["state"]["missions"]["missions"] = serde_json::json!({}),
+            }
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err(),
+                "native mission restore attack {attack}"
+            );
+            assert_eq!(sim.save().unwrap(), saved);
+        }
+        let next_id = sim.host.next_id();
+        let next_event = sim.host.next_event();
+        assert!(
+            sim.mission_command(
+                ruler,
+                &MissionAction::Objective {
+                    mission: id,
+                    objective: MissionObjective::Visit {
+                        destination: AreaId(999999)
+                    }
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(sim.host.next_id(), next_id);
+        assert_eq!(sim.host.next_event(), next_event);
+        assert_eq!(sim.save().unwrap(), saved);
     }
 }

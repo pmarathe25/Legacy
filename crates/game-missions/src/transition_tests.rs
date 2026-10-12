@@ -1,3 +1,4 @@
+use crate::fixture::Fixture;
 use crate::*;
 use game_agreements::{AgreementTerm, InventoryTerms, TermsContext};
 use game_core::*;
@@ -10,15 +11,8 @@ pub(super) const ID: MissionId = MissionId(11);
 pub(super) const HOME: AreaId = AreaId(1);
 pub(super) const AWAY: AreaId = AreaId(2);
 pub(super) const OFFER: RecruitmentId = RecruitmentId(12);
-pub(super) fn state() -> World {
-    World {
-        missions: BTreeMap::new(),
-        recruitments: BTreeMap::new(),
-        known: BTreeMap::new(),
-        talks: BTreeMap::new(),
-        last_event: 0,
-        last_review: SimTime(0),
-    }
+pub(super) fn state() -> Fixture {
+    Fixture::new()
 }
 pub(super) fn facts() -> CommandFacts {
     CommandFacts {
@@ -78,8 +72,9 @@ pub(super) fn proposal() -> MissionProposal {
         deadline: SimTime(2000),
     }
 }
-pub(super) fn start(w: &mut World, p: MissionProposal, f: &CommandFacts) {
+pub(super) fn start(w: &mut Fixture, p: MissionProposal, f: &CommandFacts) {
     w.prepare_command(
+        &w.store,
         SP,
         &MissionAction::Propose { proposal: p },
         f,
@@ -90,21 +85,23 @@ pub(super) fn start(w: &mut World, p: MissionProposal, f: &CommandFacts) {
         },
     )
     .unwrap()
-    .commit(w)
+    .commit(&mut w.runtime, &mut w.store)
     .unwrap();
 }
 pub(super) fn command(
-    w: &mut World,
+    w: &mut Fixture,
     person: PersonId,
     action: MissionAction,
     f: &CommandFacts,
     ids: MissionIds,
 ) -> PreparedMission {
-    let p = w.prepare_command(person, &action, f, &ids).unwrap();
-    p.clone().commit(w).unwrap();
+    let p = w
+        .prepare_command(&w.store, person, &action, f, &ids)
+        .unwrap();
+    p.clone().commit(&mut w.runtime, &mut w.store).unwrap();
     p
 }
-pub(super) fn accept(w: &mut World, person: PersonId, id: RecruitmentId, f: &CommandFacts) {
+pub(super) fn accept(w: &mut Fixture, person: PersonId, id: RecruitmentId, f: &CommandFacts) {
     command(
         w,
         person,
@@ -136,12 +133,16 @@ fn proposal_is_not_recruitment_payment_or_provisioning_and_guarded_acceptance_is
     let mut p = proposal();
     p.compensation.insert(A, vec![payment()]);
     start(&mut w, p, &f);
-    assert_eq!(w.missions[&ID].members[&A].status, CompanionStatus::Offered);
-    assert!(w.missions[&ID].members[&A].cargo.is_empty());
-    assert_eq!(w.recruitments[&OFFER].agreement, None);
+    assert_eq!(
+        mission(&w.store, ID).unwrap().members[&A].status,
+        CompanionStatus::Offered
+    );
+    assert!(mission(&w.store, ID).unwrap().members[&A].cargo.is_empty());
+    assert_eq!(recruitment(&w.store, OFFER).unwrap().agreement, None);
     let before = w.clone();
     assert_eq!(
         w.prepare_command(
+            &w.store,
             A,
             &MissionAction::Accept { recruitment: OFFER },
             &f,
@@ -171,8 +172,11 @@ fn proposal_is_not_recruitment_payment_or_provisioning_and_guarded_acceptance_is
             agreement: AgreementId(30)
         })
     );
-    assert_eq!(w.recruitments[&OFFER].agreement, Some(AgreementId(30)));
-    assert!(w.missions[&ID].members[&A].cargo.is_empty());
+    assert_eq!(
+        recruitment(&w.store, OFFER).unwrap().agreement,
+        Some(AgreementId(30))
+    );
+    assert!(mission(&w.store, ID).unwrap().members[&A].cargo.is_empty());
 }
 #[test]
 fn absent_sponsor_urgent_duty_and_wrong_recruit_cannot_accept() {
@@ -183,6 +187,7 @@ fn absent_sponsor_urgent_duty_and_wrong_recruit_cannot_accept() {
     f.available.remove(&SP);
     assert!(
         w.prepare_command(
+            &w.store,
             A,
             &MissionAction::Accept { recruitment: OFFER },
             &f,
@@ -194,6 +199,7 @@ fn absent_sponsor_urgent_duty_and_wrong_recruit_cannot_accept() {
     f.duties.insert(A);
     assert!(
         w.prepare_command(
+            &w.store,
             A,
             &MissionAction::Accept { recruitment: OFFER },
             &f,
@@ -204,6 +210,7 @@ fn absent_sponsor_urgent_duty_and_wrong_recruit_cannot_accept() {
     f.duties.clear();
     assert!(
         w.prepare_command(
+            &w.store,
             B,
             &MissionAction::Accept { recruitment: OFFER },
             &f,
@@ -219,7 +226,10 @@ fn absent_sponsor_urgent_duty_and_wrong_recruit_cannot_accept() {
         &f,
         MissionIds::default(),
     );
-    assert_eq!(w.missions[&ID].members[&A].status, CompanionStatus::Refused);
+    assert_eq!(
+        mission(&w.store, ID).unwrap().members[&A].status,
+        CompanionStatus::Refused
+    );
 }
 #[test]
 fn counteroffer_needs_sponsor_assent_and_recruits_later_actual_acceptance() {
@@ -241,8 +251,14 @@ fn counteroffer_needs_sponsor_assent_and_recruits_later_actual_acceptance() {
         ..Default::default()
     };
     assert!(
-        w.prepare_command(A, &MissionAction::Accept { recruitment: OFFER }, &f, &ids)
-            .is_err()
+        w.prepare_command(
+            &w.store,
+            A,
+            &MissionAction::Accept { recruitment: OFFER },
+            &f,
+            &ids
+        )
+        .is_err()
     );
     command(
         &mut w,
@@ -251,7 +267,10 @@ fn counteroffer_needs_sponsor_assent_and_recruits_later_actual_acceptance() {
         &f,
         MissionIds::default(),
     );
-    assert_eq!(w.missions[&ID].members[&A].status, CompanionStatus::Offered);
+    assert_eq!(
+        mission(&w.store, ID).unwrap().members[&A].status,
+        CompanionStatus::Offered
+    );
     command(
         &mut w,
         A,
@@ -260,7 +279,7 @@ fn counteroffer_needs_sponsor_assent_and_recruits_later_actual_acceptance() {
         ids,
     );
     assert_eq!(
-        w.missions[&ID].members[&A].status,
+        mission(&w.store, ID).unwrap().members[&A].status,
         CompanionStatus::Accepted
     );
     command(
@@ -270,7 +289,10 @@ fn counteroffer_needs_sponsor_assent_and_recruits_later_actual_acceptance() {
         &f,
         MissionIds::default(),
     );
-    assert_eq!(w.recruitments[&OFFER].agreement, Some(AgreementId(30))); // Existing debt is not forgiven by exit.
+    assert_eq!(
+        recruitment(&w.store, OFFER).unwrap().agreement,
+        Some(AgreementId(30))
+    ); // Existing debt is not forgiven by exit.
 }
 #[test]
 fn stale_acceptance_and_existing_commitments_are_atomic() {
@@ -279,6 +301,7 @@ fn stale_acceptance_and_existing_commitments_are_atomic() {
     start(&mut w, proposal(), &f);
     let prepared = w
         .prepare_command(
+            &w.store,
             A,
             &MissionAction::Accept { recruitment: OFFER },
             &f,
@@ -293,13 +316,17 @@ fn stale_acceptance_and_existing_commitments_are_atomic() {
         MissionIds::default(),
     );
     let before = w.clone();
-    assert_eq!(prepared.commit(&mut w), Err(Error::Unavailable));
+    assert_eq!(
+        prepared.commit(&mut w.runtime, &mut w.store),
+        Err(Error::Unavailable)
+    );
     assert_eq!(w, before);
     let mut w = state();
     start(&mut w, proposal(), &f);
     accept(&mut w, A, OFFER, &f);
     assert!(
         w.prepare_command(
+            &w.store,
             SP,
             &MissionAction::Propose {
                 proposal: proposal()
@@ -320,11 +347,12 @@ fn autonomous_offer_response_uses_personal_needs_and_own_known_food() {
     let f = facts();
     start(&mut w, proposal(), &f);
     assert_eq!(
-        w.recruitment_response(OFFER, input(A), HOME, InventoryId(21), &[]),
+        w.recruitment_response(&w.store, OFFER, input(A), HOME, InventoryId(21), &[]),
         Some(MissionAction::Accept { recruitment: OFFER })
     );
     assert_eq!(
         w.recruitment_response(
+            &w.store,
             OFFER,
             RecruitmentInput {
                 guardian_duty: true,
@@ -342,7 +370,7 @@ fn autonomous_offer_response_uses_personal_needs_and_own_known_food() {
         ..input(A)
     };
     assert_eq!(
-        w.recruitment_response(OFFER, cautious, HOME, InventoryId(21), &[]),
+        w.recruitment_response(&w.store, OFFER, cautious, HOME, InventoryId(21), &[]),
         Some(MissionAction::Refuse { recruitment: OFFER })
     );
     let known = StockKnowledge {
@@ -357,6 +385,7 @@ fn autonomous_offer_response_uses_personal_needs_and_own_known_food() {
     };
     assert_eq!(
         w.recruitment_response(
+            &w.store,
             OFFER,
             cautious,
             HOME,
@@ -377,6 +406,7 @@ fn autonomous_offer_response_uses_personal_needs_and_own_known_food() {
     );
     assert_eq!(
         w.recruitment_response(
+            &w.store,
             OFFER,
             cautious,
             HOME,
@@ -397,17 +427,17 @@ fn local_order_keeps_distant_directives_and_every_person_can_refuse() {
     accept(&mut w, A, OFFER, &f);
     accept(&mut w, B, RecruitmentId(13), &f);
     let objective = MissionObjective::Defeat { person: ENEMY };
-    let old_b = w.missions[&ID].members[&B].clone();
+    let old_b = mission(&w.store, ID).unwrap().members[&B].clone();
     let order = OrderFacts {
         now: SimTime(10),
         heard: BTreeMap::from([(A, ServiceChoice::Personal(input(A)))]),
         assets: f.assets.clone(),
     };
-    w.prepare_order(ID, A, &objective, &order, false)
+    w.prepare_order(&w.store, ID, A, &objective, &order, false)
         .unwrap()
-        .commit(&mut w)
+        .commit(&mut w.runtime, &mut w.store)
         .unwrap();
-    assert_eq!(w.missions[&ID].members[&B], old_b);
+    assert_eq!(mission(&w.store, ID).unwrap().members[&B], old_b);
     let unwilling = RecruitmentInput {
         ambition: 0,
         sociability: 0,
@@ -422,7 +452,9 @@ fn local_order_keeps_distant_directives_and_every_person_can_refuse() {
         ]),
         ..order
     };
-    let prepared = w.prepare_order(ID, A, &objective, &order, false).unwrap();
+    let prepared = w
+        .prepare_order(&w.store, ID, A, &objective, &order, false)
+        .unwrap();
     assert_eq!(
         prepared.events[0],
         MissionEvent::RecruitmentChanged {
@@ -431,9 +463,9 @@ fn local_order_keeps_distant_directives_and_every_person_can_refuse() {
             status: CompanionStatus::Withdrawn
         }
     );
-    prepared.commit(&mut w).unwrap();
+    prepared.commit(&mut w.runtime, &mut w.store).unwrap();
     assert_eq!(
-        w.missions[&ID].members[&B].status,
+        mission(&w.store, ID).unwrap().members[&B].status,
         CompanionStatus::Withdrawn
     );
 }
@@ -444,6 +476,7 @@ fn departure_and_retreat_are_commitments_and_do_not_move_bodies() {
     start(&mut w, proposal(), &f);
     assert!(
         w.prepare_command(
+            &w.store,
             SP,
             &MissionAction::Depart { mission: ID },
             &f,
@@ -459,14 +492,21 @@ fn departure_and_retreat_are_commitments_and_do_not_move_bodies() {
         &f,
         MissionIds::default(),
     );
-    assert_eq!(w.missions[&ID].status, MissionStatus::Traveling);
-    assert_eq!(w.missions[&ID].members[&A].visited, BTreeSet::from([HOME]));
+    assert_eq!(
+        mission(&w.store, ID).unwrap().status,
+        MissionStatus::Traveling
+    );
+    assert_eq!(
+        mission(&w.store, ID).unwrap().members[&A].visited,
+        BTreeSet::from([HOME])
+    );
     let order = OrderFacts {
         now: SimTime(10),
         heard: BTreeMap::from([(A, ServiceChoice::Personal(input(A)))]),
         assets: f.assets,
     };
     w.prepare_order(
+        &w.store,
         ID,
         A,
         &MissionObjective::Visit { destination: HOME },
@@ -474,9 +514,15 @@ fn departure_and_retreat_are_commitments_and_do_not_move_bodies() {
         true,
     )
     .unwrap()
-    .commit(&mut w)
+    .commit(&mut w.runtime, &mut w.store)
     .unwrap();
-    assert_eq!(w.missions[&ID].status, MissionStatus::Returning);
-    assert!(!w.missions[&ID].succeeded);
-    assert_eq!(w.missions[&ID].members[&A].visited, BTreeSet::from([HOME]));
+    assert_eq!(
+        mission(&w.store, ID).unwrap().status,
+        MissionStatus::Returning
+    );
+    assert!(!mission(&w.store, ID).unwrap().succeeded);
+    assert_eq!(
+        mission(&w.store, ID).unwrap().members[&A].visited,
+        BTreeSet::from([HOME])
+    );
 }
