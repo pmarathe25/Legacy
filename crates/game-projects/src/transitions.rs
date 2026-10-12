@@ -160,7 +160,7 @@ impl PreparedChange {
         self.jobs
             .insert(actor, (construction(store, actor).cloned(), after));
     }
-    fn guard_jobs(&mut self, store: &Store) {
+    pub(crate) fn guard_jobs(&mut self, store: &Store) {
         self.job_membership = Some(
             constructions(store)
                 .map(|(actor, row)| (actor, row.clone()))
@@ -173,7 +173,7 @@ impl PreparedChange {
     fn guard_farm_slots(&mut self, store: &Store, plot: SiteId) {
         self.farm_slots.insert(plot, farm_slots(store, plot));
     }
-    fn guard_enterprise_sites(&mut self, store: &Store, site: SiteId) {
+    pub(crate) fn guard_enterprise_sites(&mut self, store: &Store, site: SiteId) {
         self.enterprise_sites
             .insert(site, enterprise_sites(store, site));
     }
@@ -181,7 +181,11 @@ impl PreparedChange {
         &self.effects
     }
     pub(crate) fn validate_rows(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
-        if runtime.rules != self.rules
+        if self.projects.iter().any(|(id, (before, after))| {
+            before.is_none() && after.is_some() && store.contains(StableId(id.0))
+        }) || self.enterprises.iter().any(|(id, (before, after))| {
+            before.is_none() && after.is_some() && store.contains(StableId(id.0))
+        }) || runtime.rules != self.rules
             || self
                 .cursor
                 .is_some_and(|(before, _)| runtime.last_event != before)
@@ -263,37 +267,55 @@ impl PreparedChange {
         Ok(())
     }
     pub(crate) fn stage_rows(
-        self,
+        mut self,
         runtime: &Runtime,
         store: &Store,
         batch: &mut Batch,
     ) -> Result<ProjectFinalization, Error> {
         self.validate_rows(runtime, store)?;
-        for (id, (_, after)) in self.projects {
+        let mut writes = game_ecs::ReadFootprint::new();
+        for id in self.projects.keys() {
+            writes.protect::<Project>(StableId(id.0));
+        }
+        for id in self.enterprises.keys() {
+            writes.protect::<Enterprise>(StableId(id.0));
+        }
+        for id in self.jobs.keys() {
+            writes.protect::<Construction>(StableId(id.0));
+        }
+        if !writes.is_untouched(batch) {
+            return Err(Error::Unavailable);
+        }
+        for (id, (_, after)) in &self.projects {
             if let Some(row) = after {
-                batch.insert(StableId(id.0), row);
+                batch.insert(StableId(id.0), row.clone());
             } else {
                 batch.remove::<Project>(StableId(id.0));
             }
         }
-        for (id, (_, after)) in self.enterprises {
+        for (id, (_, after)) in &self.enterprises {
             if let Some(row) = after {
-                batch.insert(StableId(id.0), row);
+                batch.insert(StableId(id.0), row.clone());
             } else {
                 batch.remove::<Enterprise>(StableId(id.0));
             }
         }
-        for (actor, (_, after)) in self.jobs {
+        for (actor, (_, after)) in &self.jobs {
             if let Some(row) = after {
-                batch.insert(StableId(actor.0), row);
+                batch.insert(StableId(actor.0), row.clone());
             } else {
                 batch.remove::<Construction>(StableId(actor.0));
             }
         }
-        Ok(ProjectFinalization {
-            cursor: self.cursor.map(|(_, after)| after),
-            effects: self.effects,
-        })
+        let effects = std::mem::take(&mut self.effects);
+        let finish = ProjectFinalization {
+            key: batch.key(),
+            writes,
+            source: self,
+            effects,
+        };
+        finish.check_footprint(store, batch)?;
+        Ok(finish)
     }
     pub fn stage_into(
         self,
@@ -313,18 +335,118 @@ impl PreparedChange {
     ) -> Result<Vec<Effect>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, definitions, &mut batch)?;
+        finish.validate_batch(runtime, store, definitions, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish(runtime))
     }
 }
 /// Consume after the host admits the combined batch in the same serialized window.
 pub struct ProjectFinalization {
-    cursor: Option<u64>,
+    key: game_ecs::BatchKey,
+    writes: game_ecs::ReadFootprint,
+    source: PreparedChange,
     effects: Vec<Effect>,
 }
 impl ProjectFinalization {
+    pub fn validate_batch(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        definitions: &game_workshop::Definitions,
+        batch: &Batch,
+    ) -> Result<(), Error> {
+        self.source.validate(runtime, store, definitions)?;
+        self.check_footprint(store, batch)
+    }
+    pub(crate) fn validate_advance_batch(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &Batch,
+    ) -> Result<(), Error> {
+        if !self.source.recipe_reads.is_empty() {
+            return Err(Error::Unavailable);
+        }
+        self.source.validate_rows(runtime, store)?;
+        self.check_footprint(store, batch)
+    }
+    fn check_footprint(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        let source = &self.source;
+        if self.key != batch.key()
+            || !self.writes.has_one_edit_per_row(batch)
+            || source.projects.iter().any(|(id, (before, after))| {
+                before.is_none() && after.is_some() && batch.edit_count(StableId(id.0)) != 1
+            })
+            || source.enterprises.iter().any(|(id, (before, after))| {
+                before.is_none() && after.is_some() && batch.edit_count(StableId(id.0)) != 1
+            })
+        {
+            return Err(Error::Unavailable);
+        }
+        for id in batch
+            .edited_ids::<Project>()
+            .filter(|id| !source.projects.contains_key(&ProjectId(id.0)))
+        {
+            if let Some(row) = project(store, ProjectId(id.0))
+                && (source
+                    .area_slots
+                    .get(&row.area)
+                    .is_some_and(|ids| ids.contains(&row.id))
+                    || matches!(&row.kind,ProjectKind::Farm{plot,..} if source.farm_slots.get(plot).is_some_and(|ids|ids.contains(&row.id))))
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        for (_, row) in batch
+            .insertions::<Project>()
+            .filter(|(id, _)| !source.projects.contains_key(&ProjectId(id.0)))
+        {
+            if row.materials_consumed && source.area_slots.contains_key(&row.area)
+                || matches!(&row.kind,ProjectKind::Farm{plot,..} if source.farm_slots.contains_key(plot) && !matches!(row.status, ProjectStatus::Failed | ProjectStatus::Cancelled))
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        for id in batch
+            .edited_ids::<Enterprise>()
+            .filter(|id| !source.enterprises.contains_key(&EnterpriseId(id.0)))
+        {
+            if enterprise(store, EnterpriseId(id.0)).is_some_and(|row| {
+                source
+                    .enterprise_sites
+                    .get(&row.site)
+                    .is_some_and(|ids| ids.contains(&row.id))
+            }) {
+                return Err(Error::Unavailable);
+            }
+        }
+        if batch.insertions::<Enterprise>().any(|(id, row)| {
+            !source.enterprises.contains_key(&EnterpriseId(id.0))
+                && source.enterprise_sites.contains_key(&row.site)
+        }) {
+            return Err(Error::Unavailable);
+        }
+        for id in batch
+            .edited_ids::<Construction>()
+            .filter(|id| !source.jobs.contains_key(&PersonId(id.0)))
+        {
+            if source.job_membership.is_some()
+                || construction(store, PersonId(id.0))
+                    .is_some_and(|row| source.project_job_membership.contains_key(&row.project))
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        if batch.insertions::<Construction>().any(|(id, row)| {
+            !source.jobs.contains_key(&PersonId(id.0))
+                && source.project_job_membership.contains_key(&row.project)
+        }) {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
     pub fn finish(self, runtime: &mut Runtime) -> Vec<Effect> {
-        if let Some(cursor) = self.cursor {
+        if let Some((_, cursor)) = self.source.cursor {
             runtime.last_event = cursor;
         }
         self.effects
@@ -838,11 +960,11 @@ impl Runtime {
         quantity: Quantity,
     ) -> Result<PreparedChange, Error> {
         let mut change = PreparedChange::new(self);
+        change.guard_enterprise_sites(store, site);
         if let Some(asset) = crate::enterprises(store)
             .map(|(_, row)| row)
             .find(|e| e.site == site)
         {
-            change.guard_enterprise_sites(store, site);
             let mut after = asset.clone();
             let total = after.inputs.entry(good).or_default();
             *total = total.checked_add(quantity.0).ok_or(Error::Overflow)?;
@@ -871,11 +993,11 @@ impl Runtime {
     ) -> Result<PreparedChange, Error> {
         let mut change = PreparedChange::new(self);
         for (site, good, quantity) in outputs {
+            change.guard_enterprise_sites(store, *site);
             if let Some(asset) = crate::enterprises(store)
                 .map(|(_, row)| row)
                 .find(|e| e.site == *site)
             {
-                change.guard_enterprise_sites(store, *site);
                 let mut after = change
                     .enterprises
                     .get(&asset.id)

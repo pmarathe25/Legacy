@@ -485,6 +485,7 @@ impl Simulation {
             &BTreeMap::from([(speaker, Activity::MissionTalk { completes })]),
             &replacement,
         )?;
+        finalization.validate_batch(self, &batch)?;
         self.host.storage.apply_batch(batch)?;
         finalization.finish_actor(self, speaker);
         Ok(())

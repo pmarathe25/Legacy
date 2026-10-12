@@ -1247,6 +1247,7 @@ impl Simulation {
             &final_activities,
             Some(&replacement),
         )?;
+        interruption.validate_batch(self, &batch)?;
         self.host.storage.apply_batch(batch)?;
         interruption.finish_actor(self, actor);
         if let Some((source, quantity)) = action.material_consumption() {

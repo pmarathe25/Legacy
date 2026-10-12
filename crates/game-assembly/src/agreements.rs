@@ -539,7 +539,7 @@ impl Simulation {
             &final_activities,
             &replacement,
         )?;
-        finish.validate_batch(&batch)?;
+        finish.validate_batch(self, &batch)?;
         self.host.storage.apply_batch(batch)?;
         finish.finish_actor(self, sender);
         self.host

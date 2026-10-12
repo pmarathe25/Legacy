@@ -58,6 +58,7 @@ impl PreparedAdvance {
     pub fn commit(self, runtime: &mut Runtime, store: &mut Store) -> Result<Vec<Effect>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, &mut batch)?;
+        finish.validate_advance_batch(runtime, store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish(runtime))
     }
@@ -84,6 +85,7 @@ impl Runtime {
             return Err(Error::Unavailable);
         }
         let mut change = PreparedChange::new(self);
+        change.guard_jobs(store);
         for (actor, job) in &jobs {
             let before = project(store, job.project).ok_or(Error::Unavailable)?;
             let mut after = before.clone();
@@ -96,6 +98,7 @@ impl Runtime {
             change.project(store, job.project, after);
         }
         for input in work {
+            change.guard_enterprise_sites(store, input.site);
             if let Some((id, before)) = enterprises(store).find(|(_, row)| row.site == input.site) {
                 let mut after = change
                     .enterprises

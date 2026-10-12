@@ -307,6 +307,7 @@ impl Simulation {
         if let Some(health) = &health {
             health.validate_footprint(&batch)?;
         }
+        interrupted.validate_batch(self, &batch)?;
         self.host.storage.apply_batch(batch)?;
         finish.finish_optional(self.host.state.transport.as_mut());
         let mut health_effects = health.map(|finish| finish.finish()).unwrap_or_default();

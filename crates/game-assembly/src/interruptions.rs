@@ -733,7 +733,15 @@ pub(crate) struct InterruptionFinalization {
     realm: Option<game_realm::TalkBatchGuard>,
 }
 impl InterruptionFinalization {
-    pub(crate) fn validate_batch(&self, batch: &Batch) -> Result<(), Error> {
+    pub(crate) fn validate_batch(&self, sim: &Simulation, batch: &Batch) -> Result<(), Error> {
+        if let Some(guard) = &self.projects {
+            guard.validate_batch(
+                sim.host.state.projects.as_ref().ok_or(Error::Unavailable)?,
+                &sim.host.storage,
+                &sim.host.state.workshops,
+                batch,
+            )?;
+        }
         if let Some(guard) = &self.realm {
             guard.validate(batch)?;
         }

@@ -118,6 +118,9 @@ pub(super) struct Storage {
 // typed registrations and publish into native typed columns, never a value bag.
 pub(super) trait Edit: Send {
     fn key(&self) -> (StableId, TypeId);
+    fn inserted_value(&self) -> Option<&dyn Any> {
+        None
+    }
     fn preflight(&self, store: &Storage) -> Result<bool, Error>;
     fn publish(self: Box<Self>, store: &mut Storage);
 }
@@ -126,6 +129,9 @@ struct Insert<C: Component> {
     value: C,
 }
 impl<C: Component> Edit for Insert<C> {
+    fn inserted_value(&self) -> Option<&dyn Any> {
+        Some(&self.value)
+    }
     fn key(&self) -> (StableId, TypeId) {
         (self.id, TypeId::of::<C>())
     }

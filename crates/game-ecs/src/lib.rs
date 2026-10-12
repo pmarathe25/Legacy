@@ -189,6 +189,15 @@ impl Batch {
     pub fn edit_count(&self, id: StableId) -> usize {
         self.edits.iter().filter(|edit| edit.key().0 == id).count()
     }
+    /// Borrow plain staged insertions, in submission order. Removed rows are
+    /// absent; duplicates remain visible until the composed batch is admitted.
+    pub fn insertions<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> + '_ {
+        self.edits.iter().filter_map(|edit| {
+            edit.inserted_value()?
+                .downcast_ref::<C>()
+                .map(|row| (edit.key().0, row))
+        })
+    }
     /// Typed row identities in submission order, including removals and repeated
     /// edits. Owners validate their final composed footprint before publication.
     pub fn edited_ids<C: Component>(&self) -> impl Iterator<Item = StableId> + '_ {
@@ -972,5 +981,25 @@ mod tests {
         absent.protect::<Name>(StableId(90));
         batch.remove::<Name>(StableId(90));
         assert!(!absent.is_untouched(&batch));
+    }
+    #[test]
+    fn staged_insertions_borrow_only_requested_plain_values_without_publishing() {
+        let store = fixture(false);
+        let before = store.snapshot().unwrap();
+        let mut batch = Batch::new();
+        batch.insert(StableId(1), Count(11));
+        batch.insert(StableId(1), Name("different type".into()));
+        batch.remove::<Count>(StableId(2));
+        batch.insert(StableId(3), Count(30));
+        batch.insert(StableId(1), Count(12));
+        assert_eq!(
+            batch
+                .insertions::<Count>()
+                .map(|(id, row)| (id, row.0))
+                .collect::<Vec<_>>(),
+            [(StableId(1), 11), (StableId(3), 30), (StableId(1), 12)]
+        );
+        assert_eq!(batch.insertions::<Name>().count(), 1);
+        assert_eq!(store.snapshot().unwrap(), before);
     }
 }

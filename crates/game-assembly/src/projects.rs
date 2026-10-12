@@ -739,7 +739,7 @@ impl Simulation {
             .host
             .state
             .projects
-            .as_mut()
+            .as_ref()
             .ok_or(Error::Unavailable)?;
         let finish = change.stage_into(
             runtime,
@@ -747,8 +747,21 @@ impl Simulation {
             &self.host.state.workshops,
             &mut batch,
         )?;
+        finish.validate_batch(
+            runtime,
+            &self.host.storage,
+            &self.host.state.workshops,
+            &batch,
+        )?;
+        interrupted.validate_batch(self, &batch)?;
         self.host.storage.apply_batch(batch)?;
-        let effects = finish.finish(runtime);
+        let effects = finish.finish(
+            self.host
+                .state
+                .projects
+                .as_mut()
+                .expect("admitted project runtime"),
+        );
         self.host.allocate_ids(allocations)?;
         for effect in effects {
             match effect {
