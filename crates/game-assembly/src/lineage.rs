@@ -816,13 +816,13 @@ impl Simulation {
                             .health
                             > 0;
                 if same_place {
-                    let personality = game_characters::decisions::mind::<game_api::Command>(
+                    let personality = &game_characters::decisions::mind::<game_api::Command>(
                         &self.host.storage,
                         id,
                     )
                     .expect("mind exists")
-                    .personality
-                    .clone();
+                    .personality;
+                    let traits = guardian_traits(personality);
                     let stage = game_lifecycle::life(&self.host.storage, person)
                         .expect("life exists")
                         .stage;
@@ -838,13 +838,8 @@ impl Simulation {
                         .assessments
                         .entry(person)
                         .or_default();
-                    *assessment = game_lineage::observe_stage(
-                        assessment,
-                        guardian_traits(&personality),
-                        stage,
-                        owner_now,
-                        true,
-                    );
+                    *assessment =
+                        game_lineage::observe_stage(assessment, traits, stage, owner_now, true);
                 }
             }
             let force_command = self.force_candidate(id);
@@ -855,67 +850,51 @@ impl Simulation {
             let body = game_physiology::body(&self.host.storage, id).unwrap();
             let activity = self.host.storage.activity(id).unwrap();
             let own_location = self.resolved_location(id);
-            let pending = self.host.state.lineage.as_ref().unwrap().guardians[&id]
-                .assignment
-                .as_ref()
-                .is_some_and(|assignment| match assignment.request {
-                    GuardianRequest::Move { destination } => {
-                        matches!(own_location, Location::InTransit { .. })
-                            || matches!(own_location, Location::AtArea(area) if area != destination)
-                    }
-                    GuardianRequest::Work { site } => {
-                        matches!(*activity, Activity::Work { site: active } if active == site)
-                    }
-                    GuardianRequest::Rest => owner_now <= assignment.accepted_at,
-                    GuardianRequest::Supply { .. } => false,
-                });
-            let (goal, explanation, command) = if let Some(command) = force_command {
-                (
-                    GuardianGoal::Confined,
-                    "Attempting to release the physical bindings with a carried tool".into(),
-                    Some(command),
-                )
-            } else if self
-                .host
-                .state
-                .combat
-                .as_ref()
-                .is_some_and(|w| w.captivity.contains_key(&id))
-            {
-                (
-                    GuardianGoal::Confined,
-                    "The body is confined; the connection does not release its restraints".into(),
-                    None,
-                )
-            } else if body.vitals.health == 0 || self.combat_restricts(id) {
-                (
-                    GuardianGoal::Recovering,
-                    "Recovering in place before resuming the lineage duty".into(),
-                    None,
-                )
-            } else if self.in_combat(id) {
-                (
-                    GuardianGoal::Searching,
-                    "The encounter must be resolved before the guardian can continue".into(),
-                    None,
-                )
-            } else if self.mission_actor_busy(id) {
-                (GuardianGoal::Searching, "Following an accepted objective while retaining responsibility for the incarnation".into(), None)
-            } else if pending {
-                (
-                    GuardianGoal::Mentoring,
-                    "Carrying out the accepted physical task before reconsidering lineage assistance".into(),
-                    None,
-                )
-            } else if let (Some(target), Some(target_location)) = (current, &sensed) {
-                self.guardian_intention(id, target, &own_location, target_location)
-            } else {
-                (
-                    GuardianGoal::Waiting,
-                    "No living incarnation; other people and births continue normally".into(),
-                    matches!(*activity, Activity::Idle | Activity::Work { .. })
-                        .then_some(Command::Rest),
-                )
+            let facts = game_lineage::ReviewFacts {
+                now: owner_now,
+                location: &own_location,
+                active_work: match activity {
+                    Activity::Work { site } => Some(*site),
+                    _ => None,
+                },
+                confined: self
+                    .host
+                    .state
+                    .combat
+                    .as_ref()
+                    .is_some_and(|world| world.captivity.contains_key(&id)),
+                incapacitated: body.vitals.health == 0,
+                combat_restricted: self.combat_restricts(id),
+                in_combat: self.in_combat(id),
+                serving_objective: self.mission_actor_busy(id),
+                can_rest: matches!(*activity, Activity::Idle | Activity::Work { .. }),
+            };
+            let pending = game_lineage::assignment_pending(
+                self.host.state.lineage.as_ref().unwrap().guardians[&id]
+                    .assignment
+                    .as_ref(),
+                facts,
+            );
+            let step =
+                game_lineage::review_priority(current, pending, force_command.is_some(), facts);
+            let (goal, explanation, command) = match step {
+                game_lineage::ReviewStep::Assist(target) => self.guardian_intention(
+                    id,
+                    target,
+                    &own_location,
+                    sensed.as_ref().expect("living incarnation has a location"),
+                ),
+                game_lineage::ReviewStep::Escape => (
+                    step.goal(),
+                    step.explanation(force_command.is_some()).into(),
+                    force_command,
+                ),
+                game_lineage::ReviewStep::Wait { rest } => (
+                    step.goal(),
+                    step.explanation(false).into(),
+                    rest.then_some(Command::Rest),
+                ),
+                _ => (step.goal(), step.explanation(false).into(), None),
             };
             let guardian = self
                 .host
@@ -926,14 +905,14 @@ impl Simulation {
                 .guardians
                 .get_mut(&id)
                 .unwrap();
-            guardian.target = current;
-            guardian.sensed_location = sensed;
-            guardian.sensed_at = owner_now;
-            guardian.goal = goal;
-            guardian.explanation = explanation;
-            if !pending {
-                guardian.assignment = None;
-            }
+            guardian.observe_review(game_lineage::ReviewObservation {
+                target: current,
+                sensed_location: sensed,
+                now: owner_now,
+                pending_assignment: pending,
+                goal,
+                explanation,
+            });
             if let Some(command) = command {
                 let accepted = if let Command::Move { destination } = command {
                     self.start_movement(id, destination)
@@ -941,14 +920,15 @@ impl Simulation {
                     self.debug_actor_command(id, command)
                 };
                 if accepted.is_err() {
-                    self.host.state
+                    self.host
+                        .state
                         .lineage
                         .as_mut()
                         .unwrap()
                         .guardians
                         .get_mut(&id)
                         .unwrap()
-                        .explanation = "A physical attempt failed; the guardian will reconsider without abandoning the lineage".into();
+                        .observe_failed_attempt();
                 }
             }
         }

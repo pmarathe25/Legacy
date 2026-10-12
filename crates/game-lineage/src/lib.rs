@@ -19,3 +19,6 @@ pub use service::*;
 
 mod rescue;
 pub use rescue::*;
+
+mod review;
+pub use review::*;
