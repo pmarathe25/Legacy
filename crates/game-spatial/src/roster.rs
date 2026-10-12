@@ -6,12 +6,13 @@ use crate::*;
 /// mutation. The host builds once per declared phase, shares this view with
 /// systems, then drops it before motion, births, carrying changes or restore.
 pub struct LocalRoster<'a> {
-    store: &'a Store,
+    pub(crate) store: &'a Store,
+    pub(crate) carried_by: BTreeMap<StableId, BTreeSet<StableId>>,
     raw_areas: BTreeMap<AreaId, BTreeSet<StableId>>,
     resolved_areas: BTreeMap<AreaId, BTreeSet<StableId>>,
     cells: BTreeMap<AreaId, BTreeSet<StableId>>,
     roads: BTreeMap<(AreaId, AreaId), BTreeSet<StableId>>,
-    incident_roads: BTreeMap<AreaId, BTreeSet<StableId>>,
+    pub(crate) incident_roads: BTreeMap<AreaId, BTreeSet<StableId>>,
     resolved: BTreeMap<StableId, Location>,
 }
 impl<'a> LocalRoster<'a> {
@@ -19,6 +20,7 @@ impl<'a> LocalRoster<'a> {
         let resolved = resolve_locations(locations(store))?;
         let mut roster = Self {
             store,
+            carried_by: BTreeMap::new(),
             raw_areas: BTreeMap::new(),
             resolved_areas: BTreeMap::new(),
             cells: BTreeMap::new(),
@@ -27,6 +29,11 @@ impl<'a> LocalRoster<'a> {
             resolved,
         };
         for (actor, location) in locations(store) {
+            let mut current = actor;
+            while let Some(Location::Carried { carrier }) = crate::location(store, current) {
+                current = StableId(carrier.0);
+                roster.carried_by.entry(current).or_default().insert(actor);
+            }
             if let Location::AtArea(area) = location {
                 roster.raw_areas.entry(*area).or_default().insert(actor);
             }
@@ -93,6 +100,14 @@ impl<'a> LocalRoster<'a> {
     pub fn indexed(&self) -> usize {
         self.resolved.len()
     }
+    /// Capture once for a phase that needs to retain an independent audience guard.
+    pub fn capture_candidates(&self) -> LocalCandidates {
+        LocalCandidates {
+            areas: self.resolved_areas.clone(),
+            roads: self.roads.clone(),
+            incident_roads: self.incident_roads.clone(),
+        }
+    }
     /// Capture candidate identities for a declared phase that permits no
     /// Location value changes. Drop this capture before any spatial mutation.
     /// Current contact and eligibility still come from the receiving owner.
@@ -101,6 +116,24 @@ impl<'a> LocalRoster<'a> {
             areas: self.resolved_areas,
             roads: self.roads,
             incident_roads: self.incident_roads,
+        }
+    }
+    pub fn at_location(&self, query: &Location) -> CandidateIds<'_> {
+        let mut lists = Vec::new();
+        match query {
+            Location::AtArea(area) => {
+                lists.extend(self.resolved_areas.get(area).map(BTreeSet::iter));
+                lists.extend(self.incident_roads.get(area).map(BTreeSet::iter));
+            }
+            Location::InTransit { from, to, .. } | Location::StoppedOnRoad { from, to, .. } => {
+                lists.extend(self.roads.get(&road_key(*from, *to)).map(BTreeSet::iter));
+                lists.extend(self.resolved_areas.get(from).map(BTreeSet::iter));
+                lists.extend(self.resolved_areas.get(to).map(BTreeSet::iter));
+            }
+            Location::Carried { .. } => {}
+        }
+        CandidateIds {
+            lists: lists.into_iter().map(Iterator::peekable).collect(),
         }
     }
     /// Candidate IDs only. The movement owner must still compare exact road
