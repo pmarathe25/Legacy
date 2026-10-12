@@ -1573,47 +1573,33 @@ impl Simulation {
 
 impl Simulation {
     pub(crate) fn can_release(&self, actor: PersonId, target: PersonId) -> bool {
-        let Some(c) = self
-            .host
-            .state
-            .combat
-            .as_ref()
-            .and_then(|w| w.captivity.get(&target))
-        else {
+        let Some(world) = &self.host.state.combat else {
             return false;
         };
-        if !self.force_body_ready(actor)
-            || (self
-                .host
-                .state
-                .combat
-                .as_ref()
-                .unwrap()
-                .captivity
-                .contains_key(&actor)
-                && actor != target)
-        {
+        let Some(body) = game_physiology::body(&self.host.storage, actor) else {
             return false;
-        }
-        self.transport_same_place(actor, target)
-            && !self.transport_is_moving(actor)
-            && (c.captor == actor
-                || self
-                    .inventory_index
-                    .get(&InventoryLocation::Carried(actor))
-                    .into_iter()
-                    .flatten()
-                    .any(|id| {
-                        game_cargo::inventory(&self.host.storage, *(id))
-                            .expect("inventory exists")
-                            .good
-                            == Good::Tool
-                            && game_cargo::inventory(&self.host.storage, *(id))
-                                .expect("inventory exists")
-                                .quantity
-                                .0
-                                >= 1_000
-                    }))
+        };
+        world.rules.release_available(
+            game_conflict::ReleaseFacts {
+                actor,
+                target,
+                body: game_conflict::TargetBody {
+                    alive: body.vitals.alive,
+                    health: body.vitals.health,
+                },
+                independent: self.independent(actor),
+                available_area: self.force_area(actor).is_some(),
+                actor_captive: world.captivity.contains_key(&actor),
+                contact: self.transport_same_place(actor, target),
+                moving: self.transport_is_moving(actor),
+            },
+            world.captivity.get(&target),
+            self.inventory_index
+                .get(&InventoryLocation::Carried(actor))
+                .into_iter()
+                .flatten()
+                .filter_map(|id| game_cargo::inventory(&self.host.storage, *id)),
+        )
     }
     pub(crate) fn release_captive(&mut self, actor: PersonId, target: PersonId) {
         self.host

@@ -691,6 +691,7 @@ dependencies = [
  "game-agreements",
  "game-cargo",
  "game-characters",
+ "game-conflict",
  "game-core",
  "game-logistics",
  "game-transport",

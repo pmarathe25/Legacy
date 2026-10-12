@@ -13,3 +13,6 @@ pub use delivery::*;
 
 #[cfg(test)]
 mod delivery_tests;
+
+mod service;
+pub use service::*;

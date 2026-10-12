@@ -42,3 +42,9 @@ pub use control::*;
 
 mod engagement;
 pub use engagement::*;
+
+mod tactics;
+pub use tactics::*;
+
+mod reinforcements;
+pub use reinforcements::*;

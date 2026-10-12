@@ -474,28 +474,29 @@ impl Simulation {
         let Some(id) = self.mission_membership(actor) else {
             return false;
         };
-        if self.guardian_mission_duty(actor, id) {
-            return false;
-        }
-        let body = &game_physiology::body(&self.host.storage, actor).expect("body exists");
-        body.vitals.alive
-            && body.vitals.health > self.host.state.physical.as_ref().unwrap().rules.max_health / 2
-            && body.vitals.hunger < self.host.state.physical.as_ref().unwrap().rules.meal_relief
-            && body.vitals.fatigue
-                < self
-                    .host
-                    .state
-                    .physical
-                    .as_ref()
-                    .unwrap()
-                    .rules
-                    .fatigue_limit
-            && !self.combat_restricts(actor)
-            && !game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap()
-                .child_signals
-                .values()
-                .any(|signal| signal.urgency >= 20_000)
+        let body = game_physiology::body(&self.host.storage, actor).expect("body exists");
+        let rules = &self.host.state.physical.as_ref().unwrap().rules;
+        let mind = game_characters::decisions::mind::<Command>(&self.host.storage, actor).unwrap();
+        self.host.state.missions.as_ref().unwrap().member_busy(
+            actor,
+            game_missions::ServiceAvailability {
+                guardian_due: self.guardian_mission_duty(actor, id),
+                alive: body.vitals.alive,
+                health: body.vitals.health,
+                max_health: rules.max_health,
+                hunger: body.vitals.hunger,
+                meal_relief: rules.meal_relief,
+                fatigue: body.vitals.fatigue,
+                fatigue_limit: rules.fatigue_limit,
+                restricted: self.combat_restricts(actor),
+                care_urgency: mind
+                    .child_signals
+                    .values()
+                    .map(|s| s.urgency)
+                    .max()
+                    .unwrap_or(0),
+            },
+        )
     }
     fn start_mission_talk(
         &mut self,
@@ -1818,190 +1819,72 @@ impl Simulation {
         encounter: EncounterId,
         actor: PersonId,
     ) -> Option<(Option<Point>, CombatAction)> {
-        // The ruler takes personal turns; an invoked life retains its own controller.
-        if actor == self.host.state.ruler {
-            return None;
-        }
         let id = self.mission_membership(actor)?;
-        let m = &self.host.state.missions.as_ref()?.missions[&id];
-        let member = &m.members[&actor];
-        let w = self.host.state.combat.as_ref()?;
-        let e = w.encounters.get(&encounter)?;
-        let f = e.fighters.get(&actor)?;
-        let map = w.map(e.map)?;
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap();
-        let body = &game_physiology::body(&self.host.storage, actor).expect("body exists");
-        let known_status = self
-            .host
-            .state
-            .missions
-            .as_ref()?
-            .known
-            .get(&actor)
-            .and_then(|known| known.get(&id))
-            .map(|view| view.status);
-        let retreat = game_missions::combat_retreat_wanted(
-            body.vitals.health,
-            self.host.state.physical.as_ref()?.rules.max_health,
-            mind.personality.risk_tolerance,
-            known_status,
-        );
-        if retreat {
-            let exit = map
-                .exits
-                .iter()
-                .filter(|(area, _)| decisions::known_path(&mind.routes, e.area, *area).is_ok())
-                .filter(|(_, point)| map.route(f.position, *point).is_some())
-                .min_by_key(|(area, point)| (point_distance(f.position, *point), *area));
-            if let Some((destination, exit)) = exit {
-                let movement = mission_combat_step(f.position, *exit, w.rules.movement, map);
-                let position = movement.unwrap_or(f.position);
-                let action = if point_distance(position, *exit) <= u128::from(w.rules.reach).pow(2)
-                    && map.clear(position, *exit)
-                {
-                    CombatAction::Retreat {
-                        destination: *destination,
-                    }
-                } else {
-                    CombatAction::Defend
-                };
-                return Some((movement, action));
-            }
-            return Some((None, CombatAction::Surrender));
+        let world = self.host.state.missions.as_ref()?;
+        let conflict = self.host.state.combat.as_ref()?;
+        let battle = conflict.encounters.get(&encounter)?;
+        let fighter = battle.fighters.get(&actor)?;
+        let map = conflict.map(battle.map)?;
+        let mind = game_characters::decisions::mind::<Command>(&self.host.storage, actor)?;
+        let body = game_physiology::body(&self.host.storage, actor)?;
+        let decision = world.tactical_decision(
+            id,
+            game_missions::TacticalInput {
+                actor,
+                player: actor == self.host.state.ruler,
+                area: battle.area,
+                map,
+                fighter,
+                roster: &battle.fighters,
+                routes: &mind.routes,
+                health: body.vitals.health,
+                max_health: self.host.state.physical.as_ref()?.rules.max_health,
+                risk_tolerance: mind.personality.risk_tolerance,
+                movement: conflict.rules.movement,
+                reach: conflict.rules.reach,
+                binding_available: self.binding_stock(actor).is_some(),
+            },
+            &MissionTacticalFacts {
+                simulation: self,
+                actor,
+            },
+        )?;
+        let search = decision
+            .search
+            .map(|after| game_conflict::PreparedSearch::new(encounter, fighter, after));
+        if let Some(search) = search {
+            search
+                .commit(self.host.state.combat.as_mut()?)
+                .expect("immediately prepared search state");
         }
-        let target = match member.directive {
-            MissionObjective::Defeat { person }
-            | MissionObjective::Rescue { person, .. }
-            | MissionObjective::Confine { person, .. }
-                if f.known.contains_key(&person) =>
-            {
-                Some(person)
+        let action = match decision.action {
+            game_missions::TacticAction::Defend => CombatAction::Defend,
+            game_missions::TacticAction::Surrender => CombatAction::Surrender,
+            game_missions::TacticAction::Retreat(destination) => {
+                CombatAction::Retreat { destination }
             }
-            _ => f
-                .known
-                .keys()
-                .filter(|person| {
-                    e.fighters.get(person).is_some_and(|other| {
-                        other.team != f.team && map.clear(f.position, other.position)
-                    })
-                })
-                .min_by_key(|person| (point_distance(f.position, f.known[person]), **person))
-                .copied(),
+            game_missions::TacticAction::Release(target) => CombatAction::Release { target },
+            game_missions::TacticAction::Capture(target) => CombatAction::Capture { target },
+            game_missions::TacticAction::Attack(target) => CombatAction::Attack { target },
         };
-        let Some(target) = target else {
-            return Some((
-                self.combat_search_step(encounter, actor),
-                CombatAction::Defend,
-            ));
-        };
-        let point = f.known[&target];
-        let movement = map.navigation_step(
-            f.position,
-            point,
-            w.rules.movement,
-            w.rules.reach.saturating_sub(2),
-        );
-        let visible = map.clear(f.position, e.fighters[&target].position);
-        if !visible
-            && (movement.is_none()
-                || map.clear(f.position, point)
-                    && point_distance(f.position, point) <= u128::from(w.rules.reach).pow(2))
-        {
-            return Some((
-                self.combat_search_step(encounter, actor),
-                CombatAction::Defend,
-            ));
-        }
-        let from = movement.unwrap_or(f.position);
-        let reachable = visible
-            && point_distance(from, point) <= u128::from(w.rules.reach).pow(2)
-            && map.clear(from, point);
-        let action = if reachable
-            && matches!(member.directive, MissionObjective::Rescue { person, .. } if person == target)
-            && self.can_release(actor, target)
-        {
-            CombatAction::Release { target }
-        } else if reachable
-            && matches!(member.directive, MissionObjective::Confine { person, .. } if person == target)
-            && (e.fighters[&target].surrendered || !self.can_fight(target))
-            && self.binding_stock(actor).is_some()
-            && !w.captivity.contains_key(&target)
-        {
-            CombatAction::Capture { target }
-        } else if reachable
-            && e.fighters[&target].position == point
-            && map.clear(from, e.fighters[&target].position)
-            && e.fighters[&target].team != f.team
-            && !e.fighters[&target].surrendered
-        {
-            CombatAction::Attack { target }
-        } else {
-            CombatAction::Defend
-        };
-        Some((movement, action))
+        Some((decision.movement, action))
     }
     pub(crate) fn mission_reinforcements(&self) -> Vec<(EncounterId, PersonId, u32, AreaId)> {
-        let Some(w) = &self.host.state.missions else {
-            return Vec::new();
-        };
-        let mut candidates = Vec::new();
-        for m in w.missions.values() {
-            for member in m.members.values().filter(|p| {
-                p.status == CompanionStatus::Accepted
-                    && self.mission_membership(p.person) == Some(m.id)
-                    && p.person != self.host.state.ruler
-                    && self.can_fight(p.person)
-                    && !self.in_combat(p.person)
-            }) {
-                let Some(from) = member.last_leg_from else {
-                    continue;
-                };
-                let Ok(area) = self.mission_area(member.person) else {
-                    continue;
-                };
-                if !self.host.events().iter().rev().take_while(|event|event.at==self.host.clock().time).any(|event|event.at==self.host.clock().time && matches!(event.event,EventKind::Arrived {actor,area:arrived} if actor==member.person && arrived==area)) {continue;}
-                for encounter in self
-                    .host
-                    .state
-                    .combat
-                    .as_ref()
+        self.host
+            .state
+            .missions
+            .as_ref()
+            .map_or_else(Vec::new, |world| {
+                world
+                    .reinforcements(
+                        self.host.clock().time,
+                        &MissionReinforcementFacts { simulation: self },
+                    )
                     .into_iter()
-                    .flat_map(|w| w.encounters.values())
-                    .filter(|e| e.active && e.area == area)
-                {
-                    let linked = self.army_allied_missions(m.id);
-                    if let Some(ally) = encounter.fighters.values().find(|f| {
-                        linked.iter().any(|id| {
-                            w.missions[id].members.get(&f.actor).is_some_and(|p| {
-                                p.status == CompanionStatus::Accepted
-                                    && (*id == m.id
-                                        || member.directive.target_person().is_some_and(|target| {
-                                            self.mission_force_willing(member.person, m.id, target)
-                                                && encounter
-                                                    .fighters
-                                                    .get(&target)
-                                                    .is_some_and(|enemy| enemy.team != f.team)
-                                        }))
-                            })
-                        }) && !f.withdrawn
-                            && !f.surrendered
-                    }) {
-                        candidates.push((encounter.id, member.person, ally.team, from));
-                        break;
-                    }
-                }
-            }
-        }
-        candidates
+                    .map(|r| (r.encounter, r.actor, r.team, r.from))
+                    .collect()
+            })
     }
-}
-fn point_distance(a: Point, b: Point) -> u128 {
-    u128::from(a.x.abs_diff(b.x)).pow(2) + u128::from(a.y.abs_diff(b.y)).pow(2)
-}
-fn mission_combat_step(from: Point, to: Point, limit: u64, map: &combat::Map) -> Option<Point> {
-    map.navigation_step(from, to, limit, 0)
 }
 
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
@@ -2382,24 +2265,94 @@ impl Simulation {
     }
 
     pub(crate) fn guardian_mission_duty(&self, actor: PersonId, id: MissionId) -> bool {
-        if self.host.state.people[self.person_index[&actor]].role != Role::Guardian {
-            return false;
-        }
         let Some(lineage) = &self.host.state.lineage else {
             return false;
         };
-        let m = &self.host.state.missions.as_ref().unwrap().missions[&id];
-        lineage.current() != Some(m.sponsor)
-            || game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+        let sponsor = self.host.state.missions.as_ref().unwrap().missions[&id].sponsor;
+        let signal = game_characters::decisions::mind::<Command>(&self.host.storage, actor)
+            .and_then(|mind| mind.child_signals.get(&sponsor));
+        lineage.guardian_service_due(game_lineage::GuardianServiceFacts {
+            actor,
+            sponsor,
+            guardian: self.host.state.people[self.person_index[&actor]].role == Role::Guardian,
+            care_urgency: signal.map_or(0, |s| s.urgency),
+            hydration_urgency: signal.map_or(0, |s| s.hydration_urgency),
+        })
+    }
+}
+
+struct MissionTacticalFacts<'a> {
+    simulation: &'a Simulation,
+    actor: PersonId,
+}
+impl game_missions::TacticalFacts for MissionTacticalFacts<'_> {
+    fn capabilities(&self, target: PersonId) -> game_missions::TacticalCapabilities {
+        game_missions::TacticalCapabilities {
+            release_available: self.simulation.can_release(self.actor, target),
+            target_can_fight: self.simulation.can_fight(target),
+            target_captive: self
+                .simulation
+                .host
+                .state
+                .combat
+                .as_ref()
                 .unwrap()
-                .child_signals
-                .get(&m.sponsor)
-                .is_some_and(|signal| signal.urgency > 0 || signal.hydration_urgency > 0)
-            || !lineage
-                .guardians
-                .get(&actor)
-                .and_then(|g| g.assessments.get(&m.sponsor))
-                .is_some_and(|a| a.ready)
+                .captivity
+                .contains_key(&target),
+        }
+    }
+}
+struct MissionReinforcementFacts<'a> {
+    simulation: &'a Simulation,
+}
+impl game_missions::ReinforcementFacts for MissionReinforcementFacts<'_> {
+    fn arrivals(&self) -> impl Iterator<Item = game_missions::ArrivalFacts> {
+        self.simulation
+            .host
+            .events()
+            .iter()
+            .rev()
+            .take_while(|e| e.at == self.simulation.host.clock().time)
+            .filter_map(|e| {
+                if let EventKind::Arrived { actor, area } = e.event {
+                    Some(game_missions::ArrivalFacts {
+                        actor,
+                        area,
+                        at: e.at,
+                    })
+                } else {
+                    None
+                }
+            })
+    }
+    fn body(&self, mission: MissionId, person: PersonId) -> game_missions::ReinforcementBody {
+        let m = &self
+            .simulation
+            .host
+            .state
+            .missions
+            .as_ref()
+            .unwrap()
+            .missions[&mission];
+        game_missions::ReinforcementBody {
+            player: person == self.simulation.host.state.ruler,
+            can_fight: self.simulation.can_fight(person),
+            in_combat: self.simulation.in_combat(person),
+            area: self.simulation.mission_area(person).ok(),
+            recruitment: self.simulation.recruitment_input(person, m),
+        }
+    }
+    fn encounters(&self) -> impl Iterator<Item = &game_conflict::Encounter> {
+        self.simulation
+            .host
+            .state
+            .combat
+            .as_ref()
+            .into_iter()
+            .flat_map(|world| world.encounters.values())
+    }
+    fn linked_missions(&self, mission: MissionId) -> BTreeSet<MissionId> {
+        self.simulation.army_allied_missions(mission)
     }
 }
 

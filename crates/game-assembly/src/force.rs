@@ -155,7 +155,7 @@ impl Simulation {
             },
         );
     }
-    fn force_area(&self, actor: PersonId) -> Option<AreaId> {
+    pub(crate) fn force_area(&self, actor: PersonId) -> Option<AreaId> {
         let body = game_physiology::body(&self.host.storage, actor)?;
         if !body.vitals.alive {
             return None;
