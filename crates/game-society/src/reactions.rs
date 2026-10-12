@@ -3,7 +3,9 @@ use crate::institutions::*;
 use game_core::*;
 use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
-#[derive(Clone, Copy)]
+mod receipt_batch;
+pub use receipt_batch::*;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SubjectFacts {
     pub actor: PersonId,
     pub area: Option<AreaId>,
@@ -97,16 +99,9 @@ pub fn need_band(hunger: u64) -> u8 {
 }
 impl Runtime {
     pub fn linked_rule_concept(&self, store: &Store, agreement: AgreementId) -> Option<ConceptId> {
-        crate::storage::institutions(store)
-            .map(|(_, row)| row)
-            .find_map(|institution| {
-                institution.applied.iter().find_map(|(concept, people)| {
-                    people
-                        .values()
-                        .any(|id| *id == agreement)
-                        .then_some(*concept)
-                })
-            })
+        receipt_batch::Selector::Linked(agreement)
+            .select(store, None)
+            .map(|(_, concept)| concept)
     }
     pub fn sharing_concept(
         &self,
@@ -114,9 +109,9 @@ impl Runtime {
         actor: PersonId,
         source: InventoryId,
     ) -> Option<ConceptId> {
-        crate::storage::institutions(store).map(|(_, row)| row).find_map(|institution|institution.concepts.iter().find(|id|
-            matches!(crate::storage::concept(store, *id).expect("validated Society reference").effect,SocialEffect::Access{inventory,allowed:true}if inventory==source)
-                &&institution.grants.get(id).is_some_and(|people|people.contains(&actor))).copied())
+        receipt_batch::Selector::Sharing(actor, source)
+            .select(store, None)
+            .map(|(_, concept)| concept)
     }
     /// Interpret one receipt against state after the previous receipt has committed.
     pub fn receipt_reaction(
@@ -126,6 +121,24 @@ impl Runtime {
         subject: SubjectFacts,
         at: SimTime,
         index: &ReceiptIndex,
+    ) -> Option<CaseReaction> {
+        self.receipt_reaction_in(
+            store,
+            receipt,
+            subject,
+            at,
+            index,
+            &receipt_batch::ReceiptRows::opening(store),
+        )
+    }
+    fn receipt_reaction_in(
+        &self,
+        store: &Store,
+        receipt: &SocialReceipt,
+        subject: SubjectFacts,
+        at: SimTime,
+        index: &ReceiptIndex,
+        rows: &receipt_batch::ReceiptRows<'_>,
     ) -> Option<CaseReaction> {
         let make = |counterpart, asset: CaseAsset, kind, outcome, reciprocal, concept, public| {
             Some(CaseReaction {
@@ -209,7 +222,7 @@ impl Runtime {
                     asset,
                     SocialCaseKind::Default,
                     SocialOutcome::Defaulted,
-                    self.known_case_count(store, actor, actor, SocialCaseKind::Cooperation) > 0,
+                    rows.known_count(actor, actor, SocialCaseKind::Cooperation) > 0,
                     concept,
                     concept.is_some(),
                 )
@@ -223,29 +236,28 @@ impl Runtime {
                 if good != Good::Food || destination_holder != Some(actor) {
                     return None;
                 }
-                self.receipt_reaction(
+                self.receipt_reaction_in(
                     store,
                     &SocialReceipt::SupportReceived { actor, source },
                     subject,
                     at,
                     index,
+                    rows,
                 )
             }
-            SocialReceipt::Ate { actor, source } => self.receipt_reaction(
+            SocialReceipt::Ate { actor, source } => self.receipt_reaction_in(
                 store,
                 &SocialReceipt::SupportReceived { actor, source },
                 subject,
                 at,
                 index,
+                rows,
             ),
             SocialReceipt::SupportReceived { actor, source } => {
                 if actor != subject.actor {
                     return None;
                 }
-                let old = crate::storage::exclusions(store, actor)?
-                    .stores
-                    .get(&source)
-                    .and_then(|id| crate::storage::case(store, id))?;
+                let old = rows.excluded_case(actor, source)?;
                 Some(CaseReaction {
                     case: SocialCaseView {
                         id: CaseId(0),
@@ -257,13 +269,7 @@ impl Runtime {
                     public: true,
                     clear_exclusion: Some((actor, source)),
                     set_exclusion: None,
-                    exclusion_guard: Some((
-                        actor,
-                        source,
-                        crate::storage::exclusions(store, actor)
-                            .and_then(|rows| rows.stores.get(&source))
-                            .copied(),
-                    )),
+                    exclusion_guard: Some((actor, source, rows.exclusion_id(actor, source))),
                 })
             }
         }

@@ -357,6 +357,35 @@ pub struct ConditionInput<'a> {
     pub own_hunger: u64,
     pub known_stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
 }
+pub(crate) fn apply_case_learning(
+    after: &mut Knowledge,
+    case: &SocialCaseView,
+    concept: Option<ConceptId>,
+    observer: PersonId,
+    empathy: u16,
+) {
+    after.cases.insert(case.id);
+    if let Some(concept) = concept {
+        let value = after.values.entry(concept).or_insert(ConceptValue {
+            weight: 0,
+            experiences: 0,
+        });
+        let gain = match case.outcome {
+            SocialOutcome::Shared | SocialOutcome::Contributed => {
+                if observer == case.subject || observer == case.counterpart {
+                    500
+                } else {
+                    i32::from(empathy) / 2
+                }
+            }
+            SocialOutcome::Defaulted => -300,
+            _ => 0,
+        };
+        value.weight = (value.weight + gain).clamp(-2000, 2000);
+        value.experiences = value.experiences.saturating_add(1);
+    }
+}
+
 impl Runtime {
     pub fn known_case_count(
         &self,
@@ -1003,26 +1032,7 @@ impl Runtime {
             }
             let before = crate::storage::knowledge(store, *observer).cloned();
             let mut after = before.clone().unwrap_or_default();
-            after.cases.insert(case.id);
-            if let Some(concept) = concept {
-                let value = after.values.entry(concept).or_insert(ConceptValue {
-                    weight: 0,
-                    experiences: 0,
-                });
-                let gain = match case.outcome {
-                    SocialOutcome::Shared | SocialOutcome::Contributed => {
-                        if *observer == case.subject || *observer == case.counterpart {
-                            500
-                        } else {
-                            i32::from(*empathy) / 2
-                        }
-                    }
-                    SocialOutcome::Defaulted => -300,
-                    _ => 0,
-                };
-                value.weight = (value.weight + gain).clamp(-2000, 2000);
-                value.experiences = value.experiences.saturating_add(1);
-            }
+            apply_case_learning(&mut after, &case, concept, *observer, *empathy);
             edits.push((*observer, before, after));
         }
         Ok(PreparedCaseLearning {
