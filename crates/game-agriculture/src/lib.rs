@@ -3,6 +3,8 @@ use game_core::*;
 pub use game_land::Soil;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod access_reads;
+pub use access_reads::{FarmingAccessRead, prepare_farming_access};
 mod advancing;
 mod storage;
 pub use advancing::{GrowthInput, GrowthOutput, PreparedAdvance};
