@@ -70,6 +70,48 @@ fn facts() -> StartFacts {
         body_rate: SkillRate::default(),
     }
 }
+
+#[test]
+fn staged_recipe_consumption_is_affine_and_rejects_foreign_source_writes() {
+    let site = site();
+    let input = stock(1, Good::Timber, 4_000);
+    let tool = stock(2, Good::Tool, 2_000);
+    let output = stock(3, Good::Food, 0);
+    let start = view(&site)
+        .prepare_start(None, &input, &tool, &output, facts())
+        .unwrap();
+    let consumption = start.consumption.unwrap();
+    let mut schema = game_ecs::Schema::new();
+    game_cargo::register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    game_cargo::insert_inventory(&mut store, input.clone()).unwrap();
+    let opening = store.snapshot().unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = consumption.stage_into(&store, &mut batch).unwrap();
+    assert_eq!(store.snapshot().unwrap(), opening);
+    guard.validate_batch(&batch).unwrap();
+    let mut foreign = game_ecs::Batch::new();
+    foreign.insert(game_ecs::StableId(input.id.0), input.clone());
+    assert_eq!(guard.validate_batch(&foreign), Err(Error::Unavailable));
+    batch.insert(game_ecs::StableId(input.id.0), input.clone());
+    assert_eq!(guard.validate_batch(&batch), Err(Error::Unavailable));
+    assert_eq!(store.snapshot().unwrap(), opening);
+    let mut accepted = game_ecs::Batch::new();
+    let guard = consumption.stage_into(&store, &mut accepted).unwrap();
+    accepted.insert(game_ecs::StableId(tool.id.0), tool);
+    guard.validate_batch(&accepted).unwrap();
+    store.apply_batch(accepted).unwrap();
+    assert_eq!(
+        game_cargo::inventory(&store, input.id).unwrap().quantity,
+        Quantity(2_000)
+    );
+    assert_eq!(
+        consumption
+            .stage_into(&store, &mut game_ecs::Batch::new())
+            .err(),
+        Some(Error::Unavailable)
+    );
+}
 fn closing(actor: u64, equipped: bool) -> CompletionFacts {
     CompletionFacts {
         actor: PersonId(actor),

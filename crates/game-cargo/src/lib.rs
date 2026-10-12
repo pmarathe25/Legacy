@@ -17,9 +17,9 @@ pub use deposit::{
 
 mod storage;
 pub use storage::{
-    PreparedInventoryCreation, insert_inventory, inventories, inventory, inventory_mut,
-    prepare_inventory_creation, prepare_inventory_split, register_components, remove_inventory,
-    validate_storage,
+    InventoryCreationGuard, PreparedInventoryCreation, insert_inventory, inventories, inventory,
+    inventory_mut, prepare_inventory_creation, prepare_inventory_split, register_components,
+    remove_inventory, validate_storage,
 };
 #[cfg(test)]
 mod storage_tests;

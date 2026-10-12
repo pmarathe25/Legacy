@@ -152,3 +152,38 @@ fn fresh_receiving_split_and_creation_are_guarded_atomic_cargo_effects() {
         Quantity(1000)
     );
 }
+
+#[test]
+fn split_receipts_reject_foreign_writes_and_preserve_unrelated_components() {
+    let mut store = Store::with_schema(schema());
+    insert_inventory(&mut store, stock(3)).unwrap();
+    let mut receiving = stock(4);
+    receiving.quantity = Quantity(0);
+    let before = store.snapshot().unwrap();
+    for conflicting in [3, 4] {
+        let plan = prepare_inventory_split(&store, InventoryId(3), receiving.clone(), Quantity(40))
+            .unwrap();
+        let mut batch = game_ecs::Batch::new();
+        let guard = plan.stage_into(&store, &mut batch).unwrap();
+        assert!(guard.validate_batch(&game_ecs::Batch::new()).is_err());
+        batch.remove::<Inventory>(StableId(conflicting));
+        assert!(guard.validate_batch(&batch).is_err());
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+    let plan =
+        prepare_inventory_split(&store, InventoryId(3), receiving.clone(), Quantity(40)).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage_into(&store, &mut batch).unwrap();
+    batch.insert(StableId(3), "independent".to_string());
+    guard.validate_batch(&batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        inventory(&store, InventoryId(3)).unwrap().quantity,
+        Quantity(60)
+    );
+    assert_eq!(
+        inventory(&store, receiving.id).unwrap().quantity,
+        Quantity(40)
+    );
+    assert_eq!(store.get::<String>(StableId(3)).unwrap(), "independent");
+}

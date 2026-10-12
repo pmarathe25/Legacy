@@ -64,6 +64,24 @@ pub struct Consumption {
 }
 
 impl Consumption {
+    pub fn stage_into(
+        &self,
+        store: &game_ecs::Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<ConsumptionFinalization, Error> {
+        let mut input = game_cargo::inventory(store, self.source)
+            .ok_or(Error::Unavailable)?
+            .clone();
+        self.commit(&mut input)?;
+        if batch.touches::<Inventory>(game_ecs::StableId(self.source.0)) {
+            return Err(Error::Unavailable);
+        }
+        batch.insert(game_ecs::StableId(self.source.0), input);
+        Ok(ConsumptionFinalization {
+            source: self.source,
+            batch: batch.key(),
+        })
+    }
     /// Apply the admitted recipe input without creating a second stock ledger.
     /// The host validates permission/finance effects before this mutation.
     pub fn commit(&self, input: &mut Inventory) -> Result<(), Error> {
@@ -80,6 +98,25 @@ impl Consumption {
             .checked_sub(self.quantity.0)
             .ok_or(Error::Unavailable)?;
         input.quantity = Quantity(remaining);
+        Ok(())
+    }
+}
+
+pub struct ConsumptionFinalization {
+    source: InventoryId,
+    batch: game_ecs::BatchKey,
+}
+impl ConsumptionFinalization {
+    pub fn validate_batch(&self, batch: &game_ecs::Batch) -> Result<(), Error> {
+        if self.batch != batch.key()
+            || batch
+                .edited_ids::<Inventory>()
+                .filter(|id| *id == game_ecs::StableId(self.source.0))
+                .count()
+                != 1
+        {
+            return Err(Error::Unavailable);
+        }
         Ok(())
     }
 }

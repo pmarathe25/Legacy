@@ -114,19 +114,59 @@ impl PreparedInventoryCreation {
     pub fn receiving(&self) -> &Inventory {
         &self.receiving
     }
-    pub fn stage_into(self, store: &Store, batch: &mut game_ecs::Batch) -> Result<(), Error> {
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<InventoryCreationGuard, Error> {
         if store.contains(StableId(self.receiving.id.0))
+            || batch.touches::<Inventory>(StableId(self.receiving.id.0))
             || self
                 .source
                 .as_ref()
                 .is_some_and(|(before, _)| inventory(store, before.id) != Some(before))
+            || self
+                .source
+                .as_ref()
+                .is_some_and(|(before, _)| batch.touches::<Inventory>(StableId(before.id.0)))
         {
             return Err(Error::Unavailable);
         }
+        let source = self.source.as_ref().map(|(_, after)| after.id);
+        let receiving = self.receiving.id;
         if let Some((_, after)) = self.source {
             batch.insert(StableId(after.id.0), after);
         }
         batch.insert(StableId(self.receiving.id.0), self.receiving);
+        Ok(InventoryCreationGuard {
+            source,
+            receiving,
+            batch: batch.key(),
+        })
+    }
+}
+
+pub struct InventoryCreationGuard {
+    source: Option<InventoryId>,
+    receiving: InventoryId,
+    batch: game_ecs::BatchKey,
+}
+impl InventoryCreationGuard {
+    pub fn validate_batch(&self, batch: &game_ecs::Batch) -> Result<(), Error> {
+        if self.batch != batch.key()
+            || [Some(self.receiving), self.source]
+                .into_iter()
+                .flatten()
+                .any(|id| {
+                    batch
+                        .edited_ids::<Inventory>()
+                        .filter(|edited| *edited == StableId(id.0))
+                        .count()
+                        != 1
+                })
+        {
+            return Err(Error::Unavailable);
+        }
         Ok(())
     }
 }
