@@ -7,6 +7,7 @@ pub(crate) enum ActivityOwner {
     Projects,
     Health,
     Property,
+    Transport,
 }
 
 impl Simulation {

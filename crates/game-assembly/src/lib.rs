@@ -129,7 +129,7 @@ pub struct AssemblyState {
     pub workshops: game_workshop::Definitions,
     pub armies: Option<armies::World>,
     pub realm: Option<realm::World>,
-    pub transport: Option<game_transport::World>,
+    pub transport: Option<game_transport::Runtime>,
     pub genetics: Option<game_genetics::Runtime>,
     pub physical_traits: Option<game_physiology::traits::Runtime>,
     pub temperament: Option<game_characters::temperament::Runtime>,
@@ -2172,16 +2172,9 @@ impl Simulation {
                 })
                 .collect()
         });
-        let mut transport_bodies = if self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .is_some_and(|world| !world.groups.is_empty())
-        {
-            self.transport_bodies().ok()
-        } else {
-            None
+        let mut transport_bodies = transport::ReceivedTransportBodies {
+            actual: self.transport_body_lookup(),
+            received: BTreeMap::new(),
         };
         game_cargo::prepare_transfers(
             &self.host.storage,
@@ -2189,10 +2182,10 @@ impl Simulation {
             requests,
             free.as_ref(),
             |intent| {
-                let Some(world) = &self.host.state.transport else {
+                let Some(_) = &self.host.state.transport else {
                     return true;
                 };
-                if world.groups.is_empty() {
+                if game_transport::groups(&self.host.storage).next().is_none() {
                     return true;
                 }
                 let InventoryLocation::Carried(holder) =
@@ -2202,12 +2195,9 @@ impl Simulation {
                 else {
                     return true;
                 };
-                let Some(bodies) = &mut transport_bodies else {
-                    return false;
-                };
                 if !game_transport::transfer_capacity(
-                    &world.groups,
-                    bodies,
+                    &self.host.storage,
+                    &transport_bodies,
                     holder,
                     intent.quantity,
                 )
@@ -2215,13 +2205,11 @@ impl Simulation {
                 {
                     return false;
                 }
-                let Some(body) = bodies.get_mut(&holder) else {
+                let received = transport_bodies.received.entry(holder).or_default();
+                let Some(quantity) = received.0.checked_add(intent.quantity.0) else {
                     return false;
                 };
-                let Some(quantity) = body.cargo.0.checked_add(intent.quantity.0) else {
-                    return false;
-                };
-                body.cargo = Quantity(quantity);
+                *received = Quantity(quantity);
                 true
             },
         )

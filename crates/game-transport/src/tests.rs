@@ -1,3 +1,21 @@
+pub(crate) fn store() -> game_ecs::Store {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_ecs::Store::with_schema(schema)
+}
+pub(crate) fn snapshot(
+    runtime: &Runtime,
+    store: &game_ecs::Store,
+) -> (Runtime, game_ecs::Snapshot) {
+    (runtime.clone(), store.snapshot().unwrap())
+}
+fn group_store(rows: BTreeMap<PersonId, CarryGroup>) -> game_ecs::Store {
+    let mut store = store();
+    for (id, row) in rows {
+        insert_group(&mut store, id, row).unwrap();
+    }
+    store
+}
 use super::*;
 
 fn body(area: u64, mass: u64, capacity: u64) -> Body {
@@ -60,25 +78,27 @@ fn willing_group_shares_a_heavy_person_and_their_actual_cargo() {
     let mut bodies = people();
     bodies.get_mut(&PersonId(1)).unwrap().cargo = Quantity(10_000);
     bodies.get_mut(&PersonId(3)).unwrap().cargo = Quantity(10_000);
-    let groups = BTreeMap::from([(PersonId(3), group())]);
-    let plan = capacity_plan(&groups, &bodies).unwrap();
+    let store = group_store(BTreeMap::from([(PersonId(3), group())]));
+    let plan = capacity_plan(&store, &bodies).unwrap();
     assert!(plan.overloaded.is_empty());
     assert_eq!(plan.shares[&(PersonId(3), PersonId(1))], Quantity(30_000));
     assert_eq!(plan.shares[&(PersonId(3), PersonId(2))], Quantity(40_000));
     bodies.get_mut(&PersonId(2)).unwrap().cargo = Quantity(1);
     assert_eq!(
-        capacity_plan(&groups, &bodies).unwrap().overloaded,
+        capacity_plan(&store, &bodies).unwrap().overloaded,
         BTreeSet::from([PersonId(3)])
     );
 }
 #[test]
 fn an_able_passenger_requires_their_own_consent_and_real_personal_offers() {
     let bodies = people();
-    let mut world = World::new(Rules::default()).unwrap();
+    let mut world = Runtime::new(Rules::default()).unwrap();
+    let mut store = crate::tests::store();
     let bearers = group().bearers;
-    let before = world.clone();
+    let before = crate::tests::snapshot(&world, &store);
     assert_eq!(
         world.begin_lift(
+            &mut store,
             PersonId(3),
             bearers.clone(),
             Permission::default(),
@@ -87,16 +107,17 @@ fn an_able_passenger_requires_their_own_consent_and_real_personal_offers() {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(world, before);
+    assert_eq!(crate::tests::snapshot(&world, &store), before);
     world
-        .offer(PersonId(1), PersonId(3), SimTime(0), &bodies)
+        .offer(&mut store, PersonId(1), PersonId(3), SimTime(0), &bodies)
         .unwrap();
     world
-        .offer(PersonId(2), PersonId(3), SimTime(0), &bodies)
+        .offer(&mut store, PersonId(2), PersonId(3), SimTime(0), &bodies)
         .unwrap();
-    let before = world.clone();
+    let before = crate::tests::snapshot(&world, &store);
     assert_eq!(
         world.begin_lift(
+            &mut store,
             PersonId(3),
             BTreeSet::from([PersonId(1)]),
             Permission {
@@ -108,9 +129,10 @@ fn an_able_passenger_requires_their_own_consent_and_real_personal_offers() {
         ),
         Err(Error::Unavailable)
     );
-    assert_eq!(world, before);
+    assert_eq!(crate::tests::snapshot(&world, &store), before);
     world
         .begin_lift(
+            &mut store,
             PersonId(3),
             bearers,
             Permission {
@@ -121,25 +143,30 @@ fn an_able_passenger_requires_their_own_consent_and_real_personal_offers() {
             &bodies,
         )
         .unwrap();
-    assert!(world.groups.is_empty());
-    assert!(world.busy(PersonId(2)));
+    assert!(groups(&store).next().is_none());
+    assert!(world.busy(&store, PersonId(2)));
     world
-        .complete_lift(PersonId(3), SimTime(30_000), &bodies)
+        .complete_lift(&mut store, PersonId(3), SimTime(30_000), &bodies)
         .unwrap();
-    assert_eq!(world.groups[&PersonId(3)].authority, Authority::Consented);
-    validate(&world, &bodies, SimTime(30_000)).unwrap();
+    assert_eq!(
+        crate::group(&store, PersonId(3)).unwrap().authority,
+        Authority::Consented
+    );
+    validate_runtime(&world, &store, &bodies, SimTime(30_000)).unwrap();
 }
 #[test]
 fn lifting_revalidates_capacity_and_position_and_cancellation_releases_every_bearer() {
     let mut bodies = people();
-    let mut world = World::new(Rules::default()).unwrap();
+    let mut world = Runtime::new(Rules::default()).unwrap();
+    let mut store = crate::tests::store();
     for bearer in [PersonId(1), PersonId(2)] {
         world
-            .offer(bearer, PersonId(3), SimTime(0), &bodies)
+            .offer(&mut store, bearer, PersonId(3), SimTime(0), &bodies)
             .unwrap();
     }
     world
         .begin_lift(
+            &mut store,
             PersonId(3),
             group().bearers,
             Permission {
@@ -151,15 +178,18 @@ fn lifting_revalidates_capacity_and_position_and_cancellation_releases_every_bea
         )
         .unwrap();
     bodies.get_mut(&PersonId(2)).unwrap().position = Position::Area(AreaId(2));
-    let before = world.clone();
+    let before = crate::tests::snapshot(&world, &store);
     assert_eq!(
-        world.complete_lift(PersonId(3), SimTime(30_000), &bodies),
+        world.complete_lift(&mut store, PersonId(3), SimTime(30_000), &bodies),
         Err(Error::Unavailable)
     );
-    assert_eq!(world, before);
-    assert_eq!(world.cancel_lifts(PersonId(2)).len(), 1);
-    assert!(!world.busy(PersonId(1)));
-    assert!(world.groups.is_empty());
+    assert_eq!(crate::tests::snapshot(&world, &store), before);
+    assert_eq!(
+        world.cancel_lifts(&mut store, PersonId(2)).unwrap().len(),
+        1
+    );
+    assert!(!world.busy(&store, PersonId(1)));
+    assert!(groups(&store).next().is_none());
 }
 #[test]
 fn actual_newborn_attachment_can_overload_and_does_not_copy_a_journey() {
@@ -179,27 +209,37 @@ fn actual_newborn_attachment_can_overload_and_does_not_copy_a_journey() {
             ..body(1, 3_000, 1_000)
         },
     );
-    let mut world = World::new(Rules::default()).unwrap();
+    let mut world = Runtime::new(Rules::default()).unwrap();
+    let mut store = crate::tests::store();
     world
-        .attach_newborn(PersonId(4), PersonId(1), SimTime(10_000), &bodies)
+        .attach_newborn(
+            &mut store,
+            PersonId(4),
+            PersonId(1),
+            SimTime(10_000),
+            &bodies,
+        )
         .unwrap();
-    assert_eq!(world.groups[&PersonId(4)].authority, Authority::Newborn);
     assert_eq!(
-        capacity_plan(&world.groups, &bodies).unwrap().overloaded,
+        crate::group(&store, PersonId(4)).unwrap().authority,
+        Authority::Newborn
+    );
+    assert_eq!(
+        capacity_plan(&store, &bodies).unwrap().overloaded,
         BTreeSet::from([PersonId(4)])
     );
     assert_eq!(
-        world.component(PersonId(4)),
+        world.component(&store, PersonId(4)),
         BTreeSet::from([PersonId(1), PersonId(4)])
     );
     bodies.get_mut(&PersonId(1)).unwrap().can_walk = false;
     assert!(
-        capacity_plan(&world.groups, &bodies)
+        capacity_plan(&store, &bodies)
             .unwrap()
             .unable
             .contains(&PersonId(1))
     );
-    validate(&world, &bodies, SimTime(10_000)).unwrap();
+    validate_runtime(&world, &store, &bodies, SimTime(10_000)).unwrap();
 }
 #[test]
 fn capacity_apportionment_and_growth_are_integer_and_order_independent() {
@@ -260,15 +300,15 @@ fn reaching_a_roadside_body_requires_actual_time_from_either_endpoint() {
 #[test]
 fn transferred_personal_cargo_and_stopped_overloads_have_real_body_weight() {
     let mut bodies = people();
-    let groups = BTreeMap::from([(PersonId(3), group())]);
-    assert!(transfer_capacity(&groups, &bodies, PersonId(3), Quantity(20_000)).unwrap());
-    assert!(!transfer_capacity(&groups, &bodies, PersonId(1), Quantity(30_000)).unwrap());
+    let store = group_store(BTreeMap::from([(PersonId(3), group())]));
+    assert!(transfer_capacity(&store, &bodies, PersonId(3), Quantity(20_000)).unwrap());
+    assert!(!transfer_capacity(&store, &bodies, PersonId(1), Quantity(30_000)).unwrap());
     bodies.get_mut(&PersonId(1)).unwrap().cargo = Quantity(40_000);
     bodies.get_mut(&PersonId(2)).unwrap().cargo = Quantity(40_000);
-    let plan = capacity_plan(&groups, &bodies).unwrap();
+    let plan = capacity_plan(&store, &bodies).unwrap();
     assert_eq!(plan.shares.values().map(|q| q.0).sum::<u64>(), 60_000);
-    assert!(transfer_capacity(&groups, &bodies, PersonId(1), Quantity(0)).unwrap());
-    assert!(!transfer_capacity(&groups, &bodies, PersonId(1), Quantity(1)).unwrap());
+    assert!(transfer_capacity(&store, &bodies, PersonId(1), Quantity(0)).unwrap());
+    assert!(!transfer_capacity(&store, &bodies, PersonId(1), Quantity(1)).unwrap());
 }
 #[test]
 fn resolved_body_catalog_follows_shared_anchors_and_rejects_cycles() {

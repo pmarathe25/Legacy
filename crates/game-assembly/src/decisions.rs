@@ -254,7 +254,7 @@ impl Simulation {
                             .state
                             .transport
                             .as_ref()
-                            .and_then(|w| w.groups.get(child))
+                            .and_then(|_| game_transport::group(&self.host.storage, **child))
                             .is_some_and(|g| g.bearers.contains(&p.id))
                 })
                 .filter(|child| self.dependent_signal_visible(p.id, **child))
@@ -582,7 +582,7 @@ impl Simulation {
                     .state
                     .transport
                     .as_ref()
-                    .is_some_and(|world| world.busy(id))
+                    .is_some_and(|world| world.busy(&self.host.storage, id))
             {
                 Control::Delegated
             } else {

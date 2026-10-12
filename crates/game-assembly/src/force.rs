@@ -1630,7 +1630,9 @@ mod transport_force_tests {
             .unwrap();
         sim.advance(SimDuration(6_000)).unwrap();
         assert_eq!(
-            sim.host.state.transport.as_ref().unwrap().groups[&captive].authority,
+            game_transport::group(&sim.host.storage, captive)
+                .unwrap()
+                .authority,
             game_transport::Authority::Captive
         );
         sim.debug_move_actor(captor, AreaId(2)).unwrap();
@@ -1673,16 +1675,7 @@ mod transport_force_tests {
                     .captivity
                     .contains_key(&captive)
             );
-            assert!(
-                !world
-                    .host
-                    .state
-                    .transport
-                    .as_ref()
-                    .unwrap()
-                    .groups
-                    .contains_key(&captive)
-            );
+            assert!(game_transport::group(&world.host.storage, captive).is_none());
             assert!(matches!(
                 world.resolved_location(captive),
                 Location::StoppedOnRoad {

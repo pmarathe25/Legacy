@@ -10,7 +10,6 @@ enum Removal {
     ArmyTalk(armies::Talk),
     ArmyApproach(armies::Approach),
     RealmTalk(PersonId, realm::Talk),
-    Lift(game_transport::Lift),
     Social(PersonId, social::Interaction),
     Enforcement(
         PersonId,
@@ -70,6 +69,7 @@ impl MetadataPlan {
         health: &BTreeMap<PersonId, &[game_health::HealthEffect]>,
         property: &BTreeMap<PersonId, &[game_property::Effect]>,
         life: &BTreeMap<PersonId, &[LifeEffect]>,
+        preserve_transport: bool,
     ) -> Self {
         let mut plan = Self {
             steps: Vec::new(),
@@ -127,11 +127,9 @@ impl MetadataPlan {
                         .push(Removal::RealmTalk(*speaker, talk.clone()));
                 }
             }
-            if let Some(w) = &sim.host.state.transport {
-                for lift in w
-                    .lifts
-                    .values()
-                    .filter(|l| l.passenger == actor || l.bearers.contains(&actor))
+            if !preserve_transport && sim.host.state.transport.is_some() {
+                for (_, lift) in game_transport::lifts(&sim.host.storage)
+                    .filter(|(_, l)| l.passenger == actor || l.bearers.contains(&actor))
                 {
                     if !removed.insert((2, lift.passenger.0)) {
                         continue;
@@ -143,7 +141,6 @@ impl MetadataPlan {
                             step.physical_due.insert(*bearer);
                         }
                     }
-                    step.removals.push(Removal::Lift(lift.clone()));
                 }
             }
             if let Some(w) = &sim.host.state.social
@@ -320,6 +317,8 @@ impl MetadataPlan {
 
 pub(crate) struct PreparedInterruptions {
     actors: Vec<PersonId>,
+    preserve_transport: bool,
+    transport: Option<game_transport::PreparedTransport<Vec<game_transport::Lift>>>,
     now: SimTime,
     metadata: MetadataPlan,
     health: Option<game_health::PreparedHealthCancellations>,
@@ -382,7 +381,14 @@ impl Simulation {
             .as_ref()
             .map(|p| p.effects().collect())
             .unwrap_or_default();
-        let metadata = MetadataPlan::collect(self, &actors, &hm, &pm, &lm);
+        let metadata = MetadataPlan::collect(
+            self,
+            &actors,
+            &hm,
+            &pm,
+            &lm,
+            preserve == ActivityOwner::Transport,
+        );
         let genes = self
             .host
             .state
@@ -402,6 +408,14 @@ impl Simulation {
             })
             .unwrap_or_default();
         Ok(PreparedInterruptions {
+            preserve_transport: preserve == ActivityOwner::Transport,
+            transport: self
+                .host
+                .state
+                .transport
+                .as_ref()
+                .filter(|_| preserve != ActivityOwner::Transport)
+                .map(|runtime| runtime.prepare_cancel_lifts(&self.host.storage, &actors)),
             projects: self
                 .host
                 .state
@@ -463,7 +477,9 @@ impl PreparedInterruptions {
             .as_ref()
             .map(|p| p.effects().collect())
             .unwrap_or_default();
-        if self.metadata != MetadataPlan::collect(sim, &self.actors, &hm, &pm, &lm) {
+        if self.metadata
+            != MetadataPlan::collect(sim, &self.actors, &hm, &pm, &lm, self.preserve_transport)
+        {
             return Err(Error::Unavailable);
         }
         let store = &sim.host.storage;
@@ -531,16 +547,34 @@ impl PreparedInterruptions {
                 )
             })
             .transpose()?;
+        let transport = self
+            .transport
+            .map(|change| {
+                change.stage_into(
+                    sim.host
+                        .state
+                        .transport
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    store,
+                    &BTreeMap::<PersonId, game_transport::Body>::new(),
+                    self.now,
+                    batch,
+                )
+            })
+            .transpose()?;
         // Schema admission remains shared with all caller-owner writes.
         Ok(InterruptionFinalization {
             steps: metadata.steps.into_iter().map(|s| (s.actor, s)).collect(),
             property,
             projects,
+            transport,
         })
     }
 }
 pub(crate) struct InterruptionFinalization {
     steps: BTreeMap<PersonId, MetadataStep>,
+    transport: Option<game_transport::TransportFinalization<Vec<game_transport::Lift>>>,
     property: Option<game_property::CancellationFinalization>,
     projects: Option<game_projects::ProjectFinalization>,
 }
@@ -549,6 +583,15 @@ impl InterruptionFinalization {
         let Some(step) = self.steps.remove(&actor) else {
             return;
         };
+        if let Some(transport) = self.transport.take() {
+            transport.finish(
+                sim.host
+                    .state
+                    .transport
+                    .as_mut()
+                    .expect("admitted transport runtime"),
+            );
+        }
         if let Some(projects) = self.projects.take() {
             projects.finish(
                 sim.host
@@ -589,15 +632,6 @@ impl InterruptionFinalization {
                 }
                 Removal::RealmTalk(s, _) => {
                     sim.host.state.realm.as_mut().unwrap().talks.remove(&s);
-                }
-                Removal::Lift(l) => {
-                    sim.host
-                        .state
-                        .transport
-                        .as_mut()
-                        .unwrap()
-                        .lifts
-                        .remove(&l.passenger);
                 }
                 Removal::Social(key, i) => {
                     let w = sim.host.state.social.as_mut().unwrap();

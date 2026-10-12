@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 43;
+const SAVE_VERSION: u32 = 44;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -468,7 +468,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .transport
                         .as_ref()
-                        .and_then(|world| world.approaches.get(id))
+                        .and_then(|_| game_transport::approach_job(s.components, *id))
                         .map(|approach| approach.completes);
                     if !matches!(*game_spatial::location(s.components,game_ecs::StableId((p.id).0)).expect("location exists"), Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
                         || !scheduled_arrivals.insert(*id)
@@ -624,7 +624,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .transport
                         .as_ref()
-                        .and_then(|world| world.groups.get(&p.id))
+                        .and_then(|_| game_transport::group(s.components, p.id))
                         .is_some_and(|group| group.anchor == carrier)
                 {
                     return Err(fail());

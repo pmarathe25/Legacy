@@ -573,8 +573,8 @@ impl Simulation {
     }
     fn health_leaving_group(&self, actor: PersonId) -> Vec<PersonId> {
         let mut carried: BTreeMap<PersonId, Vec<PersonId>> = BTreeMap::new();
-        if let Some(world) = &self.host.state.transport {
-            for group in world.groups.values() {
+        if self.host.state.transport.is_some() {
+            for (_, group) in game_transport::groups(&self.host.storage) {
                 carried
                     .entry(group.anchor)
                     .or_default()
@@ -3109,7 +3109,7 @@ mod transport_health_tests {
             sim.transport_can_depart(bearer),
             "bodies={:?}, groups={:?}",
             sim.transport_bodies(),
-            sim.host.state.transport.as_ref().unwrap().groups
+            game_transport::groups(&sim.host.storage).collect::<Vec<_>>()
         );
         sim.debug_move_actor(bearer, destination).unwrap();
         sim.advance(SimDuration(10_000)).unwrap();

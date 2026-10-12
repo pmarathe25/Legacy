@@ -63,11 +63,16 @@ pub fn support_observers(
         .collect()
 }
 
-impl World {
+impl Runtime {
     /// The body provider supplies physical facts lazily. A moving or carried
     /// actor's action list does not require a population body catalog.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "explicit Store joins the existing bounded factual ports"
+    )]
     pub fn available_actions(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         now: SimTime,
         facts: AvailableActionFacts,
@@ -76,7 +81,7 @@ impl World {
         can_depart: impl FnOnce() -> bool,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
-        if let Some(group) = self.groups.get(&actor) {
+        if let Some(group) = group(store, actor) {
             if facts.independent && !facts.combat_restricted {
                 actions.push(Action::PutDown {
                     passenger: group.passenger,
@@ -97,11 +102,11 @@ impl World {
                 }
             }
             if let Some(bodies) = bodies() {
-                if let Some(body) = bodies.get(&actor).filter(|body| body.can_bear) {
+                if let Some(body) = bodies.body(actor).filter(|body| body.can_bear) {
                     for (passenger, candidate) in &bodies {
                         if *passenger != actor
                             && candidate.position == body.position
-                            && !self.groups.contains_key(passenger)
+                            && group(store, *passenger).is_none()
                             && !moving(*passenger)
                         {
                             actions.push(Action::OfferCarry {
@@ -110,7 +115,7 @@ impl World {
                         }
                     }
                 }
-                if let Some(offers) = self.offers.get(&actor) {
+                if let Some(offers) = offer_inbox(store, actor).map(|row| &row.by_bearer) {
                     let bearers: Vec<_> = offers
                         .values()
                         .filter(|offer| offer.expires > now)
@@ -125,9 +130,8 @@ impl World {
                 }
             }
         }
-        for group in self
-            .groups
-            .values()
+        for group in groups(store)
+            .map(|(_, row)| row)
             .filter(|group| group.bearers.contains(&actor))
         {
             actions.push(Action::PutDown {
@@ -140,6 +144,7 @@ impl World {
     /// Cheap admission before a caller assembles the connected carrying bodies.
     pub fn has_offer_to_review(
         &self,
+        store: &game_ecs::Store,
         passenger: PersonId,
         now: SimTime,
         facts: OfferResponseFacts,
@@ -148,43 +153,49 @@ impl World {
         facts.autonomous
             && facts.alive
             && !facts.combat_restricted
-            && !self.busy(passenger)
-            && self.offers.get(&passenger).is_some_and(|offers| {
-                offers
-                    .values()
-                    .any(|offer| offer.expires > now && co_present(offer.bearer))
-            })
+            && !self.busy(store, passenger)
+            && offer_inbox(store, passenger)
+                .map(|row| &row.by_bearer)
+                .is_some_and(|offers| {
+                    offers
+                        .values()
+                        .any(|offer| offer.expires > now && co_present(offer.bearer))
+                })
     }
 
     /// Select surviving, physically present offers in their stable bearer order.
     /// The relation reader supplies facts only; this owner selects and judges.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "explicit Store joins the existing bounded factual ports"
+    )]
     pub fn offer_response(
         &self,
+        store: &game_ecs::Store,
         passenger: PersonId,
         now: SimTime,
-        bodies: &BTreeMap<PersonId, Body>,
+        bodies: &impl BodyFacts,
         facts: OfferResponseFacts,
         relation: impl Fn(PersonId) -> Option<RelationFacts>,
         co_present: impl Fn(PersonId) -> bool,
     ) -> Option<OfferResponse> {
-        let passenger_body = bodies.get(&passenger)?;
-        if !self.has_offer_to_review(passenger, now, facts, |bearer| {
+        let passenger_body = bodies.body(passenger)?;
+        if !self.has_offer_to_review(store, passenger, now, facts, |bearer| {
             co_present(bearer)
                 && bodies
-                    .get(&bearer)
+                    .body(bearer)
                     .is_some_and(|body| body.position.same_point(passenger_body.position))
         }) {
             return None;
         }
-        let offers: Vec<_> = self
-            .offers
-            .get(&passenger)?
+        let offers: Vec<_> = offer_inbox(store, passenger)
+            .map(|row| &row.by_bearer)?
             .values()
             .filter(|offer| {
                 offer.expires > now
                     && co_present(offer.bearer)
                     && bodies
-                        .get(&offer.bearer)
+                        .body(offer.bearer)
                         .is_some_and(|bearer| bearer.position.same_point(passenger_body.position))
             })
             .collect();
@@ -195,6 +206,7 @@ impl World {
                 .checked_add(self.rules.lift_time.0)
                 .is_some_and(|completes| {
                     self.check_group(
+                        store,
                         &CarryGroup {
                             passenger,
                             anchor: first.bearer,
@@ -248,37 +260,9 @@ impl World {
         })
     }
 
-    pub fn record_response(&mut self, response: Response) {
-        if self.responses.iter().rev().take(64).any(|known| {
-            known.passenger == response.passenger
-                && known.bearer == response.bearer
-                && known.kind == response.kind
-        }) {
-            return;
-        }
-        self.responses.push(response);
-        if self.responses.len() > 64 {
-            self.responses.remove(0);
-        }
-    }
-
-    /// Presence is observed by the spatial provider. Memory bounds and the
-    /// exclusion of the requesting passenger belong to transport.
-    pub fn observe_support(
-        &mut self,
-        request: &SupportRequest,
-        present: impl IntoIterator<Item = PersonId>,
-    ) {
-        for observer in support_observers(request.passenger, present) {
-            let known = self.known_support.entry(observer).or_default();
-            if known.len() < 64 || known.contains_key(&request.passenger) {
-                known.insert(request.passenger, request.clone());
-            }
-        }
-    }
-
     pub fn has_support_to_review(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         request: &SupportRequest,
         now: SimTime,
@@ -288,25 +272,26 @@ impl World {
         autonomous
             && co_present
             && request.expires > now
-            && !self.groups.contains_key(&request.passenger)
-            && !self.busy(actor)
-            && !self
-                .offers
-                .get(&request.passenger)
+            && group(store, request.passenger).is_none()
+            && !self.busy(store, actor)
+            && !offer_inbox(store, request.passenger)
+                .map(|row| &row.by_bearer)
                 .is_some_and(|offers| offers.contains_key(&actor))
     }
 
     pub fn support_intent(
         &self,
+        store: &game_ecs::Store,
         actor: PersonId,
         request: &SupportRequest,
         now: SimTime,
-        bodies: &BTreeMap<PersonId, Body>,
+        bodies: &impl BodyFacts,
         facts: SupportFacts,
     ) -> Option<Action> {
-        let body = bodies.get(&actor)?;
-        let passenger = bodies.get(&request.passenger)?;
+        let body = bodies.body(actor)?;
+        let passenger = bodies.body(request.passenger)?;
         if !self.has_support_to_review(
+            store,
             actor,
             request,
             now,
