@@ -568,21 +568,49 @@ mod cancellation;
 pub use cancellation::PreparedGatheringCancellation;
 
 /// Apply already accepted site permissions through their physical owner.
-#[derive(Clone,Debug,PartialEq,Eq)]
-pub struct PreparedSiteAccess {before:BTreeMap<SiteId,Plot>,after:BTreeMap<SiteId,Plot>}
-impl Runtime{
-    pub fn prepare_site_access(&self,store:&game_ecs::Store,changes:&[(SiteId,PersonId,PersonId,bool)])->Result<PreparedSiteAccess,Error>{
-        let mut before=BTreeMap::new();let mut after:BTreeMap<SiteId,Plot>=BTreeMap::new();
-        for (id,grantor,grantee,allowed) in changes{
-            let original=self.plot(store,*id).ok_or(Error::Unavailable)?;
-            if original.custodian!=Some(*grantor)||grantee.0==0{return Err(Error::Unavailable);}
-            before.entry(*id).or_insert_with(||original.clone());
-            let row=after.entry(*id).or_insert_with(||original.clone());
-            if *allowed{row.access.insert(*grantee);}else{row.access.remove(grantee);}
-        }Ok(PreparedSiteAccess{before,after})
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedSiteAccess {
+    before: BTreeMap<SiteId, Plot>,
+    after: BTreeMap<SiteId, Plot>,
+}
+impl Runtime {
+    pub fn prepare_site_access(
+        &self,
+        store: &game_ecs::Store,
+        changes: &[(SiteId, PersonId, PersonId, bool)],
+    ) -> Result<PreparedSiteAccess, Error> {
+        let mut before = BTreeMap::new();
+        let mut after: BTreeMap<SiteId, Plot> = BTreeMap::new();
+        for (id, grantor, grantee, allowed) in changes {
+            let original = self.plot(store, *id).ok_or(Error::Unavailable)?;
+            if original.custodian != Some(*grantor) || grantee.0 == 0 {
+                return Err(Error::Unavailable);
+            }
+            before.entry(*id).or_insert_with(|| original.clone());
+            let row = after.entry(*id).or_insert_with(|| original.clone());
+            if *allowed {
+                row.access.insert(*grantee);
+            } else {
+                row.access.remove(grantee);
+            }
+        }
+        Ok(PreparedSiteAccess { before, after })
     }
 }
-impl PreparedSiteAccess{
-    pub fn check(&self,runtime:&Runtime,store:&game_ecs::Store)->Result<(),Error>{if self.before.iter().any(|(id,row)|runtime.plot(store,*id)!=Some(row)){return Err(Error::Unavailable);}Ok(())}
-    pub fn stage(&self,batch:&mut game_ecs::Batch){for (id,row) in &self.after{batch.insert(game_ecs::StableId(id.0),row.clone());}}
+impl PreparedSiteAccess {
+    pub fn check(&self, runtime: &Runtime, store: &game_ecs::Store) -> Result<(), Error> {
+        if self
+            .before
+            .iter()
+            .any(|(id, row)| runtime.plot(store, *id) != Some(row))
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    pub fn stage(&self, batch: &mut game_ecs::Batch) {
+        for (id, row) in &self.after {
+            batch.insert(game_ecs::StableId(id.0), row.clone());
+        }
+    }
 }
