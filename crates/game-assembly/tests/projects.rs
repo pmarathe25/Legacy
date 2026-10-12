@@ -32,7 +32,8 @@ fn quiet(sim: &mut Simulation) {
 }
 fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
     let maker = actor(sim, 3);
-    let custodians = &game_property::custody_rows(sim.canonical_state().components).map(|(id,row)|(id,row.custodian))
+    let custodians = &game_property::custody_rows(sim.canonical_state().components)
+        .map(|(id, row)| (id, row.custodian))
         .collect::<std::collections::BTreeMap<_, _>>();
     let owned = |stock: &&game_assembly::Inventory| {
         stock.location == InventoryLocation::Area(AreaId(1))

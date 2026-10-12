@@ -1598,7 +1598,8 @@ mod tests {
                 == AgreementStatus::Fulfilled
         }));
         assert!(ruler_office.funding.iter().all(|id| {
-            game_agreements::agreement(&established.host.storage,*id).unwrap()
+            game_agreements::agreement(&established.host.storage, *id)
+                .unwrap()
                 .status
                 == AgreementStatus::Fulfilled
         }));

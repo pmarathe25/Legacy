@@ -2541,7 +2541,8 @@ mod farm_tests {
             &game_agreements::agreement(&sim.host.storage, *project.support.iter().next().unwrap())
                 .unwrap();
         assert_eq!(contract.accepted, contract.parties);
-        let obligations = game_agreements::obligations(&sim.host.storage).collect::<BTreeMap<_,_>>();
+        let obligations =
+            game_agreements::obligations(&sim.host.storage).collect::<BTreeMap<_, _>>();
         assert!(contract.obligations.iter().any(|id| matches!(
             obligations[id].term,
             AgreementTerm::Delivery { .. }

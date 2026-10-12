@@ -893,3 +893,8 @@ mod tests;
 
 mod planning;
 pub use planning::*;
+
+/// Reachability from the actor's remembered directed route graph.
+pub fn reachable(routes: &KnownRoutes, from: &Location, to: &Location) -> bool {
+    travel_cost(routes, from, to).is_some()
+}

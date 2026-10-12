@@ -1768,7 +1768,7 @@ impl Simulation {
             }
             match (&pending.owner, r.proposal.terms.get(usize::from(key.index))) {
                 (PendingOwner::Agreement(id), Some(Term::Delivery { term, .. })) => {
-                    if game_agreements::agreement(&self.host.storage,*id)
+                    if game_agreements::agreement(&self.host.storage, *id)
                         .is_none_or(|a| !a.terms.contains(term))
                     {
                         return Err(bad());
