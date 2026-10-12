@@ -116,6 +116,41 @@ impl fmt::Debug for BatchKey {
         formatter.write_str("BatchKey(..)")
     }
 }
+/// Sparse typed dependencies of an owner plan. Keys carry no write permission.
+/// Owners retain their opening values and authorize intentional overlaps through
+/// their own private staged receipts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReadFootprint {
+    rows: std::collections::BTreeSet<(StableId, std::any::TypeId)>,
+}
+impl ReadFootprint {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn protect<C: Component>(&mut self, id: StableId) {
+        self.rows.insert((id, std::any::TypeId::of::<C>()));
+    }
+    pub fn contains<C: Component>(&self, id: StableId) -> bool {
+        self.rows.contains(&(id, std::any::TypeId::of::<C>()))
+    }
+    pub fn remove<C: Component>(&mut self, id: StableId) {
+        self.rows.remove(&(id, std::any::TypeId::of::<C>()));
+    }
+    pub fn extend(&mut self, other: Self) {
+        self.rows.extend(other.rows);
+    }
+    pub fn has_one_edit_per_row(&self, batch: &Batch) -> bool {
+        self.rows
+            .iter()
+            .all(|key| batch.edits.iter().filter(|edit| edit.key() == *key).count() == 1)
+    }
+    pub fn is_untouched(&self, batch: &Batch) -> bool {
+        batch
+            .edits
+            .iter()
+            .all(|edit| !self.rows.contains(&edit.key()))
+    }
+}
 pub struct Batch {
     key: BatchKey,
     edits: Vec<Box<dyn backend::Edit>>,
@@ -889,5 +924,24 @@ mod tests {
         assert_eq!(key.clone(), original.key());
         drop(original);
         assert_ne!(key, Batch::default().key());
+    }
+    #[test]
+    fn typed_read_footprints_include_removals_and_allow_unrelated_rows_and_types() {
+        let mut reads = ReadFootprint::new();
+        reads.protect::<Count>(StableId(1));
+        let mut batch = Batch::new();
+        batch.insert(StableId(1), Name("independent".into()));
+        batch.insert(StableId(2), Count(20));
+        assert!(reads.is_untouched(&batch));
+        batch.remove::<Count>(StableId(1));
+        assert!(!reads.is_untouched(&batch));
+        reads.remove::<Name>(StableId(1));
+        assert!(!reads.is_untouched(&batch));
+        reads.remove::<Count>(StableId(1));
+        assert!(reads.is_untouched(&batch));
+        let mut absent = ReadFootprint::new();
+        absent.protect::<Name>(StableId(90));
+        batch.remove::<Name>(StableId(90));
+        assert!(!absent.is_untouched(&batch));
     }
 }
