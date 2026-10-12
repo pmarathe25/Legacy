@@ -769,8 +769,12 @@ name = "game-realm"
 version = "0.1.0"
 dependencies = [
  "game-agreements",
+ "game-cargo",
+ "game-characters",
  "game-core",
+ "game-ecs",
  "game-missions",
+ "game-society",
  "serde",
  "serde_json",
 ]

@@ -99,7 +99,7 @@ impl Simulation {
         });
         Ok(sim)
     }
-    fn mission_area(&self, actor: PersonId) -> Result<AreaId, Error> {
+    pub(crate) fn mission_area(&self, actor: PersonId) -> Result<AreaId, Error> {
         let person = *self.person_index.get(&actor).ok_or(Error::Unavailable)?;
         self.host
             .state
@@ -216,7 +216,7 @@ impl Simulation {
     }
     /// Supplies focused body/contact/asset facts; the service owner decides
     /// authority, competing commitments, consent and compensation transitions.
-    fn mission_command_facts(
+    pub(crate) fn mission_command_facts(
         &self,
         actor: PersonId,
         area: AreaId,
@@ -314,7 +314,7 @@ impl Simulation {
         self.publish_mission_effects(events, notices);
         Ok(())
     }
-    fn publish_mission_effects(
+    pub(crate) fn publish_mission_effects(
         &mut self,
         events: Vec<game_missions::MissionEvent>,
         notices: BTreeSet<MissionId>,
@@ -814,9 +814,11 @@ impl Simulation {
         actor: PersonId,
         objective: &MissionObjective,
     ) -> game_missions::ObjectiveKnowledge {
-        let mind =
+        let _mind =
             &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                 .unwrap();
+        let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+            .expect("stock knowledge exists");
         let stocks = if let MissionObjective::Deliver {
             source,
             destination,
@@ -825,7 +827,7 @@ impl Simulation {
         {
             [source, destination]
                 .into_iter()
-                .filter_map(|id| mind.knowledge.get(id).cloned().map(|k| (*id, k)))
+                .filter_map(|id| stocks.known.get(id).cloned().map(|k| (*id, k)))
                 .collect()
         } else {
             BTreeMap::new()
@@ -1249,15 +1251,12 @@ impl Simulation {
             let input = self.recruitment_input(offer.person, m);
             let area = self.mission_area(offer.person).unwrap();
             let inventory = self.host.state.people[self.person_index[&offer.person]].inventory;
-            let known = game_characters::decisions::mind::<game_api::Command>(
-                &self.host.storage,
-                offer.person,
-            )
-            .unwrap()
-            .knowledge
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+            let known = game_characters::decisions::stocks(&self.host.storage, offer.person)
+                .unwrap()
+                .known
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
             let Some(action) = self
                 .host
                 .state
@@ -1638,7 +1637,7 @@ impl Simulation {
 }
 
 struct MissionTacticalFacts<'a> {
-    simulation: &'a Simulation,
+    pub(crate) simulation: &'a Simulation,
     actor: PersonId,
 }
 impl game_missions::TacticalFacts for MissionTacticalFacts<'_> {
@@ -1798,14 +1797,14 @@ impl game_logistics::AcquisitionSource<Command> for MissionControlFacts<'_> {
 }
 impl game_missions::MemberFacts<Command> for MissionControlFacts<'_> {
     fn food(&self) -> impl Iterator<Item = game_missions::FoodObservation> {
-        game_characters::decisions::mind::<Command>(&self.simulation.host.storage,self.actor).into_iter().flat_map(|mind|mind.knowledge.values()).map(|k|game_missions::FoodObservation{
+        game_characters::decisions::stocks(&self.simulation.host.storage,self.actor).into_iter().flat_map(|stocks|stocks.known.values()).map(|k|game_missions::FoodObservation{
             inventory:k.inventory,good:k.good,accessible:k.accessible,quantity:k.quantity,area:k.area,
             carried_by_actor:matches!(game_cargo::inventory(&self.simulation.host.storage,k.inventory).expect("inventory exists").location,InventoryLocation::Carried(carrier)if carrier==self.actor),
         })
     }
     fn source_good(&self, inventory: InventoryId) -> Option<Good> {
-        game_characters::decisions::mind::<Command>(&self.simulation.host.storage, self.actor)?
-            .knowledge
+        game_characters::decisions::stocks(&self.simulation.host.storage, self.actor)?
+            .known
             .get(&inventory)
             .map(|k| k.good)
     }
@@ -1880,8 +1879,8 @@ impl game_missions::MemberFacts<Command> for MissionControlFacts<'_> {
     }
 }
 
-struct MissionPresence<'a> {
-    simulation: &'a Simulation,
+pub(crate) struct MissionPresence<'a> {
+    pub(crate) simulation: &'a Simulation,
 }
 impl game_missions::PresenceFacts for MissionPresence<'_> {
     fn location(&self, person: PersonId) -> Location {

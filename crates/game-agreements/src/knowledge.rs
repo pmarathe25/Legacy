@@ -724,6 +724,17 @@ pub fn prepare_observations(
     }
     let mut writer = KnowledgeWriter::new(store);
     writer.plan.membership = Some(knowledges(store).map(|(id, _)| id).collect());
+    prepare_observations_from(writer, runtime, now, cursor, events, presence)
+}
+fn prepare_observations_from(
+    mut writer: KnowledgeWriter<'_>,
+    runtime: &Runtime,
+    now: SimTime,
+    cursor: u64,
+    events: &[ObservationEvent],
+    presence: &impl Presence,
+) -> Result<PreparedObservation, Error> {
+    let store = writer.store;
     for event in events {
         match event.kind {
             ObservationKind::Proposed {
@@ -794,4 +805,177 @@ pub fn prepare_observations(
         before: runtime.last_observation_event,
         after: cursor,
     })
+}
+
+/// A newly proposed promise and its local notice are one canonical transaction.
+/// Prior unconsumed observations retain their original chronological behavior.
+pub struct PreparedProposalPublication {
+    transition: PreparedTransition,
+    observation: PreparedObservation,
+}
+#[derive(Clone, Debug)]
+pub struct ProposalPublicationFinalization {
+    key: game_ecs::BatchKey,
+    agreements: BTreeSet<AgreementId>,
+    records: Vec<Agreement>,
+    people: BTreeSet<PersonId>,
+    reads: PreparedKnowledge,
+    cursor: u64,
+}
+impl PreparedProposalPublication {
+    pub fn default_knowledge(&self) -> &[NewDefaultKnowledge] {
+        &self.observation.knowledge.effects
+    }
+    pub fn prepare(
+        transition: PreparedTransition,
+        store: &Store,
+        runtime: &Runtime,
+        now: SimTime,
+        cursor: u64,
+        events: &[ObservationEvent],
+        presence: &impl Presence,
+    ) -> Result<Self, Error> {
+        transition.check(&Ledger::new(store))?;
+        if cursor < runtime.last_observation_event {
+            return Err(Error::Unavailable);
+        }
+        let mut writer = KnowledgeWriter::new(store);
+        writer.plan.membership = Some(knowledges(store).map(|(id, _)| id).collect());
+        for agreement in transition.proposed_creations()? {
+            let Some(area) = contact_area(presence, agreement.proposer) else {
+                continue;
+            };
+            for actor in agreement
+                .parties
+                .iter()
+                .copied()
+                .filter(|actor| contact_area(presence, *actor) == Some(area))
+            {
+                let view = AgreementView {
+                    id: agreement.id,
+                    proposer: agreement.proposer,
+                    parties: agreement.parties.clone(),
+                    accepted: agreement.accepted.clone(),
+                    status: agreement.status,
+                    terms: agreement.terms.clone(),
+                    obligations: vec![],
+                    procedure: agreement.procedure.clone(),
+                    amendments: vec![],
+                    revision: agreement.revision,
+                    observed_at: now,
+                    learned_at: now,
+                    source: Some(KnowledgeSource::Observed(actor)),
+                };
+                let old = writer
+                    .read(actor)
+                    .and_then(|k| k.agreements.get(&agreement.id))
+                    .cloned();
+                writer.store(actor, notice_view(now, actor, view, old));
+            }
+        }
+        let observation =
+            prepare_observations_from(writer, runtime, now, cursor, events, presence)?;
+        Ok(Self {
+            transition,
+            observation,
+        })
+    }
+    pub fn stage_into(
+        self,
+        store: &Store,
+        runtime: &Runtime,
+        batch: &mut Batch,
+    ) -> Result<ProposalPublicationFinalization, Error> {
+        self.transition.check(&Ledger::new(store))?;
+        if runtime.last_observation_event != self.observation.before
+            || self
+                .transition
+                .created_agreements()
+                .any(|id| batch.edit_count(StableId(id.0)) != 0)
+        {
+            return Err(Error::Unavailable);
+        }
+        self.observation.knowledge.stage_into(store, batch)?;
+        let finish = ProposalPublicationFinalization {
+            key: batch.key(),
+            agreements: self.transition.created_agreements().collect(),
+            records: self
+                .transition
+                .proposed_creations()?
+                .into_iter()
+                .cloned()
+                .collect(),
+            people: self.observation.knowledge.after.keys().copied().collect(),
+            reads: self.observation.knowledge,
+            cursor: self.observation.after,
+        };
+        self.transition.stage(batch);
+        finish.validate_batch(batch)?;
+        Ok(finish)
+    }
+}
+impl ProposalPublicationFinalization {
+    /// Authorizes only this owner's freshly created promise and actual receiving
+    /// personal row in the same batch; it grants no access to other row kinds.
+    pub fn authorizes_creation(
+        &self,
+        batch: &Batch,
+        id: AgreementId,
+        actor: PersonId,
+        parties: &BTreeSet<PersonId>,
+        term: &AgreementTerm,
+    ) -> Result<(), Error> {
+        self.validate_batch(batch)?;
+        if !self.agreements.contains(&id)
+            || !self.people.contains(&actor)
+            || !self
+                .records
+                .iter()
+                .any(|row| row.id == id && row.parties == *parties && row.terms == [term.clone()])
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    pub fn validate_batch(&self, batch: &Batch) -> Result<(), Error> {
+        if batch.key() != self.key
+            || self.agreements.iter().any(|id| {
+                batch.edit_count(StableId(id.0)) != 1 || !batch.touches::<Agreement>(StableId(id.0))
+            })
+            || self.people.iter().any(|id| {
+                batch
+                    .edited_ids::<Knowledge>()
+                    .filter(|edited| edited.0 == id.0)
+                    .count()
+                    != 1
+            })
+            || self
+                .reads
+                .agreements
+                .keys()
+                .any(|id| batch.touches::<Agreement>(StableId(id.0)))
+            || self
+                .reads
+                .obligations
+                .keys()
+                .any(|id| batch.touches::<Obligation>(StableId(id.0)))
+            || self
+                .reads
+                .amendments
+                .keys()
+                .any(|id| batch.touches::<Amendment>(StableId(id.0)))
+            || self
+                .reads
+                .before
+                .keys()
+                .filter(|id| !self.people.contains(id))
+                .any(|id| batch.touches::<Knowledge>(StableId(id.0)))
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    pub fn finish(self, runtime: &mut Runtime) {
+        runtime.last_observation_event = self.cursor;
+    }
 }

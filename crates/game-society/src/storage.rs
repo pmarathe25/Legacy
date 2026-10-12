@@ -347,3 +347,21 @@ pub fn concept(store: &Store, id: impl Borrow<ConceptId>) -> Option<&Institution
 pub fn concepts(store: &Store) -> impl DoubleEndedIterator<Item = (ConceptId, &InstitutionalRule)> {
     concept_rows(store).map(|(id, row)| (id, &row.rule))
 }
+
+/// The people whose current life facts can affect the named offices' authority.
+/// This declares references only; authority still follows the institution's rules.
+pub fn authority_people(
+    store: &Store,
+    ids: impl IntoIterator<Item = InstitutionId>,
+) -> BTreeSet<PersonId> {
+    ids.into_iter()
+        .filter_map(|id| institution(store, id))
+        .flat_map(|i| {
+            i.charter.offices.iter().map(|o| o.holder).chain(
+                i.office_support
+                    .values()
+                    .flat_map(|ids| ids.iter().copied()),
+            )
+        })
+        .collect()
+}

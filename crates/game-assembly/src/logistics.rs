@@ -274,10 +274,9 @@ impl Simulation {
         actor: PersonId,
         inventory: InventoryId,
     ) -> Option<KnownDestination> {
-        let fact =
-            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
-                .knowledge
-                .get(&inventory);
+        let fact = game_characters::decisions::stocks(&self.host.storage, actor)?
+            .known
+            .get(&inventory);
         let stock = game_cargo::inventory(&self.host.storage, inventory)?;
         let local = match stock.location {
             InventoryLocation::Area(area) => {
@@ -412,11 +411,9 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|_| {
-                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-            })
+            .and_then(|_| game_characters::decisions::stocks(&self.host.storage, actor))
             .into_iter()
-            .flat_map(|mind| mind.knowledge.values())
+            .flat_map(|stocks| stocks.known.values())
             .filter(|fact| {
                 fact.learned_at <= self.host.clock().time
                     && fact.observed_at <= self.host.clock().time
@@ -497,7 +494,7 @@ impl Simulation {
         good: Good,
         quantity: Quantity,
     ) -> Vec<AcquisitionOffer<Command>> {
-        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+        let Some(_mind) = self.host.state.decisions.as_ref().and_then(|_| {
             game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) else {
             return Vec::new();
@@ -517,7 +514,9 @@ impl Simulation {
                     } => (source, quantity),
                     _ => return None,
                 };
-                let known = mind.knowledge.get(&source)?;
+                let known = game_characters::decisions::stocks(&self.host.storage, actor)?
+                    .known
+                    .get(&source)?;
                 if known.good != good || known.quantity.0 == 0 {
                     return None;
                 }
@@ -554,9 +553,15 @@ impl Simulation {
         mind.sites
             .values()
             .filter_map(|site| {
-                let output = mind.knowledge.get(&site.output)?;
-                let input = mind.knowledge.get(&site.input)?;
-                let tool = mind.knowledge.get(&site.tool)?;
+                let output = game_characters::decisions::stocks(&self.host.storage, actor)?
+                    .known
+                    .get(&site.output)?;
+                let input = game_characters::decisions::stocks(&self.host.storage, actor)?
+                    .known
+                    .get(&site.input)?;
+                let tool = game_characters::decisions::stocks(&self.host.storage, actor)?
+                    .known
+                    .get(&site.tool)?;
                 if output.good != good || !site.access || !output.accessible {
                     return None;
                 }
@@ -670,10 +675,8 @@ mod tests {
             .unwrap();
         }
         let actor = sim.host.state.ruler;
-        let mind =
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
-                .unwrap();
-        mind.knowledge.clear();
+        let (mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((actor).0)).expect("mind and stock knowledge exist");
+        stocks.known.clear();
         mind.sites.clear();
         sim
     }
@@ -686,9 +689,9 @@ mod tests {
     ) {
         let actor = sim.host.state.ruler;
         let observed_at = sim.time();
-        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+        game_characters::decisions::stocks_mut(&mut sim.host.storage, actor)
             .unwrap()
-            .knowledge
+            .known
             .insert(
                 source,
                 StockKnowledge {
@@ -731,9 +734,9 @@ mod tests {
             };
             sim.advance(SimDuration(arrives.0 - sim.host.clock().time.0))
                 .unwrap();
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+            game_characters::decisions::stocks_mut(&mut sim.host.storage, actor)
                 .unwrap()
-                .knowledge
+                .known
                 .clear();
             let source = sim
                 .debug_add_inventory(
@@ -950,10 +953,8 @@ mod tests {
             )
             .unwrap();
         }
-        let mind =
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
-                .unwrap();
-        mind.knowledge.clear();
+        let (mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((actor).0)).expect("mind and stock knowledge exist");
+        stocks.known.clear();
         mind.sites.clear();
         let source = game_ecology::knowledge(&sim.host.storage, actor)
             .unwrap()
@@ -1210,10 +1211,8 @@ mod tests {
         source.access.clear();
         source.custodian = None;
         sim.observe_ecology();
-        let mind =
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
-                .unwrap();
-        mind.knowledge.clear();
+        let (mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((actor).0)).expect("mind and stock knowledge exist");
+        stocks.known.clear();
         mind.sites.clear();
         mind.personality.honesty = 900;
         mind.personality.risk_tolerance = 900;
@@ -1368,10 +1367,8 @@ mod tests {
             )
             .unwrap();
         sim.observe_ecology();
-        let mind =
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
-                .unwrap();
-        mind.knowledge.clear();
+        let (mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((actor).0)).expect("mind and stock knowledge exist");
+        stocks.known.clear();
         mind.sites.clear();
         let delivery = Delivery::new(
             Requirement {
@@ -1464,17 +1461,15 @@ mod tests {
             game_property::declare_custody(&mut sim.host.storage, source, custodian)
                 .expect("declared custody");
         }
-        let mind =
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
-                .unwrap();
-        mind.knowledge.clear();
+        let (mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((actor).0)).expect("mind and stock knowledge exist");
+        stocks.known.clear();
         mind.sites.clear();
         mind.personality.honesty = 0;
         mind.personality.risk_tolerance = 900;
         remember(&mut sim, source, AreaId(1), Good::Food, false);
-        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+        game_characters::decisions::stocks_mut(&mut sim.host.storage, actor)
             .unwrap()
-            .knowledge
+            .known
             .get_mut(&source)
             .unwrap()
             .quantity = Quantity(600);

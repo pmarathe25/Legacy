@@ -874,9 +874,9 @@ mod tests {
                 .all(|skill| skill.practice_ms == 0)
         );
         assert!(
-            game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, child)
+            game_characters::decisions::stocks(&sim.host.storage, child)
                 .expect("mind exists")
-                .knowledge
+                .known
                 .values()
                 .all(|fact| fact.source == KnowledgeSource::Observed(child)
                     && fact.observed_at

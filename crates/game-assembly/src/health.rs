@@ -1630,11 +1630,14 @@ impl Simulation {
                         .expect("location exists"),
                     Location::Carried { .. }
                 );
-            let mind = self.host.state.decisions.as_ref().and_then(|_| {
-                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-            });
+            let mind = self
+                .host
+                .state
+                .decisions
+                .as_ref()
+                .and_then(|_| game_characters::decisions::stocks(&self.host.storage, actor));
             if let Some(mind) = mind {
-                for stock in mind.knowledge.values().filter(|stock| {
+                for stock in mind.known.values().filter(|stock| {
                     stock.good == Good::Water
                         && stock.accessible
                         && self.health_remembered_source_here(actor, stock)
@@ -1714,11 +1717,9 @@ impl Simulation {
             .state
             .decisions
             .as_ref()
-            .and_then(|_| {
-                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-            })
+            .and_then(|_| game_characters::decisions::stocks(&self.host.storage, actor))
             .into_iter()
-            .flat_map(|mind| mind.knowledge.values())
+            .flat_map(|stocks| stocks.known.values())
             .filter(|s| matches!(s.good, Good::Water | Good::Timber | Good::Tool | Good::Herb))
             .map(|fact| {
                 let here = self.health_remembered_source_here(actor, fact);
@@ -2448,9 +2449,9 @@ mod integration_tests {
                 )
                 .unwrap();
             let observed_at = sim.time();
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
+            game_characters::decisions::stocks_mut(&mut sim.host.storage, actor)
                 .unwrap()
-                .knowledge
+                .known
                 .insert(
                     inventory,
                     StockKnowledge {
@@ -3036,25 +3037,22 @@ mod transport_health_tests {
             .unwrap();
         for source in [endpoint, water] {
             let observed_at = sim.time();
-            game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.host.storage,
-                bearer,
-            )
-            .unwrap()
-            .knowledge
-            .insert(
-                source,
-                StockKnowledge {
-                    inventory: source,
-                    area: home,
-                    good: Good::Water,
-                    quantity: Quantity(2_000),
-                    accessible: true,
-                    observed_at,
-                    learned_at: observed_at,
-                    source: KnowledgeSource::Observed(bearer),
-                },
-            );
+            game_characters::decisions::stocks_mut(&mut sim.host.storage, bearer)
+                .unwrap()
+                .known
+                .insert(
+                    source,
+                    StockKnowledge {
+                        inventory: source,
+                        area: home,
+                        good: Good::Water,
+                        quantity: Quantity(2_000),
+                        accessible: true,
+                        observed_at,
+                        learned_at: observed_at,
+                        source: KnowledgeSource::Observed(bearer),
+                    },
+                );
         }
         sim.seed_water_safety(bearer, water).unwrap();
         assert!(
@@ -3812,12 +3810,10 @@ mod supply_composition_tests {
             )
             .unwrap();
         let observed_at = sim.time();
-        let mind =
-            game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)
-                .unwrap();
-        mind.knowledge.retain(|_, stock| stock.good != Good::Water);
+        let (_mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((actor).0)).expect("mind and stock knowledge exist");
+        stocks.known.retain(|_, stock| stock.good != Good::Water);
         for id in [moving, alternate] {
-            mind.knowledge.insert(
+            stocks.known.insert(
                 id,
                 StockKnowledge {
                     inventory: id,
@@ -3841,11 +3837,10 @@ mod supply_composition_tests {
                 action: HealthAction::Drink { source: moving }
             })
         );
-        let remembered =
-            game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, actor)
-                .expect("mind exists")
-                .knowledge[&moving]
-                .clone();
+        let remembered = game_characters::decisions::stocks(&sim.host.storage, actor)
+            .expect("mind exists")
+            .known[&moving]
+            .clone();
         sim.debug_move_actor(holder, AreaId(3)).unwrap();
         sim.advance(SimDuration(1)).unwrap();
         let before = sim.canonical_snapshot().unwrap();
@@ -3857,9 +3852,9 @@ mod supply_composition_tests {
         );
         assert_eq!(sim.canonical_snapshot().unwrap(), before);
         assert_eq!(
-            game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, actor)
+            game_characters::decisions::stocks(&sim.host.storage, actor)
                 .expect("mind exists")
-                .knowledge[&moving],
+                .known[&moving],
             remembered
         );
         let facts = sim.remembered_health_stocks(actor, None);

@@ -312,12 +312,9 @@ fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() 
     })
     .unwrap();
     assert_eq!(
-        game_characters::decisions::mind::<game_api::Command>(
-            sim.canonical_state().components,
-            ruler
-        )
-        .expect("mind exists")
-        .knowledge[&source]
+        game_characters::decisions::stocks(sim.canonical_state().components, ruler)
+            .expect("mind exists")
+            .known[&source]
             .quantity,
         Quantity(0)
     );
@@ -430,12 +427,9 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
         Quantity(0)
     );
     assert_eq!(
-        game_characters::decisions::mind::<game_api::Command>(
-            sim.canonical_state().components,
-            actor
-        )
-        .expect("mind exists")
-        .knowledge[&source]
+        game_characters::decisions::stocks(sim.canonical_state().components, actor)
+            .expect("mind exists")
+            .known[&source]
             .quantity,
         Quantity(1_000)
     );
@@ -455,7 +449,13 @@ fn stale_supply_information_survives_until_arrival_and_then_changes_the_plan() {
         actor,
     )
     .expect("mind exists");
-    assert_eq!(mind.knowledge[&source].quantity, Quantity(0));
+    assert_eq!(
+        game_characters::decisions::stocks(sim.canonical_state().components, actor)
+            .unwrap()
+            .known[&source]
+            .quantity,
+        Quantity(0)
+    );
     assert_eq!(mind.last_failure, Some((SimTime(480_000), source)));
     assert_eq!(
         mind.plan.as_ref().map(|plan| &plan.action),

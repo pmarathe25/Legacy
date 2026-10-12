@@ -76,7 +76,6 @@ pub(crate) fn fixture() -> (Runtime, Store, Facts) {
         child_signals: BTreeMap::new(),
         personality: Personality::industrious(),
         dream: Aspiration::Independence,
-        knowledge: BTreeMap::from([(InventoryId(2), fact)]),
         sites: BTreeMap::new(),
         relationships: BTreeMap::new(),
         values: BTreeMap::new(),
@@ -99,6 +98,9 @@ pub(crate) fn fixture() -> (Runtime, Store, Facts) {
                 person: LIFE,
                 died_at: SimTime(0),
                 mind,
+                stocks: game_characters::decisions::Stocks {
+                    known: BTreeMap::from([(InventoryId(2), fact)]),
+                },
                 skills: Vec::new(),
                 institutions: Vec::new(),
                 cases: Vec::new(),
@@ -106,7 +108,6 @@ pub(crate) fn fixture() -> (Runtime, Store, Facts) {
         )
         .unwrap();
     let mut current = archive::<u8>(&store, LIFE).unwrap().mind.clone();
-    current.knowledge.clear();
     current.routes.clear();
     game_characters::decisions::insert_mind(&mut store, ACTOR, current.clone()).unwrap();
     game_characters::decisions::insert_mind(&mut store, PersonId(11), current).unwrap();

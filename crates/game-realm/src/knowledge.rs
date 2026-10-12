@@ -3,7 +3,7 @@ use crate::*;
 use game_core::*;
 use std::collections::BTreeMap;
 
-impl World {
+impl Ledger<'_> {
     /// Project personally known owner records, preserving their dates and
     /// sources even when canonical work has advanced beyond the received view.
     pub fn prepare_learn_work(
@@ -52,7 +52,7 @@ impl World {
     fn personal_change(&self, actor: PersonId, id: RealmCommitmentId) -> PreparedChange {
         PreparedChange {
             id,
-            before: None,
+            before: self.commitments.get(&id).cloned(),
             after: None,
             knowledge: vec![KnowledgePatch {
                 actor,
@@ -60,6 +60,8 @@ impl World {
                 after: self.view(actor, id).cloned().unwrap_or_default(),
             }],
             requests: Vec::new(),
+            reads: Vec::new(),
+            projection: None,
         }
     }
     /// The adapter establishes actual local hearing/inspection. This statement

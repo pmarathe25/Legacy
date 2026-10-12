@@ -4,6 +4,8 @@ use crate::decisions::*;
 use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod stocks;
+pub use stocks::*;
 mod storage;
 use game_ecs::{Component, Store};
 pub use storage::*;
@@ -19,7 +21,6 @@ pub struct Mind<A> {
     pub child_signals: BTreeMap<PersonId, ChildSignal>,
     pub personality: Personality,
     pub dream: Aspiration,
-    pub knowledge: BTreeMap<InventoryId, StockKnowledge>,
     pub sites: BTreeMap<SiteId, SiteKnowledge>,
     pub relationships: BTreeMap<PersonId, Relationship>,
     pub values: BTreeMap<ConceptId, Attachment>,
@@ -400,6 +401,7 @@ impl<A: Clone> Mind<A> {
     pub fn decide(
         &self,
         facts: &PersonalFacts,
+        stocks: &Stocks,
         candidates: &[Candidate<A>],
         work_concept: ConceptId,
         margin: i64,
@@ -462,24 +464,38 @@ impl<A: Clone> Mind<A> {
                     if candidate.shape != ActionShape::Stop {
                         return None;
                     }
-                    self.score(facts, candidate, work_concept, contacted, road_distress)
-                        .map(|explanation| Decision {
-                            plan: Some(Plan {
-                                action: candidate.action.clone(),
-                                key: candidate.key,
-                                motives: candidate.motives.clone(),
-                                prospects: candidate.prospects.clone(),
-                                shape: candidate.shape,
-                                delivery: candidate.delivery.clone(),
-                            }),
-                            explanation,
-                        })
+                    self.score(
+                        facts,
+                        stocks,
+                        candidate,
+                        work_concept,
+                        contacted,
+                        road_distress,
+                    )
+                    .map(|explanation| Decision {
+                        plan: Some(Plan {
+                            action: candidate.action.clone(),
+                            key: candidate.key,
+                            motives: candidate.motives.clone(),
+                            prospects: candidate.prospects.clone(),
+                            shape: candidate.shape,
+                            delivery: candidate.delivery.clone(),
+                        }),
+                        explanation,
+                    })
                 })
                 .unwrap_or_else(none);
         }
         let mut scored = Vec::new();
         for candidate in candidates {
-            let score = self.score(facts, candidate, work_concept, contacted, road_distress);
+            let score = self.score(
+                facts,
+                stocks,
+                candidate,
+                work_concept,
+                contacted,
+                road_distress,
+            );
             if let Some(score) = score {
                 scored.push((candidate, score));
             }
@@ -526,6 +542,7 @@ impl<A: Clone> Mind<A> {
     fn score(
         &self,
         facts: &PersonalFacts,
+        stocks: &Stocks,
         candidate: &Candidate<A>,
         work_concept: ConceptId,
         contacted: impl Fn(&PersonId, &ChildSignal) -> bool,
@@ -563,12 +580,12 @@ impl<A: Clone> Mind<A> {
             if facts.child
                 || site.area != area
                 || !site.access
-                || !self
-                    .knowledge
+                || !stocks
+                    .known
                     .get(&site.input)
                     .is_some_and(|stock| stock.accessible && stock.quantity >= site.input_quantity)
-                || !self
-                    .knowledge
+                || !stocks
+                    .known
                     .get(&site.tool)
                     .is_some_and(|stock| stock.accessible && stock.quantity.0 >= 1_000)
             {
@@ -589,7 +606,7 @@ impl<A: Clone> Mind<A> {
                             continue;
                         }
                         if let Some(source) = candidate.prospects.source {
-                            let fact = self.knowledge.get(&source)?;
+                            let fact = stocks.known.get(&source)?;
                             let good = match need {
                                 NeedRef::Hunger => Some(Good::Food),
                                 NeedRef::Hydration => Some(Good::Water),
@@ -617,7 +634,7 @@ impl<A: Clone> Mind<A> {
                             let travel = if let (Place::Area(area), Some(source)) =
                                 (facts.place, candidate.prospects.source)
                             {
-                                let fact = self.knowledge.get(&source)?;
+                                let fact = stocks.known.get(&source)?;
                                 if fact.area != area {
                                     known_path(&self.routes, area, fact.area).ok()?.1.0
                                 } else {
@@ -684,7 +701,7 @@ impl<A: Clone> Mind<A> {
                         if candidate.shape == ActionShape::Care(*beneficiary)
                             && let Some(source) = candidate.prospects.source
                         {
-                            let stock = self.knowledge.get(&source)?;
+                            let stock = stocks.known.get(&source)?;
                             if stock.good != requirement.good
                                 || !stock.accessible
                                 || stock.quantity < facts.limits.meal_size
@@ -709,7 +726,7 @@ impl<A: Clone> Mind<A> {
                         let held = facts
                             .own_cargo
                             .iter()
-                            .filter_map(|id| self.knowledge.get(id))
+                            .filter_map(|id| stocks.known.get(id))
                             .filter(|stock| {
                                 stock.good == requirement.good
                                     && stock.source == KnowledgeSource::Observed(facts.actor)
@@ -936,6 +953,7 @@ impl<A: Clone> Mind<A> {
     }
     pub fn observe_stock(
         &mut self,
+        stocks: &mut Stocks,
         now: SimTime,
         here: AreaId,
         meal_size: Quantity,
@@ -946,26 +964,27 @@ impl<A: Clone> Mind<A> {
                 .plan
                 .as_ref()
                 .is_some_and(|plan| plan.shape == ActionShape::Move(here))
-            && self
-                .knowledge
+            && stocks
+                .known
                 .get(&fact.inventory)
                 .is_some_and(|old| old.good == Good::Food && old.quantity >= meal_size)
             && fact.quantity < meal_size
         {
             self.last_failure = Some((now, fact.inventory));
         }
-        self.knowledge.insert(fact.inventory, fact);
+        stocks.known.insert(fact.inventory, fact);
     }
     pub fn receive_report(
         &mut self,
+        stocks: &mut Stocks,
         sender: PersonId,
         now: SimTime,
         mut fact: StockKnowledge,
     ) -> bool {
         fact.source = KnowledgeSource::Reported(sender);
         fact.learned_at = now;
-        fact.accessible = self
-            .knowledge
+        fact.accessible = stocks
+            .known
             .get(&fact.inventory)
             .is_some_and(|known| known.accessible);
         let relationship = self.relationships.entry(sender).or_insert(Relationship {
@@ -976,12 +995,12 @@ impl<A: Clone> Mind<A> {
             return false;
         }
         relationship.trust = (relationship.trust + 10).min(1_000);
-        if self
-            .knowledge
+        if stocks
+            .known
             .get(&fact.inventory)
             .is_none_or(|old| old.observed_at <= fact.observed_at)
         {
-            self.knowledge.insert(fact.inventory, fact);
+            stocks.known.insert(fact.inventory, fact);
         }
         true
     }
@@ -1061,7 +1080,6 @@ mod tests {
             child_signals: BTreeMap::new(),
             personality: Personality::industrious(),
             dream: Aspiration::Independence,
-            knowledge: BTreeMap::new(),
             sites: BTreeMap::new(),
             relationships: BTreeMap::new(),
             values: BTreeMap::new(),
@@ -1094,9 +1112,15 @@ mod tests {
             facts.control = control;
             assert!(!mind.needs_candidates(&facts));
             assert!(
-                mind.decide(&facts, std::slice::from_ref(&escape), ConceptId(1), 0)
-                    .plan
-                    .is_none()
+                mind.decide(
+                    &facts,
+                    &Stocks::default(),
+                    std::slice::from_ref(&escape),
+                    ConceptId(1),
+                    0
+                )
+                .plan
+                .is_none()
             );
         }
         facts.control = Control::Autonomous;
@@ -1105,7 +1129,7 @@ mod tests {
         facts.freedom_restricted = true;
         assert!(mind.needs_candidates(&facts));
         assert_eq!(
-            mind.decide(&facts, &[escape], ConceptId(1), 0)
+            mind.decide(&facts, &Stocks::default(), &[escape], ConceptId(1), 0)
                 .plan
                 .unwrap()
                 .action,
@@ -1194,7 +1218,13 @@ mod tests {
                 shape: ActionShape::Move(AreaId(2)),
                 delivery: Some(goal.delivery),
             };
-            let d = m.decide(&f, std::slice::from_ref(&supply), ConceptId(1), 0);
+            let d = m.decide(
+                &f,
+                &Stocks::default(),
+                std::slice::from_ref(&supply),
+                ConceptId(1),
+                0,
+            );
             m.record_attempt(f.now, d.plan.unwrap(), d.explanation, true)
                 .unwrap();
             f.now = SimTime(200);
@@ -1204,9 +1234,15 @@ mod tests {
             assert_eq!(remembered.location, Location::AtArea(AreaId(1)));
             assert_eq!(remembered.observed_at, SimTime(100));
             assert!(
-                m.decide(&f, std::slice::from_ref(&supply), ConceptId(1), 0)
-                    .plan
-                    .is_some()
+                m.decide(
+                    &f,
+                    &Stocks::default(),
+                    std::slice::from_ref(&supply),
+                    ConceptId(1),
+                    0
+                )
+                .plan
+                .is_some()
             );
             assert!(m.record_care_receipt(child, good, dose, 1).unwrap());
             assert!(m.care_deliveries(&f).is_empty());
@@ -1252,7 +1288,7 @@ mod tests {
             shape: ActionShape::Move(AreaId(2)),
             delivery: Some(goal.delivery),
         };
-        let decision = m.decide(&f, &[supply], ConceptId(1), 0);
+        let decision = m.decide(&f, &Stocks::default(), &[supply], ConceptId(1), 0);
         m.record_attempt(f.now, decision.plan.unwrap(), decision.explanation, true)
             .unwrap();
         // While absent, the last contact remains a dated reason to continue.
@@ -1413,10 +1449,12 @@ mod tests {
             delivery: None,
         }
     }
-    fn work(m: &mut Mind<u8>) -> Candidate<u8> {
-        m.knowledge
+    fn work(m: &mut Mind<u8>, stocks: &mut Stocks) -> Candidate<u8> {
+        stocks
+            .known
             .insert(InventoryId(3), stock(3, Good::Timber, 1, 1_000));
-        m.knowledge
+        stocks
+            .known
             .insert(InventoryId(4), stock(4, Good::Tool, 1, 1_000));
         m.sites.insert(
             SiteId(2),
@@ -1432,17 +1470,23 @@ mod tests {
         );
         candidate(2, Example::Work(SiteId(2)), ActionShape::Work(SiteId(2)))
     }
-    fn choose(m: &Mind<u8>, f: &PersonalFacts, c: &[Candidate<u8>]) -> Decision<u8> {
-        m.decide(f, c, ConceptId(6), 100)
+    fn choose(
+        m: &Mind<u8>,
+        stocks: &Stocks,
+        f: &PersonalFacts,
+        c: &[Candidate<u8>],
+    ) -> Decision<u8> {
+        m.decide(f, stocks, c, ConceptId(6), 100)
     }
     #[test]
     fn complete_selection_uses_personality_experience_and_actual_known_opportunities() {
         let mut m = mind();
+        let mut stocks = Stocks::default();
         let f = facts();
-        let work = work(&mut m);
+        let work = work(&mut m, &mut stocks);
         let rest = candidate(1, Example::Rest, ActionShape::Rest);
         assert_eq!(
-            choose(&m, &f, &[rest.clone(), work.clone()])
+            choose(&m, &stocks, &f, &[rest.clone(), work.clone()])
                 .plan
                 .unwrap()
                 .action,
@@ -1451,7 +1495,7 @@ mod tests {
         m.personality = Personality::restful();
         m.dream = Aspiration::Comfort;
         assert_eq!(
-            choose(&m, &f, &[rest.clone(), work.clone()])
+            choose(&m, &stocks, &f, &[rest.clone(), work.clone()])
                 .plan
                 .unwrap()
                 .action,
@@ -1461,6 +1505,7 @@ mod tests {
         register_minds::<u8>(&mut schema).unwrap();
         let mut store = Store::with_schema(schema);
         insert_mind(&mut store, f.actor, m).unwrap();
+        insert_stocks(&mut store, f.actor, stocks).unwrap();
         let world = Runtime {
             concepts: BTreeMap::from([(ConceptId(6), Good::Timber)]),
             work_concept: ConceptId(6),
@@ -1473,6 +1518,7 @@ mod tests {
         assert_eq!(
             choose(
                 super::mind::<u8>(&store, f.actor).unwrap(),
+                super::stocks(&store, f.actor).unwrap(),
                 &f,
                 &[rest.clone(), work.clone()]
             )
@@ -1485,15 +1531,16 @@ mod tests {
             super::mind::<u8>(&store, f.actor).unwrap().values[&ConceptId(6)].experiences,
             3
         );
-        mind_mut::<u8>(&mut store, f.actor)
+        stocks_mut(&mut store, f.actor)
             .unwrap()
-            .knowledge
+            .known
             .get_mut(&InventoryId(4))
             .unwrap()
             .quantity = Quantity(0);
         assert_eq!(
             choose(
                 super::mind::<u8>(&store, f.actor).unwrap(),
+                super::stocks(&store, f.actor).unwrap(),
                 &f,
                 &[rest, work]
             )
@@ -1506,6 +1553,7 @@ mod tests {
     #[test]
     fn planning_does_not_grant_remote_facts_or_routes_and_reports_do_not_grant_access() {
         let mut m = mind();
+        let mut stocks = Stocks::default();
         let mut f = facts();
         f.vitals.hunger = 10_000;
         let food = candidate(
@@ -1513,40 +1561,58 @@ mod tests {
             Example::Food(InventoryId(9)),
             ActionShape::Move(AreaId(2)),
         );
-        assert!(choose(&m, &f, std::slice::from_ref(&food)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&food))
+                .plan
+                .is_none()
+        );
         let snapshot = stock(9, Good::Food, 2, 1_000);
-        assert!(m.receive_report(PersonId(2), f.now, snapshot.clone()));
-        assert!(!m.knowledge[&InventoryId(9)].accessible);
-        assert_eq!(m.knowledge[&InventoryId(9)].observed_at, SimTime(1));
-        m.knowledge.get_mut(&InventoryId(9)).unwrap().accessible = true;
-        assert!(choose(&m, &f, std::slice::from_ref(&food)).plan.is_none());
+        assert!(m.receive_report(&mut stocks, PersonId(2), f.now, snapshot.clone()));
+        assert!(!stocks.known[&InventoryId(9)].accessible);
+        assert_eq!(stocks.known[&InventoryId(9)].observed_at, SimTime(1));
+        stocks.known.get_mut(&InventoryId(9)).unwrap().accessible = true;
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&food))
+                .plan
+                .is_none()
+        );
         m.routes.insert(
             AreaId(1),
             BTreeMap::from([(AreaId(2), SimDuration(25_000))]),
         );
-        assert!(choose(&m, &f, std::slice::from_ref(&food)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&food))
+                .plan
+                .is_none()
+        );
         m.routes
             .get_mut(&AreaId(1))
             .unwrap()
             .insert(AreaId(2), SimDuration(1_000));
-        let decision = choose(&m, &f, &[food]);
+        let decision = choose(&m, &stocks, &f, &[food]);
         m.record_attempt(f.now, decision.plan.unwrap(), decision.explanation, true)
             .unwrap();
         let mut empty = snapshot;
         empty.quantity = Quantity(0);
-        m.observe_stock(f.now, AreaId(2), f.limits.meal_size, empty);
+        m.observe_stock(&mut stocks, f.now, AreaId(2), f.limits.meal_size, empty);
         assert_eq!(m.last_failure, Some((f.now, InventoryId(9))));
         m.relationships.get_mut(&PersonId(2)).unwrap().trust = -501;
         let before = m.clone();
-        assert!(!m.receive_report(PersonId(2), f.now, stock(9, Good::Food, 2, 1_000)));
+        assert!(!m.receive_report(
+            &mut stocks,
+            PersonId(2),
+            f.now,
+            stock(9, Good::Food, 2, 1_000)
+        ));
         assert_eq!(m, before);
     }
     #[test]
     fn failed_plan_has_cooldown_and_overflow_is_inert() {
         let mut m = mind();
+        let mut stocks = Stocks::default();
         let mut f = facts();
-        let work = work(&mut m);
-        let d = choose(&m, &f, std::slice::from_ref(&work));
+        let work = work(&mut m, &mut stocks);
+        let d = choose(&m, &stocks, &f, std::slice::from_ref(&work));
         m.record_attempt(f.now, d.plan.unwrap(), d.explanation, false)
             .unwrap();
         assert_eq!(m.retry_after, SimTime(120_100));
@@ -1554,9 +1620,13 @@ mod tests {
             m.explanation.blocker.as_deref(),
             Some("physical attempt failed")
         );
-        assert!(choose(&m, &f, std::slice::from_ref(&work)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&work))
+                .plan
+                .is_none()
+        );
         f.now = m.retry_after;
-        let d = choose(&m, &f, &[work]);
+        let d = choose(&m, &stocks, &f, &[work]);
         assert!(d.plan.is_some());
         let before = m.clone();
         assert_eq!(
@@ -1568,19 +1638,30 @@ mod tests {
     #[test]
     fn active_commitments_and_hysteresis_preserve_the_existing_plan() {
         let mut m = mind();
+        let mut stocks = Stocks::default();
         let mut f = facts();
-        let work = work(&mut m);
+        let work = work(&mut m, &mut stocks);
         f.activity = Activity::Committed;
-        assert!(choose(&m, &f, std::slice::from_ref(&work)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&work))
+                .plan
+                .is_none()
+        );
         f.activity = Activity::Working;
         m.explanation.total = 10_000;
-        assert!(choose(&m, &f, std::slice::from_ref(&work)).plan.is_none());
-        m.knowledge
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&work))
+                .plan
+                .is_none()
+        );
+        stocks
+            .known
             .insert(InventoryId(9), stock(9, Good::Food, 1, 1_000));
         f.vitals.hunger = 10_000;
         assert_eq!(
             choose(
                 &m,
+                &stocks,
                 &f,
                 &[
                     candidate(
@@ -1598,14 +1679,20 @@ mod tests {
         );
         f.control = Control::Manual;
         assert!(
-            choose(&m, &f, &[candidate(1, Example::Rest, ActionShape::Rest)])
-                .plan
-                .is_none()
+            choose(
+                &m,
+                &stocks,
+                &f,
+                &[candidate(1, Example::Rest, ActionShape::Rest)]
+            )
+            .plan
+            .is_none()
         );
     }
     #[test]
     fn hydration_requires_observed_contact_and_personal_care_motivation() {
         let mut m = mind();
+        let mut stocks = Stocks::default();
         let mut f = facts();
         let child = PersonId(2);
         m.child_signals.insert(
@@ -1618,7 +1705,8 @@ mod tests {
                 observed_at: f.now,
             },
         );
-        m.knowledge
+        stocks
+            .known
             .insert(InventoryId(9), stock(9, Good::Water, 1, 1_000));
         let care = candidate(
             9,
@@ -1628,9 +1716,17 @@ mod tests {
             },
             ActionShape::Care(child),
         );
-        assert!(choose(&m, &f, std::slice::from_ref(&care)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&care))
+                .plan
+                .is_none()
+        );
         f.observed_contacts.insert(child);
-        assert!(choose(&m, &f, std::slice::from_ref(&care)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&care))
+                .plan
+                .is_none()
+        );
         m.relationships.insert(
             child,
             Relationship {
@@ -1640,18 +1736,19 @@ mod tests {
         );
         f.activity = Activity::Working;
         assert_eq!(
-            choose(&m, &f, std::slice::from_ref(&care))
+            choose(&m, &stocks, &f, std::slice::from_ref(&care))
                 .plan
                 .unwrap()
                 .action,
             9
         );
         m.child_signals.get_mut(&child).unwrap().observed_at = SimTime(0);
-        assert!(choose(&m, &f, &[care]).plan.is_none());
+        assert!(choose(&m, &stocks, &f, &[care]).plan.is_none());
     }
     #[test]
     fn road_choices_stop_before_care_and_do_not_use_origin_warehouses() {
         let mut m = mind();
+        let mut stocks = Stocks::default();
         let mut f = facts();
         let child = PersonId(2);
         f.observed_contacts.insert(child);
@@ -1666,7 +1763,8 @@ mod tests {
                 observed_at: f.now,
             },
         );
-        m.knowledge
+        stocks
+            .known
             .insert(InventoryId(9), stock(9, Good::Water, 1, 1_000));
         let care = candidate(
             9,
@@ -1678,31 +1776,48 @@ mod tests {
         );
         let stop = candidate(1, Example::Stop, ActionShape::Other);
         f.place = Place::Moving;
-        assert!(choose(&m, &f, std::slice::from_ref(&care)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&care))
+                .plan
+                .is_none()
+        );
         assert_eq!(
-            choose(&m, &f, &[care.clone(), stop]).plan.unwrap().action,
+            choose(&m, &stocks, &f, &[care.clone(), stop])
+                .plan
+                .unwrap()
+                .action,
             1
         );
         f.place = Place::Stopped;
-        assert!(choose(&m, &f, std::slice::from_ref(&care)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&care))
+                .plan
+                .is_none()
+        );
         f.own_cargo.insert(InventoryId(9));
-        assert_eq!(choose(&m, &f, &[care]).plan.unwrap().action, 9);
+        assert_eq!(choose(&m, &stocks, &f, &[care]).plan.unwrap().action, 9);
         f.can_resume = true;
         let resume = candidate(3, Example::Resume, ActionShape::Other);
-        assert!(choose(&m, &f, std::slice::from_ref(&resume)).plan.is_none());
+        assert!(
+            choose(&m, &stocks, &f, std::slice::from_ref(&resume))
+                .plan
+                .is_none()
+        );
         m.child_signals.clear();
-        assert_eq!(choose(&m, &f, &[resume]).plan.unwrap().action, 3);
+        assert_eq!(choose(&m, &stocks, &f, &[resume]).plan.unwrap().action, 3);
     }
     #[test]
     fn complete_personal_planning_state_roundtrips_without_world_or_api_types() {
         let mut m = mind();
+        let mut stocks = Stocks::default();
         let f = facts();
-        let work = work(&mut m);
-        let d = choose(&m, &f, &[work]);
+        let work = work(&mut m, &mut stocks);
+        let d = choose(&m, &stocks, &f, &[work]);
         m.record_attempt(f.now, d.plan.unwrap(), d.explanation, true)
             .unwrap();
-        let restored: Mind<u8> = serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
-        assert_eq!(m, restored);
+        let restored: (Mind<u8>, Stocks) =
+            serde_json::from_slice(&serde_json::to_vec(&(&m, &stocks)).unwrap()).unwrap();
+        assert_eq!((m.clone(), stocks), restored);
         let aspiration: crate::social::Aspiration = m.dream;
         assert_eq!(aspiration, Aspiration::Independence);
     }

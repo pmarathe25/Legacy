@@ -379,7 +379,8 @@ impl Simulation {
         let mind = game_characters::decisions::mind::<Command>(&self.host.storage, guardian);
         let memory = RescueMemoryAdapter {
             signals: mind.map(|mind| &mind.child_signals),
-            stocks: mind.map(|mind| &mind.knowledge),
+            stocks: game_characters::decisions::stocks(&self.host.storage, guardian)
+                .map(|stocks| &stocks.known),
             carried: self
                 .inventory_index
                 .get(&InventoryLocation::Carried(guardian))
@@ -1606,8 +1607,10 @@ mod connected_tests {
         let mind =
             &game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, mother)
                 .unwrap();
-        assert!(!mind.knowledge.contains_key(&endpoint));
-        assert_eq!(mind.knowledge[&carried].quantity, Quantity(2_000));
+        let stocks = game_characters::decisions::stocks(&sim.host.storage, mother)
+            .expect("stock knowledge exists");
+        assert!(!stocks.known.contains_key(&endpoint));
+        assert_eq!(stocks.known[&carried].quantity, Quantity(2_000));
         assert!(matches!(
             mind.child_signals[&child].location,
             Location::StoppedOnRoad { .. }

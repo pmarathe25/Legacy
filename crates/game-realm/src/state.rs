@@ -19,28 +19,45 @@ pub struct PreparedChange {
     pub(crate) after: Option<Commitment>,
     pub(crate) knowledge: Vec<KnowledgePatch>,
     pub requests: Vec<Request>,
+    pub(crate) reads: Vec<crate::reads::WorkRead>,
+    pub(crate) projection: Option<Commitment>,
 }
 impl PreparedChange {
-    pub fn commit(self, world: &mut World) -> Result<Vec<Request>, Error> {
-        if self.after.is_some() && world.commitments.get(&self.id) != self.before.as_ref()
-            || self
-                .knowledge
-                .iter()
-                .any(|p| world.view(p.actor, self.id) != p.before.as_ref())
+    pub fn check(&self, store: &game_ecs::Store) -> Result<(), Error> {
+        if self.before.is_none()
+            && self.after.is_some()
+            && store.contains(game_ecs::StableId(self.id.0))
         {
             return Err(Error::Unavailable);
         }
-        if let Some(after) = self.after {
-            world.commitments.insert(self.id, after);
+        if (self.after.is_some() || self.before.is_some())
+            && commitment(store, self.id) != self.before.as_ref()
+            || self
+                .knowledge
+                .iter()
+                .any(|p| Ledger::new(store).view(p.actor, self.id) != p.before.as_ref())
+        {
+            return Err(Error::Unavailable);
         }
-        for p in self.knowledge {
-            world
-                .known
-                .entry(p.actor)
-                .or_default()
-                .insert(self.id, p.after);
+        for read in &self.reads {
+            read.check(store)?;
         }
-        Ok(self.requests)
+        Ok(())
+    }
+    pub fn stage_into(
+        self,
+        store: &game_ecs::Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<RealmBatchGuard, Error> {
+        stage_changes(vec![self], store, batch)
+    }
+    pub fn commit(self, store: &mut game_ecs::Store) -> Result<Vec<Request>, Error> {
+        let requests = self.requests.clone();
+        let mut batch = game_ecs::Batch::new();
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(&batch)?;
+        store.apply_batch(batch)?;
+        Ok(requests)
     }
 }
 impl Revision {
@@ -96,18 +113,23 @@ impl Commitment {
             .filter(|r| r.number == revision)
     }
 }
-impl World {
-    pub fn view(&self, actor: PersonId, id: RealmCommitmentId) -> Option<&Knowledge> {
-        self.known.get(&actor)?.get(&id)
+impl<'a> Ledger<'a> {
+    pub fn view(&self, actor: PersonId, id: RealmCommitmentId) -> Option<&'a Knowledge> {
+        knowledge(self.store, actor)?.commitments.get(&id)
     }
     pub(crate) fn edit(&self, id: RealmCommitmentId) -> Result<PreparedChange, Error> {
-        let before = self.commitments.get(&id).ok_or(Error::Unavailable)?.clone();
+        let after = self.commitments.get(&id).ok_or(Error::Unavailable)?.clone();
+        let before = commitment(self.store, id)
+            .ok_or(Error::Unavailable)?
+            .clone();
         Ok(PreparedChange {
             id,
             before: Some(before.clone()),
-            after: Some(before),
+            after: Some(after.clone()),
             knowledge: Vec::new(),
             requests: Vec::new(),
+            reads: Vec::new(),
+            projection: self.commitments.projection(id).cloned(),
         })
     }
     pub fn prepare_propose(
@@ -117,7 +139,7 @@ impl World {
         facts: &ProposalFacts,
         now: SimTime,
     ) -> Result<PreparedChange, Error> {
-        if id.0 == 0 || self.commitments.contains_key(&id) {
+        if id.0 == 0 || self.store.contains(game_ecs::StableId(id.0)) {
             return Err(Error::Unavailable);
         }
         proposal.validate(facts, now)?;
@@ -146,6 +168,8 @@ impl World {
                 after: known,
             }],
             requests: Vec::new(),
+            reads: Vec::new(),
+            projection: None,
         })
     }
     pub fn prepare_revise(
@@ -301,23 +325,41 @@ impl World {
         now: SimTime,
     ) -> Result<PreparedChange, Error> {
         let mut plan = self.edit(id)?;
-        let selected = plan.before.as_ref().unwrap().clone();
-        let mut scratch = World {
-            commitments: BTreeMap::from([(id, selected)]),
-            known: BTreeMap::new(),
-        };
-        if scratch.commitments[&id]
-            .revision(revision)
-            .is_none_or(|r| !r.ratification_proposals.contains_key(&institution))
+        let r = plan.after.as_mut().unwrap().revisions.last_mut().unwrap();
+        if r.number != revision
+            || decision.proposal.0 == 0
+            || !r.proposal.participants.contains_key(&institution)
+            || decision.decided_at < r.proposed_at
+            || decision.decided_at > now
+            || decision.decided_at > r.proposal.ratify_by
+            || r.expired_at.is_some()
         {
-            scratch
-                .prepare_bind_ratification(id, revision, institution, decision.proposal, now)?
-                .commit(&mut scratch)?;
+            return Err(Error::Unavailable);
         }
-        scratch
-            .prepare_decision(id, revision, institution, decision, now)?
-            .commit(&mut scratch)?;
-        plan.after = scratch.commitments.remove(&id);
+        if let Some(old) = r.ratification_proposals.get(&institution) {
+            if *old != decision.proposal {
+                return Err(Error::Unavailable);
+            }
+        } else {
+            if now < r.proposed_at
+                || now > r.proposal.ratify_by
+                || r.status() != Status::AwaitingRatification
+                || r.ratification_proposals
+                    .values()
+                    .any(|id| *id == decision.proposal)
+            {
+                return Err(Error::Unavailable);
+            }
+            r.ratification_proposals
+                .insert(institution, decision.proposal);
+        }
+        if let Some(old) = r.ratifications.get(&institution) {
+            if old != &decision {
+                return Err(Error::Unavailable);
+            }
+        } else {
+            r.ratifications.insert(institution, decision);
+        }
         Ok(plan)
     }
     pub fn prepare_expire(
@@ -424,7 +466,18 @@ impl World {
         receipt: WorkReceipt,
         now: SimTime,
     ) -> Result<PreparedChange, Error> {
-        let mut plan = self.edit(key.commitment)?;
+        self.backing_into(self.edit(key.commitment)?, key, receipt, now)
+    }
+    pub(crate) fn backing_into(
+        &self,
+        mut plan: PreparedChange,
+        key: TermKey,
+        receipt: WorkReceipt,
+        now: SimTime,
+    ) -> Result<PreparedChange, Error> {
+        if let WorkReceipt::DeliveryOpened{obligation:Some(obligation),..}=&receipt
+            && plan.after.as_ref().is_some_and(|c|c.revisions.iter().any(|r|r.backed.iter().any(|(index,b)|!(r.number==key.revision && *index==key.index) && matches!(b.backing,Backing::Delivery{obligation:Some(id),..} if id==*obligation))))
+        {return Err(Error::Unavailable);}
         let r = revision_mut(&mut plan, key)?;
         if !fully_ratified(r) || now < r.proposed_at {
             return Err(Error::Unavailable);
@@ -570,7 +623,15 @@ impl World {
         receipt: OutcomeReceipt,
         now: SimTime,
     ) -> Result<PreparedChange, Error> {
-        let mut plan = self.edit(key.commitment)?;
+        self.outcome_into(self.edit(key.commitment)?, key, receipt, now)
+    }
+    pub(crate) fn outcome_into(
+        &self,
+        mut plan: PreparedChange,
+        key: TermKey,
+        receipt: OutcomeReceipt,
+        now: SimTime,
+    ) -> Result<PreparedChange, Error> {
         let r = revision_mut(&mut plan, key)?;
         let term = r
             .proposal
@@ -676,6 +737,7 @@ fn new_revision(number: u32, proposal: Proposal, now: SimTime) -> Revision {
         ratifications: BTreeMap::new(),
         requested: BTreeSet::new(),
         backed: BTreeMap::new(),
+        pending: BTreeMap::new(),
         expired_at: None,
     }
 }
@@ -706,4 +768,58 @@ fn revision_mut(plan: &mut PreparedChange, key: TermKey) -> Result<&mut Revision
 pub(crate) fn compatible_backing(known: &Backing, current: &Backing) -> bool {
     known == current
         || matches!((known,current),(Backing::Delivery {agreement:a,obligation:None},Backing::Delivery {agreement:b,..}) if a==b)
+}
+
+/// One owner can combine independent regional records and personal memory slots
+/// without replacing unrelated character or feature rows.
+pub fn stage_changes(
+    changes: Vec<PreparedChange>,
+    store: &game_ecs::Store,
+    batch: &mut game_ecs::Batch,
+) -> Result<RealmBatchGuard, Error> {
+    let mut commitments = BTreeSet::new();
+    let mut fresh = BTreeSet::new();
+    let mut people = BTreeMap::<PersonId, PersonalKnowledge>::new();
+    let mut slots = BTreeSet::new();
+    let mut reads = Vec::new();
+    for change in changes {
+        change.check(store)?;
+        if change.after.is_none()
+            && let Some(before) = &change.before
+        {
+            reads.push(crate::reads::WorkRead::Canonical(before.clone()));
+        }
+        for read in &change.reads {
+            read.check_batch(batch)?;
+        }
+        reads.extend(change.reads);
+        if let Some(after) = change.after {
+            if change.before.is_none() {
+                fresh.insert(change.id);
+            }
+            let id = game_ecs::StableId(change.id.0);
+            if !commitments.insert(change.id) || batch.touches::<Commitment>(id) {
+                return Err(Error::Unavailable);
+            }
+            batch.insert(id, after);
+        }
+        for patch in change.knowledge {
+            let id = game_ecs::StableId(patch.actor.0);
+            if batch.touches::<PersonalKnowledge>(id) || !slots.insert((patch.actor, change.id)) {
+                return Err(Error::Unavailable);
+            }
+            people
+                .entry(patch.actor)
+                .or_insert_with(|| knowledge(store, patch.actor).cloned().unwrap_or_default())
+                .commitments
+                .insert(change.id, patch.after);
+        }
+    }
+    let ids = people.keys().copied().collect();
+    for (id, row) in people {
+        batch.insert(game_ecs::StableId(id.0), row);
+    }
+    let guard = RealmBatchGuard::new(batch, commitments, ids, fresh, reads);
+    guard.validate(batch)?;
+    Ok(guard)
 }

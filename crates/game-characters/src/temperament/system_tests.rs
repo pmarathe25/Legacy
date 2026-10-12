@@ -23,7 +23,6 @@ fn mind() -> Mind<u8> {
         child_signals: BTreeMap::new(),
         personality: Personality::industrious(),
         dream: Aspiration::Independence,
-        knowledge: BTreeMap::new(),
         sites: BTreeMap::new(),
         relationships: BTreeMap::new(),
         values: BTreeMap::new(),
@@ -163,8 +162,10 @@ fn personality_commit_preserves_current_water_knowledge_plans_and_other_mind_fie
     let prepared = runtime
         .prepare_learning::<u8>(&store, &[(PersonId(1), "care")], &Source(1_000))
         .unwrap();
-    let current = crate::decisions::mind_mut::<u8>(&mut store, PersonId(1)).unwrap();
-    current.knowledge.insert(
+    let (current, stocks) = store
+        .get_pair_mut::<crate::decisions::Mind<u8>, crate::decisions::Stocks>(game_ecs::StableId(1))
+        .unwrap();
+    stocks.known.insert(
         InventoryId(9),
         StockKnowledge {
             inventory: InventoryId(9),
@@ -179,6 +180,7 @@ fn personality_commit_preserves_current_water_knowledge_plans_and_other_mind_fie
     );
     current.goal = Goal::Care;
     current.retry_after = SimTime(123);
+    let expected_stocks = stocks.clone();
     let mut expected = current.clone();
     expected.personality.discipline = 901;
     expected.personality.empathy = 701;
@@ -188,6 +190,10 @@ fn personality_commit_preserves_current_water_knowledge_plans_and_other_mind_fie
     assert_eq!(
         crate::decisions::mind::<u8>(&store, PersonId(1)),
         Some(&expected)
+    );
+    assert_eq!(
+        crate::decisions::stocks(&store, PersonId(1)),
+        Some(&expected_stocks)
     );
 }
 

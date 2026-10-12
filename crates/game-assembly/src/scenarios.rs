@@ -255,15 +255,11 @@ impl Simulation {
                     })
                 })
                 .collect();
-            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.host.storage,
-                person.id,
-            )
-            .unwrap();
+            let (mind,stocks)=self.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((person.id).0)).expect("mind and stock knowledge exist");
             mind.plan = None;
             mind.retry_after = owner_now;
             for fact in known {
-                mind.knowledge.insert(fact.inventory, fact);
+                stocks.known.insert(fact.inventory, fact);
             }
         }
         let parents = [self.host.state.people[3].id, self.host.state.people[4].id];

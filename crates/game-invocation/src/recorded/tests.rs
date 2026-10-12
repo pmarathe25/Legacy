@@ -9,7 +9,6 @@ fn mind() -> Mind<u8> {
         child_signals: BTreeMap::new(),
         personality: Personality::industrious(),
         dream: Aspiration::Independence,
-        knowledge: BTreeMap::new(),
         sites: BTreeMap::new(),
         relationships: BTreeMap::new(),
         values: BTreeMap::new(),
@@ -48,13 +47,17 @@ fn historical_content_reaches_current_character_through_the_receiving_owner() {
     };
     assert_eq!(content.life(), PersonId(1));
     content.teach_into(
-        game_characters::decisions::mind_mut::<u8>(&mut store, actor).unwrap(),
+        &mut game_characters::memories::CharacterMemory::<u8> {
+            store: &mut store,
+            actor,
+            marker: std::marker::PhantomData,
+        },
         SimTime(100),
         KnowledgeSource::Recorded(RecordId(4)),
     );
-    let learned = &game_characters::decisions::mind::<u8>(&store, actor)
+    let learned = &game_characters::decisions::stocks(&store, actor)
         .unwrap()
-        .knowledge[&InventoryId(2)];
+        .known[&InventoryId(2)];
     assert_eq!(learned.learned_at, SimTime(100));
     assert_eq!(learned.observed_at, SimTime(50));
     assert_eq!(learned.source, KnowledgeSource::Recorded(RecordId(4)));
@@ -66,7 +69,11 @@ fn historical_content_reaches_current_character_through_the_receiving_owner() {
         duration: SimDuration(1000),
     };
     route.teach_into(
-        game_characters::decisions::mind_mut::<u8>(&mut store, actor).unwrap(),
+        &mut game_characters::memories::CharacterMemory::<u8> {
+            store: &mut store,
+            actor,
+            marker: std::marker::PhantomData,
+        },
         SimTime(100),
         KnowledgeSource::Reported(PersonId(6)),
     );

@@ -1,3 +1,4 @@
+use crate::PendingWork;
 use game_agreements::AgreementTerm;
 use game_core::*;
 use game_missions::MissionProposal;
@@ -5,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Participant {
     pub institution: InstitutionId,
     pub settlement: AreaId,
@@ -12,6 +14,7 @@ pub struct Participant {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Term {
     Delivery {
         provider: InstitutionId,
@@ -48,6 +51,7 @@ impl Term {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Proposal {
     pub proposer: PersonId,
     pub participants: BTreeMap<InstitutionId, Participant>,
@@ -56,6 +60,7 @@ pub struct Proposal {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Action {
     Propose {
         proposal: Proposal,
@@ -74,11 +79,13 @@ pub enum Action {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KnownCommitment {
     pub id: RealmCommitmentId,
     pub knowledge: Knowledge,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct View {
     pub commitments: Vec<KnownCommitment>,
 }
@@ -111,18 +118,21 @@ pub struct ProposalFacts {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TermKey {
     pub commitment: RealmCommitmentId,
     pub revision: u32,
     pub index: u16,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Decision {
     Adopted,
     Rejected,
 }
 /// Adapter input from a completed native proposal, not a player command.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Ratification {
     pub proposal: RuleProposalId,
     pub outcome: Decision,
@@ -130,6 +140,7 @@ pub struct Ratification {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Backing {
     Delivery {
         agreement: AgreementId,
@@ -144,6 +155,7 @@ pub enum Backing {
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Progress {
     AwaitingWork,
     Active,
@@ -152,6 +164,7 @@ pub enum Progress {
     Refused,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackedTerm {
     pub backing: Backing,
     pub progress: Progress,
@@ -160,6 +173,7 @@ pub struct BackedTerm {
     pub defaulted_at: Option<SimTime>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Status {
     AwaitingRatification,
     Rejected,
@@ -170,6 +184,7 @@ pub enum Status {
     Expired,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Revision {
     pub number: u32,
     pub proposal: Proposal,
@@ -178,9 +193,11 @@ pub struct Revision {
     pub ratifications: BTreeMap<InstitutionId, Ratification>,
     pub requested: BTreeSet<u16>,
     pub backed: BTreeMap<u16, BackedTerm>,
+    pub pending: BTreeMap<u16, PendingWork>,
     pub expired_at: Option<SimTime>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Commitment {
     pub id: RealmCommitmentId,
     /// Revising a commitment preserves old work and obligation references.
@@ -264,6 +281,7 @@ pub enum OutcomeReceipt {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Dated<T> {
     pub value: T,
     pub observed_at: SimTime,
@@ -271,16 +289,19 @@ pub struct Dated<T> {
     pub source: KnowledgeSource,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KnownRevision {
     pub proposal: Dated<Proposal>,
     pub ratifications: BTreeMap<InstitutionId, Dated<Ratification>>,
     pub backed: BTreeMap<u16, Dated<BackedTerm>>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Knowledge {
     pub revisions: BTreeMap<u32, KnownRevision>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Report {
     pub commitment: RealmCommitmentId,
     pub speaker: PersonId,
@@ -309,12 +330,6 @@ impl LocalWitness {
             Ok(self.observer)
         }
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub commitments: BTreeMap<RealmCommitmentId, Commitment>,
-    pub known: BTreeMap<PersonId, BTreeMap<RealmCommitmentId, Knowledge>>,
 }
 
 /// Existing records supplied by their owners for save validation. The realm

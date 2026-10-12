@@ -985,15 +985,12 @@ impl Simulation {
                 .decisions
                 .as_ref()
                 .map_or_else(Vec::new, |_| {
-                    game_characters::decisions::mind::<game_api::Command>(
-                        &self.host.storage,
-                        ruler.id,
-                    )
-                    .unwrap()
-                    .knowledge
-                    .values()
-                    .cloned()
-                    .collect()
+                    game_characters::decisions::stocks(&self.host.storage, ruler.id)
+                        .unwrap()
+                        .known
+                        .values()
+                        .cloned()
+                        .collect()
                 }),
             combat: self.tactical_view(),
             life_stage: self.host.state.development.as_ref().map(|_| {

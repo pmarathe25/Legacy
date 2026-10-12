@@ -69,6 +69,9 @@ impl Runtime {
         let Some(m) = mission(store, id) else {
             return Vec::new();
         };
+        self.receivers_for(m, facts)
+    }
+    pub(crate) fn receivers_for(&self, m: &Mission, facts: &impl PresenceFacts) -> Vec<PersonId> {
         m.members
             .keys()
             .copied()
@@ -91,6 +94,15 @@ impl Runtime {
         facts: &impl PresenceFacts,
     ) -> Result<ObservationFacts, Error> {
         let m = mission(store, id).ok_or(Error::Unavailable)?;
+        Ok(self.observation_facts_for(m, observer, now, facts))
+    }
+    pub(crate) fn observation_facts_for(
+        &self,
+        m: &Mission,
+        observer: PersonId,
+        now: SimTime,
+        facts: &impl PresenceFacts,
+    ) -> ObservationFacts {
         let relevant = m
             .members
             .keys()
@@ -110,11 +122,11 @@ impl Runtime {
                     && facts.same_place(observer, *p)
             })
             .collect();
-        Ok(ObservationFacts {
+        ObservationFacts {
             now,
             visible_locations,
             heard,
-        })
+        }
     }
     pub fn encounter_end_responses(
         &self,

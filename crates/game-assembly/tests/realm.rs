@@ -1,3 +1,4 @@
+mod support;
 use game_api::*;
 use game_assembly::{Execution, Simulation};
 use game_realm::{Participant, Progress, Proposal, Status, Term, TermKey};
@@ -149,16 +150,10 @@ fn propose(sim: &mut Simulation, c: &Context) -> RealmCommitmentId {
             action: RealmAction::Propose { proposal: p },
         },
     );
-    *sim.canonical_state()
-        .state
-        .realm
-        .as_ref()
-        .unwrap()
-        .kernel
-        .commitments
-        .keys()
+    game_realm::commitments(sim.canonical_state().components)
         .last()
         .unwrap()
+        .0
 }
 fn report(sim: &mut Simulation, sender: PersonId, to: PersonId, id: RealmCommitmentId) {
     let action = RealmAction::Report {
@@ -220,14 +215,8 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     let id = propose(&mut sim, &c);
     travel(&mut sim, c.mayor, AreaId(1));
     report(&mut sim, ruler, c.mayor, id);
-    let terms = sim
-        .canonical_state()
-        .state
-        .realm
-        .as_ref()
+    let terms = game_realm::commitment(sim.canonical_state().components, id)
         .unwrap()
-        .kernel
-        .commitments[&id]
         .current()
         .proposal
         .terms
@@ -265,13 +254,8 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     travel(&mut sim, c.mayor, AreaId(3));
     ratify(&mut sim, c.b, c.mayor, c.bv, id);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .realm
-            .as_ref()
+        game_realm::commitment(sim.canonical_state().components, id)
             .unwrap()
-            .kernel
-            .commitments[&id]
             .current()
             .status(),
         Status::Ratified
@@ -393,14 +377,8 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
                 .0,
         total
     );
-    let r = &sim
-        .canonical_state()
-        .state
-        .realm
-        .as_ref()
+    let r = &game_realm::commitment(sim.canonical_state().components, id)
         .unwrap()
-        .kernel
-        .commitments[&id]
         .revisions[0];
     assert_eq!(r.backed[&0].performed, Quantity(1_000));
     assert_eq!(r.backed[&0].progress, Progress::Fulfilled);
@@ -441,13 +419,8 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     parallel.advance(SimDuration(duration - first)).unwrap();
     assert_eq!(sim.canonical_state(), parallel.canonical_state());
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .realm
-            .as_ref()
+        game_realm::commitment(sim.canonical_state().components, id)
             .unwrap()
-            .kernel
-            .commitments[&id]
             .revisions[0]
             .backed[&1]
             .progress,
@@ -552,12 +525,8 @@ fn a_completed_report_survives_minute_review_but_a_moving_listener_cancels_it() 
         reports
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .realm
-            .as_ref()
-            .unwrap()
-            .talks
+        game_realm::talks(sim.canonical_state().components)
+            .collect::<Vec<_>>()
             .is_empty()
     );
     assert_eq!(
@@ -596,14 +565,13 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
         },
     );
     sim.advance(SimDuration(1)).unwrap();
-    let agreement = match sim.canonical_state().state.realm.as_ref().unwrap().pending[&TermKey {
-        commitment: id,
-        revision: 0,
-        index: 0,
-    }]
+    let agreement = match game_realm::commitment(sim.canonical_state().components, id)
+        .unwrap()
+        .revisions[0]
+        .pending[&0]
         .owner
     {
-        game_assembly::realm::PendingOwner::Agreement(id) => id,
+        game_realm::PendingOwner::Agreement(id) => id,
         _ => panic!("expected the actual proposed agreement"),
     };
     assert_eq!(
@@ -619,13 +587,8 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
             .is_empty()
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .realm
-            .as_ref()
+        game_realm::commitment(sim.canonical_state().components, id)
             .unwrap()
-            .kernel
-            .commitments[&id]
             .current()
             .backed[&0]
             .progress,
@@ -643,13 +606,8 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
     .unwrap();
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .realm
-            .as_ref()
+        game_realm::commitment(sim.canonical_state().components, id)
             .unwrap()
-            .kernel
-            .commitments[&id]
             .current()
             .backed[&0]
             .progress,
@@ -722,17 +680,10 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
             },
         },
     );
-    let id = *sim
-        .canonical_state()
-        .state
-        .realm
-        .as_ref()
-        .unwrap()
-        .kernel
-        .commitments
-        .keys()
+    let id = game_realm::commitments(sim.canonical_state().components)
         .last()
-        .unwrap();
+        .unwrap()
+        .0;
     travel(&mut sim, c.mayor, AreaId(1));
     report(&mut sim, ruler, c.mayor, id);
     ratify(&mut sim, c.a, ruler, c.av, id);
@@ -769,13 +720,8 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
     .unwrap();
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .realm
-            .as_ref()
+        game_realm::commitment(sim.canonical_state().components, id)
             .unwrap()
-            .kernel
-            .commitments[&id]
             .current()
             .backed[&0]
             .progress,
@@ -794,13 +740,8 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
     );
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .realm
-            .as_ref()
+        game_realm::commitment(sim.canonical_state().components, id)
             .unwrap()
-            .kernel
-            .commitments[&id]
             .current()
             .backed[&0]
             .progress,
@@ -817,4 +758,277 @@ fn a_willing_patrol_can_be_retasked_without_freezing_the_world_or_fulfilling_its
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     sim.advance(MINUTE).unwrap();
+}
+
+fn pending_report_fixture() -> (Simulation, PersonId, RealmCommitmentId) {
+    let (mut sim, c) = fixture(91);
+    let ruler = sim.canonical_state().state.ruler;
+    let id = propose(&mut sim, &c);
+    travel(&mut sim, c.mayor, AreaId(1));
+    command(
+        &mut sim,
+        Command::Realm {
+            action: RealmAction::Report {
+                commitment: id,
+                recipient: c.mayor,
+            },
+        },
+    );
+    assert!(game_realm::talk(sim.canonical_state().components, ruler).is_some());
+    (sim, ruler, id)
+}
+
+#[test]
+fn native_realm_and_stocks_save51_have_one_authority_and_pending_report_replays() {
+    let (mut reference, ruler, id) = pending_report_fixture();
+    let bytes = reference.save().unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["version"], 51);
+    let columns = &json["state"]["components"]["columns"];
+    let realm_keys = columns
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|key| key.starts_with("realm/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        realm_keys,
+        [
+            "realm/commitment",
+            "realm/knowledge",
+            "realm/requests",
+            "realm/talk"
+        ]
+    );
+    assert_eq!(columns["realm/commitment"].as_array().unwrap().len(), 1);
+    assert_eq!(columns["realm/talk"].as_array().unwrap().len(), 1);
+    let runtime_keys = json["state"]["state"]["realm"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(runtime_keys, ["last_event", "rules"]);
+    let people = json["state"]["state"]["people"].as_array().unwrap().len();
+    assert_eq!(
+        columns["characters/stocks"].as_array().unwrap().len(),
+        people
+    );
+    for row in columns["characters/mind"].as_array().unwrap() {
+        assert!(row["value"].get("knowledge").is_none());
+    }
+    reference.advance(MINUTE).unwrap();
+    for workers in [1, 2, 4] {
+        let mut restored = Simulation::load(
+            &bytes,
+            Execution {
+                workers,
+                reverse_jobs: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(restored.save().unwrap(), bytes);
+        for duration in [17_123, 19_877, 23_000] {
+            restored.advance(SimDuration(duration)).unwrap();
+        }
+        assert_eq!(restored.save().unwrap(), reference.save().unwrap());
+        assert!(game_realm::talk(restored.canonical_state().components, ruler).is_none());
+        assert!(game_realm::commitment(restored.canonical_state().components, id).is_some());
+    }
+}
+
+#[test]
+fn native_realm_and_stocks_reject_shadow_orphan_identity_shape_and_future_dates() {
+    let (sim, ruler, id) = pending_report_fixture();
+    let bytes = sim.save().unwrap();
+    let base: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let inventory = sim.canonical_state().state.people[0].inventory.0;
+    for failure in 0..18 {
+        let mut json = base.clone();
+        match failure {
+            0 => json["version"] = 49.into(),
+            1 => json["version"] = 50.into(),
+            2 => json["state"]["state"]["realm"]["kernel"] = serde_json::json!({}),
+            3 => {
+                support::component_id(&mut json, "realm/commitment", id.0)["id"] = (id.0 + 1).into()
+            }
+            4 => {
+                support::component_id(&mut json, "realm/commitment", id.0)["revisions"] =
+                    serde_json::json!([])
+            }
+            5 => support::component(&mut json, "realm/knowledge", ruler)["unknown"] = true.into(),
+            6 => json["state"]["components"]["columns"]["realm/knowledge"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"entity": inventory, "value": {"commitments": {}}})),
+            7 => json["state"]["components"]["columns"]["realm/requests"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"entity": inventory, "value": {"reconsider_after": 0}})),
+            8 => {
+                json["state"]["components"]["columns"]["realm/talk"][0]["entity"] = inventory.into()
+            }
+            9 => {
+                support::component(&mut json, "realm/talk", ruler)["completes"] =
+                    sim.time().0.into()
+            }
+            10 => {
+                support::component(&mut json, "characters/mind", ruler)["knowledge"] =
+                    serde_json::json!({})
+            }
+            11 => {
+                support::component(&mut json, "characters/stocks", ruler)["unknown"] = true.into()
+            }
+            12 => {
+                let fact = support::component(&mut json, "characters/stocks", ruler)["known"]
+                    .as_object_mut()
+                    .unwrap()
+                    .values_mut()
+                    .next()
+                    .expect("ruler has stock knowledge");
+                fact["observed_at"] = (sim.time().0 + 1).into();
+                fact["learned_at"] = (sim.time().0 + 1).into();
+            }
+            13 => json["state"]["components"]["columns"]["characters/stocks"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"entity": inventory, "value": {"known": {}}})),
+            15 => json["state"]["state"]["realm"] = serde_json::Value::Null,
+            16 => {
+                support::component_id(&mut json, "realm/commitment", id.0)["unknown"] = true.into()
+            }
+            17 => {
+                support::component_id(&mut json, "realm/commitment", id.0)["revisions"][0]["unknown"] =
+                    true.into()
+            }
+            _ => json["state"]["components"]["columns"]["characters/stocks"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|row| row["entity"].as_u64() != Some(ruler.0)),
+        }
+        assert!(
+            Simulation::load(&serde_json::to_vec(&json).unwrap(), Execution::default()).is_err(),
+            "native corruption {failure} was accepted"
+        );
+        assert_eq!(sim.save().unwrap(), bytes);
+    }
+}
+
+struct NativeReportPresence<'a>(&'a Simulation);
+impl game_realm::Presence for NativeReportPresence<'_> {
+    type Activity = Activity;
+    fn actor_reads(&self, actor: PersonId) -> game_ecs::ReadFootprint {
+        let mut reads = game_spatial::location_reads(
+            self.0.canonical_state().components,
+            game_ecs::StableId(actor.0),
+        )
+        .unwrap();
+        reads.protect::<game_physiology::Body>(game_ecs::StableId(actor.0));
+        reads.protect::<Activity>(game_ecs::StableId(actor.0));
+        reads.protect::<game_lifecycle::Life>(game_ecs::StableId(actor.0));
+        reads
+    }
+    fn inventory_reads(&self, inventory: InventoryId) -> game_ecs::ReadFootprint {
+        let mut reads = game_ecs::ReadFootprint::new();
+        reads.protect::<game_cargo::Inventory>(game_ecs::StableId(inventory.0));
+        reads
+    }
+    fn actor(&self, actor: PersonId) -> Option<game_realm::ActorFacts> {
+        let state = self.0.canonical_state();
+        let body = game_physiology::body(state.components, actor)?;
+        Some(game_realm::ActorFacts {
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            independent: game_lifecycle::life(state.components, actor)
+                .is_none_or(|life| life.stage != LifeStage::Infant),
+            in_combat: false,
+            location: game_spatial::resolve(state.components, game_ecs::StableId(actor.0)).ok()?,
+            idle_or_rest: matches!(
+                state
+                    .components
+                    .get::<Activity>(game_ecs::StableId(actor.0)),
+                Some(Activity::Idle | Activity::Rest)
+            ),
+            foreign_talking: false,
+            controlled: actor == state.state.ruler,
+            past_life_controlled: false,
+        })
+    }
+    fn same_place(&self, a: PersonId, b: PersonId) -> bool {
+        let store = self.0.canonical_state().components;
+        game_spatial::resolve(store, game_ecs::StableId(a.0)).unwrap()
+            == game_spatial::resolve(store, game_ecs::StableId(b.0)).unwrap()
+    }
+    fn people(&self) -> impl Iterator<Item = PersonId> {
+        self.0
+            .canonical_state()
+            .state
+            .people
+            .iter()
+            .map(|person| person.id)
+    }
+    fn local_people(&self, _: AreaId) -> impl Iterator<Item = PersonId> {
+        std::iter::empty()
+    }
+    fn inventory_area(&self, _: InventoryId) -> Option<AreaId> {
+        None
+    }
+}
+#[test]
+fn native_report_completion_late_body_or_activity_edits_fail_without_publication() {
+    let (sim, speaker, _) = pending_report_fixture();
+    let saved = sim.save().unwrap();
+    let state = sim.canonical_state();
+    let runtime = state.state.realm.as_ref().unwrap();
+    let talk = game_realm::talk(state.components, speaker).unwrap();
+    let at = talk.completes;
+    let recipient = talk.recipient;
+    let presence = NativeReportPresence(&sim);
+    for failure in 0..2 {
+        let plan = runtime
+            .prepare_report_completion(state.components, at, speaker, &presence)
+            .unwrap();
+        assert!(matches!(
+            plan.event,
+            game_realm::RealmEvent::Reported { .. }
+        ));
+        let mut batch = game_ecs::Batch::new();
+        let (guard, _) = plan
+            .stage_into(state.components, at, &presence, Activity::Idle, &mut batch)
+            .unwrap();
+        if failure == 0 {
+            let mut body = game_physiology::body(state.components, recipient)
+                .unwrap()
+                .clone();
+            body.vitals.alive = false;
+            batch.insert(game_ecs::StableId(recipient.0), body);
+        } else {
+            batch.insert(game_ecs::StableId(recipient.0), Activity::Idle);
+        }
+        assert!(guard.validate(&batch).is_err());
+        assert_eq!(sim.save().unwrap(), saved);
+    }
+    let plan = runtime
+        .prepare_report_completion(state.components, at, speaker, &presence)
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let (guard, _) = plan
+        .stage_into(state.components, at, &presence, Activity::Idle, &mut batch)
+        .unwrap();
+    let other = state
+        .state
+        .people
+        .iter()
+        .find(|p| p.id != recipient && p.id != speaker)
+        .unwrap()
+        .id;
+    batch.insert(
+        game_ecs::StableId(other.0),
+        game_characters::decisions::stocks(state.components, other)
+            .unwrap()
+            .clone(),
+    );
+    guard.validate(&batch).unwrap();
+    assert_eq!(sim.save().unwrap(), saved);
 }

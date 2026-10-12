@@ -71,6 +71,10 @@ impl Simulation {
         let mut batch = game_ecs::Batch::new();
         for (actor, mind) in minds {
             batch.insert(game_ecs::StableId(actor.0), mind);
+            batch.insert(
+                game_ecs::StableId(actor.0),
+                game_characters::decisions::Stocks::default(),
+            );
         }
         self.host.storage.apply_batch(batch)?;
         let work_concept = ConceptId(self.host.allocate_id()?.0);
@@ -112,7 +116,7 @@ impl Simulation {
                         } else {
                             Aspiration::Independence
                         },
-                        knowledge: BTreeMap::new(),
+
                         sites: BTreeMap::new(),
                         relationships: BTreeMap::new(),
                         values: BTreeMap::new(),
@@ -334,6 +338,17 @@ impl Simulation {
                     }
                 })
                 .collect();
+            for fact in observed_stocks {
+                game_characters::decisions::observe_stock::<Command>(
+                    &mut self.host.storage,
+                    p.id,
+                    owner_now,
+                    area,
+                    self.host.state.physical.as_ref().unwrap().rules.meal_size,
+                    fact,
+                )
+                .expect("known observation actor");
+            }
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
                 &mut self.host.storage,
                 p.id,
@@ -352,14 +367,6 @@ impl Simulation {
                     .map(|l| (l.destination, l.duration))
                     .collect();
                 mind.routes.insert(area, actual_routes);
-            }
-            for fact in observed_stocks {
-                mind.observe_stock(
-                    owner_now,
-                    area,
-                    self.host.state.physical.as_ref().unwrap().rules.meal_size,
-                    fact,
-                );
             }
             mind.child_signals
                 .retain(|_, signal| signal.location != *location);
@@ -620,6 +627,8 @@ impl Simulation {
                 actor: id,
                 decision: mind.decide(
                     &facts,
+                    game_characters::decisions::stocks(&self.host.storage, id)
+                        .expect("stock knowledge exists"),
                     &[],
                     self.host.state.decisions.as_ref().unwrap().work_concept,
                     margin,
@@ -851,7 +860,12 @@ impl Simulation {
                     } => source,
                     _ => continue,
                 };
-                let Some(good) = mind.knowledge.get(&inventory).map(|stock| stock.good) else {
+                let Some(good) = game_characters::decisions::stocks(&self.host.storage, id)
+                    .expect("stock knowledge exists")
+                    .known
+                    .get(&inventory)
+                    .map(|stock| stock.good)
+                else {
                     continue;
                 };
                 let need = match good {
@@ -879,8 +893,9 @@ impl Simulation {
                 );
             }
         }
-        for fact in mind
-            .knowledge
+        for fact in game_characters::decisions::stocks(&self.host.storage, id)
+            .expect("stock knowledge exists")
+            .known
             .values()
             .filter(|fact| fact.good == Good::Food)
         {
@@ -1020,6 +1035,8 @@ impl Simulation {
             actor: id,
             decision: mind.decide(
                 &facts,
+                game_characters::decisions::stocks(&self.host.storage, id)
+                    .expect("stock knowledge exists"),
                 &candidates,
                 self.host.state.decisions.as_ref().unwrap().work_concept,
                 margin,
@@ -1145,10 +1162,7 @@ impl Simulation {
             .decisions
             .as_mut()
             .and_then(|_| {
-                game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut self.host.storage,
-                    id,
-                )
+                game_characters::decisions::mind_mut::<Command>(&mut self.host.storage, id)
             })
             .ok_or(Error::Unavailable)?;
         mind.personality = personality;
@@ -1169,14 +1183,9 @@ impl Simulation {
             .state
             .decisions
             .as_mut()
-            .and_then(|_| {
-                game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut self.host.storage,
-                    id,
-                )
-            })
+            .and_then(|_| game_characters::decisions::stocks_mut(&mut self.host.storage, id))
             .ok_or(Error::Unavailable)?;
-        mind.knowledge.insert(fact.inventory, fact);
+        mind.known.insert(fact.inventory, fact);
         Ok(())
     }
 
@@ -1190,14 +1199,14 @@ impl Simulation {
         let Some(_) = &mut self.host.state.decisions else {
             return false;
         };
-        let Some(receiver) = game_characters::decisions::mind_mut::<game_api::Command>(
+        let inventory = fact.inventory;
+        if !game_characters::decisions::receive_social_report::<Command>(
             &mut self.host.storage,
             recipient,
-        ) else {
-            return false;
-        };
-        let inventory = fact.inventory;
-        if !receiver.receive_report(sender, owner_now, fact) {
+            sender,
+            owner_now,
+            fact,
+        ) {
             return false;
         }
         self.emit(EventKind::Reported {

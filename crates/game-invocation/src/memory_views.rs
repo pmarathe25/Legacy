@@ -90,7 +90,7 @@ impl Runtime {
                     person: *id,
                     died_at: life.died_at,
                     skills: life.skills.clone(),
-                    stocks: life.mind.knowledge.values().take(64).cloned().collect(),
+                    stocks: life.stocks.known.values().take(64).cloned().collect(),
                     routes: life
                         .mind
                         .routes

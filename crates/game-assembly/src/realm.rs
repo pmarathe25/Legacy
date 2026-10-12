@@ -1,80 +1,120 @@
-//! Regional commitments coordinate existing institutions and owners. This
-//! adapter applies no substitute inventories, offices, votes or combat result.
+//! Public bindings for the regional owner's native records and prepared effects.
 use crate::*;
-use game_realm::{
-    Action, Backing, LocalWitness, OutcomeReceipt, Progress, Proposal, ProposalFacts, Ratification,
-    Request, Term, TermKey, WorkReceipt,
-};
+use game_realm::{Action, PendingOwner, RealmEvent, Request, TermKey};
+pub use game_realm::{PendingTalk as Talk, Rules, Runtime as World};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
-    pub talk_time: SimDuration,
+struct RealmBindings<'a> {
+    sim: &'a Simulation,
+    positional: &'a BTreeMap<AreaId, Vec<PersonId>>,
 }
-impl Default for Rules {
-    fn default() -> Self {
-        Self { talk_time: MINUTE }
+impl game_realm::Presence for RealmBindings<'_> {
+    type Activity = Activity;
+    fn actor_reads(&self, actor: PersonId) -> game_ecs::ReadFootprint {
+        let id = game_ecs::StableId(actor.0);
+        let mut reads = game_ecs::ReadFootprint::new();
+        reads.protect::<game_physiology::Body>(id);
+        reads.protect::<game_lifecycle::Life>(id);
+        reads.protect::<Activity>(id);
+        reads.protect::<game_property::Activity>(id);
+        reads.protect::<game_invocation::ControlSession>(id);
+        for (person, _) in game_invocation::sessions(&self.sim.host.storage) {
+            reads.protect::<game_invocation::ControlSession>(game_ecs::StableId(person.0));
+        }
+        for (speaker, _) in game_missions::talks(&self.sim.host.storage)
+            .filter(|(speaker, talk)| *speaker == actor || talk.listener == actor)
+        {
+            reads.protect::<game_missions::PendingTalk>(game_ecs::StableId(speaker.0));
+        }
+        reads.extend(
+            game_spatial::location_reads(&self.sim.host.storage, id)
+                .expect("validated carrier chain"),
+        );
+        reads
+    }
+    fn inventory_reads(&self, inventory: InventoryId) -> game_ecs::ReadFootprint {
+        let mut reads = game_ecs::ReadFootprint::new();
+        reads.protect::<game_cargo::Inventory>(game_ecs::StableId(inventory.0));
+        if let Some(stock) = game_cargo::inventory(&self.sim.host.storage, inventory)
+            && let InventoryLocation::Carried(actor) = stock.location
+        {
+            reads.extend(
+                game_spatial::location_reads(&self.sim.host.storage, game_ecs::StableId(actor.0))
+                    .expect("validated inventory carrier chain"),
+            );
+        }
+        reads
+    }
+
+    fn actor(&self, actor: PersonId) -> Option<game_realm::ActorFacts> {
+        let body = game_physiology::body(&self.sim.host.storage, actor)?;
+        Some(game_realm::ActorFacts {
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            independent: self.sim.independent(actor),
+            in_combat: self.sim.in_combat(actor),
+            location: self.sim.resolved_location(actor),
+            idle_or_rest: matches!(
+                self.sim.host.storage.activity(actor),
+                Some(Activity::Idle | Activity::Rest)
+            ),
+            foreign_talking: self.sim.host.state.armies.as_ref().is_some_and(|w| {
+                w.talks
+                    .values()
+                    .any(|t| t.speaker == actor || t.listener == actor)
+            }) || self
+                .sim
+                .host
+                .state
+                .missions
+                .as_ref()
+                .is_some_and(|w| w.actor_talking(&self.sim.host.storage, actor))
+                || self.sim.property_actor_talking(actor)
+                || self
+                    .sim
+                    .host
+                    .state
+                    .social
+                    .as_ref()
+                    .is_some_and(|w| w.participants.contains_key(&actor)),
+            controlled: actor == self.sim.host.state.ruler,
+            past_life_controlled: self.sim.past_life_controls_actor(actor),
+        })
+    }
+    fn same_place(&self, a: PersonId, b: PersonId) -> bool {
+        self.sim.transport_same_place(a, b)
+    }
+    fn people(&self) -> impl Iterator<Item = PersonId> {
+        self.sim.person_index.keys().copied()
+    }
+    fn local_people(&self, area: AreaId) -> impl Iterator<Item = PersonId> {
+        self.positional.get(&area).into_iter().flatten().copied()
+    }
+    fn inventory_area(&self, id: InventoryId) -> Option<AreaId> {
+        game_cargo::inventory(&self.sim.host.storage, id).and_then(|i| self.sim.inventory_area(i))
     }
 }
-impl Rules {
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.talk_time.0 == 0 {
-            Err(Error::InvalidConfiguration(
-                "realm talk time must be positive".into(),
-            ))
-        } else {
-            Ok(())
+impl game_realm::PendingFacts for RealmBindings<'_> {
+    fn talk_activity(&self, actor: PersonId) -> Option<game_realm::TalkActivity> {
+        match self.sim.host.storage.activity(actor)? {
+            Activity::RealmTalk {
+                commitment,
+                recipient,
+                completes,
+            } => Some(game_realm::TalkActivity {
+                commitment: *commitment,
+                recipient: *recipient,
+                completes: *completes,
+            }),
+            _ => None,
         }
     }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Talk {
-    pub recipient: PersonId,
-    pub area: AreaId,
-    pub completes: SimTime,
-    pub report: game_realm::Report,
-    pub institutions: Vec<InstitutionView>,
-    pub stocks: Vec<StockKnowledge>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PendingOwner {
-    Agreement(AgreementId),
-    Mission(MissionId),
-    Passage(RuleProposalId),
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingWork {
-    pub actor: PersonId,
-    pub owner: PendingOwner,
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub kernel: game_realm::World,
-    pub rules: Rules,
-    pub talks: BTreeMap<PersonId, Talk>,
-    #[serde(with = "pending_entries")]
-    pub pending: BTreeMap<TermKey, PendingWork>,
-    pub reconsider_after: BTreeMap<PersonId, SimTime>,
-    pub last_event: u64,
-}
-mod pending_entries {
-    use super::*;
-    pub fn serialize<S: serde::Serializer>(
-        value: &BTreeMap<TermKey, PendingWork>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        value.iter().collect::<Vec<_>>().serialize(serializer)
-    }
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<BTreeMap<TermKey, PendingWork>, D::Error> {
-        let entries = Vec::<(TermKey, PendingWork)>::deserialize(deserializer)?;
-        let mut result = BTreeMap::new();
-        for (key, value) in entries {
-            if result.insert(key, value).is_some() {
-                return Err(serde::de::Error::custom("duplicate regional work key"));
-            }
-        }
-        Ok(result)
+    fn physical_due(&self, actor: PersonId, at: SimTime) -> bool {
+        self.sim
+            .host
+            .state
+            .due
+            .get(&at)
+            .is_some_and(|d| d.contains(&Due::Physical(actor)))
     }
 }
 impl Simulation {
@@ -201,11 +241,15 @@ impl Simulation {
         sim.initialize_realm(Rules::default())?;
         // These fixture delegates await the scripted negotiating choices. Their
         // ordinary biological needs, voting, and real agreement tasks continue.
-        sim.host.state.realm.as_mut().unwrap().reconsider_after = sim
-            .person_index
-            .keys()
-            .map(|id| (*id, SimTime(86_400_000)))
-            .collect();
+        for actor in sim.person_index.keys().copied() {
+            game_realm::insert_requests(
+                &mut sim.host.storage,
+                actor,
+                game_realm::Requests {
+                    reconsider_after: SimTime(86_400_000),
+                },
+            )?;
+        }
         sim.review_decisions()?;
         Ok(sim)
     }
@@ -220,436 +264,355 @@ impl Simulation {
         self.host.state.realm = Some(World {
             rules,
             last_event: self.host.next_event() - 1,
-            ..World::default()
         });
+        for actor in self.person_index.keys().copied() {
+            game_realm::insert_knowledge(
+                &mut self.host.storage,
+                actor,
+                game_realm::PersonalKnowledge::default(),
+            )?;
+            game_realm::insert_requests(
+                &mut self.host.storage,
+                actor,
+                game_realm::Requests::default(),
+            )?;
+        }
         Ok(())
     }
-    fn realm_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = game_physiology::body(&self.host.storage, actor)?;
-        if !body.vitals.alive
-            || body.vitals.health == 0
-            || !self.independent(actor)
-            || self.in_combat(actor)
-        {
-            return None;
-        }
-        match self.resolved_location(actor) {
-            Location::AtArea(area) => Some(area),
-            _ => None,
-        }
-    }
-    fn realm_facts(
+    pub(crate) fn realm_positional_membership(
         &self,
-        actor: PersonId,
-        proposal: &Proposal,
-        fresh_local: bool,
-    ) -> Result<ProposalFacts, Error> {
-        let mind = self
+    ) -> Result<BTreeMap<AreaId, Vec<PersonId>>, Error> {
+        let roster = game_spatial::LocalRoster::build(&self.host.storage)?;
+        Ok(self
             .host
             .state
-            .decisions
-            .as_ref()
-            .and_then(|_| {
-                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+            .areas
+            .iter()
+            .map(|area| {
+                (
+                    area.id,
+                    roster
+                        .resolved_at_area(area.id)
+                        .map(|id| PersonId(id.0))
+                        .collect(),
+                )
             })
-            .ok_or(Error::Unavailable)?;
-        let cached = self.institution_view(actor);
-        let mut facts = ProposalFacts {
-            known_people: BTreeSet::from([actor]),
-            known_areas: mind
-                .routes
-                .keys()
-                .copied()
-                .chain(mind.routes.values().flat_map(|links| links.keys().copied()))
+            .collect())
+    }
+    fn realm_authority(
+        &self,
+        actor: PersonId,
+        extra: &[InstitutionId],
+    ) -> game_society::institutions::AuthorityFacts {
+        let ids = self
+            .host
+            .state
+            .realm
+            .as_ref()
+            .map_or_else(BTreeSet::new, |w| {
+                w.authority_institutions(&self.host.storage, actor, extra)
+            });
+        game_society::institutions::AuthorityFacts {
+            alive: game_society::authority_people(&self.host.storage, ids)
+                .into_iter()
+                .filter(|id| {
+                    game_physiology::body(&self.host.storage, *id).is_some_and(|b| b.vitals.alive)
+                })
                 .collect(),
-            ..ProposalFacts::default()
-        };
-        for (id, k) in &mind.knowledge {
-            let capacity = game_cargo::inventory(&self.host.storage, *(id))
-                .filter(|i| {
-                    self.inventory_area(i) == self.realm_area(actor)
-                        && k.observed_at == self.host.clock().time
-                })
-                .map(|i| i.capacity);
-            facts.inventories.insert(
-                *id,
-                game_realm::InventoryFacts {
-                    good: k.good,
-                    capacity,
-                },
-            );
         }
-        for p in proposal.participants.values() {
-            let known = cached
-                .iter()
-                .find(|i| i.id == p.institution)
-                .ok_or(Error::Unavailable)?;
-            facts.known_people.extend(known.members.iter().copied());
-            let office = known
-                .offices
-                .iter()
-                .find(|o| {
-                    o.mandate.holder == p.representative
-                        && o.effective
-                        && o.mandate.powers.contains(&OfficePower::Negotiate)
-                })
-                .ok_or(Error::Unavailable)?;
-            let mut mandate = office.mandate.clone();
-            let mut authorized = known.status == InstitutionStatus::Active;
-            if fresh_local && p.representative == actor {
-                let actual = game_society::institution(&self.host.storage, p.institution)
-                    .ok_or(Error::Unavailable)?;
-                mandate = actual
-                    .charter
-                    .offices
-                    .iter()
-                    .find(|o| o.slot == mandate.slot && o.holder == actor)
-                    .ok_or(Error::Unavailable)?
-                    .clone();
-                authorized = actual.charter.jurisdiction
-                    == self.realm_area(actor).ok_or(Error::Unavailable)?
-                    && self.office_effective(actual, &mandate)
-                    && mandate.powers.contains(&OfficePower::Negotiate);
-            }
-            // An inventory scope grants no invented monetary balance or
-            // compartment-sized lifetime spending limit. Owners validate each
-            // actual promise and physical use; future production can be pledged.
-            let delivery_caps = if mandate.powers.contains(&OfficePower::Delivery) {
-                mandate
-                    .inventories
-                    .iter()
-                    .map(|id| (*id, Quantity(u64::MAX)))
-                    .collect()
-            } else {
-                BTreeMap::new()
-            };
-            let supply_caps = mandate
-                .inventories
-                .iter()
-                .map(|id| (*id, Quantity(u64::MAX)))
-                .collect();
-            facts.representatives.insert(
-                p.institution,
-                game_realm::RepresentativeFacts {
-                    settlement: known.charter.jurisdiction,
-                    representative: p.representative,
-                    may_negotiate: authorized,
-                    delivery_caps,
-                    supply_caps,
-                    passage_areas: BTreeSet::from([known.charter.jurisdiction]),
-                    protection_areas: facts.known_areas.clone(),
-                },
-            );
-        }
-        facts.known_people.extend(
-            self.person_index
-                .keys()
-                .copied()
-                .filter(|p| self.realm_area(*p) == self.realm_area(actor))
-                .take(64),
-        );
-        Ok(facts)
     }
     pub(crate) fn realm_view(&self, actor: PersonId) -> game_realm::View {
-        game_realm::View {
-            commitments: self
-                .host
-                .state
-                .realm
-                .as_ref()
-                .and_then(|w| w.kernel.known.get(&actor))
-                .map_or_else(Vec::new, |known| {
-                    known
-                        .iter()
-                        .rev()
-                        .take(64)
-                        .map(|(id, k)| game_realm::KnownCommitment {
-                            id: *id,
-                            knowledge: k.clone(),
-                        })
-                        .collect()
-                }),
-        }
+        self.host
+            .state
+            .realm
+            .as_ref()
+            .map_or_else(game_realm::View::default, |w| {
+                w.view(&self.host.storage, actor)
+            })
+    }
+    pub(crate) fn publish_realm_event(&mut self, event: RealmEvent) {
+        self.emit(match event {
+            RealmEvent::Proposed {
+                commitment,
+                actor,
+                revision,
+            } => EventKind::RealmProposed {
+                commitment,
+                actor,
+                revision,
+            },
+            RealmEvent::Ratified {
+                commitment,
+                revision,
+                institution,
+                proposal,
+                adopted,
+            } => EventKind::RealmRatified {
+                commitment,
+                revision,
+                institution,
+                proposal,
+                adopted,
+            },
+            RealmEvent::WorkRequested { key, actor } => {
+                EventKind::RealmWorkRequested { key, actor }
+            }
+            RealmEvent::Reported {
+                commitment,
+                sender,
+                recipient,
+            } => EventKind::RealmReported {
+                commitment,
+                sender,
+                recipient,
+            },
+            RealmEvent::Interrupted { actor } => EventKind::Interrupted { actor },
+        });
     }
     pub(crate) fn realm_command(&mut self, actor: PersonId, action: &Action) -> Result<(), Error> {
+        let positional = self.realm_positional_membership()?;
         self.host.preflight_records(0, 0, 1)?;
-        let area = self.realm_area(actor).ok_or(Error::Unavailable)?;
         let world = self.host.state.realm.as_ref().ok_or(Error::Unavailable)?;
+        let extra = match action {
+            Action::Propose { proposal } | Action::Revise { proposal, .. } => {
+                proposal.participants.keys().copied().collect::<Vec<_>>()
+            }
+            _ => Vec::new(),
+        };
+        let authority = self.realm_authority(actor, &extra);
+        let context = game_realm::RealmContext {
+            now: self.time(),
+            authority: &authority,
+            presence: &RealmBindings {
+                sim: self,
+                positional: &positional,
+            },
+        };
         match action {
             Action::Propose { proposal } => {
-                if proposal.proposer != actor {
-                    return Err(Error::Unavailable);
-                }
-                let facts = self.realm_facts(actor, proposal, true)?;
-                self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
-                self.ensure_event_capacity(1)?;
+                self.host.preflight_records(1, 1, 0)?;
                 let id = RealmCommitmentId(self.host.next_id());
-                let prepared = world.kernel.prepare_propose(
+                let plan = world.prepare_proposal::<Command>(
+                    &self.host.storage,
+                    actor,
                     id,
-                    proposal.clone(),
-                    &facts,
-                    self.host.clock().time,
+                    proposal,
+                    &context,
                 )?;
-                let allocated = self.host.allocate_id()?.0;
-                debug_assert_eq!(allocated, id.0);
-                prepared.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-                self.emit(EventKind::RealmProposed {
+                let mut batch = game_ecs::Batch::new();
+                let guard = plan.stage_into(world, &self.host.storage, &context, &mut batch)?;
+                guard.validate(&batch)?;
+                self.host.storage.apply_batch(batch)?;
+                self.host
+                    .allocate_id()
+                    .expect("preflighted regional allocation");
+                self.publish_realm_event(RealmEvent::Proposed {
                     commitment: id,
                     actor,
                     revision: 0,
                 });
-                self.realm_publish_proposal(id, 0, area)?;
             }
             Action::Revise {
                 commitment,
                 proposal,
             } => {
-                if proposal.proposer != actor {
-                    return Err(Error::Unavailable);
-                }
-                let facts = self.realm_facts(actor, proposal, true)?;
-                let prepared = world.kernel.prepare_revise(
+                self.host.preflight_records(0, 1, 0)?;
+                let plan = world.prepare_revision::<Command>(
+                    &self.host.storage,
+                    actor,
                     *commitment,
-                    proposal.clone(),
-                    &facts,
-                    self.host.clock().time,
+                    proposal,
+                    &context,
                 )?;
-                self.ensure_event_capacity(1)?;
-                prepared.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-                let revision = self.host.state.realm.as_ref().unwrap().kernel.commitments
-                    [commitment]
-                    .current()
-                    .number;
-                self.emit(EventKind::RealmProposed {
+                let revision = plan.revision_number().unwrap();
+                let mut batch = game_ecs::Batch::new();
+                let guard = plan.stage_into(world, &self.host.storage, &context, &mut batch)?;
+                guard.validate(&batch)?;
+                self.host.storage.apply_batch(batch)?;
+                self.publish_realm_event(RealmEvent::Proposed {
                     commitment: *commitment,
                     actor,
                     revision,
                 });
-                self.realm_publish_proposal(*commitment, revision, area)?;
             }
             Action::Report {
                 commitment,
                 recipient,
             } => {
-                if *recipient == actor
-                    || self.realm_area(*recipient) != Some(area)
-                    || !self.transport_same_place(actor, *recipient)
-                    || !self.conversation_actor_available(*recipient)
-                {
-                    return Err(Error::Unavailable);
-                }
-                let report =
-                    world
-                        .kernel
-                        .prepare_report(actor, *commitment, self.host.clock().time)?;
-                let referenced = report
-                    .snapshot
-                    .revisions
-                    .values()
-                    .flat_map(|r| r.proposal.value.participants.keys().copied())
-                    .collect::<BTreeSet<_>>();
-                let stocks=game_characters::decisions::mind::<game_api::Command>(&self.host.storage,actor).unwrap().knowledge.values()
-                    .filter(|k|report.snapshot.revisions.values().any(|r|r.proposal.value.terms.iter().any(|term|match term {
-                        Term::Delivery {term:AgreementTerm::Delivery {source,destination,..},..}=>k.inventory==*source || k.inventory==*destination,
-                        Term::Protection {patrol,..}=>patrol.supplies.iter().any(|s|s.source==k.inventory)
-                            || patrol.compensation.values().flatten().any(|t|matches!(t,AgreementTerm::Delivery {source,destination,..} if k.inventory==*source || k.inventory==*destination)),
-                        _=>false,
-                    }))).take(64).cloned().collect();
-                let institutions = self
-                    .institution_view(actor)
-                    .into_iter()
-                    .filter(|i| referenced.contains(&i.id))
-                    .collect();
-                let completes = SimTime(
-                    self.host
-                        .clock()
-                        .time
-                        .0
-                        .checked_add(world.rules.talk_time.0)
-                        .ok_or(Error::Overflow)?,
-                );
-                self.ensure_event_capacity(1)?;
-                self.interrupt_actor_activity(actor);
-                self.host.state.realm.as_mut().unwrap().talks.insert(
+                let plan = world.prepare_report_start(
+                    &self.host.storage,
+                    self.time(),
                     actor,
-                    Talk {
-                        recipient: *recipient,
-                        area,
-                        completes,
-                        report,
-                        institutions,
-                        stocks,
+                    *recipient,
+                    *commitment,
+                    &RealmBindings {
+                        sim: self,
+                        positional: &positional,
                     },
-                );
-                *self.host.storage.activity_mut(actor).unwrap() = Activity::RealmTalk {
-                    commitment: *commitment,
-                    recipient: *recipient,
-                    completes,
-                };
+                )?;
+                let pending = plan.pending().clone();
+                self.ensure_event_capacity(1)?;
+                let interruption =
+                    self.prepare_interruptions(&[actor], commands::ActivityOwner::Realm)?;
+                self.ensure_event_capacity(
+                    usize::try_from(interruption.event_count()?).map_err(|_| Error::Overflow)?,
+                )?;
+                let mut batch = game_ecs::Batch::new();
+                let replacement = plan.stage_into_with_replacement(
+                    self.host.state.realm.as_ref().unwrap(),
+                    &self.host.storage,
+                    self.time(),
+                    &RealmBindings {
+                        sim: self,
+                        positional: &positional,
+                    },
+                    &mut batch,
+                )?;
+                let mut finish = interruption.stage_into_with_realm_replacement(
+                    self,
+                    &mut batch,
+                    &BTreeMap::from([(
+                        actor,
+                        Activity::RealmTalk {
+                            commitment: *commitment,
+                            recipient: *recipient,
+                            completes: pending.completes,
+                        },
+                    )]),
+                    &replacement,
+                )?;
+                finish.validate_batch(&batch)?;
+                self.host.storage.apply_batch(batch)?;
+                finish.finish_actor(self, actor);
                 self.host
                     .state
                     .due
-                    .entry(completes)
+                    .entry(pending.completes)
                     .or_default()
                     .push(Due::Physical(actor));
             }
-            Action::RequestWork { key } => self.realm_request_work(actor, *key)?,
+            Action::RequestWork { key } => self.realm_request_work(actor, *key, &positional)?,
         }
-        self.host.bump_revision(1)?;
-        Ok(())
-    }
-    fn realm_publish_proposal(
-        &mut self,
-        id: RealmCommitmentId,
-        revision: u32,
-        area: AreaId,
-    ) -> Result<(), Error> {
-        let listeners = self
-            .person_index
-            .keys()
-            .copied()
-            .filter(|p| self.realm_area(*p) == Some(area))
-            .collect::<Vec<_>>();
-        for actor in listeners {
-            let witness = LocalWitness {
-                observer: actor,
-                observer_area: area,
-                statement_area: area,
-                observed_at: self.host.clock().time,
-            };
-            let prepared = self
-                .host
-                .state
-                .realm
-                .as_ref()
-                .unwrap()
-                .kernel
-                .prepare_observe_proposal(witness, id, revision, self.host.clock().time)?;
-            prepared.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-        }
+        self.host
+            .bump_revision(1)
+            .expect("preflighted regional revision");
         Ok(())
     }
     pub(crate) fn complete_realm_talk(&mut self, actor: PersonId) {
-        let owner_now = self.host.clock().time;
-        let Some(talk) = self
-            .host
-            .state
-            .realm
-            .as_mut()
-            .and_then(|w| w.talks.remove(&actor))
-        else {
+        let positional = BTreeMap::new();
+        let world = self.host.state.realm.as_ref().expect("regional runtime");
+        let now = self.time();
+        let Ok(plan) = world.prepare_report_completion(
+            &self.host.storage,
+            now,
+            actor,
+            &RealmBindings {
+                sim: self,
+                positional: &positional,
+            },
+        ) else {
             return;
         };
-        if self.realm_area(actor) == Some(talk.area)
-            && self.realm_area(talk.recipient) == Some(talk.area)
-            && self.transport_same_place(actor, talk.recipient)
-            && matches!(
-                *self
-                    .host
-                    .storage
-                    .activity(talk.recipient)
-                    .expect("body exists"),
-                Activity::Idle | Activity::Rest
+        let event = plan.event.clone();
+        let receiving = plan
+            .reception
+            .as_ref()
+            .map(|r| {
+                Ok::<_, Error>((
+                    game_society::perception::prepare_institution_reports(
+                        &self.host.storage,
+                        r.recipient,
+                        &r.institutions,
+                    )?,
+                    game_characters::decisions::prepare_stock_reports::<Command>(
+                        &self.host.storage,
+                        r.recipient,
+                        r.sender,
+                        now,
+                        &r.stocks,
+                    )?,
+                ))
+            })
+            .transpose()
+            .expect("validated frozen regional report");
+        let mut batch = game_ecs::Batch::new();
+        let (talk_guard, realm_guard) = plan
+            .stage_into(
+                &self.host.storage,
+                now,
+                &RealmBindings {
+                    sim: self,
+                    positional: &positional,
+                },
+                Activity::Idle,
+                &mut batch,
             )
-        {
-            if let Ok(prepared) = self
-                .host
-                .state
-                .realm
-                .as_ref()
-                .unwrap()
-                .kernel
-                .prepare_receive_report(talk.recipient, &talk.report, owner_now)
-                && prepared
-                    .commit(&mut self.host.state.realm.as_mut().unwrap().kernel)
-                    .is_ok()
-            {
-                if game_society::knowledge(&self.host.storage, talk.recipient).is_none() {
-                    game_society::insert_knowledge(
-                        &mut self.host.storage,
-                        talk.recipient,
-                        game_society::Knowledge::default(),
-                    )
-                    .expect("valid report recipient");
-                }
-                let memory =
-                    game_society::knowledge_mut(&mut self.host.storage, talk.recipient).unwrap();
-                for snapshot in talk.institutions {
-                    if memory
-                        .institutions
-                        .get(&snapshot.id)
-                        .is_none_or(|old| old.observed_at < snapshot.observed_at)
-                    {
-                        memory.institutions.insert(snapshot.id, snapshot);
-                    }
-                }
-                let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut self.host.storage,
-                    talk.recipient,
-                )
-                .unwrap();
-                for mut fact in talk.stocks {
-                    if mind
-                        .knowledge
-                        .get(&fact.inventory)
-                        .is_none_or(|old| old.observed_at < fact.observed_at)
-                    {
-                        // A sender's access is not a grant to the recipient.
-                        fact.accessible = mind
-                            .knowledge
-                            .get(&fact.inventory)
-                            .is_some_and(|old| old.accessible);
-                        fact.learned_at = owner_now;
-                        fact.source = KnowledgeSource::Reported(actor);
-                        mind.knowledge.insert(fact.inventory, fact);
-                    }
-                }
-                self.emit(EventKind::RealmReported {
-                    commitment: talk.report.commitment,
-                    sender: actor,
-                    recipient: talk.recipient,
-                });
-            } else {
-                self.emit(EventKind::Interrupted { actor });
-            }
-        } else {
-            self.emit(EventKind::Interrupted { actor });
+            .expect("fresh regional report");
+        let guards = receiving
+            .map(|(institutions, stocks)| {
+                Ok::<_, Error>((
+                    institutions.stage_into(&self.host.storage, &mut batch)?,
+                    stocks.stage_into(&self.host.storage, &mut batch)?,
+                ))
+            })
+            .transpose()
+            .expect("fresh receiving memories");
+        talk_guard
+            .validate(&batch)
+            .expect("regional report footprint");
+        if let Some(g) = realm_guard {
+            g.validate(&batch).expect("regional knowledge footprint");
         }
-        *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
+        if let Some((a, b)) = guards {
+            a.validate(&batch).expect("institutional report footprint");
+            b.validate(&batch).expect("stock report footprint");
+        }
+        self.host
+            .storage
+            .apply_batch(batch)
+            .expect("admitted regional report");
+        self.publish_realm_event(event);
     }
     pub(crate) fn realm_actor_busy(&self, actor: PersonId) -> bool {
-        self.host.state.realm.as_ref().is_some_and(|w| {
-            w.talks
-                .iter()
-                .any(|(speaker, t)| *speaker == actor || t.recipient == actor)
-        })
+        self.host
+            .state
+            .realm
+            .as_ref()
+            .is_some_and(|w| w.actor_busy(&self.host.storage, actor))
     }
     pub(crate) fn interrupt_realm(&mut self, actor: PersonId) {
-        let speakers = self.host.state.realm.as_ref().map_or_else(Vec::new, |w| {
-            w.talks
-                .iter()
-                .filter(|(speaker, t)| **speaker == actor || t.recipient == actor)
-                .map(|(speaker, _)| *speaker)
-                .collect()
-        });
-        for speaker in speakers {
-            self.host
-                .state
-                .realm
-                .as_mut()
-                .unwrap()
-                .talks
-                .remove(&speaker);
+        let Some(world) = self.host.state.realm.as_ref() else {
+            return;
+        };
+        let plan = world.prepare_cancel_talks(&self.host.storage, &[actor]);
+        let speakers = plan.speakers().collect::<Vec<_>>();
+        let events = plan.events.clone();
+        let mut batch = game_ecs::Batch::new();
+        let guard = plan
+            .stage_into(&self.host.storage, &mut batch, None)
+            .expect("fresh regional interruption");
+        for speaker in &speakers {
             if matches!(
-                *self.host.storage.activity(speaker).expect("body exists"),
-                Activity::RealmTalk { .. }
+                self.host.storage.activity(*speaker),
+                Some(Activity::RealmTalk { .. })
             ) {
-                *self.host.storage.activity_mut(speaker).unwrap() = Activity::Idle;
-                for due in self.host.state.due.values_mut() {
-                    due.retain(|d| *d != Due::Physical(speaker));
-                }
+                batch.insert(game_ecs::StableId(speaker.0), Activity::Idle);
             }
-            self.emit(EventKind::Interrupted { actor: speaker });
+        }
+        guard
+            .validate(&batch)
+            .expect("regional interruption footprint");
+        self.host
+            .storage
+            .apply_batch(batch)
+            .expect("admitted regional interruption");
+        for speaker in speakers {
+            for due in self.host.state.due.values_mut() {
+                due.retain(|d| *d != Due::Physical(speaker));
+            }
+        }
+        for event in events {
+            self.publish_realm_event(event);
         }
     }
     pub(crate) fn validate_realm_change(
@@ -664,52 +627,12 @@ impl Simulation {
         ) {
             return Ok(());
         }
-        let Some(world) = &self.host.state.realm else {
-            return Err(Error::Unavailable);
-        };
-        match change {
-            InstitutionChange::RatifyRegional {
-                commitment,
-                revision,
-                ..
-            } => {
-                let c = world
-                    .kernel
-                    .commitments
-                    .get(commitment)
-                    .ok_or(Error::Unavailable)?;
-                let r = c.current();
-                if r.number != *revision
-                    || !r.proposal.participants.contains_key(&i.id)
-                    || r.proposal.ratify_by < self.host.clock().time
-                    || r.status() != game_realm::Status::AwaitingRatification
-                {
-                    return Err(Error::Unavailable);
-                }
-            }
-            InstitutionChange::AuthorizeRegionalPassage {
-                commitment,
-                revision,
-                index,
-            } => {
-                let r = world
-                    .kernel
-                    .commitments
-                    .get(commitment)
-                    .and_then(|c| c.revision(*revision))
-                    .ok_or(Error::Unavailable)?;
-                if !matches!(r.proposal.terms.get(usize::from(*index)),Some(Term::Passage {grantor,until,..}) if *grantor==i.id && *until>self.host.clock().time)
-                    || r.ratifications.len() != r.proposal.participants.len()
-                    || r.ratifications
-                        .values()
-                        .any(|r| r.outcome != game_realm::Decision::Adopted)
-                {
-                    return Err(Error::Unavailable);
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+        self.host
+            .state
+            .realm
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .validate_change(&self.host.storage, i, change, self.time())
     }
     pub(crate) fn realm_change_actor_allowed(
         &self,
@@ -718,337 +641,317 @@ impl Simulation {
         change: &InstitutionChange,
         proposing: bool,
     ) -> bool {
-        let (id, revision) = match change {
-            InstitutionChange::RatifyRegional {
-                commitment,
-                revision,
-                ..
-            }
-            | InstitutionChange::AuthorizeRegionalPassage {
-                commitment,
-                revision,
-                ..
-            } => (*commitment, *revision),
-            _ => return true,
-        };
-        let Some(known) = self
-            .host
-            .state
-            .realm
-            .as_ref()
-            .and_then(|w| w.kernel.view(actor, id))
-            .and_then(|k| k.revisions.get(&revision))
-        else {
-            return false;
-        };
-        if !proposing {
+        let positional = BTreeMap::new();
+        if !matches!(
+            change,
+            InstitutionChange::RatifyRegional { .. }
+                | InstitutionChange::AuthorizeRegionalPassage { .. }
+        ) {
             return true;
         }
-        let Some(p) = known.proposal.value.participants.get(&i.id) else {
-            return false;
-        };
-        p.representative == actor
-            && self.realm_area(actor) == Some(i.charter.jurisdiction)
-            && i.charter.offices.iter().any(|o| {
-                o.holder == actor
-                    && o.powers.contains(&OfficePower::Negotiate)
-                    && self.office_effective(i, o)
-            })
+        self.host.state.realm.as_ref().is_some_and(|w| {
+            w.change_actor_allowed(
+                &self.host.storage,
+                actor,
+                i,
+                change,
+                proposing,
+                &game_realm::RealmContext {
+                    now: self.time(),
+                    authority: &self.realm_authority(actor, &[i.id]),
+                    presence: &RealmBindings {
+                        sim: self,
+                        positional: &positional,
+                    },
+                },
+            )
+        })
     }
-    fn realm_native_plan(
+    pub(crate) fn prepare_realm_outcome(
         &self,
         institution: InstitutionId,
         proposal: RuleProposalId,
         status: RuleProposalStatus,
-    ) -> Result<Option<game_realm::PreparedChange>, Error> {
-        let record = self
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .and_then(|_| game_society::proposal(&self.host.storage, proposal))
-            .ok_or(Error::Unavailable)?;
-        let InstitutionChange::RatifyRegional {
-            commitment,
-            revision,
-            support,
-        } = record.change
-        else {
+    ) -> Result<Option<(game_realm::PreparedChange, RealmEvent)>, Error> {
+        let positional = self.realm_positional_membership()?;
+        let Some(world) = self.host.state.realm.as_ref() else {
             return Ok(None);
-        };
-        if record.institution != institution || status == RuleProposalStatus::Proposed {
-            return Err(Error::Unavailable);
-        }
-        if !support && status == RuleProposalStatus::Rejected {
-            return Ok(None);
-        }
-        let world = self.host.state.realm.as_ref().ok_or(Error::Unavailable)?;
-        let decision = Ratification {
-            proposal,
-            outcome: if support && status == RuleProposalStatus::Adopted {
-                game_realm::Decision::Adopted
-            } else {
-                game_realm::Decision::Rejected
-            },
-            decided_at: self.host.clock().time,
         };
         world
-            .kernel
-            .prepare_native_decision(
-                commitment,
-                revision,
+            .native_outcome(
+                &self.host.storage,
                 institution,
-                decision,
-                self.host.clock().time,
-            )
-            .map(Some)
-    }
-    pub(crate) fn preflight_realm_outcome(
-        &self,
-        institution: InstitutionId,
-        proposal: RuleProposalId,
-        status: RuleProposalStatus,
-    ) -> Result<(), Error> {
-        let _ = self.realm_native_plan(institution, proposal, status)?;
-        self.ensure_event_capacity(1)
-    }
-    pub(crate) fn apply_realm_outcome(
-        &mut self,
-        institution: InstitutionId,
-        proposal: RuleProposalId,
-        status: RuleProposalStatus,
-    ) -> Result<(), Error> {
-        let record = game_society::proposal(&self.host.storage, proposal)
-            .expect("validated Society reference")
-            .clone();
-        let Some(plan) = self.realm_native_plan(institution, proposal, status)? else {
-            return Ok(());
-        };
-        plan.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-        let InstitutionChange::RatifyRegional {
-            commitment,
-            revision,
-            support,
-        } = record.change
-        else {
-            return Ok(());
-        };
-        let adopted = support && status == RuleProposalStatus::Adopted;
-        self.emit(EventKind::RealmRatified {
-            commitment,
-            revision,
-            institution,
-            proposal,
-            adopted,
-        });
-        let area = game_society::institution(&self.host.storage, institution)
-            .expect("validated Society reference")
-            .charter
-            .jurisdiction;
-        self.realm_publish_proposal(commitment, revision, area)?;
-        for actor in self
-            .person_index
-            .keys()
-            .copied()
-            .filter(|a| self.realm_area(*a) == Some(area))
-            .collect::<Vec<_>>()
-        {
-            let witness = LocalWitness {
-                observer: actor,
-                observer_area: area,
-                statement_area: area,
-                observed_at: self.host.clock().time,
-            };
-            let p = self
-                .host
-                .state
-                .realm
-                .as_ref()
-                .unwrap()
-                .kernel
-                .prepare_observe_decision(
-                    witness,
-                    commitment,
-                    revision,
-                    institution,
-                    self.host.clock().time,
-                )?;
-            p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-        }
-        Ok(())
-    }
-    fn realm_request_work(&mut self, actor: PersonId, key: TermKey) -> Result<(), Error> {
-        let world = self.host.state.realm.as_ref().unwrap();
-        let r = world
-            .kernel
-            .commitments
-            .get(&key.commitment)
-            .and_then(|c| c.revision(key.revision))
-            .ok_or(Error::Unavailable)?;
-        let facts = self.realm_facts(actor, &r.proposal, true)?;
-        let plan = world
-            .kernel
-            .prepare_work_request(key, actor, &facts, self.host.clock().time)?;
-        let request = plan.requests.first().ok_or(Error::Unavailable)?.clone();
-        self.ensure_event_capacity(65)?;
-        let owner = match request {
-            Request::Delivery { parties, term, .. } => {
-                if let Some(existing) = self.agreement_view(actor).into_iter().find(|a| {
-                    a.parties == parties
-                        && a.terms.contains(&term)
-                        && !matches!(
-                            a.status,
-                            AgreementStatus::Rejected | AgreementStatus::Withdrawn
-                        )
-                }) {
-                    PendingOwner::Agreement(existing.id)
-                } else {
-                    let before = self.host.next_id();
-                    self.agreement_command(
-                        actor,
-                        &AgreementAction::Propose {
-                            parties,
-                            terms: vec![term],
-                            procedure: None,
-                        },
-                    )?;
-                    let id = game_agreements::agreements(&self.host.storage)
-                        .map(|(_, row)| row)
-                        .find(|a| a.id.0 >= before && a.proposer == actor)
-                        .ok_or(Error::Unavailable)?
-                        .id;
-                    PendingOwner::Agreement(id)
-                }
-            }
-            Request::Protection { patrol, .. } => {
-                let before = self.host.next_id();
-                self.mission_command(actor, &MissionAction::Propose { proposal: patrol })?;
-                let id = game_missions::missions(&self.host.storage)
-                    .map(|(_, row)| row)
-                    .find(|m| m.id.0 >= before && m.sponsor == actor)
+                proposal,
+                status,
+                self.time(),
+            )?
+            .map(|(plan, event)| {
+                let area = game_society::institution(&self.host.storage, institution)
                     .ok_or(Error::Unavailable)?
-                    .id;
-                PendingOwner::Mission(id)
-            }
-            Request::Passage { institution, .. } => {
-                let before = self.host.next_id();
-                self.institution_command(
-                    actor,
-                    &InstitutionAction::Propose {
+                    .charter
+                    .jurisdiction;
+                let revision = plan.revision_number().ok_or(Error::Unavailable)?;
+                Ok((
+                    plan.publish_decision(
+                        &self.host.storage,
+                        revision,
                         institution,
-                        change: InstitutionChange::AuthorizeRegionalPassage {
-                            commitment: key.commitment,
-                            revision: key.revision,
-                            index: key.index,
+                        area,
+                        self.time(),
+                        &RealmBindings {
+                            sim: self,
+                            positional: &positional,
                         },
+                    )?,
+                    event,
+                ))
+            })
+            .transpose()
+    }
+    fn realm_request_work(
+        &mut self,
+        actor: PersonId,
+        key: TermKey,
+        positional: &BTreeMap<AreaId, Vec<PersonId>>,
+    ) -> Result<(), Error> {
+        let world = self.host.state.realm.as_ref().ok_or(Error::Unavailable)?;
+        let plan = world.prepare_work::<Command>(
+            &self.host.storage,
+            actor,
+            key,
+            self.time(),
+            &self.realm_authority(actor, &[]),
+            &RealmBindings {
+                sim: self,
+                positional,
+            },
+        )?;
+        self.ensure_event_capacity(65)?;
+        let authority = self.realm_authority(actor, &[]);
+        let bindings = RealmBindings {
+            sim: self,
+            positional,
+        };
+        let context = game_realm::RealmContext {
+            now: self.time(),
+            authority: &authority,
+            presence: &bindings,
+        };
+        if let Some(owner) = plan.existing().cloned() {
+            let mut batch = game_ecs::Batch::new();
+            let guard =
+                plan.bind(owner)?
+                    .stage_into(world, &self.host.storage, &context, &mut batch)?;
+            guard.validate(&batch)?;
+            self.host.storage.apply_batch(batch)?;
+            self.publish_realm_event(RealmEvent::WorkRequested { key, actor });
+            return Ok(());
+        }
+        match plan.request().clone() {
+            Request::Delivery { parties, term, .. } => {
+                let (foreign, next) = self.prepare_agreement_command(
+                    actor,
+                    &AgreementAction::Propose {
+                        parties,
+                        terms: vec![term],
+                        procedure: None,
                     },
                 )?;
-                let id = game_society::proposals(&self.host.storage)
-                    .map(|(_, row)| row)
-                    .find(|p| p.id.0 >= before && p.proposer == actor)
-                    .ok_or(Error::Unavailable)?
-                    .id;
-                PendingOwner::Passage(id)
+                let id = foreign
+                    .created_agreements()
+                    .next()
+                    .ok_or(Error::Unavailable)?;
+                let regional = plan.bind(PendingOwner::Agreement(id))?;
+                let events = foreign.events.clone();
+                self.host.preflight_records(
+                    next.checked_sub(self.host.next_id())
+                        .ok_or(Error::Overflow)?,
+                    u64::try_from(events.len()).map_err(|_| Error::Overflow)?,
+                    0,
+                )?;
+                let publication = self.prepare_realm_agreement_publication(foreign)?;
+                let trust = game_characters::decisions::PreparedTrustReactions::prepare_defaults::<
+                    Command,
+                >(
+                    &self.host.storage,
+                    publication
+                        .default_knowledge()
+                        .iter()
+                        .map(|effect| (effect.observer, effect.debtor)),
+                )?;
+                let mut batch = game_ecs::Batch::new();
+                let finish = publication.stage_into(
+                    &self.host.storage,
+                    self.host
+                        .state
+                        .agreements
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    &mut batch,
+                )?;
+                let guard = regional.stage_with_agreement_publication(
+                    world,
+                    &self.host.storage,
+                    &context,
+                    &finish,
+                    &mut batch,
+                )?;
+                finish.validate_batch(&batch)?;
+                guard.validate(&batch)?;
+                let trust_finish =
+                    trust.prepare_finalization::<Command>(&self.host.storage, &batch)?;
+                trust_finish.validate_batch(&self.host.storage, &batch)?;
+                self.host.storage.apply_batch(batch)?;
+                finish.finish(self.host.state.agreements.as_mut().unwrap());
+                trust_finish.finish(&mut self.host.storage);
+                self.host
+                    .allocate_ids(next - self.host.next_id())
+                    .expect("preflighted regional agreement allocation");
+                self.publish_agreement_events(events);
+            }
+            Request::Protection { patrol, .. } => {
+                let action = MissionAction::Propose { proposal: patrol };
+                let area = self.mission_area(actor)?;
+                let facts = self.mission_command_facts(actor, area, &action)?;
+                let runtime = self
+                    .host
+                    .state
+                    .missions
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?;
+                let (ids, next) =
+                    runtime.command_ids(&self.host.storage, &action, self.host.next_id())?;
+                let foreign =
+                    runtime.prepare_command(&self.host.storage, actor, &action, &facts, &ids)?;
+                let id = foreign
+                    .created_missions()
+                    .next()
+                    .ok_or(Error::Unavailable)?;
+                let events = foreign.events.clone();
+                let created = foreign.created_missions().collect::<Vec<_>>();
+                self.host.preflight_records(
+                    next.checked_sub(self.host.next_id())
+                        .ok_or(Error::Overflow)?,
+                    u64::try_from(events.len()).map_err(|_| Error::Overflow)?,
+                    0,
+                )?;
+                let regional = plan.bind(PendingOwner::Mission(id))?;
+                let mut batch = game_ecs::Batch::new();
+                let (finish, publication_guard) = foreign.stage_created_with_publications(
+                    runtime,
+                    &self.host.storage,
+                    self.time(),
+                    &missions::MissionPresence { simulation: self },
+                    &mut batch,
+                )?;
+                let guard = regional.stage_into(world, &self.host.storage, &context, &mut batch)?;
+                publication_guard.validate_batch(&batch)?;
+                guard.validate(&batch)?;
+                self.host.storage.apply_batch(batch)?;
+                finish.finish(self.host.state.missions.as_mut().unwrap());
+                self.host
+                    .allocate_ids(next - self.host.next_id())
+                    .expect("preflighted regional mission allocation");
+                self.mission_membership
+                    .register_created(&self.host.storage, created);
+                self.publish_mission_effects(events, BTreeSet::new());
+            }
+            Request::Passage { institution, .. } => {
+                let action = InstitutionAction::Propose {
+                    institution,
+                    change: InstitutionChange::AuthorizeRegionalPassage {
+                        commitment: key.commitment,
+                        revision: key.revision,
+                        index: key.index,
+                    },
+                };
+                let foreign =
+                    self.prepare_institution_transition(actor, self.social_area(actor)?, &action)?;
+                let id = foreign
+                    .created_proposals()
+                    .next()
+                    .ok_or(Error::Unavailable)?;
+                let next = foreign.next_id;
+                let publications = self.prepare_institution_publications(&foreign, positional)?;
+                let regional = plan.bind(PendingOwner::Passage(id))?.receive_publications(
+                    world,
+                    &self.host.storage,
+                    &context,
+                    &publications,
+                )?;
+                self.host.preflight_records(
+                    next.checked_sub(self.host.next_id())
+                        .ok_or(Error::Overflow)?,
+                    4,
+                    0,
+                )?;
+                let mut batch = game_ecs::Batch::new();
+                let publication_guard = foreign.stage_with_publications(
+                    self.host.state.institutions.as_ref().unwrap(),
+                    &self.host.storage,
+                    publications,
+                    &mut batch,
+                )?;
+                let guard = regional.stage_into(
+                    world,
+                    &self.host.storage,
+                    &context,
+                    &publication_guard,
+                    &mut batch,
+                )?;
+                publication_guard.validate(&batch)?;
+                guard.validate(&batch)?;
+                self.host.storage.apply_batch(batch)?;
+                self.host
+                    .allocate_ids(next - self.host.next_id())
+                    .expect("preflighted regional passage allocation");
+                let through = self.host.next_event() - 1;
+                self.host.state.realm.as_mut().unwrap().last_event = through;
             }
             Request::Ratification { .. } => return Err(Error::Unavailable),
-        };
-        plan.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
+        }
+        self.publish_realm_event(RealmEvent::WorkRequested { key, actor });
+        Ok(())
+    }
+    pub(crate) fn prepare_realm_institution_reaction(
+        &self,
+        publications: &[game_society::projected_publication::PreparedCommandPublication],
+        initial: Vec<game_realm::PreparedChange>,
+        observe: bool,
+        positional: &BTreeMap<AreaId, Vec<PersonId>>,
+    ) -> Result<Option<game_realm::PreparedInstitutionReaction>, Error> {
         self.host
             .state
             .realm
-            .as_mut()
-            .unwrap()
-            .pending
-            .insert(key, PendingWork { actor, owner });
-        self.emit(EventKind::RealmWorkRequested { key, actor });
-        Ok(())
+            .as_ref()
+            .map(|w| {
+                w.prepare_institution_reaction(
+                    &self.host.storage,
+                    self.time(),
+                    publications,
+                    initial,
+                    observe,
+                    &RealmBindings {
+                        sim: self,
+                        positional,
+                    },
+                )
+            })
+            .transpose()
     }
     pub(crate) fn realm_vote_score(&self, actor: PersonId, change: &InstitutionChange) -> i64 {
-        let (id, revision, support) = match change {
-            InstitutionChange::RatifyRegional {
-                commitment,
-                revision,
-                support,
-            } => (*commitment, *revision, *support),
-            InstitutionChange::AuthorizeRegionalPassage {
-                commitment,
-                revision,
-                ..
-            } => (*commitment, *revision, true),
-            _ => return 0,
-        };
-        let Some(known) = self
-            .host
-            .state
-            .realm
-            .as_ref()
-            .and_then(|w| w.kernel.view(actor, id))
-            .and_then(|k| k.revisions.get(&revision))
-        else {
-            return -10_000;
-        };
-        let proposal = &known.proposal.value;
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap();
-        let affiliations = self
-            .institution_view(actor)
-            .iter()
-            .filter(|i| i.members.contains(&actor))
-            .map(|i| i.id)
-            .collect::<BTreeSet<_>>();
-        use game_characters::proposals::{Context, Effect, Evidence};
-        let mut effects = Vec::new();
-        let resource = |affiliation, gained, term: &AgreementTerm| {
-            if let AgreementTerm::Delivery {
-                source, quantity, ..
-            } = term
-            {
-                Some(Effect::Resource {
-                    affiliation,
-                    gained,
-                    good: mind.knowledge.get(source).map(|known| known.good),
-                    quantity: *quantity,
-                })
-            } else {
-                None
-            }
-        };
-        for term in &proposal.terms {
-            match term {
-                Term::Delivery {
-                    provider,
-                    beneficiary,
-                    term,
-                } => {
-                    effects.extend(resource(*provider, false, term));
-                    effects.extend(resource(*beneficiary, true, term));
-                }
-                Term::Passage { beneficiary, .. } => {
-                    effects.push(Effect::Passage {
-                        beneficiary: *beneficiary,
-                    });
-                }
-                Term::Protection {
-                    provider,
-                    beneficiary,
-                    patrol,
-                } => {
-                    effects.push(Effect::Protection {
-                        beneficiary: *beneficiary,
-                    });
-                    effects.push(Effect::Danger {
-                        provider: *provider,
-                    });
-                    for term in patrol.compensation.values().flatten() {
-                        effects.extend(resource(*provider, false, term));
-                    }
-                }
-            }
-        }
+        self.host.state.realm.as_ref().map_or(0, |w| {
+            w.vote_score::<Command>(
+                &self.host.storage,
+                actor,
+                change,
+                &self.realm_judgment(actor),
+            )
+        })
+    }
+    fn realm_judgment(&self, actor: PersonId) -> game_realm::JudgmentFacts<'_> {
         let rules = self.body_rules(actor);
-        let context = Context {
-            affiliations: &affiliations,
+        game_realm::JudgmentFacts {
             hunger: game_physiology::body(&self.host.storage, actor)
                 .expect("body exists")
                 .vitals
@@ -1062,635 +965,169 @@ impl Simulation {
                 .state
                 .health
                 .as_ref()
-                .map_or(Quantity(u64::MAX), |health| health.rules.drink_quantity),
+                .map_or(Quantity(u64::MAX), |w| w.rules.drink_quantity),
             concepts: &self.host.state.decisions.as_ref().unwrap().concepts,
-        };
-        let score = game_characters::proposals::assess(
-            &mind.personality,
-            &mind.values,
-            &context,
-            &Evidence {
-                proposal: (id, revision),
-                effects,
-            },
-        )
-        .total;
-        if support {
-            score
-        } else {
-            score.saturating_neg()
         }
     }
     pub(crate) fn observe_realm(&mut self) -> Result<(), Error> {
-        let Some(world) = &self.host.state.realm else {
+        let Some(world) = self.host.state.realm.as_ref() else {
             return Ok(());
         };
-        if world.kernel.commitments.is_empty() {
+        if !world.has_commitments(&self.host.storage) {
             self.host.state.realm.as_mut().unwrap().last_event = self.host.next_event() - 1;
             return Ok(());
         }
-        let _cursor = world.last_event;
-        let mut announcements = Vec::new();
-        for actor in self.person_index.keys().copied() {
-            let Some(area) = self.realm_area(actor) else {
-                continue;
-            };
-            for i in self.institution_view(actor).into_iter().filter(|i| {
-                i.observed_at == self.host.clock().time && i.charter.jurisdiction == area
-            }) {
-                for p in i.proposals {
-                    let (commitment, revision) = match p.change {
-                        InstitutionChange::RatifyRegional {
-                            commitment,
-                            revision,
-                            ..
-                        }
-                        | InstitutionChange::AuthorizeRegionalPassage {
-                            commitment,
-                            revision,
-                            ..
-                        } => (commitment, revision),
-                        _ => continue,
-                    };
-                    announcements.push((actor, area, i.id, p.id, commitment, revision, p.status));
-                }
-            }
-        }
-        for (actor, area, institution, proposal, commitment, revision, status) in announcements {
-            let witness = LocalWitness {
-                observer: actor,
-                observer_area: area,
-                statement_area: area,
-                observed_at: self.host.clock().time,
-            };
-            if let Ok(p) = self
-                .host
-                .state
-                .realm
-                .as_ref()
-                .unwrap()
-                .kernel
-                .prepare_observe_proposal(witness, commitment, revision, self.host.clock().time)
-            {
-                p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-            }
-            let actual = &game_society::proposal(&self.host.storage, proposal)
-                .expect("validated Society reference");
-            if matches!(actual.change, InstitutionChange::RatifyRegional { .. })
-                && status == RuleProposalStatus::Proposed
-            {
-                let kernel = &self.host.state.realm.as_ref().unwrap().kernel;
-                let missing = kernel
-                    .commitments
-                    .get(&commitment)
-                    .and_then(|c| c.revision(revision))
-                    .is_some_and(|r| !r.ratification_proposals.contains_key(&institution));
-                if missing
-                    && let Ok(p) = kernel.prepare_bind_ratification(
-                        commitment,
-                        revision,
-                        institution,
-                        proposal,
-                        self.host.clock().time,
-                    )
-                {
-                    p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-                }
-            }
-        }
+        let positional = self.realm_positional_membership()?;
+        let now = self.time();
+        let observation = world.prepare_observation(
+            &self.host.storage,
+            now,
+            &RealmBindings {
+                sim: self,
+                positional: &positional,
+            },
+        )?;
+        let mut batch = game_ecs::Batch::new();
+        let guard = game_realm::stage_changes(observation, &self.host.storage, &mut batch)?;
+        guard.validate(&batch)?;
+        self.host.storage.apply_batch(batch)?;
+        let ledger = game_realm::Ledger::new(&self.host.storage);
+        let plans = ledger
+            .reconciliation_ids()
+            .into_iter()
+            .map(|id| {
+                ledger.prepare_reconciliation(
+                    id,
+                    now,
+                    &RealmBindings {
+                        sim: self,
+                        positional: &positional,
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut batch = game_ecs::Batch::new();
+        let guard = game_realm::stage_changes(plans, &self.host.storage, &mut batch)?;
+        guard.validate(&batch)?;
+        self.host.storage.apply_batch(batch)?;
         self.host.state.realm.as_mut().unwrap().last_event = self.host.next_event() - 1;
-        self.reconcile_realm_work()
-    }
-    fn reconcile_realm_work(&mut self) -> Result<(), Error> {
-        let pending = self.host.state.realm.as_ref().map_or_else(Vec::new, |w| {
-            w.pending.iter().map(|(k, p)| (*k, p.clone())).collect()
-        });
-        for (key, pending) in pending {
-            let world = self.host.state.realm.as_ref().unwrap();
-            let r = world.kernel.commitments[&key.commitment]
-                .revision(key.revision)
-                .ok_or(Error::Unavailable)?;
-            let term = &r.proposal.terms[usize::from(key.index)];
-            let receipt = match (&pending.owner, term) {
-                (PendingOwner::Agreement(id), Term::Delivery { term, .. }) => {
-                    let a = &game_agreements::agreement(&self.host.storage, *id).unwrap();
-                    if let Some(obligation) = a.obligations.iter().find(|o| {
-                        game_agreements::obligation(&self.host.storage, **o)
-                            .unwrap()
-                            .term
-                            == *term
-                    }) {
-                        Some(WorkReceipt::DeliveryOpened {
-                            agreement: *id,
-                            obligation: Some(*obligation),
-                            accepted: true,
-                            term: term.clone(),
-                        })
-                    } else if matches!(
-                        a.status,
-                        AgreementStatus::Rejected | AgreementStatus::Withdrawn
-                    ) {
-                        Some(WorkReceipt::DeliveryOpened {
-                            agreement: *id,
-                            obligation: None,
-                            accepted: false,
-                            term: term.clone(),
-                        })
-                    } else {
-                        Some(WorkReceipt::DeliveryProposed {
-                            agreement: *id,
-                            term: term.clone(),
-                        })
-                    }
-                }
-                (PendingOwner::Mission(id), Term::Protection { patrol, .. }) => {
-                    let m =
-                        &game_missions::mission(&self.host.storage, *id).expect("record exists");
-                    if m.proposal.objective != patrol.objective {
-                        Some(WorkReceipt::ProtectionOpened {
-                            mission: *id,
-                            accepted: false,
-                            patrol: patrol.clone(),
-                        })
-                    } else if m.members[&patrol.leader].status == CompanionStatus::Accepted {
-                        Some(WorkReceipt::ProtectionOpened {
-                            mission: *id,
-                            accepted: true,
-                            patrol: patrol.clone(),
-                        })
-                    } else if matches!(
-                        m.members[&patrol.leader].status,
-                        CompanionStatus::Refused | CompanionStatus::Withdrawn
-                    ) {
-                        Some(WorkReceipt::ProtectionOpened {
-                            mission: *id,
-                            accepted: false,
-                            patrol: patrol.clone(),
-                        })
-                    } else {
-                        Some(WorkReceipt::ProtectionProposed {
-                            mission: *id,
-                            patrol: patrol.clone(),
-                        })
-                    }
-                }
-                // Adoption is not a movement flag. The territory owner will
-                // supply PassageApplied only when its actual effect exists.
-                (PendingOwner::Passage(_), Term::Passage { .. }) => None,
-                _ => return Err(Error::Unavailable),
-            };
-            if let Some(receipt) = receipt
-                && r.backed
-                    .get(&key.index)
-                    .is_none_or(|b| b.progress == Progress::AwaitingWork)
-            {
-                let plan = world
-                    .kernel
-                    .prepare_backing(key, receipt, self.host.clock().time)?;
-                plan.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-            }
-            let Some(backed) = self.host.state.realm.as_ref().unwrap().kernel.commitments
-                [&key.commitment]
-                .revision(key.revision)
-                .unwrap()
-                .backed
-                .get(&key.index)
-                .cloned()
-            else {
-                continue;
-            };
-            let receipt = match backed.backing {
-                Backing::Delivery {
-                    obligation: Some(id),
-                    ..
-                } => {
-                    let o = &game_agreements::obligation(&self.host.storage, id).unwrap();
-                    Some(OutcomeReceipt::Delivery {
-                        obligation: id,
-                        performed: Quantity(o.performed.min(o.amount())),
-                        defaulted: o.defaulted,
-                    })
-                }
-                Backing::Protection { mission } => {
-                    let m = &game_missions::mission(&self.host.storage, mission)
-                        .expect("record exists");
-                    let promised = &self.host.state.realm.as_ref().unwrap().kernel.commitments
-                        [&key.commitment]
-                        .revision(key.revision)
-                        .unwrap()
-                        .proposal
-                        .terms[usize::from(key.index)];
-                    let retasked = matches!(promised,Term::Protection {patrol,..} if m.proposal.objective!=patrol.objective);
-                    let progress = if retasked {
-                        Progress::Defaulted
-                    } else {
-                        match m.status {
-                            MissionStatus::Completed => Progress::Fulfilled,
-                            MissionStatus::Failed | MissionStatus::Cancelled => Progress::Defaulted,
-                            _ => Progress::Active,
-                        }
-                    };
-                    (!matches!(backed.progress, Progress::Refused | Progress::AwaitingWork))
-                        .then_some(OutcomeReceipt::Protection { mission, progress })
-                }
-                _ => None,
-            };
-            if let Some(receipt) = receipt {
-                let kernel = &self.host.state.realm.as_ref().unwrap().kernel;
-                let changed = match &receipt {
-                    OutcomeReceipt::Delivery {
-                        performed,
-                        defaulted,
-                        ..
-                    } => {
-                        *performed != backed.performed
-                            || *defaulted && backed.defaulted_at.is_none()
-                    }
-                    OutcomeReceipt::Protection { progress, .. } => *progress != backed.progress,
-                    _ => false,
-                };
-                if changed {
-                    kernel
-                        .prepare_outcome(key, receipt, self.host.clock().time)?
-                        .commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-                }
-            }
-            // Only the actor's personally known owner record can yield a local
-            // observation. Canonical remote progress never refreshes this cache.
-            self.realm_learn_own_work(key, pending.actor)?;
-        }
         Ok(())
     }
-    fn realm_learn_own_work(&mut self, key: TermKey, actor: PersonId) -> Result<(), Error> {
-        let Some(area) = self.realm_area(actor) else {
-            return Ok(());
-        };
-        let Some(r) = self.host.state.realm.as_ref().unwrap().kernel.commitments[&key.commitment]
-            .revision(key.revision)
-        else {
-            return Ok(());
-        };
-        let Some(b) = r.backed.get(&key.index) else {
-            return Ok(());
-        };
-        let term = &r.proposal.terms[usize::from(key.index)];
-        let known = self
+    pub(crate) fn available_realm_commands(&self, actor: PersonId) -> Vec<Command> {
+        if self.host.state.realm.is_none() {
+            return Vec::new();
+        }
+        let positional = self
+            .realm_positional_membership()
+            .expect("validated spatial roster");
+        self.host.state.realm.as_ref().map_or_else(Vec::new, |w| {
+            w.available_actions::<Command>(
+                &self.host.storage,
+                actor,
+                self.time(),
+                &self.realm_authority(actor, &[]),
+                &RealmBindings {
+                    sim: self,
+                    positional: &positional,
+                },
+            )
+            .into_iter()
+            .map(|action| Command::Realm { action })
+            .collect()
+        })
+    }
+    pub(crate) fn review_realm(&mut self) -> Result<(), Error> {
+        let positional = if self
             .host
             .state
             .realm
             .as_ref()
-            .unwrap()
-            .kernel
-            .view(actor, key.commitment)
-            .and_then(|k| k.revisions.get(&key.revision))
-            .and_then(|r| r.backed.get(&key.index));
-        let known_default = known.and_then(|b| b.value.defaulted_at);
-        let snapshot = match (&b.backing, term) {
-            (Backing::Delivery { agreement, .. }, Term::Delivery { term, .. }) => {
-                let Some(a) = self
-                    .agreement_view(actor)
-                    .into_iter()
-                    .find(|a| a.id == *agreement)
-                else {
-                    return Ok(());
-                };
-                if let Some(o) = a.obligations.iter().find(|o| o.term == *term) {
-                    let performed = Quantity(o.performed.min(o.amount()));
-                    let progress = if performed.0 == term.amount() {
-                        Progress::Fulfilled
-                    } else if o.defaulted {
-                        Progress::Defaulted
-                    } else {
-                        Progress::Active
-                    };
-                    let value = game_realm::BackedTerm {
-                        backing: Backing::Delivery {
-                            agreement: *agreement,
-                            obligation: Some(o.id),
-                        },
-                        progress,
-                        performed,
-                        changed_at: o.observed_at,
-                        defaulted_at: if o.defaulted {
-                            known_default.or(Some(o.observed_at))
-                        } else {
-                            known_default
-                        },
-                    };
-                    Some(game_realm::Dated {
-                        value,
-                        observed_at: o.observed_at,
-                        learned_at: self.host.clock().time,
-                        source: o.source.clone().unwrap_or(KnowledgeSource::Observed(actor)),
-                    })
-                } else {
-                    let progress = if matches!(
-                        a.status,
-                        AgreementStatus::Rejected | AgreementStatus::Withdrawn
-                    ) {
-                        Progress::Refused
-                    } else {
-                        Progress::AwaitingWork
-                    };
-                    let value = game_realm::BackedTerm {
-                        backing: Backing::Delivery {
-                            agreement: *agreement,
-                            obligation: None,
-                        },
-                        progress,
-                        performed: Quantity(0),
-                        changed_at: a.observed_at,
-                        defaulted_at: None,
-                    };
-                    Some(game_realm::Dated {
-                        value,
-                        observed_at: a.observed_at,
-                        learned_at: self.host.clock().time,
-                        source: a.source.unwrap_or(KnowledgeSource::Observed(actor)),
-                    })
-                }
-            }
-            (Backing::Protection { mission }, Term::Protection { patrol, .. }) => {
-                let Some(m) = self
-                    .mission_view(actor)
-                    .into_iter()
-                    .find(|m| m.id == *mission)
-                else {
-                    return Ok(());
-                };
-                let progress = if m.objective != patrol.objective {
-                    Progress::Defaulted
-                } else {
-                    match m.status {
-                        MissionStatus::Completed => Progress::Fulfilled,
-                        MissionStatus::Failed | MissionStatus::Cancelled => Progress::Defaulted,
-                        _ => match m
-                            .recruitments
-                            .iter()
-                            .find(|r| r.person == patrol.leader)
-                            .map(|r| r.status)
-                        {
-                            Some(CompanionStatus::Accepted) => Progress::Active,
-                            Some(CompanionStatus::Refused | CompanionStatus::Withdrawn) => {
-                                Progress::Refused
-                            }
-                            _ => Progress::AwaitingWork,
-                        },
-                    }
-                };
-                let value = game_realm::BackedTerm {
-                    backing: Backing::Protection { mission: *mission },
-                    progress,
-                    performed: Quantity(0),
-                    changed_at: m.observed_at,
-                    defaulted_at: if progress == Progress::Defaulted {
-                        known_default.or(Some(m.observed_at))
-                    } else {
-                        known_default
-                    },
-                };
-                Some(game_realm::Dated {
-                    value,
-                    observed_at: m.observed_at,
-                    learned_at: self.host.clock().time,
-                    source: m
-                        .reported_by
-                        .map_or(KnowledgeSource::Observed(actor), KnowledgeSource::Reported),
-                })
-            }
-            _ => None,
-        };
-        let _ = area;
-        if let Some(snapshot) = snapshot
-            && let Ok(p) = self
-                .host
-                .state
-                .realm
-                .as_ref()
-                .unwrap()
-                .kernel
-                .prepare_learn_work(actor, key, snapshot, self.host.clock().time)
+            .is_some_and(|w| w.has_commitments(&self.host.storage))
         {
-            p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-        }
-        Ok(())
-    }
-    pub(crate) fn available_realm_commands(&self, actor: PersonId) -> Vec<Command> {
-        let Some(world) = &self.host.state.realm else {
-            return Vec::new();
+            self.realm_positional_membership()?
+        } else {
+            BTreeMap::new()
         };
-        let Some(area) = self.realm_area(actor) else {
-            return Vec::new();
-        };
-        let mut commands = Vec::new();
-        for entry in self.realm_view(actor).commitments {
-            for (number, known) in &entry.knowledge.revisions {
-                if let Ok(facts) = self.realm_facts(actor, &known.proposal.value, true) {
-                    for index in 0..known.proposal.value.terms.len() {
-                        let key = TermKey {
-                            commitment: entry.id,
-                            revision: *number,
-                            index: index as u16,
-                        };
-                        if world
-                            .kernel
-                            .prepare_work_request(key, actor, &facts, self.host.clock().time)
-                            .is_ok()
-                        {
-                            commands.push(Command::Realm {
-                                action: Action::RequestWork { key },
-                            });
-                        }
-                    }
-                }
-            }
-            for recipient in self
-                .person_index
-                .keys()
-                .copied()
-                .filter(|p| {
-                    *p != actor
-                        && self.realm_area(*p) == Some(area)
-                        && matches!(
-                            *self.host.storage.activity(*p).expect("body exists"),
-                            Activity::Idle | Activity::Rest
-                        )
-                })
-                .take(4)
-            {
-                commands.push(Command::Realm {
-                    action: Action::Report {
-                        commitment: entry.id,
-                        recipient,
-                    },
-                });
-            }
-        }
-        commands.truncate(64);
-        commands
-    }
-    pub(crate) fn review_realm(&mut self) -> Result<(), Error> {
-        let owner_now = self.host.clock().time;
         self.observe_realm()?;
-        let Some(world) = &self.host.state.realm else {
+        let Some(world) = self.host.state.realm.as_ref() else {
             return Ok(());
         };
-        let expiries = world
-            .kernel
-            .commitments
-            .values()
-            .filter(|c| {
-                c.current().status() == game_realm::Status::AwaitingRatification
-                    && c.current().proposal.ratify_by < owner_now
-            })
-            .map(|c| c.id)
-            .collect::<Vec<_>>();
-        for id in expiries {
-            let p = self
+        let now = self.time();
+        let plans = world
+            .expiry_ids(&self.host.storage, now)
+            .into_iter()
+            .map(|id| game_realm::Ledger::new(&self.host.storage).prepare_expire(id, now))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut batch = game_ecs::Batch::new();
+        let guard = game_realm::stage_changes(plans, &self.host.storage, &mut batch)?;
+        guard.validate(&batch)?;
+        self.host.storage.apply_batch(batch)?;
+        for actor in self.person_index.keys().copied().collect::<Vec<_>>() {
+            let authority = self.realm_authority(actor, &[]);
+            let context = game_realm::RealmContext {
+                now,
+                authority: &authority,
+                presence: &RealmBindings {
+                    sim: self,
+                    positional: &positional,
+                },
+            };
+            let Some(mut plan) = self
                 .host
                 .state
                 .realm
                 .as_ref()
                 .unwrap()
-                .kernel
-                .prepare_expire(id, owner_now)?;
-            p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
-        }
-        for actor in self
-            .person_index
-            .keys()
-            .copied()
-            .filter(|p| *p != self.host.state.ruler)
-            .collect::<Vec<_>>()
-        {
-            if self.past_life_controls_actor(actor)
-                || self.realm_area(actor).is_none()
-                || !matches!(
-                    *self.host.storage.activity(actor).expect("body exists"),
-                    Activity::Idle | Activity::Rest
+                .prepare_review::<Command>(
+                    &self.host.storage,
+                    actor,
+                    &context,
+                    &self.realm_judgment(actor),
                 )
-                || self
-                    .host
-                    .state
-                    .realm
-                    .as_ref()
-                    .unwrap()
-                    .reconsider_after
-                    .get(&actor)
-                    .is_some_and(|at| *at > owner_now)
-            {
+            else {
                 continue;
-            }
-            let offers = self.realm_view(actor).commitments;
-            let mut signed = false;
-            for offer in offers {
-                let Some((revision, known)) = offer.knowledge.revisions.last_key_value() else {
-                    continue;
+            };
+            while let Some(choice) = plan.next_attempt() {
+                let result = match choice {
+                    game_realm::ReviewChoice::Ratify {
+                        institution,
+                        change,
+                    } => self.execute_institution_transition_with_positions(
+                        actor,
+                        self.social_area(actor)?,
+                        &InstitutionAction::Propose {
+                            institution,
+                            change,
+                        },
+                        &positional,
+                    ),
+                    game_realm::ReviewChoice::Work { key } => {
+                        self.realm_request_work(actor, key, &positional)
+                    }
                 };
-                let Ok(facts) = self.realm_facts(actor, &known.proposal.value, true) else {
-                    continue;
-                };
-                for p in known
-                    .proposal
-                    .value
-                    .participants
-                    .values()
-                    .filter(|p| p.representative == actor)
-                {
-                    if self
-                        .host
-                        .state
-                        .realm
-                        .as_ref()
-                        .unwrap()
-                        .kernel
-                        .prepare_ratification_request(
-                            offer.id,
-                            p.institution,
-                            actor,
-                            &facts,
-                            owner_now,
-                        )
-                        .is_err()
-                    {
-                        continue;
-                    }
-                    let change = InstitutionChange::RatifyRegional {
-                        commitment: offer.id,
-                        revision: *revision,
-                        support: true,
-                    };
-                    let support = self.realm_vote_score(actor, &change) >= 0;
-                    let change = InstitutionChange::RatifyRegional {
-                        commitment: offer.id,
-                        revision: *revision,
-                        support,
-                    };
-                    if self
-                        .institution_command(
-                            actor,
-                            &InstitutionAction::Propose {
-                                institution: p.institution,
-                                change,
-                            },
-                        )
-                        .is_ok()
-                    {
-                        signed = true;
-                        break;
-                    }
-                }
-                if signed {
-                    break;
-                }
+                plan.receive_result(result.is_ok());
             }
-            if !signed {
-                for command in self.available_realm_commands(actor) {
-                    if let Command::Realm {
-                        action: Action::RequestWork { key },
-                    } = command
-                        && self.realm_request_work(actor, key).is_ok()
-                    {
-                        break;
-                    }
-                }
-            }
-            self.host
-                .state
-                .realm
-                .as_mut()
-                .unwrap()
-                .reconsider_after
-                .insert(actor, SimTime(owner_now.0.saturating_add(180_000)));
+            game_realm::insert_requests(&mut self.host.storage, actor, plan.reconsideration)?;
         }
         Ok(())
     }
     pub(crate) fn realm_allocation_bound(&self) -> u64 {
-        self.host.state.realm.as_ref().map_or(0, |_| {
-            (self.host.state.people.len() as u64).saturating_mul(512)
-        })
-    }
-    pub(crate) fn realm_boundary(&self, limit: SimTime) -> SimTime {
         self.host
             .state
             .realm
             .as_ref()
-            .into_iter()
-            .flat_map(|w| w.kernel.commitments.values())
-            .filter(|c| c.current().status() == game_realm::Status::AwaitingRatification)
-            .filter_map(|c| c.current().proposal.ratify_by.0.checked_add(1).map(SimTime))
-            .filter(|at| *at > self.host.clock().time)
-            .min()
-            .map_or(limit, |at| at.min(limit))
+            .map_or(0, |w| w.allocation_bound(self.host.state.people.len()))
+    }
+    pub(crate) fn realm_boundary(&self, limit: SimTime) -> SimTime {
+        self.host.state.realm.as_ref().map_or(limit, |w| {
+            w.boundary(&self.host.storage, self.time(), limit)
+        })
     }
     pub(crate) fn validate_realm(&self) -> Result<(), Error> {
-        let Some(world) = &self.host.state.realm else {
+        let positional = BTreeMap::new();
+        let Some(world) = self.host.state.realm.as_ref() else {
             return Ok(());
         };
-        world.rules.validate()?;
-        let bad = || Error::InvalidSave("invalid realm communication or owner references".into());
-        self.host.state.institutions.as_ref().ok_or_else(bad)?;
-        self.host.state.agreements.as_ref().ok_or_else(bad)?;
         let refs = game_realm::References {
             people: self.person_index.keys().copied().collect(),
             areas: self.host.state.areas.iter().map(|a| a.id).collect(),
@@ -1709,100 +1146,20 @@ impl Simulation {
             proposals: game_society::proposals(&self.host.storage)
                 .map(|(id, _)| id)
                 .collect(),
-            missions: self
-                .host
-                .state
-                .missions
-                .as_ref()
-                .map_or_else(BTreeSet::new, |_| {
-                    game_missions::missions(&self.host.storage)
-                        .map(|(id, _)| id)
-                        .collect()
-                }),
+            missions: game_missions::missions(&self.host.storage)
+                .map(|(id, _)| id)
+                .collect(),
             records: BTreeSet::new(),
         };
-        world.kernel.validate(&refs, self.host.clock().time)?;
-        if world.last_event >= self.host.next_event() {
-            return Err(bad());
-        }
-        for (actor, talk) in &world.talks {
-            if !refs.people.contains(actor)
-                || !refs.people.contains(&talk.recipient)
-                || !refs.areas.contains(&talk.area)
-                || talk.completes <= self.host.clock().time
-                || !matches!(*self.host.storage.activity(*actor).expect("body exists"),Activity::RealmTalk {commitment,recipient,completes} if commitment==talk.report.commitment && recipient==talk.recipient && completes==talk.completes)
-                || !self
-                    .host
-                    .state
-                    .due
-                    .get(&talk.completes)
-                    .is_some_and(|d| d.contains(&Due::Physical(*actor)))
-                || talk.report.speaker != *actor
-                || talk.report.sent_at > self.host.clock().time
-            {
-                return Err(bad());
-            }
-            // Validate the frozen packet without delivering it or peeking at a
-            // current foreign institution view.
-            let _ = world
-                .kernel
-                .prepare_receive_report(talk.recipient, &talk.report, self.host.clock().time)
-                .map_err(|_| bad())?;
-            if talk
-                .institutions
-                .iter()
-                .any(|i| !refs.institutions.contains(&i.id) || i.observed_at > talk.report.sent_at)
-            {
-                return Err(bad());
-            }
-        }
-        for (key, pending) in &world.pending {
-            let r = world
-                .kernel
-                .commitments
-                .get(&key.commitment)
-                .and_then(|c| c.revision(key.revision))
-                .ok_or_else(bad)?;
-            if !refs.people.contains(&pending.actor) || !r.requested.contains(&key.index) {
-                return Err(bad());
-            }
-            match (&pending.owner, r.proposal.terms.get(usize::from(key.index))) {
-                (PendingOwner::Agreement(id), Some(Term::Delivery { term, .. })) => {
-                    if game_agreements::agreement(&self.host.storage, *id)
-                        .is_none_or(|a| !a.terms.contains(term))
-                    {
-                        return Err(bad());
-                    }
-                }
-                (PendingOwner::Mission(id), Some(Term::Protection { patrol, .. })) => {
-                    if self
-                        .host
-                        .state
-                        .missions
-                        .as_ref()
-                        .and_then(|_| game_missions::mission(&self.host.storage, *id))
-                        .is_none_or(|m| {
-                            m.sponsor != pending.actor || m.proposal.leader != patrol.leader
-                        })
-                    {
-                        return Err(bad());
-                    }
-                }
-                (PendingOwner::Passage(id), Some(Term::Passage { .. })) => {
-                    if game_society::proposal(&self.host.storage, id).is_none_or(|p| {
-                        p.change
-                            != InstitutionChange::AuthorizeRegionalPassage {
-                                commitment: key.commitment,
-                                revision: key.revision,
-                                index: key.index,
-                            }
-                    }) {
-                        return Err(bad());
-                    }
-                }
-                _ => return Err(bad()),
-            }
-        }
-        Ok(())
+        world.validate(
+            &self.host.storage,
+            &refs,
+            self.time(),
+            self.host.next_event(),
+            &RealmBindings {
+                sim: self,
+                positional: &positional,
+            },
+        )
     }
 }

@@ -13,6 +13,7 @@ pub struct PastLife<A> {
     pub person: PersonId,
     pub died_at: SimTime,
     pub mind: Mind<A>,
+    pub stocks: game_characters::decisions::Stocks,
     pub skills: Vec<SkillView>,
     pub institutions: Vec<InstitutionView>,
     pub cases: Vec<SocialCaseView>,
@@ -28,7 +29,8 @@ impl<A> PastLife<A> {
         {
             return Err(Error::InvalidSave("invalid historical archive".into()));
         }
-        self.mind.validate()
+        self.mind.validate()?;
+        self.stocks.validate()
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

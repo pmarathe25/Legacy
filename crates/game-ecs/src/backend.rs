@@ -255,6 +255,25 @@ impl Storage {
             .get_mut::<Native<C>>(*self.entities.get(&id)?)
             .map(|component| &mut component.into_inner().0)
     }
+    pub(super) fn get_pair_mut<C: Component, D: Component>(
+        &mut self,
+        id: StableId,
+    ) -> Option<(&mut C, &mut D)> {
+        if std::any::TypeId::of::<C>() == std::any::TypeId::of::<D>() {
+            return None;
+        }
+        self.schema.registration::<C>().ok()?;
+        self.schema.registration::<D>().ok()?;
+        let entity = *self.entities.get(&id)?;
+        let (a, b) = self
+            .world
+            .get_entity_mut(entity)
+            .ok()?
+            .into_mutable()
+            .into_components_mut::<(&mut Native<C>, &mut Native<D>)>()
+            .ok()?;
+        Some((&mut a.into_inner().0, &mut b.into_inner().0))
+    }
     pub(super) fn insert<C: Component>(&mut self, id: StableId, component: C) -> Result<(), Error> {
         self.insert_component(id, component, false)
     }

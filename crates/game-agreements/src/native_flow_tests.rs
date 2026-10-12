@@ -1053,3 +1053,146 @@ fn construction_fulfillment_reads_the_first_ordered_personal_promise_without_hid
         Some(ObligationId(41))
     );
 }
+
+fn proposal_publication_plan(store: &Store) -> PreparedTransition {
+    let terms = vec![delivery()];
+    let facts = TransitionFacts {
+        actor_available: true,
+        present: BTreeSet::from([A, B]),
+        assets: terms_context(store, SimTime(0), &terms, &Facts::default()),
+    };
+    Ledger::new(store)
+        .prepare_transition(
+            A,
+            &AgreementAction::Propose {
+                parties: BTreeSet::from([A, B]),
+                terms,
+                procedure: None,
+            },
+            &facts,
+            &TransitionIds {
+                agreement: Some(AgreementId(30)),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+}
+fn publication_contacts() -> ContactSet {
+    ContactSet(BTreeMap::from([
+        (
+            A,
+            ContactFacts {
+                alive: true,
+                health: 1000,
+                independent: true,
+                in_combat: false,
+                area: Some(AreaId(1)),
+            },
+        ),
+        (
+            B,
+            ContactFacts {
+                alive: true,
+                health: 1000,
+                independent: true,
+                in_combat: false,
+                area: Some(AreaId(2)),
+            },
+        ),
+    ]))
+}
+#[test]
+fn created_proposal_notice_stages_atomically_and_preserves_remote_ignorance() {
+    let mut store = world();
+    let plan = proposal_publication_plan(&store);
+    let mut legacy = world();
+    plan.clone().commit(&mut legacy).unwrap();
+    local_notice(
+        &mut legacy,
+        SimTime(0),
+        AgreementId(30),
+        A,
+        None,
+        &publication_contacts(),
+    )
+    .unwrap();
+    let event = ObservationEvent {
+        at: SimTime(0),
+        kind: ObservationKind::Proposed {
+            agreement: AgreementId(30),
+            proposer: A,
+        },
+    };
+    observe_events(
+        &mut legacy,
+        &mut Runtime::default(),
+        SimTime(0),
+        1,
+        &[event],
+        &publication_contacts(),
+    )
+    .unwrap();
+    let mut runtime = Runtime::default();
+    let receipt = PreparedProposalPublication::prepare(
+        plan,
+        &store,
+        &runtime,
+        SimTime(0),
+        1,
+        &[],
+        &publication_contacts(),
+    )
+    .unwrap();
+    let before = store.snapshot().unwrap();
+    let mut batch = Batch::new();
+    let finish = receipt.stage_into(&store, &runtime, &mut batch).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(finish.validate_batch(&Batch::new()).is_err());
+    finish.validate_batch(&batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    finish.finish(&mut runtime);
+    assert_eq!(store.snapshot().unwrap(), legacy.snapshot().unwrap());
+    assert_eq!(runtime.last_observation_event, 1);
+    assert!(known_agreement(&store, A, AgreementId(30)).is_some());
+    assert!(known_agreement(&store, B, AgreementId(30)).is_none());
+}
+#[test]
+fn created_proposal_publication_rejects_stale_receivers_and_foreign_final_edits() {
+    let mut store = world();
+    let runtime = Runtime::default();
+    let receipt = PreparedProposalPublication::prepare(
+        proposal_publication_plan(&store),
+        &store,
+        &runtime,
+        SimTime(0),
+        1,
+        &[],
+        &publication_contacts(),
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    let finish = receipt.stage_into(&store, &runtime, &mut batch).unwrap();
+    batch.insert(StableId(A.0), Knowledge::default());
+    assert!(finish.validate_batch(&batch).is_err());
+    let receipt = PreparedProposalPublication::prepare(
+        proposal_publication_plan(&store),
+        &store,
+        &runtime,
+        SimTime(0),
+        1,
+        &[],
+        &publication_contacts(),
+    )
+    .unwrap();
+    let before = store.snapshot().unwrap();
+    store
+        .insert_or_spawn(StableId(A.0), Knowledge::default())
+        .unwrap();
+    assert!(
+        receipt
+            .stage_into(&store, &runtime, &mut Batch::new())
+            .is_err()
+    );
+    assert!(agreement(&store, AgreementId(30)).is_none());
+    assert_ne!(store.snapshot().unwrap(), before);
+}

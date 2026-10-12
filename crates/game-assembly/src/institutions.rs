@@ -68,7 +68,7 @@ impl Simulation {
         Ok(sim)
     }
 
-    fn social_area(&self, actor: PersonId) -> Result<AreaId, Error> {
+    pub(crate) fn social_area(&self, actor: PersonId) -> Result<AreaId, Error> {
         let p = self
             .person_index
             .get(&actor)
@@ -418,7 +418,78 @@ impl Simulation {
             })
             .collect()
     }
-    fn publish_institution(&mut self, id: InstitutionId) {
+    fn social_observer_facts_for(
+        &self,
+        people: impl IntoIterator<Item = PersonId>,
+    ) -> Vec<game_society::perception::ObserverFacts> {
+        people
+            .into_iter()
+            .map(|actor| game_society::perception::ObserverFacts {
+                actor,
+                area: match game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
+                {
+                    Some(Location::AtArea(area)) => Some(*area),
+                    _ => None,
+                },
+                alive: game_physiology::body(&self.host.storage, actor)
+                    .is_some_and(|b| b.vitals.alive),
+                independent: self.independent(actor),
+                conversation_allowed: !self.combat_restricts(actor),
+                empathy: game_characters::decisions::mind::<Command>(&self.host.storage, actor)
+                    .expect("known institutional person")
+                    .personality
+                    .empathy,
+            })
+            .collect()
+    }
+    pub(crate) fn prepare_institution_publications(
+        &self,
+        plan: &game_society::institutions::PreparedCommand,
+        positional: &BTreeMap<AreaId, Vec<PersonId>>,
+    ) -> Result<Vec<game_society::projected_publication::PreparedCommandPublication>, Error> {
+        let mut people = BTreeSet::new();
+        let mut authority_people = BTreeSet::new();
+        for effect in &plan.effects {
+            if let CommandEffect::Publish { institution } = effect {
+                let i = plan.publication_institution(&self.host.storage, *institution)?;
+                people.extend(
+                    plan.publication_people(
+                        &self.host.storage,
+                        *institution,
+                        positional
+                            .get(&i.charter.jurisdiction)
+                            .into_iter()
+                            .flatten()
+                            .copied(),
+                    )?,
+                );
+                authority_people
+                    .extend(plan.publication_authority_people(&self.host.storage, *institution)?);
+            }
+        }
+        let roster = self.social_observer_facts_for(people);
+        let index = game_society::perception::ObservationIndex::new(&roster)?;
+        let authority = game_society::institutions::AuthorityFacts {
+            alive: authority_people
+                .into_iter()
+                .filter(|id| {
+                    game_physiology::body(&self.host.storage, *id).is_some_and(|b| b.vitals.alive)
+                })
+                .collect(),
+        };
+        plan.prepare_publications(
+            self.host
+                .state
+                .institutions
+                .as_ref()
+                .ok_or(Error::Unavailable)?,
+            &self.host.storage,
+            &authority,
+            self.time(),
+            &index,
+        )
+    }
+    pub(crate) fn publish_institution(&mut self, id: InstitutionId) {
         let roster = self.social_observer_facts();
         let index = game_society::perception::ObservationIndex::new(&roster)
             .expect("unique observer roster");
@@ -490,12 +561,12 @@ impl Simulation {
         self.institution_reference_facts(&request)
             .validate_subjects(subjects, offices)
     }
-    fn execute_institution_transition(
-        &mut self,
+    pub(crate) fn prepare_institution_transition(
+        &self,
         actor: PersonId,
         area: AreaId,
         action: &InstitutionAction,
-    ) -> Result<(), Error> {
+    ) -> Result<game_society::institutions::PreparedCommand, Error> {
         let world = self
             .host
             .state
@@ -573,7 +644,7 @@ impl Simulation {
         } else {
             None
         };
-        let plan = world.prepare_command(
+        world.prepare_command(
             &self.host.storage,
             action,
             &CommandFacts {
@@ -587,7 +658,25 @@ impl Simulation {
             CommandIds {
                 first: self.host.next_id(),
             },
-        )?;
+        )
+    }
+    fn execute_institution_transition(
+        &mut self,
+        actor: PersonId,
+        area: AreaId,
+        action: &InstitutionAction,
+    ) -> Result<(), Error> {
+        let positional = self.realm_positional_membership()?;
+        self.execute_institution_transition_with_positions(actor, area, action, &positional)
+    }
+    pub(crate) fn execute_institution_transition_with_positions(
+        &mut self,
+        actor: PersonId,
+        area: AreaId,
+        action: &InstitutionAction,
+        positional: &BTreeMap<AreaId, Vec<PersonId>>,
+    ) -> Result<(), Error> {
+        let plan = self.prepare_institution_transition(actor, area, action)?;
         let external_ids = plan
             .effects
             .iter()
@@ -632,6 +721,8 @@ impl Simulation {
                     .prepare_institutional_duties(&duties, self.host.clock().time)?,
             )
         };
+        let mut regional_plans = Vec::new();
+        let mut regional_events = Vec::new();
         for effect in &plan.effects {
             if let CommandEffect::ExternalOutcome {
                 institution,
@@ -643,7 +734,13 @@ impl Simulation {
                 match change {
                     InstitutionChange::RatifyRegional { .. }
                     | InstitutionChange::AuthorizeRegionalPassage { .. } => {
-                        self.preflight_realm_outcome(*institution, *proposal, *outcome)?
+                        if let Some((change, event)) =
+                            self.prepare_realm_outcome(*institution, *proposal, *outcome)?
+                        {
+                            regional_plans.push(change);
+                            regional_events.push((*institution, *proposal, event));
+                        }
+                        self.ensure_event_capacity(1)?;
                     }
                     _ => self.preflight_enforcement_adoption(*institution, *proposal)?,
                 }
@@ -655,14 +752,32 @@ impl Simulation {
         if let Some(funding) = &funding {
             funding.check(&game_agreements::Ledger::new(&self.host.storage))?;
         }
+        let observe = effects
+            .iter()
+            .any(|e| matches!(e, CommandEffect::ObserveRegional));
+        let publications = self.prepare_institution_publications(&plan, positional)?;
+        let regional = self.prepare_realm_institution_reaction(
+            &publications,
+            regional_plans,
+            observe,
+            positional,
+        )?;
         let mut batch = game_ecs::Batch::new();
-        plan.stage_into(
+        let publication_guard = plan.stage_with_publications(
             self.host.state.institutions.as_ref().unwrap(),
             &self.host.storage,
+            publications,
             &mut batch,
         )?;
+        let regional_guard = regional
+            .map(|p| p.stage_into(&self.host.storage, &publication_guard, &mut batch))
+            .transpose()?;
         if let Some(funding) = funding {
             funding.stage(&mut batch);
+        }
+        publication_guard.validate(&batch)?;
+        if let Some(guard) = regional_guard {
+            guard.validate(&batch)?;
         }
         self.host.storage.apply_batch(batch)?;
         self.host.allocate_ids(
@@ -709,17 +824,27 @@ impl Simulation {
                 CommandEffect::ExternalOutcome {
                     institution,
                     proposal,
-                    outcome,
+                    outcome: _,
                     change,
                 } => match change {
                     InstitutionChange::RatifyRegional { .. }
                     | InstitutionChange::AuthorizeRegionalPassage { .. } => {
-                        self.apply_realm_outcome(institution, proposal, outcome)?
+                        if let Some((_, _, event)) = regional_events
+                            .iter()
+                            .find(|(i, p, _)| *i == institution && *p == proposal)
+                        {
+                            self.publish_realm_event(event.clone());
+                        }
                     }
                     _ => self.adopt_enforcement_change(institution, proposal)?,
                 },
-                CommandEffect::Publish { institution } => self.publish_institution(institution),
-                CommandEffect::ObserveRegional => self.observe_realm()?,
+                CommandEffect::Publish { .. } => {}
+                CommandEffect::ObserveRegional => {
+                    let through = self.host.next_event() - 1;
+                    if let Some(world) = self.host.state.realm.as_mut() {
+                        world.last_event = through;
+                    }
+                }
             }
         }
         Ok(())
@@ -775,12 +900,9 @@ impl Simulation {
                     .expect("body exists")
                     .vitals
                     .hunger,
-                known_stocks: &game_characters::decisions::mind::<game_api::Command>(
-                    &self.host.storage,
-                    *actor,
-                )
-                .expect("mind exists")
-                .knowledge,
+                known_stocks: &game_characters::decisions::stocks(&self.host.storage, *actor)
+                    .expect("mind exists")
+                    .known,
             })
             .collect::<Vec<_>>();
         let locations = self
@@ -1046,20 +1168,23 @@ impl Simulation {
     fn observe_exclusions(&mut self) -> Result<(), Error> {
         let world = self.host.state.institutions.as_ref().unwrap();
         let mut reactions = Vec::new();
-        for (actor, mind) in
-            game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
+        for (actor, _) in game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
         {
             let Ok(area) = self.social_area(actor) else {
                 continue;
             };
             let mut subject = self.case_subject_facts(actor);
             subject.area = Some(area);
-            reactions.extend(world.exclusion_reactions(
-                &self.host.storage,
-                subject,
-                &mind.knowledge,
-                self.time(),
-            ));
+            reactions.extend(
+                world.exclusion_reactions(
+                    &self.host.storage,
+                    subject,
+                    &game_characters::decisions::stocks(&self.host.storage, actor)
+                        .expect("stock knowledge exists")
+                        .known,
+                    self.time(),
+                ),
+            );
         }
         let roster = self.social_observer_facts();
         let witnesses = game_society::perception::ObservationIndex::new(&roster)?;
@@ -1071,8 +1196,10 @@ impl Simulation {
     fn institutional_vote_knowledge(&self, actor: PersonId) -> InstitutionalVotingKnowledge<'_> {
         let mind = game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
             .expect("institutional actor has a mind");
+        let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+            .expect("stock knowledge exists");
         InstitutionalVotingKnowledge {
-            stocks: &mind.knowledge,
+            stocks: &stocks.known,
             store: &self.host.storage,
             relationships: &mind.relationships,
         }

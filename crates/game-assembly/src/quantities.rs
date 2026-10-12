@@ -36,8 +36,9 @@ impl Simulation {
             game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) {
             for site in mind.sites.values() {
-                if mind
-                    .knowledge
+                if game_characters::decisions::stocks(&self.host.storage, actor)
+                    .expect("stock knowledge exists")
+                    .known
                     .get(&site.input)
                     .is_some_and(|stock| stock.good == good)
                 {

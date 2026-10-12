@@ -13,34 +13,54 @@ pub trait MemoryLearner {
     fn learn_memory_route(&mut self, origin: AreaId, destination: AreaId, duration: SimDuration);
 }
 
-impl<A> MemoryLearner for Mind<A> {
-    /// Historical information may replace equally old observations, but never a
-    /// newer one. Reading or teaching does not grant current physical access.
+/// Borrowed receiving owner access to the person's distinct mind and stock rows.
+pub struct CharacterMemory<'a, A: game_ecs::Component> {
+    pub store: &'a mut game_ecs::Store,
+    pub actor: game_core::PersonId,
+    pub marker: std::marker::PhantomData<A>,
+}
+impl<A: game_ecs::Component> MemoryLearner for CharacterMemory<'_, A> {
     fn learn_memory_stock(
         &mut self,
         now: SimTime,
         mut fact: StockKnowledge,
         source: KnowledgeSource,
     ) -> bool {
-        if self
-            .knowledge
+        let stocks =
+            crate::decisions::stocks_mut(self.store, self.actor).expect("receiving stocks exist");
+        if stocks
+            .known
             .get(&fact.inventory)
             .is_some_and(|old| old.observed_at > fact.observed_at)
         {
             return false;
         }
-        fact.accessible = self
-            .knowledge
+        fact.accessible = stocks
+            .known
             .get(&fact.inventory)
             .is_some_and(|old| old.accessible);
         fact.learned_at = now;
         fact.source = source;
-        self.knowledge.insert(fact.inventory, fact);
+        stocks.known.insert(fact.inventory, fact);
         true
     }
-    /// A recalled route supplies a missing edge. It does not rewrite a route
-    /// already learned by the current person.
     fn learn_memory_route(&mut self, origin: AreaId, destination: AreaId, duration: SimDuration) {
+        let mind =
+            crate::decisions::mind_mut::<A>(self.store, self.actor).expect("receiving mind exists");
+        mind.routes
+            .entry(origin)
+            .or_default()
+            .entry(destination)
+            .or_insert(duration);
+    }
+}
+impl<A> Mind<A> {
+    pub fn learn_memory_route(
+        &mut self,
+        origin: AreaId,
+        destination: AreaId,
+        duration: SimDuration,
+    ) {
         self.routes
             .entry(origin)
             .or_default()
@@ -48,7 +68,6 @@ impl<A> MemoryLearner for Mind<A> {
             .or_insert(duration);
     }
 }
-
 #[cfg(test)]
 mod tests;
 
@@ -98,8 +117,12 @@ pub fn prepare_memory_stock<A: game_ecs::Component>(
             "invalid learned memory stock".into(),
         ));
     }
-    let mind = crate::decisions::mind::<A>(store, actor).ok_or(game_core::Error::Unavailable)?;
-    let before = mind.knowledge.get(&fact.inventory).cloned();
+    crate::decisions::mind::<A>(store, actor).ok_or(game_core::Error::Unavailable)?;
+    let before = crate::decisions::stocks(store, actor)
+        .ok_or(game_core::Error::Unavailable)?
+        .known
+        .get(&fact.inventory)
+        .cloned();
     if let Some(old) = before
         .as_ref()
         .filter(|old| old.observed_at > fact.observed_at)
@@ -159,7 +182,9 @@ impl PreparedMemoryLearning {
         mind.validate()?;
         let unchanged = match &self.patch {
             MemoryLearningPatch::Stock { before, after } => {
-                mind.knowledge.get(&after.inventory) == before.as_ref()
+                crate::decisions::stocks(store, self.actor)
+                    .and_then(|s| s.known.get(&after.inventory))
+                    == before.as_ref()
             }
             MemoryLearningPatch::Route {
                 origin,
@@ -179,33 +204,72 @@ impl PreparedMemoryLearning {
         }
         Ok(())
     }
-    /// Validate the final composed footprint before any owner publishes rows.
+    /// Stock learning publishes a native row; route learning remains a guarded
+    /// field effect owned by the receiving character.
+    pub fn stage_into<A: game_ecs::Component>(
+        self,
+        store: &game_ecs::Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<MemoryLearningFinalization, game_core::Error> {
+        self.validate::<A>(store)?;
+        let stock = matches!(self.patch, MemoryLearningPatch::Stock { .. });
+        if batch.touches::<Mind<A>>(game_ecs::StableId(self.actor.0))
+            || stock && batch.touches::<crate::decisions::Stocks>(game_ecs::StableId(self.actor.0))
+        {
+            return Err(game_core::Error::Unavailable);
+        }
+        if let MemoryLearningPatch::Stock { after, .. } = &self.patch {
+            let mut row = crate::decisions::stocks(store, self.actor)
+                .cloned()
+                .ok_or(game_core::Error::Unavailable)?;
+            row.known.insert(after.inventory, after.clone());
+            batch.insert(game_ecs::StableId(self.actor.0), row);
+        }
+        let finalization = MemoryLearningFinalization {
+            key: batch.key(),
+            learning: self,
+            stock,
+        };
+        finalization.validate_batch::<A>(store, batch)?;
+        Ok(finalization)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryLearningFinalization {
+    key: game_ecs::BatchKey,
+    learning: PreparedMemoryLearning,
+    stock: bool,
+}
+impl MemoryLearningFinalization {
     pub fn validate_batch<A: game_ecs::Component>(
         &self,
         store: &game_ecs::Store,
         batch: &game_ecs::Batch,
     ) -> Result<(), game_core::Error> {
-        self.validate::<A>(store)?;
-        if batch.touches::<Mind<A>>(game_ecs::StableId(self.actor.0)) {
+        self.learning.validate::<A>(store)?;
+        let ids = batch
+            .edited_ids::<crate::decisions::Stocks>()
+            .filter(|id| id.0 == self.learning.actor.0)
+            .collect::<Vec<_>>();
+        if self.key != batch.key()
+            || batch.touches::<Mind<A>>(game_ecs::StableId(self.learning.actor.0))
+            || self.stock && ids != vec![game_ecs::StableId(self.learning.actor.0)]
+        {
             return Err(game_core::Error::Unavailable);
         }
         Ok(())
     }
-    /// Finish after validation and publication; the validated batch must leave
-    /// the receiving mind attached and must not write that same mind row.
     pub fn finish<A: game_ecs::Component>(self, store: &mut game_ecs::Store) {
-        let mind = crate::decisions::mind_mut::<A>(store, self.actor)
-            .expect("validated learning recipient");
-        match self.patch {
-            MemoryLearningPatch::Stock { after, .. } => {
-                mind.knowledge.insert(after.inventory, after);
-            }
-            MemoryLearningPatch::Route {
-                origin,
-                destination,
-                duration,
-                ..
-            } => mind.learn_memory_route(origin, destination, duration),
+        if let MemoryLearningPatch::Route {
+            origin,
+            destination,
+            duration,
+            ..
+        } = self.learning.patch
+        {
+            crate::decisions::mind_mut::<A>(store, self.learning.actor)
+                .expect("validated learning recipient")
+                .learn_memory_route(origin, destination, duration);
         }
     }
 }

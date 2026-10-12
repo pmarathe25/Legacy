@@ -9,7 +9,6 @@ use game_lifecycle::Effect as LifeEffect;
 enum Removal {
     ArmyTalk(armies::Talk),
     ArmyApproach(armies::Approach),
-    RealmTalk(PersonId, realm::Talk),
     Social(PersonId, social::Interaction),
     Enforcement(
         PersonId,
@@ -106,24 +105,16 @@ impl MetadataPlan {
                 }
             }
             if let Some(w) = &sim.host.state.realm {
-                for (speaker, talk) in w
-                    .talks
-                    .iter()
-                    .filter(|(s, t)| **s == actor || t.recipient == actor)
-                {
+                let cancellation = w.prepare_cancel_talks(&sim.host.storage, &[actor]);
+                for speaker in cancellation.speakers() {
                     if !removed.insert((1, speaker.0)) {
                         continue;
                     }
-                    if matches!(
-                        plan.current(sim, *speaker),
-                        Some(Activity::RealmTalk { .. })
-                    ) {
-                        plan.activities.insert(*speaker, Activity::Idle);
-                        step.physical_due.insert(*speaker);
+                    if matches!(plan.current(sim, speaker), Some(Activity::RealmTalk { .. })) {
+                        plan.activities.insert(speaker, Activity::Idle);
+                        step.physical_due.insert(speaker);
                     }
-                    step.events.push(EventKind::Interrupted { actor: *speaker });
-                    step.removals
-                        .push(Removal::RealmTalk(*speaker, talk.clone()));
+                    step.events.push(EventKind::Interrupted { actor: speaker });
                 }
             }
             if !preserve_transport && sim.host.state.transport.is_some() {
@@ -325,6 +316,7 @@ pub(crate) struct PreparedInterruptions {
     missions: Option<game_missions::PreparedTalkCancellations>,
     agreements: Option<game_agreements::PreparedReportCancellations>,
     memory: Option<game_invocation::PreparedMemoryEnding>,
+    realm: Option<game_realm::PreparedTalkCancellations>,
 }
 impl Simulation {
     pub(crate) fn prepare_interruptions(
@@ -456,6 +448,12 @@ impl Simulation {
                 .invocation
                 .as_ref()
                 .map(|runtime| runtime.prepare_memory_ending(&self.host.storage, &actors)),
+            realm: self
+                .host
+                .state
+                .realm
+                .as_ref()
+                .map(|w| w.prepare_cancel_talks(&self.host.storage, &actors)),
             actors,
             now,
             metadata,
@@ -465,6 +463,13 @@ impl Simulation {
             genes,
         })
     }
+}
+#[derive(Default)]
+struct ReplacementPermits<'a> {
+    memory: Option<&'a game_invocation::MemoryReplacement>,
+    mission: Option<&'a game_missions::TalkReplacement>,
+    agreement: Option<&'a game_agreements::ReportReplacement>,
+    realm: Option<&'a game_realm::ReportReplacement>,
 }
 impl PreparedInterruptions {
     pub(crate) fn projected_activities(&self) -> impl Iterator<Item = (PersonId, &Activity)> {
@@ -492,15 +497,16 @@ impl PreparedInterruptions {
         sim: &Simulation,
         batch: &mut Batch,
         final_activities: &BTreeMap<PersonId, Activity>,
-        memory_replacement: Option<&game_invocation::MemoryReplacement>,
+        replacement: Option<&game_invocation::MemoryReplacement>,
     ) -> Result<InterruptionFinalization, Error> {
         self.stage_into_with_replacements(
             sim,
             batch,
             final_activities,
-            memory_replacement,
-            None,
-            None,
+            ReplacementPermits {
+                memory: replacement,
+                ..Default::default()
+            },
         )
     }
     pub(crate) fn stage_into_with_mission_replacement(
@@ -514,9 +520,10 @@ impl PreparedInterruptions {
             sim,
             batch,
             final_activities,
-            None,
-            Some(replacement),
-            None,
+            ReplacementPermits {
+                mission: Some(replacement),
+                ..Default::default()
+            },
         )
     }
     pub(crate) fn stage_into_with_agreement_replacement(
@@ -530,9 +537,27 @@ impl PreparedInterruptions {
             sim,
             batch,
             final_activities,
-            None,
-            None,
-            Some(replacement),
+            ReplacementPermits {
+                agreement: Some(replacement),
+                ..Default::default()
+            },
+        )
+    }
+    pub(crate) fn stage_into_with_realm_replacement(
+        self,
+        sim: &Simulation,
+        batch: &mut Batch,
+        final_activities: &BTreeMap<PersonId, Activity>,
+        replacement: &game_realm::ReportReplacement,
+    ) -> Result<InterruptionFinalization, Error> {
+        self.stage_into_with_replacements(
+            sim,
+            batch,
+            final_activities,
+            ReplacementPermits {
+                realm: Some(replacement),
+                ..Default::default()
+            },
         )
     }
     fn stage_into_with_replacements(
@@ -540,10 +565,14 @@ impl PreparedInterruptions {
         sim: &Simulation,
         batch: &mut Batch,
         final_activities: &BTreeMap<PersonId, Activity>,
-        memory_replacement: Option<&game_invocation::MemoryReplacement>,
-        mission_replacement: Option<&game_missions::TalkReplacement>,
-        agreement_replacement: Option<&game_agreements::ReportReplacement>,
+        permits: ReplacementPermits<'_>,
     ) -> Result<InterruptionFinalization, Error> {
+        let ReplacementPermits {
+            memory: memory_replacement,
+            mission: mission_replacement,
+            agreement: agreement_replacement,
+            realm: realm_replacement,
+        } = permits;
         if self.now != sim.host.clock().time {
             return Err(Error::Unavailable);
         }
@@ -680,6 +709,10 @@ impl PreparedInterruptions {
         if let Some(change) = self.missions {
             change.stage_into_composed(store, batch, mission_replacement)?;
         }
+        let realm = self
+            .realm
+            .map(|change| change.stage_into(store, batch, realm_replacement))
+            .transpose()?;
         // Schema admission remains shared with all caller-owner writes.
         Ok(InterruptionFinalization {
             steps: metadata.steps.into_iter().map(|s| (s.actor, s)).collect(),
@@ -687,6 +720,7 @@ impl PreparedInterruptions {
             projects,
             transport,
             agreements,
+            realm,
         })
     }
 }
@@ -696,9 +730,13 @@ pub(crate) struct InterruptionFinalization {
     property: Option<game_property::CancellationFinalization>,
     projects: Option<game_projects::ProjectFinalization>,
     agreements: Option<game_agreements::ReportBatchGuard>,
+    realm: Option<game_realm::TalkBatchGuard>,
 }
 impl InterruptionFinalization {
     pub(crate) fn validate_batch(&self, batch: &Batch) -> Result<(), Error> {
+        if let Some(guard) = &self.realm {
+            guard.validate(batch)?;
+        }
         if let Some(guard) = &self.agreements {
             guard.validate(batch)?;
         }
@@ -755,9 +793,6 @@ impl InterruptionFinalization {
                         .unwrap()
                         .approaches
                         .remove(&a.actor);
-                }
-                Removal::RealmTalk(s, _) => {
-                    sim.host.state.realm.as_mut().unwrap().talks.remove(&s);
                 }
                 Removal::Social(key, i) => {
                     let w = sim.host.state.social.as_mut().unwrap();

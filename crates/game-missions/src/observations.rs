@@ -1,5 +1,5 @@
+use crate::mission as stored_mission;
 use crate::*;
-use crate::{mission as stored_mission, recruitment as stored_recruitment};
 use game_core::*;
 use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
@@ -74,85 +74,12 @@ impl Runtime {
         let old = knowledge(store, observer)
             .map(|row| &row.missions)
             .and_then(|k| k.get(&id));
-        let leader_heard = f.heard.contains(&m.proposal.leader) || observer == m.proposal.leader;
-        if !leader_heard && old.is_none() {
-            return Err(Error::Unavailable);
-        }
-        let companions = m
+        let offers = m
             .members
             .values()
-            .filter_map(|p| {
-                if let Some(location) = f.visible_locations.get(&p.person) {
-                    Some(CompanionView {
-                        person: p.person,
-                        status: p.status,
-                        location: Some(location.clone()),
-                        explanation: if p.person == observer {
-                            p.explanation.clone()
-                        } else {
-                            p.declared_explanation.clone()
-                        },
-                        observed_at: f.now,
-                    })
-                } else {
-                    old.and_then(|view| {
-                        view.companions
-                            .iter()
-                            .find(|known| known.person == p.person)
-                    })
-                    .cloned()
-                }
-            })
+            .filter_map(|member| recruitment(store, member.recruitment).map(|row| (row.id, row)))
             .collect();
-        let recruitments = m
-            .members
-            .values()
-            .filter(|p| {
-                p.person == observer || observer == m.sponsor && f.heard.contains(&p.person)
-            })
-            .map(|p| {
-                let offer = stored_recruitment(store, p.recruitment).ok_or(Error::Unavailable)?;
-                Ok(RecruitmentView {
-                    id: offer.id,
-                    person: offer.person,
-                    status: p.status,
-                    compensation: offer.compensation.clone(),
-                    payment_agreement: offer.agreement,
-                    countered: offer.countered,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
-        let snapshot = MissionView {
-            id: m.id,
-            sponsor: m.sponsor,
-            leader: m.proposal.leader,
-            objective: if leader_heard {
-                m.proposal.objective.clone()
-            } else {
-                old.unwrap().objective.clone()
-            },
-            status: if leader_heard {
-                m.status
-            } else {
-                old.unwrap().status
-            },
-            home: m.proposal.home,
-            deadline: m.proposal.deadline,
-            companions,
-            recruitments,
-            supplies: m.proposal.supplies.clone(),
-            explanation: if leader_heard {
-                m.explanation.clone()
-            } else {
-                old.unwrap().explanation.clone()
-            },
-            observed_at: if leader_heard {
-                f.now
-            } else {
-                old.unwrap().observed_at
-            },
-            reported_by: None,
-        };
+        let snapshot = observation_snapshot(m, &offers, observer, old, f)?;
         Ok(PreparedObservation {
             observer,
             mission: id,
@@ -199,4 +126,93 @@ impl Runtime {
             snapshot: after,
         }))
     }
+}
+
+pub(crate) fn observation_snapshot(
+    m: &Mission,
+    offers: &BTreeMap<RecruitmentId, &Recruitment>,
+    observer: PersonId,
+    old: Option<&MissionView>,
+    f: &ObservationFacts,
+) -> Result<MissionView, Error> {
+    let leader_heard = f.heard.contains(&m.proposal.leader) || observer == m.proposal.leader;
+    if !leader_heard && old.is_none() {
+        return Err(Error::Unavailable);
+    }
+    let companions = m
+        .members
+        .values()
+        .filter_map(|p| {
+            if let Some(location) = f.visible_locations.get(&p.person) {
+                Some(CompanionView {
+                    person: p.person,
+                    status: p.status,
+                    location: Some(location.clone()),
+                    explanation: if p.person == observer {
+                        p.explanation.clone()
+                    } else {
+                        p.declared_explanation.clone()
+                    },
+                    observed_at: f.now,
+                })
+            } else {
+                old.and_then(|view| {
+                    view.companions
+                        .iter()
+                        .find(|known| known.person == p.person)
+                })
+                .cloned()
+            }
+        })
+        .collect();
+    let recruitments = m
+        .members
+        .values()
+        .filter(|p| p.person == observer || observer == m.sponsor && f.heard.contains(&p.person))
+        .map(|p| {
+            let offer = offers
+                .get(&p.recruitment)
+                .copied()
+                .ok_or(Error::Unavailable)?;
+            Ok(RecruitmentView {
+                id: offer.id,
+                person: offer.person,
+                status: p.status,
+                compensation: offer.compensation.clone(),
+                payment_agreement: offer.agreement,
+                countered: offer.countered,
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    Ok(MissionView {
+        id: m.id,
+        sponsor: m.sponsor,
+        leader: m.proposal.leader,
+        objective: if leader_heard {
+            m.proposal.objective.clone()
+        } else {
+            old.unwrap().objective.clone()
+        },
+        status: if leader_heard {
+            m.status
+        } else {
+            old.unwrap().status
+        },
+        home: m.proposal.home,
+        deadline: m.proposal.deadline,
+        companions,
+        recruitments,
+        supplies: m.proposal.supplies.clone(),
+        explanation: if leader_heard {
+            m.explanation.clone()
+        } else {
+            old.unwrap().explanation.clone()
+        },
+        observed_at: if leader_heard {
+            f.now
+        } else {
+            old.unwrap().observed_at
+        },
+        reported_by: None,
+    })
 }

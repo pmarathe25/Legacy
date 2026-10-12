@@ -828,12 +828,9 @@ fn permission_granted_during_loading_does_not_stop_the_physical_transfer() {
     )
     .unwrap();
     assert!(
-        game_characters::decisions::mind::<game_api::Command>(
-            sim.canonical_state().components,
-            ruler
-        )
-        .expect("mind exists")
-        .knowledge[&stock]
+        game_characters::decisions::stocks(sim.canonical_state().components, ruler)
+            .expect("mind exists")
+            .known[&stock]
             .accessible
     );
     sim.advance(SimDuration(30_000)).unwrap();

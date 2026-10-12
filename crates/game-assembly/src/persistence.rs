@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 50;
+const SAVE_VERSION: u32 = 51;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -363,6 +363,13 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
+    if s.state.decisions.is_none()
+        && game_characters::decisions::stock_rows(s.components)
+            .next()
+            .is_some()
+    {
+        return Err(fail());
+    }
     if let Some(world) = &s.state.decisions {
         for id in world.concepts.keys() {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
@@ -389,12 +396,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.realm {
-        for id in world.kernel.commitments.keys() {
+    if s.state.realm.is_some() {
+        for (id, _) in game_realm::commitments(s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
                 return Err(fail());
             }
         }
+    } else if game_realm::commitments(s.components).next().is_some()
+        || game_realm::knowledges(s.components).next().is_some()
+        || game_realm::request_rows(s.components).next().is_some()
+        || game_realm::talks(s.components).next().is_some()
+    {
+        return Err(fail());
     }
     if let Some(world) = &s.state.combat {
         for id in world
@@ -557,7 +570,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .realm
                         .as_ref()
-                        .and_then(|w| w.kernel.commitments.get(&commitment))
+                        .and_then(|_| game_realm::commitment(s.components, commitment))
                         .is_some_and(|c| c.revision(revision).is_some())
                 {
                     return Err(fail());
@@ -574,7 +587,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .realm
                         .as_ref()
-                        .is_some_and(|w| w.kernel.commitments.contains_key(&commitment))
+                        .is_some_and(|_| game_realm::commitment(s.components, commitment).is_some())
                 {
                     return Err(fail());
                 }
@@ -585,7 +598,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .realm
                         .as_ref()
-                        .and_then(|w| w.kernel.commitments.get(&key.commitment))
+                        .and_then(|_| game_realm::commitment(s.components, key.commitment))
                         .and_then(|c| c.revision(key.revision))
                         .is_some_and(|r| usize::from(key.index) < r.proposal.terms.len())
                 {
@@ -603,7 +616,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .realm
                     .as_ref()
-                    .and_then(|w| w.kernel.commitments.get(&commitment))
+                    .and_then(|_| game_realm::commitment(s.components, commitment))
                     .is_some_and(|c| c.revision(revision).is_some())
                     || !s.state.institutions.as_ref().is_some_and(|_| {
                         game_society::proposal(s.components, proposal)
@@ -1680,11 +1693,22 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     {
         return Err(fail());
     }
+    if s.state.decisions.is_none()
+        && game_characters::decisions::stock_rows(s.components)
+            .next()
+            .is_some()
+    {
+        return Err(fail());
+    }
     if let Some(world) = &s.state.decisions {
         if game_characters::decisions::minds::<game_api::Command>(s.components)
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>()
             != people.keys().copied().collect::<BTreeSet<_>>()
+            || game_characters::decisions::stock_rows(s.components)
+                .map(|(id, _)| id)
+                .collect::<BTreeSet<_>>()
+                != people.keys().copied().collect::<BTreeSet<_>>()
             || !world.concepts.contains_key(&world.work_concept)
             || world.last_learning_event >= s.next_event
             || world.switching_margin < 0
@@ -1852,7 +1876,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }) {
                 return Err(fail());
             }
-            for (id, fact) in &mind.knowledge {
+            for (id, fact) in &game_characters::decisions::stocks(s.components, *id)
+                .ok_or_else(fail)?
+                .known
+            {
                 if *id != fact.inventory
                     || !game_cargo::inventory(s.components, *(id)).is_some()
                     || !areas.contains(&fact.area)

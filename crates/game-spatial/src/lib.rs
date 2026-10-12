@@ -131,6 +131,19 @@ pub fn resolved_anchor(store: &Store, entity: StableId) -> Result<(StableId, &Lo
         }
     }
 }
+/// Typed rows read while following one carrier chain. Rebuild after any change.
+pub fn location_reads(store: &Store, entity: StableId) -> Result<game_ecs::ReadFootprint, Error> {
+    resolved_anchor(store, entity)?;
+    let mut reads = game_ecs::ReadFootprint::new();
+    let mut current = entity;
+    loop {
+        reads.protect::<Location>(current);
+        match location(store, current).expect("validated carrier chain") {
+            Location::Carried { carrier } => current = StableId(carrier.0),
+            _ => return Ok(reads),
+        }
+    }
+}
 pub fn resolve(store: &Store, entity: StableId) -> Result<Location, Error> {
     Ok(resolved_anchor(store, entity)?.1.clone())
 }

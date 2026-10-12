@@ -150,19 +150,6 @@ impl Simulation {
                         child_signals: BTreeMap::new(),
                         personality,
                         dream: decisions::Aspiration::Independence,
-                        knowledge: BTreeMap::from([(
-                            food,
-                            StockKnowledge {
-                                inventory: food,
-                                area: sim.host.state.areas[0].id,
-                                good: Good::Food,
-                                quantity: Quantity(200_000),
-                                accessible: true,
-                                observed_at: SimTime(0),
-                                learned_at: SimTime(0),
-                                source: KnowledgeSource::Observed(p.id),
-                            },
-                        )]),
                         sites: BTreeMap::new(),
                         relationships: BTreeMap::new(),
                         values: BTreeMap::new(),
@@ -182,6 +169,25 @@ impl Simulation {
             })
             .collect();
         sim.initialize_decision_people(minds)?;
+        for person in &sim.host.state.people {
+            game_characters::decisions::stocks_mut(&mut sim.host.storage, person.id)
+                .expect("stock knowledge exists")
+                .known
+                .insert(
+                    food,
+                    StockKnowledge {
+                        inventory: food,
+                        area: sim.host.state.areas[0].id,
+                        good: Good::Food,
+                        quantity: Quantity(200_000),
+                        accessible: true,
+                        observed_at: SimTime(0),
+                        learned_at: SimTime(0),
+                        source: KnowledgeSource::Observed(person.id),
+                    },
+                );
+        }
+
         sim.host.state.combat = Some(combat::World {
             rules: combat::Rules {
                 encounter_limit: 128,

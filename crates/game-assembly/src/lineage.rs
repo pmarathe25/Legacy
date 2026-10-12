@@ -434,6 +434,8 @@ impl Simulation {
                 *teacher,
             )
             .expect("mind exists");
+            let stocks = game_characters::decisions::stocks(&self.host.storage, *teacher)
+                .expect("stock knowledge exists");
             if !mind
                 .child_signals
                 .get(&student)
@@ -467,17 +469,14 @@ impl Simulation {
                 guardian: *teacher,
                 request: GuardianRequest::Rest,
             });
-            for food in mind.knowledge.values().filter(|k| {
+            for food in stocks.known.values().filter(|k| {
                 k.good == Good::Food
                     && k.accessible
                     && k.quantity.0 >= 1_000
-                    && game_characters::decisions::mind::<game_api::Command>(
-                        &self.host.storage,
-                        student,
-                    )
-                    .expect("mind exists")
-                    .knowledge
-                    .contains_key(&k.inventory)
+                    && game_characters::decisions::stocks(&self.host.storage, student)
+                        .expect("mind exists")
+                        .known
+                        .contains_key(&k.inventory)
             }) {
                 commands.push(Command::RequestGuardian {
                     guardian: *teacher,

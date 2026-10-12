@@ -49,7 +49,7 @@ pub struct MemoryCompletion {
     pub effect: MemoryEffect,
     pub participants: Vec<PersonId>,
     pub allocation_demand: u64,
-    learning: Option<game_characters::memories::PreparedMemoryLearning>,
+    learning: Option<game_characters::memories::MemoryLearningFinalization>,
 }
 impl MemoryCompletion {
     pub fn validate_batch<A: Component>(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
@@ -327,11 +327,15 @@ impl PreparedMemoryCompletion {
             cargo.stage_into(store, batch)?;
         }
         let participants = self.ending.stage_into(runtime, store, None, batch)?;
+        let learning = self
+            .learning
+            .map(|learning| learning.stage_into::<A>(store, batch))
+            .transpose()?;
         Ok(MemoryCompletion {
             effect: self.effect,
             participants,
             allocation_demand: self.allocation_demand,
-            learning: self.learning,
+            learning,
         })
     }
 }

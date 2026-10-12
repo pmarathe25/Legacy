@@ -103,7 +103,7 @@ fn pending() -> Simulation {
     sim
 }
 #[test]
-fn native_session_and_save50_are_public_authority_without_runtime_shadows() {
+fn native_session_and_save51_are_public_authority_without_runtime_shadows() {
     let mut sim = pending();
     let actor = sim.canonical_state().state.ruler;
     let state = sim.canonical_state();
@@ -119,7 +119,7 @@ fn native_session_and_save50_are_public_authority_without_runtime_shadows() {
     assert!(row.active.is_none());
     let bytes = sim.save().unwrap();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(value["version"], 50);
+    assert_eq!(value["version"], 51);
     let control = &value["state"]["state"]["invocation"]["control"];
     assert_eq!(
         control.as_object().unwrap().keys().collect::<Vec<_>>(),
@@ -172,7 +172,7 @@ fn public_restore_rejects_runtime_shadows_orphans_and_pending_session_aliases() 
     for attack in 0..8 {
         let mut value = base.clone();
         match attack {
-            0 => value["version"] = serde_json::json!(49),
+            0 => value["version"] = serde_json::json!(50),
             1 => {
                 value["state"]["state"]["invocation"]["control"]["active"] = serde_json::Value::Null
             }

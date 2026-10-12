@@ -75,6 +75,195 @@ pub struct PreparedCommand {
     pub effects: Vec<CommandEffect>,
 }
 impl PreparedCommand {
+    pub fn created_proposals(&self) -> impl Iterator<Item = RuleProposalId> + '_ {
+        self.proposals
+            .iter()
+            .filter(|(before, _)| before.is_none())
+            .map(|(_, after)| after.id)
+    }
+    /// Selected facts for publication of an owner-prepared institutional row.
+    pub fn publication_institution<'a>(
+        &'a self,
+        store: &'a Store,
+        id: InstitutionId,
+    ) -> Result<&'a Institution, Error> {
+        self.institutions
+            .iter()
+            .find(|(_, after)| after.id == id)
+            .map(|(_, after)| after)
+            .or_else(|| {
+                self.resolution
+                    .as_ref()
+                    .and_then(|r| r.institution_after.as_ref())
+                    .filter(|i| i.id == id)
+            })
+            .or_else(|| crate::institution(store, id))
+            .ok_or(Error::Unavailable)
+    }
+    pub fn publication_people(
+        &self,
+        store: &Store,
+        id: InstitutionId,
+        local: impl IntoIterator<Item = PersonId>,
+    ) -> Result<BTreeSet<PersonId>, Error> {
+        let i = self.publication_institution(store, id)?;
+        Ok(i.charter
+            .founders
+            .iter()
+            .chain(&i.members)
+            .chain(&i.invited)
+            .copied()
+            .chain(local.into_iter().filter(|_| i.charter.open_membership))
+            .collect())
+    }
+    pub fn publication_authority_people(
+        &self,
+        store: &Store,
+        id: InstitutionId,
+    ) -> Result<BTreeSet<PersonId>, Error> {
+        let i = self.publication_institution(store, id)?;
+        Ok(i.charter
+            .offices
+            .iter()
+            .map(|o| o.holder)
+            .chain(
+                i.office_support
+                    .values()
+                    .flat_map(|ids| ids.iter().copied()),
+            )
+            .collect())
+    }
+    fn publication_proposals(&self, store: &Store, id: InstitutionId) -> Vec<RuleProposal> {
+        let mut rows = crate::projected_publication::current_proposals(store, id)
+            .into_iter()
+            .map(|p| (p.id, p))
+            .collect::<BTreeMap<_, _>>();
+        for (_, after) in &self.proposals {
+            if after.institution == id {
+                rows.insert(after.id, after.clone());
+            }
+        }
+        if let Some(r) = &self.resolution {
+            for (_, after) in &r.proposals {
+                if after.institution == id {
+                    rows.insert(after.id, after.clone());
+                }
+            }
+        }
+        rows.into_values().rev().take(32).collect()
+    }
+    pub fn prepare_publications(
+        &self,
+        world: &Runtime,
+        store: &Store,
+        authority: &AuthorityFacts,
+        at: SimTime,
+        index: &crate::perception::ObservationIndex<'_>,
+    ) -> Result<Vec<crate::projected_publication::PreparedCommandPublication>, Error> {
+        self.verify(store)?;
+        self.effects
+            .iter()
+            .filter_map(|e| {
+                if let CommandEffect::Publish { institution } = e {
+                    Some(*institution)
+                } else {
+                    None
+                }
+            })
+            .map(|id| {
+                Ok(world.projected_publication(
+                    store,
+                    self.publication_institution(store, id)?,
+                    self.publication_proposals(store, id),
+                    authority,
+                    at,
+                    index,
+                ))
+            })
+            .collect()
+    }
+    pub fn stage_with_publications(
+        mut self,
+        world: &Runtime,
+        store: &Store,
+        publications: Vec<crate::projected_publication::PreparedCommandPublication>,
+        batch: &mut Batch,
+    ) -> Result<crate::projected_publication::CommandPublicationGuard, Error> {
+        self.verify(store)?;
+        let mut after = BTreeMap::<PersonId, crate::Knowledge>::new();
+        let receipts = publications.clone();
+        if receipts
+            .iter()
+            .any(|p| batch.touches::<Institution>(StableId(p.institution.id.0)))
+        {
+            return Err(Error::Unavailable);
+        }
+        for publication in publications {
+            publication.verify(store)?;
+            if self.publication_institution(store, publication.institution.id)?
+                != &publication.institution
+                || self.publication_proposals(store, publication.institution.id)
+                    != publication.projected_proposals
+            {
+                return Err(Error::Unavailable);
+            }
+            for (actor, _) in publication.before {
+                after
+                    .entry(actor)
+                    .or_insert_with(|| crate::knowledge(store, actor).cloned().unwrap_or_default())
+                    .institutions
+                    .insert(publication.view.id, publication.view.clone());
+            }
+        }
+        for (actor, _, cases) in std::mem::take(&mut self.evidence) {
+            after
+                .entry(actor)
+                .or_insert_with(|| crate::knowledge(store, actor).cloned().unwrap_or_default())
+                .cases = cases;
+        }
+        let mut institutions = self
+            .institutions
+            .iter()
+            .map(|(_, row)| row.id)
+            .collect::<BTreeSet<_>>();
+        self.stage_into(world, store, batch)?;
+        institutions.extend(
+            receipts
+                .iter()
+                .filter(|p| batch.touches::<Institution>(StableId(p.institution.id.0)))
+                .map(|p| p.institution.id),
+        );
+        let preserved = receipts
+            .iter()
+            .filter(|p| {
+                institutions.contains(&p.institution.id)
+                    && p.source.as_ref() == Some(&p.institution)
+            })
+            .map(|p| p.institution.id)
+            .collect();
+        let readonly = receipts
+            .iter()
+            .filter(|p| !institutions.contains(&p.institution.id))
+            .map(|p| p.institution.id)
+            .collect();
+        let people = after.keys().copied().collect();
+        for (actor, row) in after {
+            if batch.touches::<crate::Knowledge>(StableId(actor.0)) {
+                return Err(Error::Unavailable);
+            }
+            batch.insert(StableId(actor.0), row);
+        }
+        let guard = crate::projected_publication::CommandPublicationGuard::new(
+            batch,
+            people,
+            &receipts,
+            institutions,
+            preserved,
+            readonly,
+        );
+        guard.validate(batch)?;
+        Ok(guard)
+    }
     pub fn verify(&self, store: &Store) -> Result<(), Error> {
         if self
             .reads

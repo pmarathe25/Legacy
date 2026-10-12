@@ -1,6 +1,6 @@
 use super::*;
 use crate::memory_start::tests::{ACTOR, LIFE, fixture, request};
-use game_characters::decisions::{Mind, mind, mind_mut};
+use game_characters::decisions::{Mind, mind, mind_mut, stocks, stocks_mut};
 
 fn start(
     runtime: &Runtime,
@@ -76,9 +76,9 @@ fn written_native_record_completes_at_deadline_and_reading_survives_dismissal() 
             .is_none()
     );
     assert!(
-        !mind::<u8>(&store, ACTOR)
+        !stocks(&store, ACTOR)
             .unwrap()
-            .knowledge
+            .known
             .contains_key(&InventoryId(2))
     );
     store.remove::<ControlSession>(StableId(ACTOR.0)).unwrap();
@@ -99,7 +99,7 @@ fn written_native_record_completes_at_deadline_and_reading_survives_dismissal() 
             actor: ACTOR
         }
     );
-    let fact = &mind::<u8>(&store, ACTOR).unwrap().knowledge[&InventoryId(2)];
+    let fact = &stocks(&store, ACTOR).unwrap().known[&InventoryId(2)];
     assert_eq!(fact.source, KnowledgeSource::Recorded(RecordId(40)));
     assert!(!fact.accessible);
     assert_eq!(fact.learned_at, reading.completes);
@@ -164,12 +164,7 @@ fn completion_rechecks_tools_capacity_control_and_teaching_collateral() {
         complete(&runtime, &mut store, &facts, teaching.completes, 40),
         MemoryEffect::Interrupted { actor: ACTOR }
     );
-    assert!(
-        mind::<u8>(&store, PersonId(11))
-            .unwrap()
-            .knowledge
-            .is_empty()
-    );
+    assert!(stocks(&store, PersonId(11)).unwrap().known.is_empty());
 }
 #[test]
 fn chosen_record_moves_with_cargo_without_relocating_its_sibling() {
@@ -233,7 +228,7 @@ fn chosen_record_moves_with_cargo_without_relocating_its_sibling() {
     );
 }
 #[test]
-fn final_foreign_mind_edits_reject_before_publishing_readers_or_knowledge() {
+fn final_foreign_mind_or_stock_edits_reject_before_publishing_readers_or_knowledge() {
     let (runtime, mut store, facts) = fixture();
     let writing = start(&runtime, &mut store, &facts, &request());
     complete(&runtime, &mut store, &facts, writing.completes, 40);
@@ -246,7 +241,7 @@ fn final_foreign_mind_edits_reject_before_publishing_readers_or_knowledge() {
         },
         writing.completes,
     );
-    for remove in [false, true] {
+    for attack in 0..4 {
         let before = store.clone();
         let plan = runtime
             .prepare_memory_completion::<u8>(&store, &facts, ACTOR, reading.completes, 42)
@@ -255,13 +250,22 @@ fn final_foreign_mind_edits_reject_before_publishing_readers_or_knowledge() {
         let finish = plan
             .stage_into::<u8>(&runtime, &store, &facts, reading.completes, &mut batch)
             .unwrap();
-        if remove {
-            batch.remove::<Mind<u8>>(StableId(ACTOR.0));
-        } else {
-            batch.insert(
-                StableId(ACTOR.0),
-                mind::<u8>(&store, ACTOR).unwrap().clone(),
-            );
+        match attack {
+            0 => {
+                batch.remove::<Mind<u8>>(StableId(ACTOR.0));
+            }
+            1 => {
+                batch.insert(
+                    StableId(ACTOR.0),
+                    mind::<u8>(&store, ACTOR).unwrap().clone(),
+                );
+            }
+            2 => {
+                batch.remove::<game_characters::decisions::Stocks>(StableId(ACTOR.0));
+            }
+            _ => {
+                batch.insert(StableId(ACTOR.0), stocks(&store, ACTOR).unwrap().clone());
+            }
         }
         assert_eq!(
             finish.validate_batch::<u8>(&store, &batch),
@@ -273,10 +277,10 @@ fn final_foreign_mind_edits_reject_before_publishing_readers_or_knowledge() {
     let plan = runtime
         .prepare_memory_completion::<u8>(&store, &facts, ACTOR, reading.completes, 42)
         .unwrap();
-    let fact = archive::<u8>(&store, LIFE).unwrap().mind.knowledge[&InventoryId(2)].clone();
-    mind_mut::<u8>(&mut store, ACTOR)
+    let fact = archive::<u8>(&store, LIFE).unwrap().stocks.known[&InventoryId(2)].clone();
+    stocks_mut(&mut store, ACTOR)
         .unwrap()
-        .knowledge
+        .known
         .insert(InventoryId(2), fact);
     let before = store.clone();
     assert!(
@@ -305,6 +309,9 @@ fn archives_capture_once_and_only_refresh_skills_in_the_death_tick() {
         }
         fn mind(&self, person: PersonId) -> Option<&Mind<u8>> {
             mind::<u8>(self.store, person)
+        }
+        fn stocks(&self, person: PersonId) -> Option<&game_characters::decisions::Stocks> {
+            game_characters::decisions::stocks(self.store, person)
         }
         fn skills(&self, _: PersonId) -> Vec<SkillView> {
             vec![SkillView {
@@ -338,6 +345,12 @@ fn archives_capture_once_and_only_refresh_skills_in_the_death_tick() {
     store.apply_batch(batch).unwrap();
     finish.finish(&mut store);
     let archived = archive::<u8>(&store, ACTOR).unwrap().mind.clone();
+    let archived_stocks = archive::<u8>(&store, ACTOR).unwrap().stocks.clone();
+    let fact = archive::<u8>(&store, LIFE).unwrap().stocks.known[&InventoryId(2)].clone();
+    stocks_mut(&mut store, ACTOR)
+        .unwrap()
+        .known
+        .insert(fact.inventory, fact);
     mind_mut::<u8>(&mut store, ACTOR).unwrap().dream =
         game_characters::decisions::Aspiration::Comfort;
     let facts = Facts {
@@ -356,6 +369,10 @@ fn archives_capture_once_and_only_refresh_skills_in_the_death_tick() {
     store.apply_batch(batch).unwrap();
     finish.finish(&mut store);
     assert_eq!(archive::<u8>(&store, ACTOR).unwrap().mind, archived);
+    assert_eq!(
+        archive::<u8>(&store, ACTOR).unwrap().stocks,
+        archived_stocks
+    );
     assert_eq!(archive::<u8>(&store, ACTOR).unwrap().skills[0].level, 12);
     let facts = Facts {
         store: &store,
@@ -439,7 +456,7 @@ fn composed_control_dismissal_ends_writing_but_reading_still_learns() {
         }
     );
     assert!(matches!(
-        mind::<u8>(&store, ACTOR).unwrap().knowledge[&InventoryId(2)].source,
+        stocks(&store, ACTOR).unwrap().known[&InventoryId(2)].source,
         KnowledgeSource::Recorded(RecordId(40))
     ));
 }

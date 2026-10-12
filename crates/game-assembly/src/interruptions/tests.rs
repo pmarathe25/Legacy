@@ -99,12 +99,13 @@ fn realm_recipient_fan_in_counts_every_event_without_fixed_budget() {
         .map(|p| p.id)
         .filter(|id| *id != recipient)
         .collect();
-    let mut realm = realm::World::default();
+    let realm = realm::World::default();
     for speaker in &speakers {
         let commitment = RealmCommitmentId(1);
-        realm.talks.insert(
-            *speaker,
+        game_realm::insert_talk(
+            &mut old.host.storage,
             realm::Talk {
+                speaker: *speaker,
                 recipient,
                 area,
                 completes,
@@ -117,7 +118,8 @@ fn realm_recipient_fan_in_counts_every_event_without_fixed_budget() {
                 institutions: Vec::new(),
                 stocks: Vec::new(),
             },
-        );
+        )
+        .unwrap();
         *old.host.storage.activity_mut(*speaker).unwrap() = Activity::RealmTalk {
             commitment,
             recipient,
@@ -137,6 +139,13 @@ fn realm_recipient_fan_in_counts_every_event_without_fixed_budget() {
         .unwrap();
     staged.host.state.realm = old.host.state.realm.clone();
     for speaker in &speakers {
+        game_realm::insert_talk(
+            &mut staged.host.storage,
+            game_realm::talk(&old.host.storage, *speaker)
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
         *staged.host.storage.activity_mut(*speaker).unwrap() =
             old.host.storage.activity(*speaker).unwrap().clone();
     }
@@ -153,7 +162,7 @@ fn realm_recipient_fan_in_counts_every_event_without_fixed_budget() {
     finish.finish_actor(&mut staged, recipient);
     old.interrupt_actor_activity_except_projects(recipient);
     assert_eq!(old.canonical_state(), staged.canonical_state());
-    assert_eq!(staged.host.state.realm.as_ref().unwrap().talks.len(), 0);
+    assert_eq!(game_realm::talks(&staged.host.storage).count(), 0);
 }
 #[test]
 fn caller_replacement_and_paused_workshop_job_are_not_overwritten() {

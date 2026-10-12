@@ -217,8 +217,8 @@ impl game_agreements::DutyFacts<Command> for AgreementBindings<'_> {
             })
     }
     fn source_good(&self, actor: PersonId, source: InventoryId) -> Option<Good> {
-        game_characters::decisions::mind::<Command>(&self.0.host.storage, actor)?
-            .knowledge
+        game_characters::decisions::stocks(&self.0.host.storage, actor)?
+            .known
             .get(&source)
             .map(|row| row.good)
     }
@@ -412,13 +412,12 @@ impl Simulation {
         .expect("validated local notice");
         self.apply_agreement_learning(effects);
     }
-    pub(crate) fn observe_agreement_events(&mut self) {
+    pub(crate) fn agreement_observation_events(&self) -> Vec<game_agreements::ObservationEvent> {
         use game_agreements::ObservationKind as O;
         let Some(runtime) = &self.host.state.agreements else {
-            return;
+            return vec![];
         };
-        let events = self
-            .host
+        self.host
             .events()
             .iter()
             .skip(runtime.last_observation_event as usize)
@@ -449,7 +448,36 @@ impl Simulation {
                 };
                 Some(game_agreements::ObservationEvent { at: e.at, kind })
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+    }
+    pub(crate) fn prepare_realm_agreement_publication(
+        &self,
+        prepared: game_agreements::PreparedTransition,
+    ) -> Result<game_agreements::PreparedProposalPublication, Error> {
+        let events = self.agreement_observation_events();
+        let people = prepared.proposal_publication_people(&self.host.storage, &events)?;
+        let cursor = (self.host.next_event() - 1)
+            .checked_add(u64::try_from(prepared.events.len()).map_err(|_| Error::Overflow)?)
+            .ok_or(Error::Overflow)?;
+        game_agreements::PreparedProposalPublication::prepare(
+            prepared,
+            &self.host.storage,
+            self.host
+                .state
+                .agreements
+                .as_ref()
+                .ok_or(Error::Unavailable)?,
+            self.time(),
+            cursor,
+            &events,
+            &self.agreement_contacts(people),
+        )
+    }
+    pub(crate) fn observe_agreement_events(&mut self) {
+        if self.host.state.agreements.is_none() {
+            return;
+        };
+        let events = self.agreement_observation_events();
         let contacts = self.agreement_contacts(game_agreements::observation_people(
             &self.host.storage,
             &events,
@@ -634,6 +662,31 @@ impl Simulation {
             .prepare_transition(actor, action, &facts, &ids)?;
         self.apply_prepared_agreement(actor, prepared, next)
     }
+    pub(crate) fn prepare_agreement_command(
+        &self,
+        actor: PersonId,
+        action: &AgreementAction,
+    ) -> Result<(game_agreements::PreparedTransition, u64), Error> {
+        self.agreement_actor_area(actor)?;
+        self.reserve_agreement_ids(0)?;
+        let requirements =
+            game_agreements::Ledger::new(&self.host.storage).transition_requirements(action)?;
+        let facts = game_agreements::transition_facts(
+            &self.host.storage,
+            actor,
+            action,
+            self.economic_terms_context(&requirements.terms),
+            &AgreementBindings(self),
+        )?;
+        let (ids, next) =
+            game_agreements::transition_ids(self.host.next_id(), requirements.allocation)?;
+        self.reserve_agreement_ids(next - self.host.next_id())?;
+        Ok((
+            game_agreements::Ledger::new(&self.host.storage)
+                .prepare_transition(actor, action, &facts, &ids)?,
+            next,
+        ))
+    }
     pub(crate) fn prepare_service_agreement(
         &self,
         consent: &game_missions::ServiceConsent,
@@ -759,7 +812,6 @@ impl Simulation {
         prepared: game_agreements::PreparedTransition,
         next: u64,
     ) -> Result<(), Error> {
-        use game_agreements::TransitionEvent;
         let events = prepared.events;
         let notices = prepared.notices;
         self.host.allocate_ids(
@@ -767,6 +819,18 @@ impl Simulation {
                 .checked_sub(self.host.next_id())
                 .ok_or(Error::Overflow)?,
         )?;
+        self.publish_agreement_events(events);
+        for notice in notices {
+            self.local_agreement_notice(notice.agreement, actor, notice.amendment);
+        }
+        self.observe_agreement_events();
+        Ok(())
+    }
+    pub(crate) fn publish_agreement_events(
+        &mut self,
+        events: Vec<game_agreements::TransitionEvent>,
+    ) {
+        use game_agreements::TransitionEvent;
         for event in events {
             self.emit(match event {
                 TransitionEvent::Proposed {
@@ -800,11 +864,6 @@ impl Simulation {
                 },
             });
         }
-        for notice in notices {
-            self.local_agreement_notice(notice.agreement, actor, notice.amendment);
-        }
-        self.observe_agreement_events();
-        Ok(())
     }
     fn reserve_agreement_ids(&self, count: u64) -> Result<(), Error> {
         self.host
@@ -1176,6 +1235,8 @@ impl Simulation {
         actor: PersonId,
         terms: &[AgreementTerm],
     ) -> Result<OfferKnowledgeFacts<'_>, Error> {
+        let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+            .ok_or(Error::Unavailable)?;
         let mind = game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
             .ok_or(Error::Unavailable)?;
         let mut shares = BTreeMap::new();
@@ -1266,7 +1327,7 @@ impl Simulation {
             .map(|known| known.keys().copied().collect())
             .unwrap_or_default();
         Ok(OfferKnowledgeFacts {
-            stocks: &mind.knowledge,
+            stocks: &stocks.known,
             sites: &mind.sites,
             projects,
             shares,
@@ -1283,6 +1344,8 @@ impl Simulation {
         for (actor, mind) in
             game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
         {
+            let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+                .ok_or(Error::Unavailable)?;
             let sites: Vec<_> = mind
                 .sites
                 .values()
@@ -1300,7 +1363,7 @@ impl Simulation {
                     .ok_or(Error::Unavailable)?
                     .vitals
                     .hunger,
-                stocks: &mind.knowledge,
+                stocks: &stocks.known,
                 sites: &sites,
             };
             if let Some(proposal) = game_agreements::Ledger::new(&self.host.storage).local_exchange(

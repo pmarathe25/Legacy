@@ -11,7 +11,6 @@ fn mind() -> Mind<&'static str> {
         child_signals: BTreeMap::new(),
         personality: Personality::industrious(),
         dream: Aspiration::Independence,
-        knowledge: BTreeMap::new(),
         sites: BTreeMap::new(),
         relationships: BTreeMap::new(),
         values: BTreeMap::new(),
@@ -68,7 +67,7 @@ fn choice(
     facts: &PersonalFacts,
     candidate: Candidate<&'static str>,
 ) -> Decision<&'static str> {
-    mind.decide(facts, &[candidate], ConceptId(2), 100)
+    mind.decide(facts, &Stocks::default(), &[candidate], ConceptId(2), 100)
 }
 #[test]
 fn provider_identity_is_opaque_and_semantically_equal_effects_receive_equal_judgment() {

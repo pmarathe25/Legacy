@@ -278,13 +278,9 @@ impl Simulation {
                 .cloned()
                 .collect::<Vec<_>>();
             let observed_at = sim.time();
-            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.host.storage,
-                person,
-            )
-            .unwrap();
+            let (_mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((person).0)).expect("mind and stock knowledge exist");
             for stock in inventories {
-                mind.knowledge.insert(
+                stocks.known.insert(
                     stock.id,
                     StockKnowledge {
                         inventory: stock.id,
@@ -1269,6 +1265,8 @@ impl Simulation {
             let mind =
                 &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                     .unwrap();
+            let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+                .expect("stock knowledge exists");
             if mind.dream != decisions::Aspiration::Independence || mind.personality.ambition < 600
             {
                 continue;
@@ -1281,8 +1279,8 @@ impl Simulation {
                 .unwrap()
                 .rules
                 .construction_timber;
-            let offer = mind
-                .knowledge
+            let offer = stocks
+                .known
                 .values()
                 .filter(|f| {
                     f.good == Good::Timber
@@ -1298,8 +1296,8 @@ impl Simulation {
             let Some((supporter, source)) = offer else {
                 continue;
             };
-            let destination = mind
-                .knowledge
+            let destination = stocks
+                .known
                 .values()
                 .filter(|f| {
                     f.good == Good::Food && f.area == plan.area && f.inventory != plan.output
@@ -1396,13 +1394,15 @@ impl Simulation {
             let mind =
                 &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
                     .unwrap();
+            let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+                .expect("stock knowledge exists");
             if game_projects::requests(&self.host.storage, actor)
                 .is_some_and(|row| row.next_search > self.host.clock().time)
             {
                 continue;
             }
-            let supplies = mind
-                .knowledge
+            let supplies = stocks
+                .known
                 .values()
                 .map(|known| {
                     let custodian =
@@ -1491,9 +1491,11 @@ impl Simulation {
     fn workshop_procurement(
         &self,
         actor: PersonId,
-        mind: &decisions::Mind,
+        _mind: &decisions::Mind,
         resources: Option<&equipment::RankingResources>,
     ) -> Option<Command> {
+        let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+            .expect("stock knowledge exists");
         use game_logistics::{
             AcquisitionOffer, Delivery, Destination, OfferYield, Requirement, Step,
         };
@@ -1533,7 +1535,7 @@ impl Simulation {
         } else {
             world.rules.construction_timber.0
         };
-        let fact = mind.knowledge.get(&target)?;
+        let fact = stocks.known.get(&target)?;
         let destination = self.delivery_known_inventory_destination(actor, target)?;
         let available = if destination.observed_at == self.host.clock().time
             && destination.location == self.delivery_observed_location(actor)
@@ -1563,8 +1565,8 @@ impl Simulation {
             .into_iter()
             .flatten()
             .filter(|area| {
-                !mind
-                    .knowledge
+                !stocks
+                    .known
                     .values()
                     .any(|fact| fact.area == **area && fact.good == delivery.requirement.good)
             })
@@ -1599,6 +1601,8 @@ impl Simulation {
         actor: PersonId,
         resources: Option<&equipment::RankingResources>,
     ) -> Vec<Command> {
+        let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+            .expect("stock knowledge exists");
         let Some(world) = self.host.state.projects.as_ref() else {
             return Vec::new();
         };
@@ -1714,8 +1718,8 @@ impl Simulation {
                 && game_property::inventory_custodian(&self.host.storage, fact.inventory)
                     == Some(actor)
         };
-        let Some(materials) = mind
-            .knowledge
+        let Some(materials) = stocks
+            .known
             .values()
             .filter(own)
             .find(|fact| fact.good == Good::Timber && fact.accessible)
@@ -1723,8 +1727,8 @@ impl Simulation {
         else {
             return opportunities;
         };
-        let Some(tool) = mind
-            .knowledge
+        let Some(tool) = stocks
+            .known
             .values()
             .filter(own)
             .find(|fact| fact.good == Good::Tool && fact.accessible && fact.quantity.0 >= 1_000)
@@ -1743,7 +1747,8 @@ impl Simulation {
             .and_then(|k| k.values().find(|p| p.area == area && p.accessible))
         {
             let stock = |good| {
-                mind.knowledge
+                stocks
+                    .known
                     .values()
                     .filter(own)
                     .find(|f| f.good == good && f.accessible)
@@ -1776,8 +1781,8 @@ impl Simulation {
                 });
             }
         }
-        let stocks = mind
-            .knowledge
+        let stocks = stocks
+            .known
             .values()
             .map(|known| game_projects::WorkshopStock {
                 known,
@@ -1827,6 +1832,8 @@ impl Simulation {
         actor: PersonId,
         terms: &[AgreementTerm],
     ) -> i64 {
+        let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+            .expect("stock knowledge exists");
         let Some(runtime) = &self.host.state.projects else {
             return 0;
         };
@@ -1870,7 +1877,7 @@ impl Simulation {
             },
             terms,
             &Knowledge {
-                stocks: &mind.knowledge,
+                stocks: &stocks.known,
                 work_access: mind.sites.values().any(|site| site.access),
                 store: &self.host.storage,
             },

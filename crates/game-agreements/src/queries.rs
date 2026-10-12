@@ -67,3 +67,11 @@ pub fn known_construction_obligation(
     known_agreements(store,actor).into_iter().flat_map(|known|known.values()).flat_map(|agreement|agreement.obligations.iter())
         .find(|o|matches!(o.term,AgreementTerm::ConstructionLabor{debtor,project:target,..} if debtor==actor && target==project) && o.performed<o.term.amount()).map(|o|o.id)
 }
+
+/// A personally visible promise, preserving the same stable cap as public views.
+pub fn known_agreement(store: &Store, actor: PersonId, id: AgreementId) -> Option<&AgreementView> {
+    known_agreements(store, actor)?
+        .values()
+        .take(64)
+        .find(|view| view.id == id)
+}

@@ -10,7 +10,6 @@ fn mind() -> Mind<u8> {
         child_signals: BTreeMap::new(),
         personality: Personality::industrious(),
         dream: Aspiration::Independence,
-        knowledge: BTreeMap::new(),
         sites: BTreeMap::new(),
         relationships: BTreeMap::new(),
         values: BTreeMap::new(),
@@ -41,13 +40,13 @@ fn fact(observed_at: u64, accessible: bool) -> StockKnowledge {
 }
 #[test]
 fn remembered_stock_keeps_current_rights_and_rejects_older_information() {
-    let mut mind = mind();
+    let mut mind = crate::decisions::Stocks::default();
     let source = KnowledgeSource::Recorded(game_core::RecordId(4));
     assert!(mind.learn_memory_stock(SimTime(30), fact(10, true), source.clone()));
-    assert!(!mind.knowledge[&InventoryId(1)].accessible);
-    assert_eq!(mind.knowledge[&InventoryId(1)].learned_at, SimTime(30));
-    assert_eq!(mind.knowledge[&InventoryId(1)].source, source);
-    mind.knowledge.insert(InventoryId(1), fact(20, true));
+    assert!(!mind.known[&InventoryId(1)].accessible);
+    assert_eq!(mind.known[&InventoryId(1)].learned_at, SimTime(30));
+    assert_eq!(mind.known[&InventoryId(1)].source, source);
+    mind.known.insert(InventoryId(1), fact(20, true));
     let before = mind.clone();
     assert!(!mind.learn_memory_stock(
         SimTime(40),
@@ -60,7 +59,7 @@ fn remembered_stock_keeps_current_rights_and_rejects_older_information() {
         fact(20, false),
         KnowledgeSource::Reported(PersonId(5))
     ));
-    assert!(mind.knowledge[&InventoryId(1)].accessible);
+    assert!(mind.known[&InventoryId(1)].accessible);
 }
 #[test]
 fn historical_routes_fill_missing_edges_while_current_routes_keep_priority() {
@@ -91,16 +90,17 @@ fn prepared_learning_preserves_current_priority_and_unrelated_mind_updates() {
     crate::decisions::mind_mut::<u8>(&mut store, actor)
         .unwrap()
         .dream = Aspiration::Comfort;
-    let batch = game_ecs::Batch::new();
+    let mut batch = game_ecs::Batch::new();
+    let receipt = receipt.stage_into::<u8>(&store, &mut batch).unwrap();
     receipt.validate_batch::<u8>(&store, &batch).unwrap();
     store.apply_batch(batch).unwrap();
     receipt.finish::<u8>(&mut store);
     let row = crate::decisions::mind::<u8>(&store, actor).unwrap();
     assert_eq!(row.dream, Aspiration::Comfort);
-    assert!(!row.knowledge[&InventoryId(1)].accessible);
-    crate::decisions::mind_mut::<u8>(&mut store, actor)
+    assert!(!crate::decisions::stocks(&store, actor).unwrap().known[&InventoryId(1)].accessible);
+    crate::decisions::stocks_mut(&mut store, actor)
         .unwrap()
-        .knowledge
+        .known
         .insert(InventoryId(1), fact(20, true));
     let receipt = prepare_memory_stock::<u8>(
         &store,
@@ -110,14 +110,13 @@ fn prepared_learning_preserves_current_priority_and_unrelated_mind_updates() {
         KnowledgeSource::Reported(PersonId(3)),
     )
     .unwrap();
-    receipt
-        .validate_batch::<u8>(&store, &game_ecs::Batch::new())
-        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let receipt = receipt.stage_into::<u8>(&store, &mut batch).unwrap();
+    receipt.validate_batch::<u8>(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
     receipt.finish::<u8>(&mut store);
     assert_eq!(
-        crate::decisions::mind::<u8>(&store, actor)
-            .unwrap()
-            .knowledge[&InventoryId(1)],
+        crate::decisions::stocks(&store, actor).unwrap().known[&InventoryId(1)],
         fact(20, true)
     );
     for (origin, destination, duration) in [

@@ -532,13 +532,8 @@ impl Simulation {
                     .state
                     .decisions
                     .as_ref()
-                    .and_then(|_| {
-                        game_characters::decisions::mind::<game_api::Command>(
-                            &self.host.storage,
-                            actor,
-                        )
-                    })
-                    .and_then(|m| m.knowledge.get(&inventory))
+                    .and_then(|_| game_characters::decisions::stocks(&self.host.storage, actor))
+                    .and_then(|m| m.known.get(&inventory))
                     .cloned();
                 let visible = game_cargo::inventory(&self.host.storage, inventory).filter(|i| {
                     i.location == InventoryLocation::Area(area)
@@ -702,13 +697,10 @@ impl Simulation {
             .activity_mut(actor)
             .expect("activity exists") = activity.clone();
         if let Activity::Tell { ref fact, .. } = activity {
-            game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.host.storage,
-                actor,
-            )
-            .unwrap()
-            .knowledge
-            .insert(fact.inventory, fact.clone());
+            game_characters::decisions::stocks_mut(&mut self.host.storage, actor)
+                .unwrap()
+                .known
+                .insert(fact.inventory, fact.clone());
         }
         if let Activity::Care { child, .. } | Activity::Comfort { child, .. } = activity {
             self.care_index.insert(child, actor);

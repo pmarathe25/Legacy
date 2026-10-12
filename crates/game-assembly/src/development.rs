@@ -103,11 +103,7 @@ impl Simulation {
         let first = sim.host.state.people[3].id;
         let second = sim.host.state.people[4].id;
         for (id, partner) in [(first, second), (second, first)] {
-            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.host.storage,
-                id,
-            )
-            .unwrap();
+            let (mind,_stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((id).0)).expect("mind and stock knowledge exist");
             mind.dream = decisions::Aspiration::Parenthood;
             mind.personality.empathy = 900;
             mind.relationships.insert(
@@ -183,8 +179,9 @@ impl Simulation {
             wants_parenthood: mind.dream == decisions::Aspiration::Parenthood,
             partner_affection: relationship.map_or(0, |relation| relation.affection),
             partner_trust: relationship.map_or(0, |relation| relation.trust),
-            knows_adequate_food: mind
-                .knowledge
+            knows_adequate_food: game_characters::decisions::stocks(&self.host.storage, id)
+                .expect("stock knowledge exists")
+                .known
                 .values()
                 .any(|fact| fact.good == Good::Food && fact.accessible && fact.quantity.0 >= 3_000),
         })
@@ -626,7 +623,6 @@ impl Simulation {
         mind.routes.clear();
         mind.last_failure = None;
         mind.child_signals.clear();
-        mind.knowledge.clear();
         mind.sites.clear();
         mind.values.clear();
         mind.relationships.clear();
@@ -648,6 +644,20 @@ impl Simulation {
             mind,
         )
         .expect("validated newborn mind");
+        if self.host.state.realm.is_some() {
+            game_realm::insert_knowledge(
+                &mut self.host.storage,
+                child,
+                game_realm::PersonalKnowledge::default(),
+            )
+            .expect("newborn Realm knowledge");
+            game_realm::insert_requests(
+                &mut self.host.storage,
+                child,
+                game_realm::Requests::default(),
+            )
+            .expect("newborn Realm requests");
+        }
         // Kinship changes a directed initial relationship. It grants no assets,
         // permissions, office, compulsory care, or legal guardianship.
         for parent in parents {

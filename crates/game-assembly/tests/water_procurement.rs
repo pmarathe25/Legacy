@@ -107,7 +107,12 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
         .map(|row| &mut row["value"])
     {
         mind["plan"] = serde_json::Value::Null;
-        for fact in mind["knowledge"].as_object_mut().unwrap().values_mut() {
+    }
+    for row in state["components"]["columns"]["characters/stocks"]
+        .as_array_mut()
+        .expect("actual saved stock knowledge column")
+    {
+        for fact in row["value"]["known"].as_object_mut().unwrap().values_mut() {
             if fact["good"] == "Water" {
                 fact["quantity"] = 0.into();
             }
@@ -236,12 +241,17 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
         .iter_mut()
         .map(|row| &mut row["value"])
     {
-        for fact in mind["knowledge"].as_object_mut().unwrap().values_mut() {
+        mind["plan"] = serde_json::Value::Null;
+    }
+    for row in state["components"]["columns"]["characters/stocks"]
+        .as_array_mut()
+        .expect("actual saved stock knowledge column")
+    {
+        for fact in row["value"]["known"].as_object_mut().unwrap().values_mut() {
             if fact["good"] == "Water" {
                 fact["quantity"] = 0.into();
             }
         }
-        mind["plan"] = serde_json::Value::Null;
     }
     for row in state["components"]["columns"]["ecology/resource"]
         .as_array_mut()

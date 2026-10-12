@@ -70,8 +70,8 @@ impl Runtime {
                 || past.died_at > facts.now
                 || !references.person(id).is_some_and(|person| !person.alive)
                 || past
-                    .mind
-                    .knowledge
+                    .stocks
+                    .known
                     .values()
                     .any(|fact| !fact_valid(fact) || fact.observed_at > past.died_at)
                 || past

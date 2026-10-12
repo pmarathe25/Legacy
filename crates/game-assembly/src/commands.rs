@@ -11,6 +11,7 @@ pub(crate) enum ActivityOwner {
     Transport,
     Missions,
     Invocation,
+    Realm,
 }
 
 impl Simulation {
@@ -35,9 +36,12 @@ impl Simulation {
                     .unwrap()
                     .actor_talking(&self.host.storage, actor)
             })
-            && self.host.state.realm.as_ref().is_none_or(|w| {
-                !w.talks.contains_key(&actor) && !w.talks.values().any(|t| t.recipient == actor)
-            })
+            && self
+                .host
+                .state
+                .realm
+                .as_ref()
+                .is_none_or(|w| !w.actor_busy(&self.host.storage, actor))
             && !self.property_actor_talking(actor)
             && self
                 .host

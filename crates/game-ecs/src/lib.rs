@@ -184,6 +184,11 @@ impl Batch {
         let key = (id, std::any::TypeId::of::<C>());
         self.edits.iter().any(|edit| edit.key() == key)
     }
+    /// Number of component edits at an entity, including duplicate removals.
+    /// An allocating owner can guard a new entity's declared component footprint.
+    pub fn edit_count(&self, id: StableId) -> usize {
+        self.edits.iter().filter(|edit| edit.key().0 == id).count()
+    }
     /// Typed row identities in submission order, including removals and repeated
     /// edits. Owners validate their final composed footprint before publication.
     pub fn edited_ids<C: Component>(&self) -> impl Iterator<Item = StableId> + '_ {
@@ -231,6 +236,14 @@ impl Store {
     /// Exclusive typed access for an owning feature's prevalidated commit.
     pub fn get_mut<C: Component>(&mut self, id: StableId) -> Option<&mut C> {
         self.backend.get_mut(id)
+    }
+    /// Borrow two distinct attached components on one stable entity. Missing,
+    /// unregistered or aliasing component requests leave the store untouched.
+    pub fn get_pair_mut<C: Component, D: Component>(
+        &mut self,
+        id: StableId,
+    ) -> Option<(&mut C, &mut D)> {
+        self.backend.get_pair_mut(id)
     }
     pub fn insert<C: Component>(&mut self, id: StableId, component: C) -> Result<(), Error> {
         self.backend.insert(id, component)
@@ -924,6 +937,22 @@ mod tests {
         assert_eq!(key.clone(), original.key());
         drop(original);
         assert_ne!(key, Batch::default().key());
+    }
+    #[test]
+    fn mutable_pair_borrow_is_typed_non_aliasing_and_preserves_query_bindings() {
+        let mut store = fixture(false);
+        let query = store.query2::<Count, Name>();
+        let (count, name) = store.get_pair_mut::<Count, Name>(StableId(2)).unwrap();
+        count.0 = 42;
+        name.0 = "paired".into();
+        assert!(query.iter(&store).is_ok());
+        assert_eq!(store.get::<Count>(StableId(2)), Some(&Count(42)));
+        let before = store.snapshot().unwrap();
+        assert!(store.get_pair_mut::<Count, Count>(StableId(2)).is_none());
+        assert!(store.get_pair_mut::<Count, Name>(StableId(99)).is_none());
+        assert!(store.get_pair_mut::<Count, Name>(StableId(3)).is_none());
+        assert!(store.get_pair_mut::<Count, StableId>(StableId(2)).is_none());
+        assert_eq!(store.snapshot().unwrap(), before);
     }
     #[test]
     fn typed_read_footprints_include_removals_and_allow_unrelated_rows_and_types() {

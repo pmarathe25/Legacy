@@ -177,6 +177,88 @@ impl PreparedMission {
             .filter(|patch| patch.before.is_none())
             .map(|patch| patch.after.id)
     }
+    /// Creation and local service declarations share a batch. The service owner
+    /// selects receivers and their visible/heard evidence from the projected rows.
+    pub fn stage_created_with_publications(
+        self,
+        state: &Runtime,
+        store: &Store,
+        now: SimTime,
+        presence: &impl PresenceFacts,
+        batch: &mut Batch,
+    ) -> Result<(MissionFinalization, MissionPublicationGuard), Error> {
+        self.check(state, store)?;
+        if self.missions.is_empty()
+            || self.missions.iter().any(|p| p.before.is_some())
+            || self.recruitments.iter().any(|p| p.before.is_some())
+            || self.consent.is_some()
+            || self.conversation.is_some()
+            || !self.trust.is_empty()
+            || self.allegiance.is_some()
+            || self.receipt_cursor.is_some()
+        {
+            return Err(Error::Unavailable);
+        }
+        let offers = self
+            .recruitments
+            .iter()
+            .map(|p| (p.after.id, &p.after))
+            .collect();
+        let mut personal = BTreeMap::<PersonId, Knowledge>::new();
+        for patch in &self.missions {
+            if !self.notices.contains(&patch.after.id) {
+                continue;
+            }
+            for observer in state.receivers_for(&patch.after, presence) {
+                let facts = state.observation_facts_for(&patch.after, observer, now, presence);
+                let old = personal
+                    .get(&observer)
+                    .or_else(|| knowledge(store, observer))
+                    .and_then(|row| row.missions.get(&patch.after.id));
+                if let Ok(snapshot) = crate::observations::observation_snapshot(
+                    &patch.after,
+                    &offers,
+                    observer,
+                    old,
+                    &facts,
+                ) {
+                    personal
+                        .entry(observer)
+                        .or_insert_with(|| knowledge(store, observer).cloned().unwrap_or_default())
+                        .missions
+                        .insert(patch.after.id, snapshot);
+                }
+            }
+        }
+        let guard = MissionPublicationGuard {
+            key: batch.key(),
+            missions: self.created_missions().collect(),
+            recruitments: self.recruitments.iter().map(|p| p.after.id).collect(),
+            people: personal.keys().copied().collect(),
+        };
+        if guard
+            .missions
+            .iter()
+            .any(|id| batch.edit_count(StableId(id.0)) != 0)
+            || guard
+                .recruitments
+                .iter()
+                .any(|id| batch.edit_count(StableId(id.0)) != 0)
+            || guard
+                .people
+                .iter()
+                .any(|id| batch.touches::<Knowledge>(StableId(id.0)))
+        {
+            return Err(Error::Unavailable);
+        }
+        for (actor, row) in personal {
+            row.validate()?;
+            batch.insert(StableId(actor.0), row);
+        }
+        let finish = self.stage_into(state, store, batch)?;
+        guard.validate_batch(batch)?;
+        Ok((finish, guard))
+    }
     pub fn check(&self, state: &Runtime, store: &Store) -> Result<(), Error> {
         let fresh = self
             .missions
@@ -820,5 +902,35 @@ impl MissionFinalization {
         if let Some(after) = self.receipt_cursor {
             state.last_event = after;
         }
+    }
+}
+
+pub struct MissionPublicationGuard {
+    key: game_ecs::BatchKey,
+    missions: BTreeSet<MissionId>,
+    recruitments: BTreeSet<RecruitmentId>,
+    people: BTreeSet<PersonId>,
+}
+impl MissionPublicationGuard {
+    pub fn validate_batch(&self, batch: &Batch) -> Result<(), Error> {
+        if batch.key() != self.key
+            || self.missions.iter().any(|id| {
+                batch.edit_count(StableId(id.0)) != 1 || !batch.touches::<Mission>(StableId(id.0))
+            })
+            || self.recruitments.iter().any(|id| {
+                batch.edit_count(StableId(id.0)) != 1
+                    || !batch.touches::<Recruitment>(StableId(id.0))
+            })
+            || self.people.iter().any(|id| {
+                batch
+                    .edited_ids::<Knowledge>()
+                    .filter(|edited| edited.0 == id.0)
+                    .count()
+                    != 1
+            })
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
     }
 }

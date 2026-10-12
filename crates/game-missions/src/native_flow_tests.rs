@@ -545,3 +545,83 @@ fn rejected_native_compensation_cannot_accept_recruitment_or_publish_service_met
     assert!(game_agreements::agreement(&w.store, AgreementId(30)).is_none());
     assert!(!w.store.contains(StableId(31)));
 }
+
+fn projected_creation(w: &crate::fixture::Fixture) -> PreparedMission {
+    w.prepare_command(
+        &w.store,
+        SP,
+        &MissionAction::Propose {
+            proposal: proposal(),
+        },
+        &facts(),
+        &MissionIds {
+            mission: Some(ID),
+            recruitments: BTreeMap::from([(A, OFFER), (B, RecruitmentId(13))]),
+            backing: None,
+        },
+    )
+    .unwrap()
+}
+#[test]
+fn created_mission_publication_matches_local_observation_and_keeps_remote_member_ignorant() {
+    let mut w = state();
+    let scene = Scene {
+        areas: BTreeMap::from([(SP, HOME), (A, HOME), (B, AWAY)]),
+        combat: false,
+    };
+    let mut legacy = state();
+    projected_creation(&legacy)
+        .commit(&mut legacy.runtime, &mut legacy.store)
+        .unwrap();
+    for actor in legacy.runtime.receivers(&legacy.store, ID, &scene) {
+        let facts = legacy
+            .runtime
+            .observation_facts(&legacy.store, actor, ID, SimTime(0), &scene)
+            .unwrap();
+        legacy
+            .runtime
+            .prepare_observation(&legacy.store, actor, ID, &facts)
+            .unwrap()
+            .commit(&mut legacy.store)
+            .unwrap();
+    }
+    let plan = projected_creation(&w);
+    let before = w.store.snapshot().unwrap();
+    let mut batch = Batch::new();
+    let (finish, guard) = plan
+        .stage_created_with_publications(&w.runtime, &w.store, SimTime(0), &scene, &mut batch)
+        .unwrap();
+    assert_eq!(w.store.snapshot().unwrap(), before);
+    assert!(guard.validate_batch(&Batch::new()).is_err());
+    guard.validate_batch(&batch).unwrap();
+    w.store.apply_batch(batch).unwrap();
+    finish.finish(&mut w.runtime);
+    assert_eq!(
+        w.store.snapshot().unwrap(),
+        legacy.store.snapshot().unwrap()
+    );
+    assert!(known_mission(&w.store, SP, ID).is_some());
+    assert!(known_mission(&w.store, A, ID).is_some());
+    assert!(known_mission(&w.store, B, ID).is_none());
+}
+#[test]
+fn created_mission_publication_rejects_foreign_knowledge_and_source_replacements() {
+    let w = state();
+    let scene = Scene {
+        areas: BTreeMap::from([(SP, HOME), (A, HOME), (B, AWAY)]),
+        combat: false,
+    };
+    for source in [false, true] {
+        let mut batch = Batch::new();
+        let (_, guard) = projected_creation(&w)
+            .stage_created_with_publications(&w.runtime, &w.store, SimTime(0), &scene, &mut batch)
+            .unwrap();
+        if source {
+            batch.remove::<Mission>(StableId(ID.0));
+        } else {
+            batch.insert(StableId(SP.0), Knowledge::default());
+        }
+        assert!(guard.validate_batch(&batch).is_err());
+        assert!(mission(&w.store, ID).is_none());
+    }
+}

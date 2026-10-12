@@ -20,3 +20,5 @@ mod storage_tests;
 
 #[cfg(test)]
 mod proposal_voting_tests;
+
+pub mod projected_publication;

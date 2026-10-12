@@ -150,6 +150,40 @@ pub struct PreparedTransition {
     pub notices: Vec<TransitionNotice>,
 }
 impl PreparedTransition {
+    pub fn created_agreements(&self) -> impl Iterator<Item = AgreementId> + '_ {
+        self.agreements
+            .iter()
+            .filter(|p| p.before.is_none())
+            .map(|p| p.id)
+    }
+    pub fn proposal_publication_people(
+        &self,
+        store: &Store,
+        events: &[ObservationEvent],
+    ) -> Result<BTreeSet<PersonId>, Error> {
+        let mut people = observation_people(store, events);
+        for row in self.proposed_creations()? {
+            people.extend(row.parties.iter().copied());
+            people.insert(row.proposer);
+        }
+        Ok(people)
+    }
+    pub(crate) fn proposed_creations(&self) -> Result<Vec<&Agreement>, Error> {
+        if self.agreements.is_empty()
+            || !self.amendments.is_empty()
+            || !self.obligations.is_empty()
+            || !self.permissions.is_empty()
+            || !self.pending.is_empty()
+            || self.agreements.iter().any(|p| {
+                p.before.is_some()
+                    || p.after.status != AgreementStatus::Proposed
+                    || !p.after.obligations.is_empty()
+            })
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(self.agreements.iter().map(|p| &p.after).collect())
+    }
     pub fn check(&self, state: &Ledger<'_>) -> Result<(), Error> {
         let fresh = self
             .agreements

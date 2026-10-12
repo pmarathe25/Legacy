@@ -10,7 +10,6 @@ impl<A> Mind<A> {
             || self.interests.values().any(|interest| *interest > 1_000)
             || self.values.values().any(|value| !(0..=1_000).contains(&value.weight))
             || self.routes.values().any(|links| links.values().any(|duration| duration.0 == 0))
-            || self.knowledge.iter().any(|(id, fact)| *id != fact.inventory)
             || self.sites.iter().any(|(id, site)| *id != site.site)
             || self.plan.as_ref().is_some_and(|plan| {
                 plan.delivery.as_ref().is_some_and(|delivery| !delivery.valid())
@@ -26,6 +25,7 @@ impl<A> Mind<A> {
 }
 
 pub fn register_minds<A: Component>(schema: &mut Schema) -> Result<(), Error> {
+    schema.register::<Stocks>("characters/stocks", Stocks::validate)?;
     schema.register::<Mind<A>>("characters/mind", Mind::<A>::validate)
 }
 pub fn mind<A: Component>(store: &Store, actor: PersonId) -> Option<&Mind<A>> {
@@ -45,7 +45,8 @@ pub fn insert_mind<A: Component>(
     row: Mind<A>,
 ) -> Result<(), Error> {
     row.validate()?;
-    store.insert_or_spawn(StableId(actor.0), row)
+    let stocks = stocks(store, actor).cloned().unwrap_or_default();
+    store.insert_pair_or_spawn(StableId(actor.0), row, stocks)
 }
 pub fn remove_mind<A: Component>(
     store: &mut Store,

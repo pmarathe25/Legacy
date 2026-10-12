@@ -185,7 +185,7 @@ impl Runtime {
                     return Err(Error::Unavailable);
                 }
                 let fact = archive::<A>(store, life)
-                    .and_then(|past| past.mind.knowledge.get(&inventory))
+                    .and_then(|past| past.stocks.known.get(&inventory))
                     .cloned()
                     .ok_or(Error::Unavailable)?;
                 Ok(RecordedMemory::Stock { life, fact })

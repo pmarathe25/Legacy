@@ -190,8 +190,8 @@ impl Simulation {
         Ok(())
     }
     fn social_tool(&self, actor: PersonId) -> Option<InventoryId> {
-        game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
-            .knowledge
+        game_characters::decisions::stocks(&self.host.storage, actor)?
+            .known
             .values()
             .filter(|known| {
                 known.good == Good::Tool && known.accessible && known.quantity.0 >= 1_000
@@ -226,8 +226,8 @@ impl Simulation {
         .expect("location exists") else {
             return None;
         };
-        game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
-            .knowledge
+        game_characters::decisions::stocks(&self.host.storage, actor)?
+            .known
             .values()
             .filter(|known| known.good == good && known.accessible && known.quantity >= quantity)
             .find_map(|known| {
@@ -1460,9 +1460,9 @@ mod tests {
     fn actual_birth(sim: &mut Simulation, first: PersonId, second: PersonId) -> PersonId {
         // The relocated peer acquires an actual local report, rather than a
         // fixture granting knowledge merely because its body changed area.
-        let food = game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, first)
+        let food = game_characters::decisions::stocks(&sim.host.storage, first)
             .unwrap()
-            .knowledge
+            .known
             .values()
             .find(|fact| fact.good == Good::Food && fact.accessible && fact.quantity.0 >= 3_000)
             .unwrap()

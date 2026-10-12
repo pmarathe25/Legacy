@@ -32,7 +32,7 @@ fn native_route_has_eight_columns_no_person_shadow_and_is_legal_without_carry_ru
     assert!(sim.canonical_state().state.transport.is_none());
     let saved = sim.save().unwrap();
     let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-    assert_eq!(json["version"], 50);
+    assert_eq!(json["version"], 51);
     assert!(json["state"]["state"]["people"][0].get("route").is_none());
     assert_eq!(
         json["state"]["components"]["columns"]

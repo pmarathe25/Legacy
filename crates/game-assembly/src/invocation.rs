@@ -206,6 +206,9 @@ impl game_invocation::ArchiveFacts<game_api::Command> for MemoryBindings<'_> {
     fn mind(&self, id: PersonId) -> Option<&decisions::Mind> {
         game_characters::decisions::mind::<game_api::Command>(&self.0.host.storage, id)
     }
+    fn stocks(&self, id: PersonId) -> Option<&game_characters::decisions::Stocks> {
+        game_characters::decisions::stocks(&self.0.host.storage, id)
+    }
     fn skills(&self, id: PersonId) -> Vec<SkillView> {
         self.0.own_skill_view(id)
     }
@@ -1029,11 +1032,22 @@ impl Simulation {
                 past: game_invocation::ControllerMemory {
                     goal: past.goal,
                     dream: past.dream,
-                    stocks: &past.knowledge,
+                    stocks: &game_invocation::archive::<game_api::Command>(
+                        &self.host.storage,
+                        life,
+                    )
+                    .unwrap()
+                    .stocks
+                    .known,
                     sites: &past.sites,
                     relationships: &past.relationships,
                 },
-                current_stocks: &current.knowledge,
+                current_stocks: &game_characters::decisions::stocks(
+                    &self.host.storage,
+                    controller_actor,
+                )
+                .expect("stocks exist")
+                .known,
                 current_sites: &current.sites,
                 child_signals: &current.child_signals,
                 local_people: local,
@@ -1759,16 +1773,16 @@ mod tests {
         let life = past(&sim);
         let remote = game_invocation::archive::<game_api::Command>(&sim.host.storage, life)
             .unwrap()
-            .mind
-            .knowledge
+            .stocks
+            .known
             .values()
             .find(|k| k.area == AreaId(3) && k.good == Good::Timber)
             .unwrap()
             .inventory;
         assert!(
-            !game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, actor)
+            !game_characters::decisions::stocks(&sim.host.storage, actor)
                 .expect("mind exists")
-                .knowledge
+                .known
                 .contains_key(&remote)
         );
         let material = sim
@@ -1819,20 +1833,20 @@ mod tests {
         act(&mut sim, InvocationAction::Dismiss).unwrap();
         assert!(sim.invocation_view().unwrap().memories.is_empty());
         assert!(
-            !game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, actor)
+            !game_characters::decisions::stocks(&sim.host.storage, actor)
                 .expect("mind exists")
-                .knowledge
+                .known
                 .contains_key(&remote)
         );
         act(&mut sim, InvocationAction::ReadRecord { record }).unwrap();
         sim.advance(MINUTE).unwrap();
         assert!(
-            matches!(game_characters::decisions::mind::<game_api::Command>(&sim.host.storage,actor).expect("mind exists").knowledge[&remote].source,KnowledgeSource::Recorded(id)if id==record)
+            matches!(game_characters::decisions::stocks(&sim.host.storage,actor).expect("mind exists").known[&remote].source,KnowledgeSource::Recorded(id)if id==record)
         );
         assert!(
-            !game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, actor)
+            !game_characters::decisions::stocks(&sim.host.storage, actor)
                 .expect("mind exists")
-                .knowledge[&remote]
+                .known[&remote]
                 .accessible
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
@@ -2121,8 +2135,8 @@ mod tests {
         let life = past(&sim);
         let remote = game_invocation::archive::<game_api::Command>(&sim.host.storage, life)
             .unwrap()
-            .mind
-            .knowledge
+            .stocks
+            .known
             .keys()
             .next()
             .copied()

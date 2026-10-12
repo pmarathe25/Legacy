@@ -127,3 +127,13 @@ impl MembershipIndex {
         })
     }
 }
+
+/// Borrow one dated service record through the same cap/order as public views.
+pub fn known_mission(store: &Store, actor: PersonId, id: MissionId) -> Option<&MissionView> {
+    knowledge(store, actor)?
+        .missions
+        .values()
+        .rev()
+        .take(64)
+        .find(|view| view.id == id)
+}

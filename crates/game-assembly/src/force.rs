@@ -800,9 +800,11 @@ impl Simulation {
         if self.force_tool(guardian).is_some() {
             return Some(Command::FreeCaptive { target });
         }
-        let mind =
+        let _mind =
             game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)?;
-        let tool = mind.knowledge.values().find(|fact| {
+        let stocks = game_characters::decisions::stocks(&self.host.storage, guardian)
+            .expect("stock knowledge exists");
+        let tool = stocks.known.values().find(|fact| {
             fact.good == Good::Tool
                 && Some(fact.area) == self.force_area(guardian)
                 && matches!(self.resolved_location(guardian), Location::AtArea(_))

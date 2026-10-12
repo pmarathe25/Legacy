@@ -159,8 +159,32 @@ pub struct TrustDelta {
 }
 pub struct PreparedTrustReactions {
     changes: Vec<(PersonId, PersonId, Option<Relationship>, Relationship)>,
+    honesty: Vec<(PersonId, u16)>,
 }
 impl PreparedTrustReactions {
+    pub fn prepare_defaults<A: game_ecs::Component>(
+        store: &game_ecs::Store,
+        defaults: impl IntoIterator<Item = (PersonId, PersonId)>,
+    ) -> Result<Self, Error> {
+        let mut honesty = Vec::new();
+        let effects = defaults
+            .into_iter()
+            .filter_map(|(observer, subject)| {
+                let mind = mind::<A>(store, observer)?;
+                if !honesty.iter().any(|(actor, _)| *actor == observer) {
+                    honesty.push((observer, mind.personality.honesty));
+                }
+                Some(TrustDelta {
+                    observer,
+                    subject,
+                    delta: -(i32::from(mind.personality.honesty) / 100),
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut prepared = Self::prepare::<A>(store, effects)?;
+        prepared.honesty = honesty;
+        Ok(prepared)
+    }
     pub fn prepare<A: game_ecs::Component>(
         store: &game_ecs::Store,
         effects: impl IntoIterator<Item = TrustDelta>,
@@ -182,9 +206,17 @@ impl PreparedTrustReactions {
             after.trust = (after.trust + effect.delta).clamp(-1000, 1000);
             changes.push((effect.observer, effect.subject, before, after));
         }
-        Ok(Self { changes })
+        Ok(Self {
+            changes,
+            honesty: vec![],
+        })
     }
     pub fn check<A: game_ecs::Component>(&self, store: &game_ecs::Store) -> Result<(), Error> {
+        if self.honesty.iter().any(|(actor, before)| {
+            mind::<A>(store, *actor).is_none_or(|row| row.personality.honesty != *before)
+        }) {
+            return Err(Error::Unavailable);
+        }
         for (observer, subject, before, _) in &self.changes {
             if mind::<A>(store, *observer)
                 .ok_or(Error::Unavailable)?
@@ -212,6 +244,18 @@ impl PreparedTrustReactions {
         }
         Ok(())
     }
+    pub fn prepare_finalization<A: game_ecs::Component>(
+        self,
+        store: &game_ecs::Store,
+        batch: &game_ecs::Batch,
+    ) -> Result<TrustFinalization<A>, Error> {
+        self.check_batch::<A>(store, batch)?;
+        Ok(TrustFinalization {
+            key: batch.key(),
+            prepared: self,
+            marker: std::marker::PhantomData,
+        })
+    }
     pub fn commit<A: game_ecs::Component>(self, store: &mut game_ecs::Store) -> Result<(), Error> {
         self.check::<A>(store)?;
         for (observer, subject, _, after) in self.changes {
@@ -221,6 +265,34 @@ impl PreparedTrustReactions {
                 .insert(subject, after);
         }
         Ok(())
+    }
+}
+
+/// A field-only finalizer admitted against the opening source and final batch.
+/// After publication, finishing cannot perform a new check or return an error.
+pub struct TrustFinalization<A: game_ecs::Component> {
+    key: game_ecs::BatchKey,
+    prepared: PreparedTrustReactions,
+    marker: std::marker::PhantomData<A>,
+}
+impl<A: game_ecs::Component> TrustFinalization<A> {
+    pub fn validate_batch(
+        &self,
+        store: &game_ecs::Store,
+        batch: &game_ecs::Batch,
+    ) -> Result<(), Error> {
+        if self.key != batch.key() {
+            return Err(Error::Unavailable);
+        }
+        self.prepared.check_batch::<A>(store, batch)
+    }
+    pub fn finish(self, store: &mut game_ecs::Store) {
+        for (observer, subject, _, after) in self.prepared.changes {
+            mind_mut::<A>(store, observer)
+                .expect("prechecked untouched receiving mind")
+                .relationships
+                .insert(subject, after);
+        }
     }
 }
 

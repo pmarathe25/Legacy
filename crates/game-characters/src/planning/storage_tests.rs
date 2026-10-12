@@ -89,7 +89,10 @@ fn personal_minds_and_values_share_entities_without_sharing_learning_or_foreign_
 #[test]
 fn mind_schema_registration_and_invalid_insertions_are_inert() {
     let mut schema = schema();
-    assert_eq!(schema.keys().collect::<Vec<_>>(), vec!["characters/mind"]);
+    assert_eq!(
+        schema.keys().collect::<Vec<_>>(),
+        vec!["characters/mind", "characters/stocks"]
+    );
     assert!(schema.is_registered::<Mind<OpaqueAction>>());
     assert!(!schema.is_registered::<Mind<u8>>());
     assert!(register_minds::<OpaqueAction>(&mut schema).is_err());
@@ -122,8 +125,9 @@ fn mind_schema_registration_and_invalid_insertions_are_inert() {
 #[test]
 fn intrinsic_mind_validation_preserves_opaque_actions_and_leaves_catalogs_and_clocks_to_composition()
  {
-    let mut row = row();
-    row.knowledge.insert(
+    let row = row();
+    let mut stocks = Stocks::default();
+    stocks.known.insert(
         InventoryId(17),
         StockKnowledge {
             inventory: InventoryId(17),
@@ -139,9 +143,10 @@ fn intrinsic_mind_validation_preserves_opaque_actions_and_leaves_catalogs_and_cl
     let mut store = Store::with_schema(schema());
     insert_mind(&mut store, PersonId(1), row.clone()).unwrap();
     assert_eq!(mind::<OpaqueAction>(&store, PersonId(1)), Some(&row));
-    let mut mismatched = row;
+    insert_stocks(&mut store, PersonId(1), stocks.clone()).unwrap();
+    let mut mismatched = stocks;
     mismatched
-        .knowledge
+        .known
         .get_mut(&InventoryId(17))
         .unwrap()
         .inventory = InventoryId(18);
@@ -199,6 +204,9 @@ fn opaque_actions_roundtrip_without_native_handles_or_loss_of_integer_precision(
 #[test]
 fn a_stricter_mind_schema_cannot_publish_partial_replacements_or_entities() {
     let mut schema = Schema::new();
+    schema
+        .register::<Stocks>("characters/stocks", Stocks::validate)
+        .unwrap();
     schema
         .register::<Mind<OpaqueAction>>("characters/mind", |row| {
             row.validate()?;
@@ -267,4 +275,69 @@ fn sparse_trust_reaction_preserves_other_mind_fields_and_rejects_stale_or_foreig
     let before = store.clone();
     assert!(change.commit::<OpaqueAction>(&mut store).is_err());
     assert_eq!(store, before);
+}
+
+#[test]
+fn default_trust_finalization_guards_honesty_batch_and_recipient_then_finishes_only_selected_fields()
+ {
+    let mut store = Store::with_schema(schema());
+    insert_mind(&mut store, PersonId(1), row()).unwrap();
+    insert_mind(&mut store, PersonId(3), row()).unwrap();
+    let prepared = PreparedTrustReactions::prepare_defaults::<OpaqueAction>(
+        &store,
+        [(PersonId(1), PersonId(2))],
+    )
+    .unwrap();
+    let batch = game_ecs::Batch::new();
+    let finish = prepared
+        .prepare_finalization::<OpaqueAction>(&store, &batch)
+        .unwrap();
+    assert!(
+        finish
+            .validate_batch(&store, &game_ecs::Batch::new())
+            .is_err()
+    );
+    let old = mind::<OpaqueAction>(&store, PersonId(1))
+        .unwrap()
+        .personality
+        .honesty;
+    mind_mut::<OpaqueAction>(&mut store, PersonId(1))
+        .unwrap()
+        .personality
+        .honesty = old - 1;
+    assert!(finish.validate_batch(&store, &batch).is_err());
+    mind_mut::<OpaqueAction>(&mut store, PersonId(1))
+        .unwrap()
+        .personality
+        .honesty = old;
+    mind_mut::<OpaqueAction>(&mut store, PersonId(1))
+        .unwrap()
+        .retry_after = SimTime(77);
+    let before = mind::<OpaqueAction>(&store, PersonId(1))
+        .unwrap()
+        .plan
+        .clone();
+    let mut batch = batch;
+    batch.insert(StableId(3), row());
+    finish.validate_batch(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    finish.finish(&mut store);
+    let current = mind::<OpaqueAction>(&store, PersonId(1)).unwrap();
+    assert_eq!(current.retry_after, SimTime(77));
+    assert_eq!(current.plan, before);
+    assert_eq!(
+        current.relationships[&PersonId(2)].trust,
+        -(i32::from(old) / 100)
+    );
+    let prepared = PreparedTrustReactions::prepare_defaults::<OpaqueAction>(
+        &store,
+        [(PersonId(1), PersonId(2))],
+    )
+    .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let finish = prepared
+        .prepare_finalization::<OpaqueAction>(&store, &batch)
+        .unwrap();
+    batch.remove::<Mind<OpaqueAction>>(StableId(1));
+    assert!(finish.validate_batch(&store, &batch).is_err());
 }

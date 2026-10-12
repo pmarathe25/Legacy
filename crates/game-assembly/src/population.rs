@@ -27,7 +27,7 @@ fn mind(
         child_signals: BTreeMap::new(),
         personality,
         dream,
-        knowledge: BTreeMap::new(),
+
         sites: BTreeMap::new(),
         relationships: BTreeMap::new(),
         values: BTreeMap::new(),
@@ -403,16 +403,12 @@ impl Simulation {
                     view
                 })
                 .collect::<Vec<_>>();
-            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.host.storage,
-                *actor,
-            )
-            .unwrap();
+            let (mind,stocks)=self.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId(actor.0)).expect("mind and stock knowledge exist");
             for stock in &reported {
                 let InventoryLocation::Area(area) = stock.location else {
                     unreachable!()
                 };
-                mind.knowledge.insert(
+                stocks.known.insert(
                     stock.id,
                     StockKnowledge {
                         inventory: stock.id,
@@ -811,16 +807,12 @@ impl Simulation {
             let visible:Vec<_>=game_cargo::inventories(&sim.host.storage).map(|(_, row)| row).filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).cloned().collect();
             let observed_at = sim.time();
             for actor in &settlement.residents {
-                let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                    &mut sim.host.storage,
-                    *actor,
-                )
-                .unwrap();
+                let (mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId(actor.0)).expect("mind and stock knowledge exist");
                 for stock in &visible {
                     let InventoryLocation::Area(area) = stock.location else {
                         unreachable!()
                     };
-                    mind.knowledge.insert(
+                    stocks.known.insert(
                         stock.id,
                         StockKnowledge {
                             inventory: stock.id,

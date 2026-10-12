@@ -9,6 +9,7 @@ use std::{collections::BTreeSet, marker::PhantomData};
 pub trait ArchiveFacts<A> {
     fn incarnations(&self) -> impl Iterator<Item = (PersonId, Option<SimTime>)>;
     fn mind(&self, person: PersonId) -> Option<&Mind<A>>;
+    fn stocks(&self, person: PersonId) -> Option<&game_characters::decisions::Stocks>;
     fn skills(&self, person: PersonId) -> Vec<SkillView>;
     fn institutions(&self, person: PersonId) -> Vec<InstitutionView>;
     fn cases(&self, person: PersonId) -> Vec<SocialCaseView>;
@@ -78,6 +79,7 @@ impl Runtime {
                     person,
                     died_at,
                     mind: facts.mind(person).ok_or(Error::Unavailable)?.clone(),
+                    stocks: facts.stocks(person).ok_or(Error::Unavailable)?.clone(),
                     skills: facts.skills(person),
                     institutions: facts.institutions(person),
                     cases: facts.cases(person),
@@ -109,6 +111,7 @@ impl<A: Component> PreparedArchives<A> {
             if archive::<A>(store, snapshot.person).is_some()
                 || facts.skills(snapshot.person) != snapshot.skills
                 || facts.mind(snapshot.person) != Some(&snapshot.mind)
+                || facts.stocks(snapshot.person) != Some(&snapshot.stocks)
                 || facts.institutions(snapshot.person) != snapshot.institutions
                 || facts.cases(snapshot.person) != snapshot.cases
             {

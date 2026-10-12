@@ -110,12 +110,8 @@ impl Simulation {
                 .map(|(id, _)| id)
                 .collect();
         for person in actors {
-            let mind = game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut sim.host.storage,
-                person,
-            )
-            .unwrap();
-            if let Some(fact) = mind.knowledge.get_mut(&food) {
+            let (_mind,stocks)=sim.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((person).0)).expect("mind and stock knowledge exist");
+            if let Some(fact) = stocks.known.get_mut(&food) {
                 fact.accessible = person == custodian;
             }
         }
@@ -592,12 +588,12 @@ impl Simulation {
                         .decisions
                         .as_mut()
                         .and_then(|_| {
-                            game_characters::decisions::mind_mut::<game_api::Command>(
+                            game_characters::decisions::stocks_mut(
                                 &mut self.host.storage,
                                 recipient,
                             )
                         })
-                        .and_then(|m| m.knowledge.get_mut(&inventory))
+                        .and_then(|m| m.known.get_mut(&inventory))
                     {
                         fact.accessible = allowed;
                         fact.learned_at = owner_now;
@@ -1077,7 +1073,7 @@ impl Simulation {
         if !world.acquisition_eligible(&self.host.storage, actor_facts) {
             return Vec::new();
         }
-        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
+        let Some(_mind) = self.host.state.decisions.as_ref().and_then(|_| {
             game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
         }) else {
             return Vec::new();
@@ -1095,9 +1091,11 @@ impl Simulation {
                 .and_modify(|existing| *existing = (*existing).min(*id))
                 .or_insert(*id);
         }
+        let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
+            .expect("stock knowledge exists");
         let mut actions = Vec::new();
-        for known in mind
-            .knowledge
+        for known in stocks
+            .known
             .values()
             .filter(|known| good.is_none_or(|good| known.good == good))
         {

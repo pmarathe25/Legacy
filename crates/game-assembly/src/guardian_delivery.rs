@@ -49,7 +49,11 @@ impl Simulation {
                 .ok_or(Error::Unavailable)?;
         let source_carried = game_cargo::inventory(&self.host.storage, source)
             .is_some_and(|i| i.location == InventoryLocation::Carried(guardian));
-        let known = mind.knowledge.get(&source).cloned();
+        let known = game_characters::decisions::stocks(&self.host.storage, guardian)
+            .ok_or(Error::Unavailable)?
+            .known
+            .get(&source)
+            .cloned();
         let known_route = source_carried
             || known
                 .as_ref()
@@ -667,9 +671,9 @@ mod tests {
             )
             .unwrap();
         let observed_at = sim.time();
-        game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, guardian)
+        game_characters::decisions::stocks_mut(&mut sim.host.storage, guardian)
             .unwrap()
-            .knowledge
+            .known
             .insert(
                 source,
                 StockKnowledge {
