@@ -83,6 +83,27 @@ pub struct ToolAllocations {
 }
 
 impl ToolAllocations {
+    /// Prospective consumption cannot spend the toolkit needed by its own
+    /// production, or displace other actors' already allocated physical units.
+    pub fn allows_after_consumption(
+        &self,
+        actor: PersonId,
+        tool: InventoryId,
+        actual_quantity: Quantity,
+        consumed: Quantity,
+    ) -> bool {
+        actor.0 > 0
+            && actual_quantity
+                .0
+                .checked_sub(consumed.0)
+                .is_some_and(|after| {
+                    after / 1_000
+                        > self
+                            .allocated_users(tool)
+                            .filter(|user| *user != actor)
+                            .count() as u64
+                })
+    }
     /// Each use describes one live actor's physically selected toolkit. The host
     /// excludes dead, misplaced, and non-tool selections, but does not erase a
     /// physical use merely because somebody withdrew access permission.

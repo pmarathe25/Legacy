@@ -9,10 +9,12 @@ pub use recipes::{
     Catalog, Definitions, ProductionRequirement, Recipe, RecipeId, RecipeView, SiteBindings,
 };
 mod components;
+mod equipment;
 pub use components::{
     insert_job, insert_site, job, job_mut, jobs, register_components, remove_job, remove_site,
     site, site_mut, sites,
 };
+pub use equipment::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Job {

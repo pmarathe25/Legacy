@@ -7,6 +7,49 @@ pub(crate) struct RankingResources {
     allocations: game_cargo::ToolAllocations,
 }
 
+struct WorkshopToolFacts<'a>(&'a Simulation);
+impl game_workshop::ToolSelectionFacts for WorkshopToolFacts<'_> {
+    fn actor(&self, actor: PersonId) -> Option<game_workshop::ToolActorFacts> {
+        self.0.host.state.physical.as_ref()?;
+        self.0.person_index.get(&actor)?;
+        let body = game_physiology::body(&self.0.host.storage, actor)?;
+        let stationary_area =
+            match game_spatial::location(&self.0.host.storage, game_ecs::StableId(actor.0))? {
+                Location::AtArea(area) => Some(*area),
+                _ => None,
+            };
+        Some(game_workshop::ToolActorFacts {
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            stationary_area,
+        })
+    }
+    fn nearby(&self, actor: PersonId, area: AreaId) -> impl Iterator<Item = InventoryId> {
+        self.0
+            .inventory_index
+            .get(&InventoryLocation::Carried(actor))
+            .into_iter()
+            .flatten()
+            .chain(
+                self.0
+                    .inventory_index
+                    .get(&InventoryLocation::Area(area))
+                    .into_iter()
+                    .flatten(),
+            )
+            .copied()
+    }
+    fn stock(&self, actor: PersonId, stock: &Inventory) -> game_workshop::ToolStockFacts {
+        game_workshop::ToolStockFacts {
+            accessible: self.0.has_stock_access(actor, stock),
+            actual_area: self.0.inventory_area(stock),
+        }
+    }
+    fn allocations(&self) -> Option<game_cargo::ToolAllocations> {
+        self.0.prepare_tool_allocations(None).ok()
+    }
+}
+
 impl Simulation {
     /// Bind a contact handoff to an actual compartment and the normal timed
     /// transfer action. Permission still comes from the receiving owner.
@@ -320,78 +363,12 @@ impl Simulation {
     }
 
     pub(crate) fn select_work_tool(&self, actor: PersonId, site: SiteId) -> Option<InventoryId> {
-        self.host.state.physical.as_ref()?;
-        let body = game_physiology::body(&self.host.storage, actor)?;
-        if !body.vitals.alive || body.vitals.health == 0 {
-            return None;
-        }
-        let site = game_workshop::site(&self.host.storage, site)?;
-        let Location::AtArea(area) = *game_spatial::location(
+        self.host.state.workshops.select_work_tool(
             &self.host.storage,
-            game_ecs::StableId((self.host.state.people[*self.person_index.get(&actor)?].id).0),
+            actor,
+            site,
+            &WorkshopToolFacts(self),
         )
-        .expect("location exists") else {
-            return None;
-        };
-        if area != site.area {
-            return None;
-        }
-        let resumed =
-            game_workshop::job(&self.host.storage, actor).filter(|job| job.site == site.id);
-        let allocations = self.prepare_tool_allocations(None).ok()?;
-        let mut candidates = Vec::new();
-        if let Some(tool) = resumed.and_then(|job| job.tool) {
-            candidates.push(tool);
-        }
-        candidates.push(site.tool);
-        candidates.extend(
-            self.inventory_index
-                .get(&InventoryLocation::Carried(actor))
-                .into_iter()
-                .flatten()
-                .copied(),
-        );
-        candidates.extend(
-            self.inventory_index
-                .get(&InventoryLocation::Area(area))
-                .into_iter()
-                .flatten()
-                .copied(),
-        );
-        let mut visited = BTreeSet::new();
-        candidates.into_iter().find(|tool| {
-            if !visited.insert(*tool) {
-                return false;
-            }
-            let Some(stock) = game_cargo::inventory(&self.host.storage, *(tool)) else {
-                return false;
-            };
-            if stock.good != Good::Tool
-                || !self.has_stock_access(actor, stock)
-                || self.inventory_area(stock) != Some(area)
-            {
-                return false;
-            }
-            let consumed = if resumed.is_none() && *tool == site.input {
-                self.host
-                    .state
-                    .workshops
-                    .recipe(&site.recipe)
-                    .expect("validated recipe")
-                    .input_quantity
-                    .0
-            } else {
-                0
-            };
-            let Some(after_input) = stock.quantity.0.checked_sub(consumed) else {
-                return false;
-            };
-            let currently_allocated = allocations
-                .allocated_users(*tool)
-                .filter(|user| *user != actor)
-                .count() as u64;
-            after_input / 1_000 > currently_allocated
-        })
     }
 
     #[cfg(test)]

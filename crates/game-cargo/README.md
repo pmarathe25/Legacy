@@ -8,4 +8,6 @@ The `cargo/inventory` schema and typed storage ports admit inventory rows into t
 
 Material deposits check the compartment's actual good and available room before increasing its stock. Their prepared writes can join other owners' effects in one atomic batch. Tool availability after finishing uses the remaining selected users, preserving existing users when the finishing actor releases its selection.
 
+Tool allocations also admit prospective consumption: a producer cannot consume the last toolkit it needs or displace another worker's allocated unit. Producers choose their own preferred tool order through that interface.
+
 Prepared compartment creation and splits validate the new identity, good, quantity, capacity, and opening source row. They stage with other owners' effects. A split preserves the source compartment's grant history. `ValidatedTransfers::stage_next_into` stages each ordered physical transfer so a receiving owner's record changes can join the same batch before its receipt is published.
