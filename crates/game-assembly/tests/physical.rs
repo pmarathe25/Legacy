@@ -605,7 +605,7 @@ fn death_at_an_intermediate_arrival_does_not_publish_a_phantom_next_leg() {
         .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
-    assert!(state.state.people[0].route.is_empty());
+    assert!(game_transport::route_steps(state.components, state.state.people[0].id).is_empty());
     assert!(
         !state.events.iter().any(|event| event.at == SimTime(240_000)
             && matches!(event.event, EventKind::Departed { actor, .. } if actor == ruler))
@@ -625,7 +625,13 @@ fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
         .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
-    assert!(sim.canonical_state().state.people[0].route.is_empty());
+    assert!(
+        game_transport::route_steps(
+            sim.canonical_state().components,
+            sim.canonical_state().state.people[0].id
+        )
+        .is_empty()
+    );
     assert_eq!(
         command(
             &mut sim,

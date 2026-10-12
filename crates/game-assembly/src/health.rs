@@ -4,9 +4,9 @@ use crate::*;
 
 pub use game_health::*;
 pub(crate) struct LocalHealthFacts {
-    actors: Vec<game_health::LocalHealthActor<game_transport::PositionKey>>,
+    pub(crate) actors: Vec<game_health::LocalHealthActor<game_transport::PositionKey>>,
     interactions: Vec<game_health::HealthInteraction>,
-    geometry: Vec<game_health::HealthGeometry>,
+    pub(crate) geometry: Vec<game_health::HealthGeometry>,
 }
 impl LocalHealthFacts {
     fn index<'a>(
@@ -572,56 +572,7 @@ impl Simulation {
         }
     }
     fn health_leaving_group(&self, actor: PersonId) -> Vec<PersonId> {
-        let mut carried: BTreeMap<PersonId, Vec<PersonId>> = BTreeMap::new();
-        if self.host.state.transport.is_some() {
-            for (_, group) in game_transport::groups(&self.host.storage) {
-                carried
-                    .entry(group.anchor)
-                    .or_default()
-                    .push(group.passenger);
-            }
-        }
-        let mut result = Vec::new();
-        let mut pending = vec![actor];
-        while let Some(actor) = pending.pop() {
-            result.push(actor);
-            if let Some(passengers) = carried.get(&actor) {
-                pending.extend(passengers);
-            }
-        }
-        result
-    }
-    pub(crate) fn leave_shelter_on_movement(&mut self, actor: PersonId) {
-        if let Some(world) = &self.host.state.health {
-            let change = world.prepare_leave(&self.host.storage, &self.health_leaving_group(actor));
-            let _ = self.apply_health_change(change);
-        }
-    }
-    pub(crate) fn health_before_putdown(&self, passenger: PersonId) -> Option<ShelterId> {
-        self.effective_shelter(passenger).map(|shelter| shelter.id)
-    }
-    pub(crate) fn health_after_putdown(&mut self, passenger: PersonId, shelter: Option<ShelterId>) {
-        let location = self.resolved_location(passenger);
-        let alive = self.host.state.physical.as_ref().is_some_and(|_| {
-            game_physiology::body(&self.host.storage, passenger)
-                .unwrap()
-                .vitals
-                .alive
-        });
-        if self.host.state.health.is_none() {
-            return;
-        }
-        game_health::remove_occupancy(&mut self.host.storage, passenger)
-            .expect("registered occupancy");
-        if let Some(shelter) = shelter.filter(|id| {
-            alive
-                && game_health::shelter(&self.host.storage, *id)
-                    .is_some_and(|s| location == Location::AtArea(s.area))
-        }) {
-            game_health::insert_occupancy(&mut self.host.storage, passenger, Occupancy { shelter })
-                .expect("validated shelter");
-        }
-        self.observe_health();
+        game_transport::carrier_family(&self.host.storage, actor)
     }
     pub(crate) fn health_command(
         &mut self,
@@ -2149,7 +2100,7 @@ impl Simulation {
             return;
         }
         match *event {
-            EventKind::Departed { actor, .. } => self.leave_shelter_on_movement(actor),
+            EventKind::Departed { .. } => {}
             EventKind::Born { child, parents, .. } => {
                 let mother = parents
                     .iter()
@@ -4064,5 +4015,56 @@ mod supply_composition_tests {
         assert!(sim.transport_is_moving(observer));
         assert!(sim.dependent_signal_visible(observer, child));
         assert!(!sim.can_observe_health(observer, child));
+    }
+}
+
+pub(crate) struct PlacementFacts<'a>(pub(crate) &'a Simulation);
+impl game_health::ShelterPlacementFacts for PlacementFacts<'_> {
+    fn actor(&self, actor: PersonId) -> Option<game_health::ShelterActorFacts> {
+        self.0.health_shelter_actor(actor)
+    }
+}
+impl Simulation {
+    pub(crate) fn health_projected_facts(
+        &self,
+        motion: &game_transport::PreparedMotion,
+        activities: &BTreeMap<PersonId, Activity>,
+    ) -> Result<LocalHealthFacts, Error> {
+        let mut facts = self.health_local_facts()?;
+        for actor in &mut facts.actors {
+            let (anchor, location) = motion.projected_anchor(&self.host.storage, actor.actor)?;
+            actor.carrier = match motion.projected_location(&self.host.storage, actor.actor) {
+                Some(Location::Carried { carrier }) => Some(*carrier),
+                _ => None,
+            };
+            actor.physical_area = match location {
+                Location::AtArea(area) => Some(*area),
+                _ => None,
+            };
+            actor.place = game_transport::position_from_location(location, self.host.clock().time)
+                .ok()
+                .map(|point| point.key());
+            actor.moving = matches!(location, Location::InTransit { .. });
+            actor.tactical = self
+                .host
+                .state
+                .combat
+                .as_ref()
+                .and_then(|world| world.tactical_placement(anchor))
+                .map(|place| game_health::TacticalIdentity {
+                    encounter: place.encounter,
+                    anchor,
+                });
+            if let Some(activity) = activities.get(&actor.actor) {
+                actor.activity = game_health::HealthActivityFacts {
+                    combat: matches!(activity, Activity::Combat { .. }),
+                    cultivation: matches!(activity, Activity::Cultivate { .. }),
+                    gathering: matches!(activity, Activity::Gather { .. }),
+                    construction: matches!(activity, Activity::Construct { .. }),
+                    play: matches!(activity, Activity::Play { .. }),
+                };
+            }
+        }
+        Ok(facts)
     }
 }

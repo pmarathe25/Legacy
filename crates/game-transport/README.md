@@ -1,11 +1,13 @@
-# game-transport
+# Transport
 
-Carrying groups, offer inboxes, lifts, approaches, resume targets, paused approaches, and personal support knowledge are seven optional shared-store components on existing person entities. Typed ports and `register_components` own their schema and intrinsic checks. `Runtime` owns rules and the global 64-record response journal; journal records have no entity identity.
+Transport owns pending routes, carrying groups, offers, timed lifts, road approaches, paused intentions and personal support knowledge as eight optional components on existing person entities in the shared store. An empty pending route has no component. Carrying `Runtime` holds rules and a bounded response journal; routes also work without that optional runtime.
 
-Body, contact, consent, and road facts remain explicit inputs. `BodyFacts` supplies only requested physical facts; ordinary offer and lift admission reads the connected carrying component. Available actions retain lazy local candidate enumeration. Integer load shares, real carried mass, directional road positions, consent, deadlines, and dated support views preserve their existing mechanics.
+Typed route replacements guard their opening rows and issue admissions bound to the staging batch. Transport plans itineraries through Spatial's directed graph path function and consumes the first leg in the same edit as a prepared departure. `BodyInput` and `CarryWork` supply actual body limits and activity facts; Transport owns their interpretation. `BodyFacts` reads only affected people during ordinary group operations.
 
-Prepared operations capture touched rows, relevant connected group/lift membership, body facts, rules, and any response-journal input. Time-sensitive plans also capture their preparation time. `stage_into` appends typed edits to a caller's batch. Apply that batch once before consuming `TransportFinalization::finish` in the same serialized transition. Standalone `commit` performs that sequence. Failed admission publishes neither row changes nor journal responses.
+Prepared motion handles stopping, arrival, birth attachment, lift completion, departure, approach, retreat, resume, putdown, confinement release and load reconciliation. Spatial remains the Location authority. Motion stages Transport and Location edits together, provides projected location facts for receiving owners, and emits ordered effects for activity interruption, shelter movement, deadlines, dependent indexing and public events.
 
-`validate_runtime` checks owned relationships against one supplied factual body catalog and clock. `validate_absent` rejects native transport rows when a composition has no Transport runtime.
+A `MotionBatch` collects independent plans and coalesces compatible sparse rows. Its finalization must validate the complete CarryGroup/Lift footprint after all participants stage and before the host applies the shared batch. Undeclared carrying edges reject publication. Exact Location/Route read reservations reject conflicting foreign writes or removals through ordinary host admission. Selected body, topology, road, time and lift action facts reject stale plans.
 
-Departure admission, carried load, joining-bearer selection, and lift participant order are owner entrypoints. Physical facts remain lazy and requested by ID.
+Health owns effective-shelter selection, occupancy and observations through its own prepared placement interface. Motion never chooses a shelter. Tactical reach and obstacles belong to Conflict; its contact result accompanies Spatial-resolved anchor identities.
+
+Intrinsic schemas validate native rows. `validate_routes` checks actual actor placements and directed topology. `validate_composition` checks both sides of carrier/group and lift/action links. Owner tests and a composed Transport–Health–generic host proof exercise these interfaces without the game assembly.

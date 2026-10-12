@@ -2,7 +2,7 @@
 //! The returned intent still requires the ordinary timed physical executor.
 use crate::{Action, Leg, Position, RoadPosition};
 use game_core::{AreaId, Error, Location, SimDuration, SimTime};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 pub type KnownRoutes = BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,25 +210,9 @@ fn fraction(duration: u64, distance: u64, basis: u64) -> Option<u128> {
     Some((u128::from(duration) * u128::from(distance)).div_ceil(u128::from(basis)))
 }
 fn area_cost(routes: &KnownRoutes, origin: AreaId, target: AreaId) -> Option<u64> {
-    let mut frontier = BTreeSet::from([(0u64, Vec::<AreaId>::new(), origin)]);
-    let mut visited = BTreeSet::new();
-    while let Some((cost, path, area)) = frontier.pop_first() {
-        if !visited.insert(area) {
-            continue;
-        }
-        if area == target {
-            return Some(cost);
-        }
-        for (next, duration) in routes.get(&area).into_iter().flatten() {
-            if duration.0 == 0 {
-                continue;
-            }
-            let mut path = path.clone();
-            path.push(*next);
-            frontier.insert((cost.checked_add(duration.0)?, path, *next));
-        }
-    }
-    None
+    game_spatial::shortest_path(routes, origin, target)
+        .ok()
+        .map(|(_, cost)| cost.0)
 }
 
 #[cfg(test)]

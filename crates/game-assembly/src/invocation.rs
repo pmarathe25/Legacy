@@ -530,6 +530,17 @@ impl Simulation {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let effects = prepared.effects.clone();
+        let route_reactions = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                ControlEffect::Dismissed { actor } => Some(*actor),
+                _ => None,
+            })
+            .map(|actor| self.prepare_dismissed_route(actor))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         let runtime = self.host.state.invocation.as_ref().unwrap();
         let memory_ending = runtime.prepare_memory_control_reactions(&self.host.storage, &effects);
         let canonical = self.canonical_state();
@@ -546,6 +557,13 @@ impl Simulation {
         memory_ending.stage_into(runtime, &self.host.storage, None, &mut batch)?;
         for actor in memory_resets {
             batch.insert(game_ecs::StableId(actor.0), Activity::Idle);
+        }
+        let route_admissions = route_reactions
+            .into_iter()
+            .map(|plan| plan.stage_into(&self.host.storage, &mut batch))
+            .collect::<Result<Vec<_>, _>>()?;
+        for admission in &route_admissions {
+            admission.validate_footprint(&batch)?;
         }
         self.host.storage.apply_batch(batch)?;
         finish.finish(&mut self.host.state.invocation.as_mut().unwrap().control);
@@ -566,7 +584,6 @@ impl Simulation {
                     self.emit(EventKind::InvocationStarted { actor, lives });
                 }
                 ControlEffect::Dismissed { actor } => {
-                    self.dismiss_recalled_route(actor);
                     self.emit(EventKind::InvocationDismissed { actor });
                 }
                 ControlEffect::CostApplied {
@@ -880,20 +897,25 @@ impl Simulation {
             }),
         ))
     }
-    fn dismiss_recalled_route(&mut self, actor: PersonId) {
-        let person = &self.host.state.people[self.person_index[&actor]];
+    pub(crate) fn prepare_dismissed_route(
+        &self,
+        actor: PersonId,
+    ) -> Result<Option<game_transport::PreparedRoute>, Error> {
         let location = game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
-            .expect("location exists");
+            .ok_or(Error::Unavailable)?;
         let current =
             &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .expect("mind exists")
+                .ok_or(Error::Unavailable)?
                 .routes;
-        if let Some(route) =
-            game_invocation::retained_route_after_dismissal(current, location, &person.route)
-        {
-            self.host.state.people[self.person_index[&actor]].route = route;
-        }
+        game_invocation::retained_route_after_dismissal(
+            current,
+            location,
+            game_transport::route_steps(&self.host.storage, actor),
+        )
+        .map(|route| game_transport::prepare_route_replacement(&self.host.storage, actor, route))
+        .transpose()
     }
+
     pub(crate) fn invocation_personality(&self, actor: PersonId) -> Option<decisions::Personality> {
         let w = self.host.state.invocation.as_ref()?;
         let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;

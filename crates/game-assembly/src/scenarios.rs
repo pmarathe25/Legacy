@@ -202,7 +202,8 @@ impl Simulation {
                 game_ecs::StableId((person.id).0),
             )
             .expect("location exists") = Location::AtArea(village);
-            person.route.clear();
+            game_transport::replace_route(&mut self.host.storage, person.id, Vec::new())
+                .expect("actor route");
         }
         for person in game_lifecycle::all_lives(&self.host.storage)
             .map(|(id, _)| id)
@@ -1147,7 +1148,8 @@ impl Simulation {
             body.vitals.fatigue = 0;
         }
         for person in &mut self.host.state.people {
-            person.route.clear();
+            game_transport::replace_route(&mut self.host.storage, person.id, Vec::new())
+                .expect("actor route");
             *game_spatial::location_mut(
                 &mut self.host.storage,
                 game_ecs::StableId((person.id).0),

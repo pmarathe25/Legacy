@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 48;
+const SAVE_VERSION: u32 = 49;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -453,7 +453,6 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    let mut scheduled_arrivals = BTreeSet::new();
     let mut reviews = Vec::new();
     let mut physical_deadlines = BTreeSet::new();
     let mut spoil_deadlines = BTreeSet::new();
@@ -463,20 +462,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         }
         for event in events {
             match event {
-                Due::Arrive(id) => {
-                    let p = people.get(id).ok_or_else(fail)?;
-                    let deadline = s
-                        .state
-                        .transport
-                        .as_ref()
-                        .and_then(|_| game_transport::approach_job(s.components, *id))
-                        .map(|approach| approach.completes);
-                    if !matches!(*game_spatial::location(s.components,game_ecs::StableId((p.id).0)).expect("location exists"), Location::InTransit { arrives, .. } if deadline.unwrap_or(arrives) == *time)
-                        || !scheduled_arrivals.insert(*id)
-                    {
-                        return Err(fail());
-                    }
-                }
+                Due::Arrive(_) => {}
                 Due::Review => reviews.push(*time),
                 Due::CombatRound(_) => {
                     if s.state.combat.is_none() {
@@ -534,116 +520,6 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 .is_some_and(|i| i.location == InventoryLocation::Carried(p.id))
         {
             return Err(fail());
-        }
-        let mut origin = match *game_spatial::location(s.components, game_ecs::StableId((p.id).0))
-            .expect("location exists")
-        {
-            Location::AtArea(a) => {
-                if !p.route.is_empty() || !areas.contains(&a) {
-                    return Err(fail());
-                }
-                a
-            }
-            Location::InTransit {
-                from,
-                to,
-                departed,
-                arrives,
-                road_start,
-            } => {
-                let link = s
-                    .state
-                    .areas
-                    .iter()
-                    .find(|a| a.id == from)
-                    .and_then(|a| a.links.iter().find(|l| l.destination == to))
-                    .ok_or_else(fail)?;
-                let dead = s.state.physical.as_ref().is_some_and(|_| {
-                    game_physiology::body(s.components, p.id).is_some_and(|a| !a.vitals.alive)
-                });
-                if departed > s.time
-                    || arrived_duration(departed, arrives)
-                        != Some(match road_start {
-                            None => link.duration.0,
-                            Some(point) => {
-                                let original = s
-                                    .state
-                                    .areas
-                                    .iter()
-                                    .find(|area| area.id == point.from)
-                                    .and_then(|area| {
-                                        area.links.iter().find(|edge| edge.destination == point.to)
-                                    })
-                                    .ok_or_else(fail)?;
-                                if point.duration != original.duration {
-                                    return Err(fail());
-                                }
-                                let leg =
-                                    game_transport::retreat(point, to, link.duration, SimTime(0))
-                                        .map_err(|_| fail())?;
-                                if leg.from != from {
-                                    return Err(fail());
-                                }
-                                leg.arrives.0
-                            }
-                        })
-                    || (!dead && (arrives <= s.time || !scheduled_arrivals.contains(&p.id)))
-                    || (dead && scheduled_arrivals.contains(&p.id))
-                {
-                    return Err(fail());
-                }
-                to
-            }
-            Location::StoppedOnRoad {
-                from,
-                to,
-                progress,
-                duration,
-            } => {
-                let link = s
-                    .state
-                    .areas
-                    .iter()
-                    .find(|area| area.id == from)
-                    .and_then(|area| area.links.iter().find(|link| link.destination == to))
-                    .ok_or_else(fail)?;
-                if duration != link.duration
-                    || progress > duration
-                    || !p.route.is_empty()
-                    || scheduled_arrivals.contains(&p.id)
-                {
-                    return Err(fail());
-                }
-                from
-            }
-            Location::Carried { carrier } => {
-                if !people.contains_key(&carrier)
-                    || carrier == p.id
-                    || !p.route.is_empty()
-                    || scheduled_arrivals.contains(&p.id)
-                    || !s
-                        .state
-                        .transport
-                        .as_ref()
-                        .and_then(|_| game_transport::group(s.components, p.id))
-                        .is_some_and(|group| group.anchor == carrier)
-                {
-                    return Err(fail());
-                }
-                // No independent route remains on a body being physically borne.
-                s.state.areas.first().ok_or_else(fail)?.id
-            }
-        };
-        for destination in &p.route {
-            if !s
-                .state
-                .areas
-                .iter()
-                .any(|a| a.id == origin && a.links.iter().any(|l| l.destination == *destination))
-            {
-                return Err(fail());
-            }
-            origin = *destination;
         }
     }
     for (id, inventory) in game_cargo::inventories(s.components) {
@@ -2346,8 +2222,4 @@ fn validate_physical(
         }
     }
     Ok(())
-}
-
-fn arrived_duration(departed: SimTime, arrives: SimTime) -> Option<u64> {
-    arrives.0.checked_sub(departed.0)
 }

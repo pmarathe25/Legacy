@@ -467,6 +467,12 @@ impl Simulation {
     }
 }
 impl PreparedInterruptions {
+    pub(crate) fn projected_activities(&self) -> impl Iterator<Item = (PersonId, &Activity)> {
+        self.metadata
+            .activities
+            .iter()
+            .map(|(actor, activity)| (*actor, activity))
+    }
     pub(crate) fn event_count(&self) -> Result<u64, Error> {
         self.metadata.steps.iter().try_fold(0u64, |sum, step| {
             sum.checked_add(u64::try_from(step.events.len()).map_err(|_| Error::Overflow)?)

@@ -501,10 +501,14 @@ impl Runtime {
         })
     }
 }
+mod itinerary;
+pub use itinerary::*;
 mod storage;
 pub use storage::*;
 mod changes;
 pub use changes::*;
+mod references;
+pub use references::*;
 mod validation;
 pub use validation::{validate_absent, validate_runtime};
 
@@ -746,3 +750,7 @@ mod tests;
 mod component_tests;
 
 mod policy;
+pub use policy::{GrowingBodyFacts, carrier_family};
+
+mod physical_facts;
+pub use physical_facts::*;

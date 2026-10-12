@@ -21,6 +21,40 @@ impl<C: Component> Rows<C> {
         self.guard(store, actor);
         self.edits.get_mut(&actor).unwrap().1 = after;
     }
+    fn merge(&mut self, other: Self) -> Result<(), Error> {
+        for (actor, (before, after)) in other.edits {
+            if let Some((existing_before, existing_after)) = self.edits.get_mut(&actor) {
+                if *existing_before != before {
+                    return Err(Error::Unavailable);
+                }
+                if *existing_after == *existing_before {
+                    *existing_after = after;
+                } else if after != before && *existing_after != after {
+                    return Err(Error::Unavailable);
+                }
+            } else {
+                self.edits.insert(actor, (before, after));
+            }
+        }
+        Ok(())
+    }
+    fn reserve(self, batch: &mut Batch) -> Result<(), Error> {
+        if self
+            .edits
+            .keys()
+            .any(|actor| batch.touches::<C>(StableId(actor.0)))
+        {
+            return Err(Error::Unavailable);
+        }
+        for (actor, (_, after)) in self.edits {
+            if let Some(row) = after {
+                batch.insert(StableId(actor.0), row);
+            } else {
+                batch.remove::<C>(StableId(actor.0));
+            }
+        }
+        Ok(())
+    }
     fn validate(&self, store: &Store) -> Result<(), Error> {
         if self
             .edits
@@ -93,6 +127,7 @@ pub(crate) fn connected(store: &Store, seed: &BTreeSet<PersonId>) -> BTreeSet<Pe
 pub struct PreparedTransport<T> {
     rules: Rules,
     at: Option<SimTime>,
+    routes: Rows<Route>,
     groups: Rows<CarryGroup>,
     offers: Rows<OfferInbox>,
     lifts: Rows<Lift>,
@@ -111,6 +146,7 @@ impl<T> PreparedTransport<T> {
         Self {
             rules: runtime.rules.clone(),
             at: None,
+            routes: Rows::new(),
             groups: Rows::new(),
             offers: Rows::new(),
             lifts: Rows::new(),
@@ -123,6 +159,25 @@ impl<T> PreparedTransport<T> {
             journal: None,
             expired_inboxes: None,
             result,
+        }
+    }
+    fn map_result<U>(self, map: impl FnOnce(T) -> U) -> PreparedTransport<U> {
+        PreparedTransport {
+            rules: self.rules,
+            at: self.at,
+            routes: self.routes,
+            groups: self.groups,
+            offers: self.offers,
+            lifts: self.lifts,
+            approaches: self.approaches,
+            resume: self.resume,
+            paused: self.paused,
+            knowledge: self.knowledge,
+            body_reads: self.body_reads,
+            topology: self.topology,
+            journal: self.journal,
+            expired_inboxes: self.expired_inboxes,
+            result: map(self.result),
         }
     }
     pub fn result(&self) -> &T {
@@ -179,6 +234,7 @@ impl<T> PreparedTransport<T> {
         }) {
             return Err(Error::Unavailable);
         }
+        self.routes.validate(store)?;
         self.groups.validate(store)?;
         self.offers.validate(store)?;
         self.lifts.validate(store)?;
@@ -196,6 +252,7 @@ impl<T> PreparedTransport<T> {
         batch: &mut Batch,
     ) -> Result<TransportFinalization<T>, Error> {
         self.validate(runtime, store, bodies, now)?;
+        self.routes.stage(batch);
         self.groups.stage(batch);
         self.offers.stage(batch);
         self.lifts.stage(batch);
@@ -794,3 +851,11 @@ impl Runtime {
         Ok(prepared)
     }
 }
+
+#[path = "motion.rs"]
+mod motion;
+pub use motion::*;
+
+#[path = "journey.rs"]
+mod journey;
+pub use journey::*;

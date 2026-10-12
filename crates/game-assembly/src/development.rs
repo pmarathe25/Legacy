@@ -555,7 +555,6 @@ impl Simulation {
             work_units: 0,
             work_remainder: 0,
             work_rate: 1_000,
-            route: Vec::new(),
             hunger_exempt: false,
         });
         game_spatial::set_location(
@@ -755,7 +754,7 @@ impl Simulation {
             .expect("actor exists");
         self.transport_death(id);
         self.interrupt_actor_activity(id);
-        self.host.state.people[self.person_index[&id]].route.clear();
+        game_transport::replace_route(&mut self.host.storage, id, Vec::new()).expect("actor route");
         for due in self.host.state.due.values_mut() {
             due.retain(|d| !matches!(d, Due::Age(p) | Due::Arrive(p) if *p == id));
         }

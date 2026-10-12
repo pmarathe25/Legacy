@@ -186,3 +186,9 @@ pub fn resolve_locations<'a>(
 
 #[cfg(test)]
 mod tests;
+
+mod roster;
+pub use roster::LocalRoster;
+
+mod navigation;
+pub use navigation::{RoadGraph, shortest_path};

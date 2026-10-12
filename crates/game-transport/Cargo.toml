@@ -7,7 +7,10 @@ license.workspace = true
 [dependencies]
 game-ecs.workspace = true
 game-core.workspace = true
+game-spatial.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+game-health.workspace = true
+game-world.workspace = true

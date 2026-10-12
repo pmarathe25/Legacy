@@ -73,7 +73,13 @@ fn domain_kernels_cannot_depend_on_the_coordinator_or_client_facade() {
         }
         domains += 1;
         for dependency in package["dependencies"].as_array().unwrap() {
-            let dependency = dependency["name"].as_str().unwrap();
+            let dependency_name = dependency["name"].as_str().unwrap();
+            // The host is feature-agnostic. Owner composition tests may use
+            // its publication counters without importing the playable assembly.
+            // Production features still cannot require a host instance.
+            if dependency_name == "game-world" && dependency["kind"].as_str() == Some("dev") {
+                continue;
+            }
             assert!(
                 ![
                     "game-api",
@@ -82,8 +88,8 @@ fn domain_kernels_cannot_depend_on_the_coordinator_or_client_facade() {
                     "game-session",
                     "game-cli"
                 ]
-                .contains(&dependency),
-                "{name} cannot compile independently with dependency {dependency}"
+                .contains(&dependency_name),
+                "{name} cannot compile independently with dependency {dependency_name}"
             );
         }
     }

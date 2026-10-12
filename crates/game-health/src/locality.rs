@@ -40,7 +40,7 @@ pub struct LocalHealthActor<K> {
     pub temperature_c: Option<i32>,
 }
 /// Minimal transient facts for a single actor's shelter or carrier chain.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShelterActorFacts {
     pub actor: PersonId,
     pub carrier: Option<PersonId>,
@@ -59,9 +59,26 @@ impl<K> From<&LocalHealthActor<K>> for ShelterActorFacts {
         }
     }
 }
+fn projected_occupancy<'a>(
+    store: &'a Store,
+    projected: Option<&'a BTreeMap<PersonId, Option<Occupancy>>>,
+    actor: PersonId,
+) -> Option<&'a Occupancy> {
+    if let Some(after) = projected.and_then(|rows| rows.get(&actor)) {
+        after.as_ref()
+    } else {
+        occupancy(store, actor)
+    }
+}
 fn occupied_shelter(store: &Store, actor: &ShelterActorFacts) -> Option<ShelterId> {
-    occupancy(store, actor.actor)
-        .and_then(|row| shelter(store, row.shelter))
+    occupied_shelter_with(store, actor, occupancy(store, actor.actor))
+}
+fn occupied_shelter_with(
+    store: &Store,
+    actor: &ShelterActorFacts,
+    row: Option<&Occupancy>,
+) -> Option<ShelterId> {
+    row.and_then(|row| shelter(store, row.shelter))
         .filter(|shelter| {
             actor.alive
                 && !actor.activity.outside_shelter()
@@ -156,6 +173,14 @@ impl<'a, K: Clone + Ord> LocalIndex<'a, K> {
         actors: &'a [LocalHealthActor<K>],
         geometry: &[HealthGeometry],
     ) -> Result<Self, Error> {
+        Self::build_with_occupancy(store, actors, geometry, None)
+    }
+    fn build_with_occupancy(
+        store: &Store,
+        actors: &'a [LocalHealthActor<K>],
+        geometry: &[HealthGeometry],
+        projected: Option<&BTreeMap<PersonId, Option<Occupancy>>>,
+    ) -> Result<Self, Error> {
         let mut facts = BTreeMap::new();
         for actor in actors {
             if actor.actor.0 == 0
@@ -206,7 +231,11 @@ impl<'a, K: Clone + Ord> LocalIndex<'a, K> {
                     chain.push(current);
                     current = carrier;
                 } else {
-                    let effective = occupied_shelter(store, &ShelterActorFacts::from(*actor));
+                    let effective = occupied_shelter_with(
+                        store,
+                        &ShelterActorFacts::from(*actor),
+                        projected_occupancy(store, projected, actor.actor),
+                    );
                     shelters.insert(current, effective);
                     tactical.insert(current, actor.tactical);
                     break effective;
@@ -327,7 +356,7 @@ impl<K: Clone + Ord> LocalHealthIndex<'_, K> {
     }
     pub fn prepare_observations(&self) -> Result<PreparedLocalObservation, Error> {
         self.runtime
-            .prepare_observations_with_index(self.store, self.at, &self.local)
+            .prepare_observations_with_index(self.store, self.at, &self.local, None)
     }
 }
 impl Runtime {
@@ -515,7 +544,7 @@ impl PreparedLocalObservation {
     pub fn observers(&self) -> usize {
         self.deltas.len()
     }
-    pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<(), Error> {
+    pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
         if runtime.rules != self.rules
             || self
                 .clinical
@@ -536,7 +565,24 @@ impl PreparedLocalObservation {
         {
             return Err(invalid("stale local health observation"));
         }
-        let mut batch = Batch::new();
+        for delta in &self.deltas {
+            let current = knowledge(store, delta.observer);
+            if current.map_or_else(BTreeMap::new, |row| row.people.clone()) != delta.before_people
+                || current.map_or_else(BTreeMap::new, |row| row.shelters.clone())
+                    != delta.before_shelters
+            {
+                return Err(invalid("stale personal health observation"));
+            }
+        }
+        Ok(())
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(), Error> {
+        self.validate(runtime, store)?;
         for delta in self.deltas {
             let mut current = knowledge(store, delta.observer)
                 .cloned()
@@ -549,6 +595,11 @@ impl PreparedLocalObservation {
             current.validate()?;
             batch.insert(StableId(delta.observer.0), current);
         }
+        Ok(())
+    }
+    pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        self.stage_into(runtime, store, &mut batch)?;
         store.apply_batch(batch)
     }
 }
@@ -561,13 +612,25 @@ impl Runtime {
         geometry: &[HealthGeometry],
     ) -> Result<PreparedLocalObservation, Error> {
         let index = LocalIndex::build(store, actors, geometry)?;
-        self.prepare_observations_with_index(store, at, &index)
+        self.prepare_observations_with_index(store, at, &index, None)
+    }
+    pub(crate) fn prepare_projected_local_observations<K: Clone + Ord>(
+        &self,
+        store: &Store,
+        at: SimTime,
+        actors: &[LocalHealthActor<K>],
+        geometry: &[HealthGeometry],
+        projected: &BTreeMap<PersonId, Option<Occupancy>>,
+    ) -> Result<PreparedLocalObservation, Error> {
+        let index = LocalIndex::build_with_occupancy(store, actors, geometry, Some(projected))?;
+        self.prepare_observations_with_index(store, at, &index, Some(projected))
     }
     fn prepare_observations_with_index<K: Clone + Ord>(
         &self,
         store: &Store,
         at: SimTime,
         index: &LocalIndex<'_, K>,
+        projected: Option<&BTreeMap<PersonId, Option<Occupancy>>>,
     ) -> Result<PreparedLocalObservation, Error> {
         let mut observed_areas = BTreeSet::new();
         let mut occupants = BTreeMap::<(ShelterId, Cohort<K>), BTreeSet<PersonId>>::new();
@@ -575,7 +638,7 @@ impl Runtime {
             let shelter = if index.actors[actor].carrier.is_some() {
                 cohort.shelter
             } else {
-                occupancy(store, *actor).map(|row| row.shelter)
+                projected_occupancy(store, projected, *actor).map(|row| row.shelter)
             };
             if let Some(shelter) = shelter {
                 occupants
@@ -651,7 +714,7 @@ impl Runtime {
             .collect();
         let mut consulted: BTreeSet<_> = visible_shelters.iter().copied().collect();
         for actor in index.actors.keys() {
-            if let Some(row) = occupancy(store, *actor) {
+            if let Some(row) = projected_occupancy(store, projected, *actor) {
                 consulted.insert(row.shelter);
             }
         }

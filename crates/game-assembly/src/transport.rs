@@ -9,6 +9,21 @@ pub(crate) struct TransportBodyLookup<'a> {
     sim: &'a Simulation,
     now: SimTime,
 }
+struct GrowingTransportBodies<'a>(&'a Simulation);
+impl game_transport::GrowingBodyFacts for GrowingTransportBodies<'_> {
+    fn body_at(&self, actor: PersonId, at: SimTime) -> Option<Body> {
+        let person = self
+            .0
+            .host
+            .state
+            .people
+            .get(*self.0.person_index.get(&actor)?)?;
+        self.0
+            .transport_body_facts_at(std::iter::once(person), at)
+            .ok()?
+            .remove(&actor)
+    }
+}
 impl game_transport::BodyFacts for TransportBodyLookup<'_> {
     fn body(&self, actor: PersonId) -> Option<Body> {
         let person = self
@@ -104,55 +119,31 @@ impl Simulation {
         let Some(combat) = &self.host.state.combat else {
             return true;
         };
-        let anchor = |mut actor: PersonId| {
-            let mut visited = BTreeSet::new();
-            while visited.insert(actor) {
-                match *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                    .expect("location exists")
-                {
-                    Location::Carried { carrier } => actor = carrier,
-                    _ => break,
-                }
-            }
-            actor
+        let anchor = |actor: PersonId| {
+            game_spatial::resolved_anchor(&self.host.storage, game_ecs::StableId(actor.0))
+                .ok()
+                .map(|(id, _)| PersonId(id.0))
         };
-        let tactical = |actor: PersonId| {
-            combat
-                .encounters
-                .values()
-                .filter(|e| e.active)
-                .find_map(|e| {
-                    e.fighters
-                        .get(&actor)
-                        .filter(|f| !f.withdrawn)
-                        .map(|f| (e.id, e.map, f.position))
-                })
-        };
-        match (tactical(anchor(a)), tactical(anchor(b))) {
-            (None, None) => true,
-            (Some((a, map, ap)), Some((b, _, bp))) => {
-                a == b
-                    && game_conflict::distance(ap, bp) <= u128::from(combat.rules.reach).pow(2)
-                    && combat.map(map).is_some_and(|m| m.clear(ap, bp))
-            }
+        match (anchor(a), anchor(b)) {
+            (Some(a), Some(b)) => combat.physical_contact(a, b),
             _ => false,
         }
     }
     pub(crate) fn transport_is_moving(&self, actor: PersonId) -> bool {
-        matches!(self.resolved_location(actor), Location::InTransit { .. })
+        game_spatial::resolve(&self.host.storage, game_ecs::StableId(actor.0))
+            .is_ok_and(|location| matches!(location, Location::InTransit { .. }))
     }
     pub(crate) fn transport_exerting(&self, actor: PersonId) -> bool {
-        matches!(
-            *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                .expect("location exists"),
-            Location::InTransit { .. }
-        ) || self.host.state.physical.as_ref().is_some_and(|_| {
-            matches!(
-                self.host.storage.activity(actor).unwrap(),
-                Activity::Lift { .. }
-            )
-        })
+        let location = game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
+            .expect("known location");
+        let lifting = self.host.state.physical.is_some()
+            && matches!(
+                self.host.storage.activity(actor),
+                Some(Activity::Lift { .. })
+            );
+        game_transport::exerting(location, lifting)
     }
+    #[cfg(test)]
     fn transport_bodies_at(&self, now: SimTime) -> Result<BTreeMap<PersonId, Body>, Error> {
         self.transport_body_facts_at(self.host.state.people.iter(), now)
     }
@@ -205,48 +196,49 @@ impl Simulation {
                         )
                         .ok_or(Error::Overflow)
                     })?;
-                let can_walk = body.vitals.alive
-                    && body.vitals.health > 0
-                    && body.vitals.fatigue < limits.fatigue_limit
-                    && self.independent(person.id)
-                    && !self.combat_restricts(person.id)
-                    && !matches!(
-                        *game_spatial::location(
-                            &self.host.storage,
-                            game_ecs::StableId((person.id).0)
-                        )
-                        .expect("location exists"),
-                        Location::Carried { .. }
-                    );
-                let can_bear = can_walk
-                    && matches!(
-                        *self.host.storage.activity(person.id).unwrap(),
-                        Activity::Idle | Activity::Rest | Activity::Lift { .. }
-                    );
+                let location =
+                    game_spatial::location(&self.host.storage, game_ecs::StableId(person.id.0))
+                        .ok_or(Error::Unavailable)?;
+                let work = match self
+                    .host
+                    .storage
+                    .activity(person.id)
+                    .ok_or(Error::Unavailable)?
+                {
+                    Activity::Idle => game_transport::CarryWork::Idle,
+                    Activity::Rest => game_transport::CarryWork::Rest,
+                    Activity::Lift { .. } => game_transport::CarryWork::Lifting,
+                    _ => game_transport::CarryWork::Other,
+                };
                 Ok((
                     person.id,
-                    Body {
+                    Body::from_facts(game_transport::BodyInput {
                         position: self
                             .transport_position(person.id)
                             .ok_or(Error::Unavailable)?,
                         mass,
                         cargo: Quantity(cargo),
                         capacity: limits.carrying_capacity,
-                        can_hold: body.vitals.alive
-                            && body.vitals.health > 0
-                            && self
-                                .host
-                                .state
-                                .combat
-                                .as_ref()
-                                .is_none_or(|w| body.vitals.health > w.rules.incapacitation),
-                        can_walk,
-                        can_bear,
-                    },
+                        alive: body.vitals.alive,
+                        health: body.vitals.health,
+                        fatigue: body.vitals.fatigue,
+                        fatigue_limit: limits.fatigue_limit,
+                        independent: self.independent(person.id),
+                        combat_restricted: self.combat_restricts(person.id),
+                        carried: matches!(location, Location::Carried { .. }),
+                        work,
+                        incapacitation: self
+                            .host
+                            .state
+                            .combat
+                            .as_ref()
+                            .map(|world| world.rules.incapacitation),
+                    }),
                 ))
             })
             .collect()
     }
+    #[cfg(test)]
     pub(crate) fn transport_bodies(&self) -> Result<BTreeMap<PersonId, Body>, Error> {
         self.transport_bodies_at(self.host.clock().time)
     }
@@ -308,159 +300,47 @@ impl Simulation {
         .unwrap_or(false)
     }
     pub(crate) fn transport_boundary(&self, limit: SimTime) -> Result<SimTime, Error> {
-        let Some(_) = &self.host.state.transport else {
-            return Ok(limit);
-        };
-        if game_transport::groups(&self.host.storage).next().is_none()
-            || !game_transport::groups(&self.host.storage)
-                .map(|(_, row)| row)
-                .any(|g| self.transport_is_moving(g.anchor))
-        {
-            return Ok(limit);
-        }
-        let crossing =
-            game_physiology::first_crossing(limit.0 - self.host.clock().time.0, |elapsed| {
-                let bodies =
-                    self.transport_bodies_at(SimTime(self.host.clock().time.0 + elapsed))?;
-                let plan = game_transport::capacity_plan(&self.host.storage, &bodies)?;
-                Ok(plan.overloaded.iter().any(|id| {
-                    self.transport_is_moving(
-                        game_transport::group(&self.host.storage, *id)
-                            .unwrap()
-                            .anchor,
-                    )
-                }))
-            })?;
-        Ok(crossing.map_or(limit, |elapsed| SimTime(self.host.clock().time.0 + elapsed)))
+        self.host
+            .state
+            .transport
+            .as_ref()
+            .map_or(Ok(limit), |owner| {
+                owner.growth_boundary(
+                    &self.host.storage,
+                    self.host.clock().time,
+                    limit,
+                    &GrowingTransportBodies(self),
+                )
+            })
     }
-    pub(crate) fn transport_departed(&mut self, actor: PersonId) {
-        let Some(w) = &self.host.state.transport else {
-            return;
-        };
-        let members = w.component(&self.host.storage, actor);
-        let location = game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-            .expect("location exists")
-            .clone();
-        let Location::InTransit {
-            from, to, arrives, ..
-        } = location
-        else {
-            return;
-        };
-        let passengers: BTreeSet<_> = game_transport::groups(&self.host.storage)
-            .map(|(id, _)| id)
-            .collect();
-        let approach = game_transport::approach_job(&self.host.storage, actor).cloned();
-        for member in members {
-            for dependents in self.dependent_index.values_mut() {
-                dependents.remove(&member);
-            }
-            self.leave_shelter_on_movement(member);
-            if member == actor || passengers.contains(&member) {
-                continue;
-            }
-            self.interrupt_actor_activity(member);
-            self.clear_transport_arrival(member);
-            self.leave_shelter_on_movement(member);
-            for dependents in self.dependent_index.values_mut() {
-                dependents.remove(&member);
-            }
-            let person = &mut self.host.state.people[self.person_index[&member]];
-            *game_spatial::location_mut(&mut self.host.storage, game_ecs::StableId((member).0))
-                .expect("location exists") = location.clone();
-            person.route.clear();
-            let deadline = approach.as_ref().map_or(arrives, |a| a.completes);
-            if let Some(approach) = &approach {
-                let change = self
-                    .host
-                    .state
-                    .transport
-                    .as_ref()
-                    .unwrap()
-                    .prepare_approach(&self.host.storage, member, Some(approach.clone()));
-                self.apply_transport_change(change)
-                    .expect("validated coupled approach");
-            }
-            self.host
-                .state
-                .due
-                .entry(deadline)
-                .or_default()
-                .push(Due::Arrive(member));
-            self.emit(EventKind::Departed {
-                actor: member,
-                from,
-                to,
-                arrives: deadline,
-            });
-        }
-    }
-    fn clear_transport_arrival(&mut self, actor: PersonId) {
+    pub(crate) fn clear_transport_arrival(&mut self, actor: PersonId) {
         for due in self.host.state.due.values_mut() {
             due.retain(|d| !matches!(d,Due::Arrive(id) if *id==actor));
         }
         self.host.state.due.retain(|_, due| !due.is_empty());
     }
     fn stop_transport_component(&mut self, actor: PersonId) {
-        let members = self.host.state.transport.as_ref().map_or_else(
-            || BTreeSet::from([actor]),
-            |w| w.component(&self.host.storage, actor),
-        );
-        let positions: Vec<_> = members
-            .iter()
-            .filter_map(|id| {
-                let location = game_spatial::location(&self.host.storage, game_ecs::StableId(id.0))
-                    .expect("location exists")
-                    .clone();
-                if matches!(location, Location::InTransit { .. }) {
-                    location_position(&location, self.host.clock().time)
-                        .ok()
-                        .map(|place| (*id, place))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for (member, position) in positions {
-            self.clear_transport_arrival(member);
-            let destination =
-                match *game_spatial::location(&self.host.storage, game_ecs::StableId((member).0))
-                    .expect("location exists")
-                {
-                    Location::InTransit { to, .. } => Some(to),
-                    _ => None,
-                };
-            if let (Some(runtime), Some(destination)) =
-                (self.host.state.transport.as_ref(), destination)
-            {
-                let change =
-                    runtime.prepare_pause_routes(&self.host.storage, &[member], destination);
-                self.apply_transport_change(change)
-                    .expect("validated route pause");
-            }
-            *game_spatial::location_mut(&mut self.host.storage, game_ecs::StableId((member).0))
-                .expect("location exists") = position_location(position);
-            self.host.state.people[self.person_index[&member]]
-                .route
-                .clear();
-            self.emit(EventKind::Interrupted { actor: member });
-        }
+        let fallback = self.transport_default_runtime();
+        let owner = self.host.state.transport.as_ref().unwrap_or(&fallback);
+        let plan = owner
+            .prepare_stop(&self.host.storage, actor, self.host.clock().time)
+            .expect("canonical motion facts");
+        self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))
+            .expect("guarded connected stop");
     }
     pub(crate) fn transport_death(&mut self, actor: PersonId) {
-        self.interrupt_transport_lift(actor);
-        if !matches!(
-            *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                .expect("location exists"),
-            Location::Carried { .. }
-        ) {
-            self.stop_transport_component(actor);
-        }
+        let fallback = self.transport_default_runtime();
+        let owner = self.host.state.transport.as_ref().unwrap_or(&fallback);
+        let plan = owner
+            .prepare_death_motion(&self.host.storage, actor, self.host.clock().time)
+            .expect("canonical death motion facts");
+        self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))
+            .expect("guarded transport death reaction");
     }
     pub(crate) fn transport_stop_for_force(&mut self, target: PersonId) -> Result<(), Error> {
         if !self.person_index.contains_key(&target) {
             return Err(Error::Unavailable);
         }
-        self.ensure_event_capacity(self.host.state.people.len())?;
         self.stop_transport_component(target);
         Ok(())
     }
@@ -469,187 +349,36 @@ impl Simulation {
         actor: PersonId,
         destination: AreaId,
     ) -> Result<(), Error> {
-        if !self.person_index.contains_key(&actor) || self.host.state.transport.is_none() {
-            return Err(Error::Unavailable);
-        }
-        let Some(Position::Road(position)) = self.transport_position(actor) else {
-            return Err(Error::Unavailable);
-        };
-        let direction_from = if destination == position.to {
-            position.from
-        } else if destination == position.from {
-            position.to
-        } else {
-            return Err(Error::NoRoute);
-        };
-        let reverse = self
-            .host
-            .state
-            .areas
-            .iter()
-            .find(|a| a.id == direction_from)
-            .and_then(|a| a.links.iter().find(|l| l.destination == destination))
-            .map(|l| l.duration)
-            .ok_or(Error::NoRoute)?;
-        // At an exact endpoint, finishing the location transition needs no
-        // zero-length travel leg. Capacity still protects carried dependents.
-        if !self.transport_can_depart(actor) {
-            return Err(Error::Unavailable);
-        }
-        self.ensure_event_capacity(self.host.state.people.len() + 1)?;
-        let at_endpoint = destination == position.from && position.progress.0 == 0
-            || destination == position.to && position.progress == position.duration;
-        let leg = if at_endpoint {
-            None
-        } else {
-            Some(game_transport::retreat(
-                position,
-                destination,
-                reverse,
-                self.host.clock().time,
-            )?)
-        };
-        self.stop_transport_component(actor);
-        self.interrupt_actor_activity(actor);
-        let Some(leg) = leg else {
-            let members = self
-                .host
-                .state
-                .transport
-                .as_ref()
-                .unwrap()
-                .component(&self.host.storage, actor);
-            for member in members {
-                self.clear_transport_arrival(member);
-                let change = self
-                    .host
-                    .state
-                    .transport
-                    .as_ref()
-                    .unwrap()
-                    .prepare_departure(&self.host.storage, &[member]);
-                self.apply_transport_change(change)?;
-                if !matches!(
-                    *game_spatial::location(&self.host.storage, game_ecs::StableId((member).0))
-                        .expect("location exists"),
-                    Location::Carried { .. }
-                ) {
-                    *game_spatial::location_mut(
-                        &mut self.host.storage,
-                        game_ecs::StableId((member).0),
-                    )
-                    .expect("location exists") = Location::AtArea(destination);
-                    self.emit(EventKind::Arrived {
-                        actor: member,
-                        area: destination,
-                    });
-                }
-            }
-            return Ok(());
-        };
-        *game_spatial::location_mut(&mut self.host.storage, game_ecs::StableId((actor).0))
-            .expect("location exists") = Location::InTransit {
-            from: leg.from,
-            to: leg.to,
-            departed: leg.departed,
-            road_start: leg.road_start,
-            arrives: leg.arrives,
-        };
-        self.host
-            .state
-            .due
-            .entry(leg.arrives)
-            .or_default()
-            .push(Due::Arrive(actor));
-        self.emit(EventKind::Departed {
-            actor,
-            from: leg.from,
-            to: leg.to,
-            arrives: leg.arrives,
-        });
-        self.transport_departed(actor);
-        Ok(())
+        let plan = self.prepare_transport_road_return(actor, destination)?;
+        self.apply_motion(plan)
     }
     pub(crate) fn transport_release_confinement(&mut self, target: PersonId) {
-        let Some(group) = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .and_then(|_| game_transport::group(&self.host.storage, target))
-            .filter(|g| g.authority == Authority::Captive)
-            .cloned()
+        let Some(owner) = self.host.state.transport.as_ref() else {
+            return;
+        };
+        let Ok(plan) =
+            owner.prepare_confinement_release(&self.host.storage, target, self.host.clock().time)
         else {
             return;
         };
-        self.stop_transport_component(group.anchor);
-        let Some(position) = self.transport_position(target) else {
-            return;
-        };
-        let shelter = self.health_before_putdown(target);
-        let change = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_remove_group(&self.host.storage, target);
-        self.apply_transport_change(change)
-            .expect("validated group release");
-        *game_spatial::location_mut(&mut self.host.storage, game_ecs::StableId((target).0))
-            .expect("location exists") = position_location(position);
-        if let Position::Area(area) = position {
-            self.index_dependent(target, area);
-        }
-        self.health_after_putdown(target, shelter);
+        self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))
+            .expect("guarded physical release");
     }
     pub(crate) fn transport_birth(&mut self, child: PersonId, gestator: PersonId) {
-        let owner_now = self.host.clock().time;
-        if self.host.state.transport.is_none()
-            || !matches!(self.resolved_location(gestator), Location::InTransit { .. })
-        {
+        let Some(owner) = self.host.state.transport.as_ref() else {
             return;
-        }
-        let prepared = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_newborn(
-                &self.host.storage,
-                child,
-                gestator,
-                owner_now,
-                &self.transport_body_lookup(),
-            )
-            .expect("newborn colocated with actual gestator");
-        let group = prepared.result().clone();
-        let mut batch = game_ecs::Batch::new();
-        let finish = prepared
-            .stage_into(
-                self.host.state.transport.as_ref().unwrap(),
-                &self.host.storage,
-                &self.transport_body_lookup(),
-                owner_now,
-                &mut batch,
-            )
-            .expect("guarded newborn carrying");
-        batch.insert(
-            game_ecs::StableId(child.0),
-            Location::Carried {
-                carrier: group.anchor,
-            },
-        );
-        self.host
-            .storage
-            .apply_batch(batch)
-            .expect("validated newborn carrying rows");
-        finish.finish(self.host.state.transport.as_mut().unwrap());
-        self.clear_transport_arrival(child);
-        self.host.state.people[self.person_index[&child]]
-            .route
-            .clear();
+        };
+        let Ok(plan) = owner.prepare_birth_motion(
+            &self.host.storage,
+            child,
+            gestator,
+            self.host.clock().time,
+            &self.transport_body_lookup(),
+        ) else {
+            return;
+        };
+        self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))
+            .expect("guarded newborn attachment");
         self.reconcile_transport();
     }
     pub(crate) fn transport_guardian_rescue(
@@ -705,89 +434,14 @@ impl Simulation {
         })
     }
     pub(crate) fn reconcile_transport(&mut self) {
-        let owner_now = self.host.clock().time;
-        let Some(_) = &self.host.state.transport else {
+        if self.host.state.transport.is_none() {
+            return;
+        }
+        let Ok(plan) = self.prepare_transport_reconciliation() else {
             return;
         };
-        let Ok(bodies) = self.transport_bodies() else {
-            return;
-        };
-        let Ok(plan) = game_transport::capacity_plan(&self.host.storage, &bodies) else {
-            return;
-        };
-        let mut stopped: BTreeSet<_> = plan.unable;
-        for passenger in plan.overloaded {
-            stopped.extend(
-                game_transport::group(&self.host.storage, passenger)
-                    .unwrap()
-                    .bearers
-                    .iter()
-                    .copied(),
-            );
-        }
-        for (id, body) in &bodies {
-            if (!body.can_walk || body.cargo > body.capacity)
-                && matches!(
-                    *game_spatial::location(&self.host.storage, game_ecs::StableId(id.0))
-                        .expect("location exists"),
-                    Location::InTransit { .. }
-                )
-            {
-                stopped.insert(*id);
-            }
-        }
-        for actor in stopped {
-            self.stop_transport_component(actor);
-        }
-        let change = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_prune_offers(&self.host.storage, owner_now);
-        self.apply_transport_change(change)
-            .expect("guarded expired offers");
-        let stopped: BTreeSet<_> = self
-            .host
-            .state
-            .people
-            .iter()
-            .filter(|p| {
-                matches!(
-                    *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
-                        .expect("location exists"),
-                    Location::StoppedOnRoad { .. }
-                )
-            })
-            .map(|p| p.id)
-            .collect();
-        let change = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_forget_routes(&self.host.storage, &stopped);
-        self.apply_transport_change(change)
-            .expect("validated route cleanup");
-        let dependents: Vec<_> = game_transport::groups(&self.host.storage)
-            .map(|(id, _)| id)
-            .filter_map(|id| {
-                if let Location::AtArea(area) = self.resolved_location(id) {
-                    game_physiology::body(&self.host.storage, id)
-                        .unwrap()
-                        .vitals
-                        .alive
-                        .then_some((id, area))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for (child, area) in dependents {
-            self.index_dependent(child, area);
-        }
+        self.apply_motion(plan)
+            .expect("guarded transport reconciliation");
     }
     fn carry_permission(
         &self,
@@ -795,36 +449,13 @@ impl Simulation {
         bearers: &BTreeSet<PersonId>,
         accepted: bool,
     ) -> Permission {
-        let body = game_physiology::body(&self.host.storage, passenger).unwrap();
-        let incapacitated = !body.vitals.alive
-            || body.vitals.health == 0
-            || self
-                .host
-                .state
-                .combat
-                .as_ref()
-                .is_some_and(|w| body.vitals.health <= w.rules.incapacitation);
-        let yielded = self
-            .host
-            .state
-            .force
-            .as_ref()
-            .and_then(|w| w.yielded.get(&passenger))
-            .is_some_and(|y| bearers.is_subset(&y.captors));
-        let captive = self
-            .host
-            .state
-            .combat
-            .as_ref()
-            .and_then(|w| w.captivity.get(&passenger))
-            .is_some_and(|c| bearers.contains(&c.captor));
-        Permission {
-            passenger_accepted: accepted,
-            unable_to_consent: incapacitated || !self.independent(passenger),
-            yielded,
-            captive,
-            newborn: false,
-        }
+        Permission::from_facts(
+            bearers,
+            accepted,
+            &self
+                .transport_permission_facts(passenger)
+                .expect("known carry passenger"),
+        )
     }
     fn begin_transport_lift(
         &mut self,
@@ -832,285 +463,37 @@ impl Simulation {
         bearers: BTreeSet<PersonId>,
         accepted: bool,
     ) -> Result<(), Error> {
-        if bearers
-            .iter()
-            .any(|id| !self.transport_same_place(*id, passenger) || self.transport_is_moving(*id))
-            || self.transport_is_moving(passenger)
-        {
-            return Err(Error::Unavailable);
-        }
-        let permission = self.carry_permission(passenger, &bearers, accepted);
-        let prepared = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_begin_lift(
-                &self.host.storage,
-                passenger,
-                bearers,
-                permission,
-                self.host.clock().time,
-                &self.transport_body_lookup(),
-            )?;
-        let lift = prepared.result().clone();
-        let actors = lift.participants(matches!(
-            self.host.storage.activity(passenger),
-            Some(Activity::Escape { .. })
-        ));
-        let interruptions =
-            self.prepare_interruptions(&actors, commands::ActivityOwner::Transport)?;
-        self.host
-            .preflight_records(0, interruptions.event_count()?, 0)?;
-        let finals = lift
-            .bearers
-            .iter()
-            .map(|bearer| {
-                (
-                    *bearer,
-                    Activity::Lift {
-                        passenger,
-                        completes: lift.completes,
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let mut batch = game_ecs::Batch::new();
-        let mut interrupted = interruptions.stage_into(self, &mut batch, &finals)?;
-        let finish = prepared.stage_into(
-            self.host.state.transport.as_ref().unwrap(),
-            &self.host.storage,
-            &self.transport_body_lookup(),
-            self.host.clock().time,
-            &mut batch,
-        )?;
-        self.host.storage.apply_batch(batch)?;
-        finish.finish(self.host.state.transport.as_mut().unwrap());
-        for actor in actors {
-            interrupted.finish_actor(self, actor);
-        }
-        for bearer in &lift.bearers {
-            self.host
-                .state
-                .due
-                .entry(lift.completes)
-                .or_default()
-                .push(Due::Physical(*bearer));
-        }
-        Ok(())
+        let plan = self.prepare_transport_lift_start(passenger, bearers, accepted)?;
+        self.apply_motion(plan)
     }
     pub(crate) fn complete_transport_lift(&mut self, actor: PersonId) {
-        let now = self.host.clock().time;
-        let Some(runtime) = self.host.state.transport.as_ref() else {
-            return;
-        };
-        let Some(lift) = game_transport::lifts(&self.host.storage)
-            .map(|(_, row)| row)
-            .find(|row| row.bearers.contains(&actor))
-            .cloned()
-        else {
-            return;
-        };
-        let Ok(prepared) = runtime.prepare_complete_lift(
-            &self.host.storage,
-            lift.passenger,
-            now,
-            &self.transport_body_lookup(),
-        ) else {
+        let Ok(plan) = self.prepare_transport_lift_finish(actor) else {
             self.interrupt_transport_lift(actor);
             return;
         };
-        let group = prepared.result().clone();
-        let actors = lift.participants(matches!(
-            self.host.storage.activity(group.passenger),
-            Some(Activity::Escape { .. })
-        ));
-        let operation = (|| -> Result<_, Error> {
-            let interruptions =
-                self.prepare_interruptions(&actors, commands::ActivityOwner::Transport)?;
-            self.host
-                .preflight_records(0, interruptions.event_count()?, 0)?;
-            let mut batch = game_ecs::Batch::new();
-            let interrupted = interruptions.stage_into(self, &mut batch, &BTreeMap::new())?;
-            let finish = prepared.stage_into(
-                self.host.state.transport.as_ref().unwrap(),
-                &self.host.storage,
-                &self.transport_body_lookup(),
-                now,
-                &mut batch,
-            )?;
-            batch.insert(
-                game_ecs::StableId(group.passenger.0),
-                Location::Carried {
-                    carrier: group.anchor,
-                },
-            );
-            self.host.storage.apply_batch(batch)?;
-            finish.finish(self.host.state.transport.as_mut().unwrap());
-            Ok(interrupted)
-        })();
-        let Ok(mut interrupted) = operation else {
+        if self.apply_motion(plan).is_err() {
             self.interrupt_transport_lift(actor);
-            return;
-        };
-        for actor in actors {
-            interrupted.finish_actor(self, actor);
         }
-        self.clear_transport_arrival(group.passenger);
-        for dependents in self.dependent_index.values_mut() {
-            dependents.remove(&group.passenger);
-        }
-        self.host.state.people[self.person_index[&group.passenger]]
-            .route
-            .clear();
     }
     pub(crate) fn interrupt_transport_lift(&mut self, actor: PersonId) {
-        let Some(runtime) = self.host.state.transport.as_ref() else {
+        let Some(owner) = self.host.state.transport.as_ref() else {
             return;
         };
-        let prepared = runtime.prepare_cancel_lifts(&self.host.storage, &[actor]);
-        let lifts = self
-            .apply_transport_change(prepared)
-            .expect("guarded native lift cancellation");
-        for lift in lifts {
-            for bearer in lift.bearers {
-                if matches!(*self.host.storage.activity(bearer).unwrap(),Activity::Lift {passenger,..} if passenger==lift.passenger)
-                {
-                    *self.host.storage.activity_mut(bearer).unwrap() = Activity::Idle;
-                    for due in self.host.state.due.values_mut() {
-                        due.retain(|d| !matches!(d,Due::Physical(id) if *id==bearer));
-                    }
-                }
-            }
-        }
-        self.host.state.due.retain(|_, due| !due.is_empty());
-    }
-    pub(crate) fn transport_arrive(&mut self, actor: PersonId) -> bool {
-        let Some(approach) = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .and_then(|_| game_transport::approach_job(&self.host.storage, actor))
-            .cloned()
-        else {
-            return false;
-        };
-        if approach.completes != self.host.clock().time {
-            return false;
-        }
-        let change = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_finish_approach(&self.host.storage, actor, self.host.clock().time)
-            .expect("validated arrival");
-        self.apply_transport_change(change)
-            .expect("validated approach completion");
-        let position = Position::Road(approach.target);
-        *game_spatial::location_mut(&mut self.host.storage, game_ecs::StableId((actor).0))
-            .expect("location exists") = position_location(position);
-        self.host.state.people[self.person_index[&actor]]
-            .route
-            .clear();
-        self.emit(EventKind::Interrupted { actor });
-        true
+        let plan = owner.prepare_lift_cancellation_motion(
+            &self.host.storage,
+            actor,
+            self.host.clock().time,
+        );
+        self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))
+            .expect("guarded lift action reactions");
     }
     pub(crate) fn transport_approach_road(
         &mut self,
         actor: PersonId,
         target: RoadPosition,
     ) -> Result<(), Error> {
-        if !self.transport_can_depart(actor) || self.host.state.transport.is_none() {
-            return Err(Error::Unavailable);
-        }
-        let position = self.transport_position(actor).ok_or(Error::Unavailable)?;
-        let start = match position {
-            Position::Area(endpoint) => RoadPosition {
-                progress: if endpoint == target.from {
-                    SimDuration(0)
-                } else if endpoint == target.to {
-                    target.duration
-                } else {
-                    return Err(Error::Unavailable);
-                },
-                ..target
-            },
-            Position::Road(point) => point,
-        };
-        let link = |from: AreaId, to: AreaId| {
-            self.host
-                .state
-                .areas
-                .iter()
-                .find(|a| a.id == from)
-                .and_then(|a| a.links.iter().find(|l| l.destination == to))
-                .map(|l| l.duration)
-        };
-        let original = link(target.from, target.to).ok_or(Error::NoRoute)?;
-        if target.duration != original {
-            return Err(Error::Unavailable);
-        }
-        let forward = original;
-        let reverse = link(target.to, target.from).unwrap_or(SimDuration(0));
-        let (leg, approach) =
-            game_transport::approach_from(start, target, forward, reverse, self.host.clock().time)?;
-        if !self.host.state.decisions.as_ref().is_none_or(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .unwrap()
-                .routes
-                .get(&leg.from)
-                .is_some_and(|links| links.contains_key(&leg.to))
-        }) {
-            return Err(Error::NoRoute);
-        }
-        self.ensure_event_capacity(self.host.state.people.len() + 1)?;
-        self.interrupt_actor_activity(actor);
-        self.clear_transport_arrival(actor);
-        let change = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_paused_approach(&self.host.storage, actor, None);
-        self.apply_transport_change(change)?;
-        self.leave_shelter_on_movement(actor);
-        let p = &mut self.host.state.people[self.person_index[&actor]];
-        *game_spatial::location_mut(&mut self.host.storage, game_ecs::StableId((actor).0))
-            .expect("location exists") = Location::InTransit {
-            from: leg.from,
-            to: leg.to,
-            departed: leg.departed,
-            road_start: leg.road_start,
-            arrives: leg.arrives,
-        };
-        p.route.clear();
-        self.host
-            .state
-            .due
-            .entry(approach.completes)
-            .or_default()
-            .push(Due::Arrive(actor));
-        let change = self
-            .host
-            .state
-            .transport
-            .as_ref()
-            .unwrap()
-            .prepare_approach(&self.host.storage, actor, Some(approach.clone()));
-        self.apply_transport_change(change)?;
-        self.emit(EventKind::Departed {
-            actor,
-            from: leg.from,
-            to: leg.to,
-            arrives: approach.completes,
-        });
-        self.transport_departed(actor);
-        Ok(())
+        let plan = self.prepare_transport_approach(actor, target)?;
+        self.apply_motion(plan)
     }
     pub(crate) fn transport_command(
         &mut self,
@@ -1124,34 +507,8 @@ impl Simulation {
         }
         match action {
             Action::OfferCarry { passenger } => {
-                owner_now
-                    .0
-                    .checked_add(
-                        self.host
-                            .state
-                            .transport
-                            .as_ref()
-                            .unwrap()
-                            .rules
-                            .lift_time
-                            .0,
-                    )
-                    .ok_or(Error::Overflow)?;
-                if !self.person_index.contains_key(passenger)
-                    || self.transport_is_moving(actor)
-                    || self.transport_is_moving(*passenger)
-                    || !self.transport_same_place(actor, *passenger)
-                {
-                    return Err(Error::Unavailable);
-                }
-                let change = self.host.state.transport.as_ref().unwrap().prepare_offer(
-                    &self.host.storage,
-                    actor,
-                    *passenger,
-                    owner_now,
-                    &self.transport_body_lookup(),
-                )?;
-                self.apply_transport_change(change)?;
+                let change = self.prepare_transport_offer(actor, *passenger)?;
+                self.apply_motion(change)?;
                 let bearers = BTreeSet::from([actor]);
                 if self
                     .carry_permission(*passenger, &bearers, false)
@@ -1167,18 +524,8 @@ impl Simulation {
                 }
             }
             Action::AcceptCarry { bearers } => {
-                let set: BTreeSet<_> = bearers.iter().copied().collect();
-                if set.len() != bearers.len()
-                    || !self.independent(actor)
-                    || !game_physiology::body(&self.host.storage, actor)
-                        .unwrap()
-                        .vitals
-                        .alive
-                    || self.combat_restricts(actor)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.begin_transport_lift(actor, set, true)?;
+                let plan = self.prepare_transport_accept(actor, bearers)?;
+                self.apply_motion(plan)?;
             }
             Action::RefuseCarry { bearer } => {
                 let change = self
@@ -1191,34 +538,8 @@ impl Simulation {
                 self.apply_transport_change(change)?;
             }
             Action::JoinCarry { passenger } => {
-                owner_now
-                    .0
-                    .checked_add(
-                        self.host
-                            .state
-                            .transport
-                            .as_ref()
-                            .unwrap()
-                            .rules
-                            .lift_time
-                            .0,
-                    )
-                    .ok_or(Error::Overflow)?;
-                if !self.person_index.contains_key(passenger)
-                    || self.transport_is_moving(actor)
-                    || self.transport_is_moving(*passenger)
-                    || !self.transport_same_place(actor, *passenger)
-                {
-                    return Err(Error::Unavailable);
-                }
-                let change = self.host.state.transport.as_ref().unwrap().prepare_offer(
-                    &self.host.storage,
-                    actor,
-                    *passenger,
-                    owner_now,
-                    &self.transport_body_lookup(),
-                )?;
-                self.apply_transport_change(change)?;
+                let change = self.prepare_transport_offer(actor, *passenger)?;
+                self.apply_motion(change)?;
                 let bearers = self.host.state.transport.as_ref().unwrap().join_bearers(
                     &self.host.storage,
                     &self.transport_body_lookup(),
@@ -1237,139 +558,20 @@ impl Simulation {
                 }
             }
             Action::PutDown { passenger } | Action::WithdrawSupport { passenger } => {
-                let group = game_transport::group(&self.host.storage, *passenger)
-                    .ok_or(Error::Unavailable)?
-                    .clone();
-                if actor != *passenger && !group.bearers.contains(&actor) {
-                    return Err(Error::Unavailable);
-                }
-                if actor == *passenger && (!self.independent(actor) || self.combat_restricts(actor))
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.ensure_event_capacity(self.host.state.people.len())?;
-                self.stop_transport_component(group.anchor);
-                let position = self
-                    .transport_position(*passenger)
-                    .ok_or(Error::Unavailable)?;
-                let shelter = self.health_before_putdown(*passenger);
-                let change = self
-                    .host
-                    .state
-                    .transport
-                    .as_ref()
-                    .unwrap()
-                    .prepare_remove_group(&self.host.storage, *passenger);
-                self.apply_transport_change(change)?;
-                *game_spatial::location_mut(
-                    &mut self.host.storage,
-                    game_ecs::StableId(passenger.0),
-                )
-                .expect("location exists") = position_location(position);
-                if let Position::Area(area) = position {
-                    self.index_dependent(*passenger, area);
-                }
-                self.health_after_putdown(*passenger, shelter);
+                let plan = self.prepare_transport_putdown(actor, *passenger)?;
+                self.apply_motion(plan)?;
             }
             Action::Stop => {
-                if !self.independent(actor)
-                    || !game_physiology::body(&self.host.storage, actor)
-                        .unwrap()
-                        .vitals
-                        .alive
-                    || !matches!(
-                        *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                            .expect("location exists"),
-                        Location::InTransit { .. }
-                    )
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.ensure_event_capacity(self.host.state.people.len())?;
-                self.stop_transport_component(actor);
+                let plan = self.prepare_requested_transport_stop(actor)?;
+                self.apply_motion(plan)?;
             }
             Action::Resume => {
-                if let Some(target) = game_transport::paused_approach(&self.host.storage, actor)
-                    .map(|row| &row.target)
-                    .copied()
-                {
-                    self.transport_approach_road(actor, target)?;
-                    self.host.bump_revision(1)?;
-                    return Ok(());
-                }
-                if !self.transport_can_depart(actor) {
-                    return Err(Error::Unavailable);
-                }
-                let Location::StoppedOnRoad {
-                    from,
-                    to,
-                    progress,
-                    duration,
-                } = *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                    .expect("location exists")
-                else {
-                    return Err(Error::Unavailable);
-                };
-                let destination = game_transport::resume_target(&self.host.storage, actor)
-                    .map(|row| &row.area)
-                    .copied()
-                    .unwrap_or(to);
-                let direction_from = if destination == to { from } else { to };
-                let actual_duration = self
-                    .host
-                    .state
-                    .areas
-                    .iter()
-                    .find(|a| a.id == direction_from)
-                    .and_then(|a| a.links.iter().find(|l| l.destination == destination))
-                    .map(|l| l.duration)
-                    .ok_or(Error::NoRoute)?;
-                let leg = game_transport::retreat(
-                    RoadPosition {
-                        from,
-                        to,
-                        progress,
-                        duration,
-                    },
-                    destination,
-                    actual_duration,
-                    owner_now,
-                )?;
-                self.ensure_event_capacity(self.host.state.people.len() + 1)?;
-                self.interrupt_actor_activity(actor);
-                *game_spatial::location_mut(
-                    &mut self.host.storage,
-                    game_ecs::StableId((actor).0),
-                )
-                .expect("location exists") = Location::InTransit {
-                    from: leg.from,
-                    to: leg.to,
-                    departed: leg.departed,
-                    road_start: leg.road_start,
-                    arrives: leg.arrives,
-                };
-                self.host
-                    .state
-                    .due
-                    .entry(leg.arrives)
-                    .or_default()
-                    .push(Due::Arrive(actor));
-                self.emit(EventKind::Departed {
-                    actor,
-                    from: leg.from,
-                    to: leg.to,
-                    arrives: leg.arrives,
-                });
-                self.transport_departed(actor);
+                let plan = self.prepare_transport_resume(actor)?;
+                self.apply_motion(plan)?;
             }
             Action::ReturnToArea { destination } => {
-                if !matches!(
-                    self.resolved_location(actor),
-                    Location::StoppedOnRoad { .. }
-                ) {
-                    return Err(Error::Unavailable);
-                }
-                self.transport_retreat(actor, *destination)?;
+                let plan = self.prepare_transport_return_request(actor, *destination)?;
+                self.apply_motion(plan)?;
             }
             Action::ApproachRoad {
                 from,
@@ -1582,12 +784,18 @@ impl Simulation {
         reader: &impl game_transport::BodyFacts,
     ) -> Option<BTreeMap<PersonId, Body>> {
         let position = self.transport_position(actor)?;
-        self.host
-            .state
-            .people
-            .iter()
-            .filter(|person| self.transport_position(person.id) == Some(position))
-            .map(|person| Some((person.id, reader.body(person.id)?)))
+        let roster = game_spatial::LocalRoster::build(&self.host.storage).ok()?;
+        roster
+            .position_candidates(game_ecs::StableId(actor.0))
+            .ok()?
+            .into_iter()
+            .map(|id| PersonId(id.0))
+            .filter(|actor| self.person_index.contains_key(actor))
+            .filter(|actor| {
+                self.transport_position(*actor)
+                    .is_some_and(|candidate| candidate == position)
+            })
+            .map(|actor| Some((actor, reader.body(actor)?)))
             .collect()
     }
     pub(crate) fn available_transport_commands(&self, actor: PersonId) -> Vec<Command> {
@@ -1619,54 +827,97 @@ impl Simulation {
     }
 }
 pub(crate) fn location_position(location: &Location, now: SimTime) -> Result<Position, Error> {
-    match *location {
-        Location::AtArea(area) => Ok(Position::Area(area)),
-        Location::InTransit {
-            from,
-            to,
-            departed,
-            road_start,
-            arrives,
-        } => game_transport::Leg {
-            from,
-            to,
-            departed,
-            road_start,
-            arrives,
-        }
-        .position(now),
-        Location::StoppedOnRoad {
-            from,
-            to,
-            progress,
-            duration,
-        } => Ok(Position::Road(RoadPosition {
-            from,
-            to,
-            progress,
-            duration,
-        })),
-        Location::Carried { .. } => Err(Error::Unavailable),
+    game_transport::position_from_location(location, now)
+}
+#[cfg(test)]
+fn position_location(position: Position) -> Location {
+    game_transport::location_from_position(position)
+}
+
+struct TransportSaveFacts<'a> {
+    state: &'a CanonicalState<'a>,
+    actors: BTreeSet<PersonId>,
+}
+impl game_transport::RouteReferences for TransportSaveFacts<'_> {
+    fn location(&self, actor: PersonId) -> Option<&Location> {
+        self.actors
+            .contains(&actor)
+            .then(|| game_spatial::location(self.state.components, game_ecs::StableId(actor.0)))
+            .flatten()
+    }
+    fn link(&self, from: AreaId, to: AreaId) -> bool {
+        self.state
+            .state
+            .areas
+            .iter()
+            .find(|area| area.id == from)
+            .is_some_and(|area| area.links.iter().any(|link| link.destination == to))
     }
 }
-fn position_location(position: Position) -> Location {
-    match position {
-        Position::Area(area) => Location::AtArea(area),
-        Position::Road(RoadPosition {
-            from,
-            to,
-            progress,
-            duration,
-        }) => Location::StoppedOnRoad {
-            from,
-            to,
-            progress,
-            duration,
-        },
+impl game_transport::TransportReferences for TransportSaveFacts<'_> {
+    fn lifting(&self, actor: PersonId) -> Option<(PersonId, SimTime)> {
+        match self.state.components.activity(actor)? {
+            Activity::Lift {
+                passenger,
+                completes,
+            } => Some((*passenger, *completes)),
+            _ => None,
+        }
+    }
+    fn lifters(&self) -> impl Iterator<Item = (PersonId, PersonId, SimTime)> {
+        self.state
+            .components
+            .activities()
+            .filter_map(|(actor, activity)| match activity {
+                Activity::Lift {
+                    passenger,
+                    completes,
+                } => Some((actor, *passenger, *completes)),
+                _ => None,
+            })
+    }
+}
+impl game_transport::MotionReferences for TransportSaveFacts<'_> {
+    fn actors(&self) -> impl Iterator<Item = PersonId> {
+        self.actors.iter().copied()
+    }
+    fn arrivals(&self) -> impl Iterator<Item = (PersonId, SimTime)> {
+        self.state.state.due.iter().flat_map(|(at, due)| {
+            due.iter().filter_map(move |due| match due {
+                Due::Arrive(actor) => Some((*actor, *at)),
+                _ => None,
+            })
+        })
+    }
+    fn alive(&self, actor: PersonId) -> Option<bool> {
+        game_physiology::body(self.state.components, actor).map(|body| body.vitals.alive)
+    }
+    fn physical_enabled(&self) -> bool {
+        self.state.state.physical.is_some()
+    }
+    fn area_exists(&self, area: AreaId) -> bool {
+        self.state.state.areas.iter().any(|row| row.id == area)
+    }
+    fn duration(&self, from: AreaId, to: AreaId) -> Option<SimDuration> {
+        self.state
+            .state
+            .areas
+            .iter()
+            .find(|area| area.id == from)?
+            .links
+            .iter()
+            .find(|link| link.destination == to)
+            .map(|link| link.duration)
     }
 }
 
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
+    let facts = TransportSaveFacts {
+        state,
+        actors: state.state.people.iter().map(|person| person.id).collect(),
+    };
+    game_transport::validate_routes(state.components, &facts)?;
+    game_transport::validate_motion(state.components, &facts, state.time)?;
     let Some(w) = &state.state.transport else {
         return game_transport::validate_absent(state.components);
     };
@@ -1700,60 +951,30 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         };
         let cargo = cargo_by_actor.get(&p.id).copied().unwrap_or(0);
         let position = location_position(&resolved[&p.id], state.time).map_err(|_| fail())?;
-        if let Location::Carried { carrier } =
-            *game_spatial::location(state.components, game_ecs::StableId((p.id).0))
-                .ok_or_else(fail)?
-        {
-            if !game_transport::group(state.components, p.id).is_some_and(|g| g.anchor == carrier)
-                || !p.route.is_empty()
-            {
-                return Err(fail());
-            }
-        } else if game_transport::group(state.components, p.id).is_some() {
-            return Err(fail());
-        }
-        let can_walk = body.vitals.alive
-            && body.vitals.health > 0
-            && body.vitals.fatigue < physical.rules.fatigue_limit;
         bodies.insert(
             p.id,
-            Body {
+            Body::from_facts(game_transport::BodyInput {
                 position,
                 mass,
                 cargo: Quantity(cargo),
                 capacity: physical::rules_for(state, p.id).carrying_capacity,
-                can_hold: body.vitals.alive
-                    && body.vitals.health > 0
-                    && state
-                        .state
-                        .combat
-                        .as_ref()
-                        .is_none_or(|w| body.vitals.health > w.rules.incapacitation),
-                can_walk,
-                can_bear: can_walk,
-            },
+                alive: body.vitals.alive,
+                health: body.vitals.health,
+                fatigue: body.vitals.fatigue,
+                fatigue_limit: physical.rules.fatigue_limit,
+                independent: true,
+                combat_restricted: false,
+                carried: false,
+                work: game_transport::CarryWork::Idle,
+                incapacitation: state
+                    .state
+                    .combat
+                    .as_ref()
+                    .map(|world| world.rules.incapacitation),
+            }),
         );
     }
-    game_transport::validate_runtime(w, state.components, &bodies, state.time)?;
-    for (id, lift) in game_transport::lifts(state.components) {
-        for bearer in &lift.bearers {
-            if !matches!(*state.components.activity(*bearer).unwrap(),Activity::Lift {passenger,completes} if passenger==id&&completes==lift.completes)
-            {
-                return Err(fail());
-            }
-        }
-    }
-    for (id, activity) in state.components.activities() {
-        if let Activity::Lift {
-            passenger,
-            completes,
-        } = *activity
-            && !game_transport::lift(state.components, passenger)
-                .is_some_and(|l| l.bearers.contains(&id) && l.completes == completes)
-        {
-            return Err(fail());
-        }
-    }
+    game_transport::validate_composition(w, state.components, &bodies, &facts, state.time)?;
     Ok(())
 }
 
@@ -2465,9 +1686,8 @@ mod connected_tests {
     #[test]
     fn a_carried_child_in_battle_requires_the_anchors_actual_tactical_reach() {
         let (mut sim, mother, child) = traveling_birth(1);
-        sim.host.state.people[sim.person_index[&mother]]
-            .route
-            .clear();
+        game_transport::replace_route(&mut sim.host.storage, mother, Vec::new())
+            .expect("actor route");
         game_physiology::body_mut(&mut sim.host.storage, mother)
             .unwrap()
             .vitals

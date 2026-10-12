@@ -1418,7 +1418,8 @@ mod tests {
         for person in &mut sim.host.state.people {
             *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId((person.id).0))
                 .expect("location exists") = Location::AtArea(village);
-            person.route.clear();
+            game_transport::replace_route(&mut sim.host.storage, person.id, Vec::new())
+                .expect("actor route");
         }
         sim.host
             .state

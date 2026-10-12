@@ -269,5 +269,11 @@ fn replacing_a_route_with_the_current_leg_endpoint_stops_after_that_leg() {
     sim.advance(SimDuration(130_000)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
     assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
-    assert!(sim.canonical_state().state.people[0].route.is_empty());
+    assert!(
+        game_transport::route_steps(
+            sim.canonical_state().components,
+            sim.canonical_state().state.people[0].id
+        )
+        .is_empty()
+    );
 }

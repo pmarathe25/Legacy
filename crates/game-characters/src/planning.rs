@@ -1047,26 +1047,7 @@ pub fn known_path(
     origin: AreaId,
     destination: AreaId,
 ) -> Result<(Vec<AreaId>, SimDuration), Error> {
-    let mut frontier = BTreeSet::from([(0_u64, Vec::<AreaId>::new(), origin)]);
-    let mut visited = BTreeSet::new();
-    while let Some((cost, path, area)) = frontier.pop_first() {
-        if !visited.insert(area) {
-            continue;
-        }
-        if area == destination {
-            return Ok((path, SimDuration(cost)));
-        }
-        for (to, duration) in graph.get(&area).into_iter().flatten() {
-            let mut next = path.clone();
-            next.push(*to);
-            frontier.insert((
-                cost.checked_add(duration.0).ok_or(Error::Overflow)?,
-                next,
-                *to,
-            ));
-        }
-    }
-    Err(Error::NoRoute)
+    game_spatial::shortest_path(graph, origin, destination)
 }
 
 #[cfg(test)]

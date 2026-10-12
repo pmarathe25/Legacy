@@ -538,6 +538,7 @@ dependencies = [
  "game-ecs",
  "game-genetics",
  "game-logistics",
+ "game-spatial",
  "serde",
  "serde_json",
 ]
@@ -828,6 +829,9 @@ version = "0.1.0"
 dependencies = [
  "game-core",
  "game-ecs",
+ "game-health",
+ "game-spatial",
+ "game-world",
  "serde",
  "serde_json",
 ]

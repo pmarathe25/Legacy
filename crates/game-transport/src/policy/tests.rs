@@ -105,3 +105,77 @@ fn lift_participant_order_preserves_an_escaping_passengers_action() {
     );
     assert_eq!(lift.participants(true), vec![PersonId(1), PersonId(2)]);
 }
+
+#[test]
+fn growth_boundary_finds_first_overload_and_reads_only_connected_bodies() {
+    let (runtime, _, bodies) = fixture();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_spatial::register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    game_spatial::set_location(
+        &mut store,
+        game_ecs::StableId(1),
+        Location::InTransit {
+            from: AreaId(10),
+            to: AreaId(11),
+            departed: SimTime(0),
+            arrives: SimTime(100),
+            road_start: None,
+        },
+    )
+    .unwrap();
+    insert_group(&mut store, PersonId(3), group_row()).unwrap();
+    struct Growth {
+        bodies: BTreeMap<PersonId, Body>,
+        reads: std::cell::RefCell<BTreeSet<PersonId>>,
+    }
+    impl GrowingBodyFacts for Growth {
+        fn body_at(&self, actor: PersonId, at: SimTime) -> Option<Body> {
+            self.reads.borrow_mut().insert(actor);
+            let mut body = self.bodies.get(&actor)?.clone();
+            if actor == PersonId(3) {
+                body.mass.0 += at.0 * 1_000;
+            }
+            Some(body)
+        }
+    }
+    let growth = Growth {
+        bodies,
+        reads: Default::default(),
+    };
+    assert_eq!(
+        runtime
+            .growth_boundary(&store, SimTime(0), SimTime(10), &growth)
+            .unwrap(),
+        SimTime(5)
+    );
+    assert_eq!(
+        *growth.reads.borrow(),
+        BTreeSet::from([PersonId(1), PersonId(2), PersonId(3)])
+    );
+    assert_eq!(
+        runtime
+            .growth_boundary(&store, SimTime(0), SimTime(4), &growth)
+            .unwrap(),
+        SimTime(4)
+    );
+    assert_eq!(
+        runtime.growth_boundary(&store, SimTime(10), SimTime(9), &growth),
+        Err(Error::Overflow)
+    );
+    game_spatial::set_location(
+        &mut store,
+        game_ecs::StableId(1),
+        Location::AtArea(AreaId(10)),
+    )
+    .unwrap();
+    growth.reads.borrow_mut().clear();
+    assert_eq!(
+        runtime
+            .growth_boundary(&store, SimTime(0), SimTime(10), &growth)
+            .unwrap(),
+        SimTime(10)
+    );
+    assert!(growth.reads.borrow().is_empty());
+}

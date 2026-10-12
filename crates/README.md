@@ -48,7 +48,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-agriculture` | `game-ecs`, `game-land`; `game-content` (optional) | Field, crop, soil and cultivation joins; crop-definition loading |
 | `game-armies` | `game-missions` | Objectives for autonomous leaders |
 | `game-cargo` | `game-ecs` | Inventory components, conserved loading and transfer effects, and typed stock access |
-| `game-characters` | `game-ecs`, `game-logistics`; `game-genetics` (optional) | Personal mind and temperament components; material goals; opaque inheritable temperament loci |
+| `game-characters` | `game-ecs`, `game-logistics`, `game-spatial`; `game-genetics` (optional) | Personal mind and temperament components; material goals; shared known-graph navigation; opaque inheritable temperament loci |
 | `game-conflict` | `game-ecs`, `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
 | `game-ecology` | `game-ecs`, `game-land`, `game-logistics` | Natural resources, plots, gathering, personal knowledge and request components; shared soil; sparse daily renewal effects; typed material offers |
 | `game-environment` | `game-ecs`; `game-content` (optional) | Local climate and weather components; typed calendar and climate loading |
@@ -61,7 +61,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-openings` | `game-content`, `game-ecology`, `game-property` | Authored opening and settlement declarations, validated independently of simulation startup |
 | `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components and numerical integration; opaque inheritable physical characteristics |
 | `game-projects` | `game-ecs`, `game-agreements`, `game-workshop` | Native plans, enterprises, construction and personal knowledge; guarded material funding and selected-recipe accounts |
-| `game-transport` | `game-ecs` | Native carrying groups, lift offers and jobs, approaches, paused routes and dated support knowledge; guarded sparse changes |
+| `game-transport` | `game-ecs`, `game-spatial` | Native routes, carrying groups, lift offers and jobs, approaches, paused routes and dated support knowledge; guarded motion, physical placement and shared navigation |
 | `game-property` | `game-ecs` | Native claims, incidents, stock provenance, personal attitudes, dated knowledge, actions and request deadlines; guarded sparse changes |
 | `game-realm` | `game-agreements`, `game-missions` | Diplomatic terms and objectives |
 | `game-society` | `game-agreements`, `game-ecs`, `game-property` | Native obligations and physical custody for institutional duties, exclusions and disputes |
@@ -80,9 +80,13 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 
 **Composed changes:** Each owner prepares and validates its changes. Owners can append their component effects to one shared batch, which generic storage infrastructure validates and applies atomically. Assembly can order these operations and bind receipts to handlers; the receiving feature owns the reaction to a receipt. Cross-feature tests should construct the relevant owners and a small store directly, without the playable simulation. The dependency guard in `game-assembly/tests/domain_boundaries.rs` forbids features from importing assembly, including through test dependencies. This guard protects dependency direction; source review and executable behavior tests also establish policy ownership.
 
+Owner tests may use the generic `game-world` host to exercise publication counters and atomic admission. Production features cannot depend on that host; no feature may import the playable assembly even for tests.
+
 **Engine independence:** Feature interfaces expose plain values, borrowed component rows, and typed prepared changes. They do not expose engine entity handles, derives, query types, or schedules. Replacing the engine changes the private `game-ecs` adapter; its callers keep the same interfaces. Systems order authoritative results by stable game IDs because engine iteration order is unspecified.
 
 **Shared space:** Features share `game-core::AreaId` and `Location`, rather than defining separate maps. Plots and fields refer to an area; `game-land` owns their shared soil component; weather cells use the same area IDs. Converting a plot into a field retains that soil on the same entity. `Location::cell()` keeps a road segment in its departure cell until its scheduled arrival; carried entities use their resolved carrier location. `game-spatial` owns location storage and carrier-chain resolution; transport owns carrying decisions and movement effects. Missing anchors and cycles are explicit errors. Different spatial resolutions will use explicit mappings within this common model.
+
+Spatial's borrowed `LocalRoster` supplies raw stationary, resolved area, cell and road candidate IDs to local systems. Build it once per immutable phase, drop its borrow before changing locations or entity membership, and rebuild for the next phase. It is shared query infrastructure; features retain their own eligibility and exact contact rules. Spatial also owns deterministic shortest paths over plain directed area graphs.
 
 **Local inputs:** Environment owns local climate and weather components on area entities. Agriculture joins `Field`, `Crop`, and `Soil` by `SiteId`, then looks up weather for the field's area. Crop growth consumes agriculture's `WeatherFacts`, supplied by the composition from environment observations. Agriculture has no dependency on environment's runtime or global climate state.
 

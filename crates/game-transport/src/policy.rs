@@ -78,3 +78,96 @@ impl Lift {
 #[cfg(test)]
 #[path = "policy/tests.rs"]
 mod tests;
+
+/// Sparse anchored descendants for receiving movement reactions. Body reads
+/// and unrelated actor rows are unnecessary; validation makes these links
+/// reciprocal with Spatial's actual carried locations.
+pub fn carrier_family(store: &game_ecs::Store, actor: PersonId) -> Vec<PersonId> {
+    let mut children = BTreeMap::<PersonId, Vec<PersonId>>::new();
+    for (_, group) in groups(store) {
+        children
+            .entry(group.anchor)
+            .or_default()
+            .push(group.passenger);
+    }
+    let mut result = Vec::new();
+    let mut pending = vec![actor];
+    let mut seen = BTreeSet::new();
+    while let Some(actor) = pending.pop() {
+        if !seen.insert(actor) {
+            continue;
+        }
+        result.push(actor);
+        if let Some(children) = children.get(&actor) {
+            pending.extend(children);
+        }
+    }
+    result
+}
+
+pub trait GrowingBodyFacts {
+    fn body_at(&self, actor: PersonId, at: SimTime) -> Option<Body>;
+}
+impl Runtime {
+    pub fn growth_boundary(
+        &self,
+        store: &game_ecs::Store,
+        now: SimTime,
+        limit: SimTime,
+        facts: &impl GrowingBodyFacts,
+    ) -> Result<SimTime, Error> {
+        let elapsed = limit.0.checked_sub(now.0).ok_or(Error::Overflow)?;
+        let moving = groups(store)
+            .filter(|(_, group)| {
+                matches!(
+                    game_spatial::resolve(store, game_ecs::StableId(group.anchor.0)),
+                    Ok(Location::InTransit { .. })
+                )
+            })
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>();
+        if moving.is_empty() || elapsed == 0 {
+            return Ok(limit);
+        }
+        let linked = super::changes::connected(store, &moving);
+        let rows = groups(store)
+            .filter(|(_, group)| {
+                linked.contains(&group.passenger) || !group.bearers.is_disjoint(&linked)
+            })
+            .map(|(_, group)| group)
+            .collect::<Vec<_>>();
+        struct At<'a, F> {
+            facts: &'a F,
+            at: SimTime,
+        }
+        impl<F: GrowingBodyFacts> BodyFacts for At<'_, F> {
+            fn body(&self, actor: PersonId) -> Option<Body> {
+                self.facts.body_at(actor, self.at)
+            }
+        }
+        let overloaded = |elapsed| -> Result<bool, Error> {
+            let plan = capacity_plan_rows(
+                rows.iter().copied(),
+                &At {
+                    facts,
+                    at: SimTime(now.0 + elapsed),
+                },
+                None,
+            )?;
+            Ok(!plan.overloaded.is_disjoint(&moving))
+        };
+        if !overloaded(elapsed)? {
+            return Ok(limit);
+        }
+        let (mut lower, mut upper) = (1, elapsed);
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2;
+            if overloaded(middle)? {
+                upper = middle;
+            } else {
+                lower = middle + 1;
+            }
+        }
+        Ok(SimTime(now.0 + lower))
+    }
+}

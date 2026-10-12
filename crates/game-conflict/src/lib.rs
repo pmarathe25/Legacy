@@ -619,3 +619,6 @@ mod release;
 pub use release::*;
 mod allegiance;
 pub use allegiance::*;
+
+mod contact;
+pub use contact::TacticalPlacement;

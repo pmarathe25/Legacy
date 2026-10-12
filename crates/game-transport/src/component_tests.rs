@@ -57,14 +57,14 @@ fn response() -> Response {
     }
 }
 #[test]
-fn seven_columns_admit_only_intrinsic_rows_without_metadata_entity_maps() {
+fn eight_columns_admit_only_intrinsic_rows_without_metadata_entity_maps() {
     let (runtime, mut store, _) = fixture();
     assert_eq!(
         schema()
             .keys()
             .filter(|key| key.starts_with("transport/"))
             .count(),
-        7
+        8
     );
     let before = store.snapshot().unwrap();
     assert!(insert_offer_inbox(&mut store, PersonId(3), OfferInbox::default()).is_err());

@@ -1181,3 +1181,7 @@ impl Runtime {
 #[cfg(test)]
 #[path = "action_staging_tests.rs"]
 mod staging_tests;
+
+#[path = "placement.rs"]
+mod placement;
+pub use placement::*;

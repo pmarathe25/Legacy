@@ -1,4 +1,4 @@
-//! Seven optional personal transport columns share the host's entity identity.
+//! Eight optional personal transport columns share the host's entity identity.
 use crate::*;
 use game_ecs::{Schema, StableId, Store};
 
@@ -145,6 +145,7 @@ impl Response {
     }
 }
 pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
+    schema.register::<Route>("transport/route", Route::validate)?;
     schema.register::<CarryGroup>("transport/group", CarryGroup::validate)?;
     schema.register::<OfferInbox>("transport/offers", OfferInbox::validate)?;
     schema.register::<Lift>("transport/lift", Lift::validate)?;

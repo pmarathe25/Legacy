@@ -100,7 +100,6 @@ pub struct Person {
     pub work_units: u64,
     pub work_remainder: u64,
     pub work_rate: u64,
-    pub route: Vec<AreaId>,
     pub hunger_exempt: bool,
 }
 
@@ -541,7 +540,6 @@ impl Simulation {
                 work_units: 0,
                 work_remainder: 0,
                 work_rate: 1_000 + i as u64 % 7,
-                route: Vec::new(),
                 hunger_exempt: role == Role::Guardian,
             });
             game_spatial::set_location(
@@ -730,7 +728,7 @@ impl Simulation {
                         )
                         .expect("location exists"),
                         Location::InTransit { .. }
-                    ) && !ruler.route.is_empty()
+                    ) && !game_transport::route_steps(&self.host.storage, ruler.id).is_empty()
             })
             .filter(|a| {
                 known_routes.map_or_else(
@@ -1168,123 +1166,29 @@ impl Simulation {
         destination: AreaId,
     ) -> Result<(), Error> {
         self.host.preflight_records(0, 0, 1)?;
-        let index = *self.person_index.get(&actor).ok_or(Error::Unavailable)?;
-        if self.combat_restricts(actor) || !self.transport_can_depart(actor) {
-            return Err(Error::Unavailable);
-        }
-        if !self.independent(actor)
-            || self.host.state.physical.as_ref().is_some_and(|w| {
-                !game_physiology::body(&self.host.storage, actor)
-                    .expect("body exists")
-                    .vitals
-                    .alive
-                    || game_physiology::body(&self.host.storage, actor)
-                        .expect("body exists")
-                        .vitals
-                        .health
-                        == 0
-                    || game_physiology::body(&self.host.storage, actor)
-                        .expect("body exists")
-                        .vitals
-                        .fatigue
-                        >= w.rules.fatigue_limit
-            })
-        {
-            return Err(Error::Unavailable);
-        }
-        if !self.host.state.areas.iter().any(|a| a.id == destination) {
-            return Err(Error::UnknownArea);
-        }
-        let origin = match *game_spatial::location(
-            &self.host.storage,
-            game_ecs::StableId((self.host.state.people[index].id).0),
-        )
-        .expect("location exists")
-        {
-            Location::AtArea(a) => a,
-            Location::InTransit { to, .. } => to,
-            Location::StoppedOnRoad { .. } | Location::Carried { .. } => {
-                return Err(Error::Unavailable);
-            }
-        };
-        let path = if let Some(routes) = self.invocation_routes(actor) {
-            decisions::known_path(&routes, origin, destination)?.0
-        } else if self.host.state.decisions.is_some() {
-            decisions::known_path(
-                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                    .unwrap()
-                    .routes,
-                origin,
-                destination,
-            )?
-            .0
-        } else {
-            self.path(origin, destination)?
-        };
-        if path.is_empty()
-            && (matches!(
-                *game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[index].id).0)
-                )
-                .expect("location exists"),
-                Location::AtArea(_)
-            ) || self.host.state.people[index].route.is_empty())
-        {
-            return Err(Error::AlreadyThere);
-        }
-        let departure = if matches!(
-            *game_spatial::location(
-                &self.host.storage,
-                game_ecs::StableId((self.host.state.people[index].id).0)
-            )
-            .expect("location exists"),
-            Location::AtArea(_)
-        ) {
-            Some(self.departure(origin, path[0])?)
-        } else {
-            None
-        };
-        self.ensure_event_capacity(
-            usize::from(departure.is_some()) + usize::from(self.host.state.development.is_some()),
-        )?;
-        self.interrupt_actor_activity(actor);
-        self.host.state.people[index].route = path;
-        if let Some((to, arrives)) = departure {
-            self.depart(index, origin, to, arrives);
-        }
+        let plan = self.prepare_transport_journey(actor, destination)?;
+        self.apply_motion(plan)?;
         self.host.bump_revision(1)?;
         Ok(())
     }
 
     fn path(&self, origin: AreaId, destination: AreaId) -> Result<Vec<AreaId>, Error> {
-        let mut frontier = BTreeSet::from([(0_u64, Vec::<AreaId>::new(), origin)]);
-        let mut visited = BTreeSet::new();
-        while let Some((cost, path, area)) = frontier.pop_first() {
-            if !visited.insert(area) {
-                continue;
-            }
-            if area == destination {
-                return Ok(path);
-            }
-            let record = self
-                .host
-                .state
-                .areas
-                .iter()
-                .find(|a| a.id == area)
-                .ok_or(Error::NoRoute)?;
-            for link in &record.links {
-                let mut next = path.clone();
-                next.push(link.destination);
-                frontier.insert((
-                    cost.checked_add(link.duration.0).ok_or(Error::Overflow)?,
-                    next,
-                    link.destination,
-                ));
-            }
-        }
-        Err(Error::NoRoute)
+        let graph = self
+            .host
+            .state
+            .areas
+            .iter()
+            .map(|area| {
+                (
+                    area.id,
+                    area.links
+                        .iter()
+                        .map(|link| (link.destination, link.duration))
+                        .collect(),
+                )
+            })
+            .collect();
+        game_spatial::shortest_path(&graph, origin, destination).map(|(path, _)| path)
     }
 
     fn departure(&self, from: AreaId, to: AreaId) -> Result<(AreaId, SimTime), Error> {
@@ -1296,50 +1200,8 @@ impl Simulation {
             .find(|a| a.id == from)
             .and_then(|a| a.links.iter().find(|l| l.destination == to))
             .ok_or(Error::NoRoute)?;
-        Ok((
-            to,
-            SimTime(
-                self.host
-                    .clock()
-                    .time
-                    .0
-                    .checked_add(link.duration.0)
-                    .ok_or(Error::Overflow)?,
-            ),
-        ))
-    }
-
-    fn depart(&mut self, index: usize, from: AreaId, to: AreaId, arrives: SimTime) {
-        let actor = self.host.state.people[index].id;
-        self.leave_shelter_on_movement(actor);
-        if let Some(people) = self.dependent_index.get_mut(&from) {
-            people.remove(&actor);
-        }
-        self.host.state.people[index].route.remove(0);
-        *game_spatial::location_mut(
-            &mut self.host.storage,
-            game_ecs::StableId((self.host.state.people[index].id).0),
-        )
-        .expect("location exists") = Location::InTransit {
-            from,
-            to,
-            departed: self.host.clock().time,
-            arrives,
-            road_start: None,
-        };
-        self.host
-            .state
-            .due
-            .entry(arrives)
-            .or_default()
-            .push(Due::Arrive(actor));
-        self.emit(EventKind::Departed {
-            actor,
-            from,
-            to,
-            arrives,
-        });
-        self.transport_departed(self.host.state.people[index].id);
+        game_transport::area_leg(from, to, link.duration, self.host.clock().time)
+            .map(|leg| (leg.to, leg.arrives))
     }
 
     pub fn advance(&mut self, duration: SimDuration) -> Result<AdvanceResult, Error> {
@@ -1486,7 +1348,8 @@ impl Simulation {
                 }
                 Due::Arrive(id) => {
                     let p = &self.host.state.people[self.person_index[id]];
-                    if let Some(to) = p.route.first() {
+                    if let Some(to) = game_transport::route_steps(&self.host.storage, p.id).first()
+                    {
                         let Location::InTransit { to: from, .. } = *game_spatial::location(
                             &self.host.storage,
                             game_ecs::StableId((p.id).0),
@@ -1827,6 +1690,35 @@ impl Simulation {
         self.commit_environment(environment_output)?;
         self.commit_ecology(ecology_output)?;
         self.host.state.due.remove(&next);
+        let arrivals = due
+            .iter()
+            .filter_map(|event| match event {
+                Due::Arrive(actor) => Some(*actor),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !arrivals.is_empty() {
+            let fallback = self.transport_default_runtime();
+            let owner = self.host.state.transport.as_ref().unwrap_or(&fallback);
+            let plan = owner.prepare_arrivals(&self.host.storage, &arrivals, next)?;
+            let arrived = plan
+                .effects()
+                .iter()
+                .filter_map(|effect| match effect {
+                    game_transport::MotionEffect::Arrived { actor, area } => Some((*actor, *area)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))?;
+            for (actor, area) in arrived {
+                if let Some(destination) = game_transport::route_steps(&self.host.storage, actor)
+                    .first()
+                    .copied()
+                {
+                    continued_journeys.push((actor, area, destination));
+                }
+            }
+        }
         for event in due {
             match event {
                 Due::Review => self
@@ -1836,34 +1728,7 @@ impl Simulation {
                     .entry(SimTime(next.0 + 60_000))
                     .or_default()
                     .push(Due::Review),
-                Due::Arrive(id) => {
-                    if self.transport_arrive(id) {
-                        continue;
-                    }
-                    let index = self.person_index[&id];
-                    if let Location::InTransit { to, .. } = *game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId((self.host.state.people[index].id).0),
-                    )
-                    .expect("location exists")
-                    {
-                        *game_spatial::location_mut(
-                            &mut self.host.storage,
-                            game_ecs::StableId((self.host.state.people[index].id).0),
-                        )
-                        .expect("location exists") = Location::AtArea(to);
-                        self.index_dependent(id, to);
-                        self.emit(EventKind::Arrived {
-                            actor: id,
-                            area: to,
-                        });
-                        if let Some(destination) =
-                            self.host.state.people[index].route.first().copied()
-                        {
-                            continued_journeys.push((id, to, destination));
-                        }
-                    }
-                }
+                Due::Arrive(_) => {}
                 Due::Transfers(_) => {}
                 Due::Age(_) | Due::Birth(_) | Due::CombatRound(_) => {}
                 Due::Physical(actor) => {
@@ -1992,29 +1857,14 @@ impl Simulation {
         // A closing arrival cannot grant another leg before death, exhaustion,
         // or incapacity at that same timestamp has been committed.
         for (actor, origin, destination) in continued_journeys {
-            let ready = self.host.state.physical.as_ref().is_none_or(|world| {
-                let body = &game_physiology::body(&self.host.storage, actor).expect("body exists");
-                body.vitals.alive
-                    && body.vitals.health > 0
-                    && body.vitals.fatigue < world.rules.fatigue_limit
-            }) && !self.combat_restricts(actor)
-                && self.independent(actor)
-                && self.transport_can_depart(actor);
-            let index = self.person_index[&actor];
-            if ready
-                && *game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[index].id).0),
-                )
-                .expect("location exists")
-                    == Location::AtArea(origin)
-                && self.host.state.people[index].route.first() == Some(&destination)
-            {
-                let (_, arrival) = self.departure(origin, destination)?;
-                self.depart(index, origin, destination, arrival);
-            } else {
-                self.host.state.people[index].route.clear();
-                self.emit(EventKind::Interrupted { actor });
+            match self.prepare_transport_continuation(actor, origin, destination) {
+                Ok(plan) => self.apply_motion(plan)?,
+                Err(Error::Unavailable) => {
+                    game_transport::replace_route(&mut self.host.storage, actor, Vec::new())
+                        .expect("guarded route failure");
+                    self.emit(EventKind::Interrupted { actor });
+                }
+                Err(error) => return Err(error),
             }
         }
         self.reconcile_missions()?;
@@ -2312,3 +2162,5 @@ impl Simulation {
             .expect("the command or interval preflighted its publication budget");
     }
 }
+
+mod transport_motion;
