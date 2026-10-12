@@ -221,11 +221,12 @@ fn chosen_record_moves_with_cargo_without_relocating_its_sibling() {
             .quantity,
         Quantity(1000)
     );
-    runtime
-        .prepare_record_receipt(&store, InventoryId(41), InventoryId(43), Quantity(1000))
-        .unwrap()
-        .commit(&mut store)
-        .unwrap();
+    assert!(
+        runtime
+            .prepare_record_receipt(&store, InventoryId(41), InventoryId(43), Quantity(1000))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         record(&store, RecordId(40)).unwrap().inventory,
         InventoryId(41)

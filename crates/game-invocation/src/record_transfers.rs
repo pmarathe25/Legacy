@@ -55,18 +55,12 @@ impl Runtime {
         destination: InventoryId,
         quantity: Quantity,
         selected: Option<RecordId>,
-    ) -> Result<PreparedRecordTransfer, Error> {
-        let rows = source_rows(store, source);
-        let Some(stock) = game_cargo::inventory(store, source) else {
-            return Err(Error::Unavailable);
-        };
+    ) -> Result<Option<PreparedRecordTransfer>, Error> {
+        let stock = game_cargo::inventory(store, source).ok_or(Error::Unavailable)?;
         if stock.good != Good::Record {
-            return Ok(PreparedRecordTransfer {
-                source,
-                source_rows: rows,
-                patches: Vec::new(),
-            });
+            return Ok(None);
         }
+        let rows = source_rows(store, source);
         if quantity.0 == 0
             || !quantity.0.is_multiple_of(1000)
             || (rows.len() as u128) < u128::from(quantity.0 / 1000)
@@ -94,11 +88,11 @@ impl Runtime {
                 (before, after)
             })
             .collect();
-        Ok(PreparedRecordTransfer {
+        Ok(Some(PreparedRecordTransfer {
             source,
             source_rows: rows,
             patches,
-        })
+        }))
     }
     /// A receiver may have staged its record effects with Cargo already. The
     /// physical source balance then has no outstanding record movement to apply.
@@ -108,15 +102,14 @@ impl Runtime {
         source: InventoryId,
         destination: InventoryId,
         quantity: Quantity,
-    ) -> Result<PreparedRecordTransfer, Error> {
+    ) -> Result<Option<PreparedRecordTransfer>, Error> {
         let stock = game_cargo::inventory(store, source).ok_or(Error::Unavailable)?;
+        if stock.good != Good::Record {
+            return Ok(None);
+        }
         let rows = source_rows(store, source);
-        if stock.good == Good::Record && rows.len() as u128 * 1000 == u128::from(stock.quantity.0) {
-            return Ok(PreparedRecordTransfer {
-                source,
-                source_rows: rows,
-                patches: Vec::new(),
-            });
+        if rows.len() as u128 * 1000 == u128::from(stock.quantity.0) {
+            return Ok(None);
         }
         self.prepare_record_transfer(store, source, destination, quantity, None)
     }

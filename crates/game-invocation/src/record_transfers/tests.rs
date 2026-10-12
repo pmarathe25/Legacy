@@ -59,6 +59,7 @@ fn selected_record_and_actual_cargo_move_once_in_a_shared_batch() {
     let quantity = Quantity(1000);
     let records = runtime
         .prepare_record_transfer(&store, source, destination, quantity, Some(RecordId(42)))
+        .unwrap()
         .unwrap();
     let cargo = game_cargo::prepare_transfers(
         &store,
@@ -109,11 +110,12 @@ fn selected_record_and_actual_cargo_move_once_in_a_shared_batch() {
         Quantity(1000)
     );
     let before = store.clone();
-    runtime
-        .prepare_record_receipt(&store, source, destination, quantity)
-        .unwrap()
-        .commit(&mut store)
-        .unwrap();
+    assert!(
+        runtime
+            .prepare_record_receipt(&store, source, destination, quantity)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(store, before);
 }
 #[test]
@@ -139,9 +141,52 @@ fn partial_units_or_changed_source_record_membership_are_rejected() {
             Quantity(1000),
             None,
         )
+        .unwrap()
         .unwrap();
     record_mut(&mut store, RecordId(42)).unwrap().intact = false;
     let before = store.clone();
     assert_eq!(plan.commit(&mut store), Err(Error::Unavailable));
     assert_eq!(store, before);
+}
+
+#[test]
+fn ordinary_materials_have_no_record_effect_with_unrelated_native_records_present() {
+    let (runtime, mut store) = fixture();
+    for (id, amount) in [(InventoryId(50), 1000), (InventoryId(60), 0)] {
+        game_cargo::insert_inventory(
+            &mut store,
+            game_cargo::Inventory {
+                id,
+                location: game_cargo::InventoryLocation::Area(AreaId(3)),
+                quantity: Quantity(amount),
+                capacity: Quantity(5000),
+                access: BTreeSet::from([PersonId(10)]),
+                last_granted: None,
+                good: Good::Water,
+                spoils_at: None,
+            },
+        )
+        .unwrap();
+    }
+    let before = store.snapshot().unwrap();
+    assert!(
+        runtime
+            .prepare_record_transfer(
+                &store,
+                InventoryId(50),
+                InventoryId(60),
+                Quantity(1000),
+                None
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        runtime
+            .prepare_record_receipt(&store, InventoryId(50), InventoryId(60), Quantity(1000))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert_eq!(records(&store).count(), 2);
 }

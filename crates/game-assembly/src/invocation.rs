@@ -1410,11 +1410,14 @@ impl Simulation {
         let Some(runtime) = self.host.state.invocation.as_ref() else {
             return;
         };
-        runtime
+        if let Some(effect) = runtime
             .prepare_record_receipt(&self.host.storage, source, destination, quantity)
             .expect("admitted record receipt")
-            .commit(&mut self.host.storage)
-            .expect("admitted record receipt schema");
+        {
+            effect
+                .commit(&mut self.host.storage)
+                .expect("admitted record receipt schema");
+        }
     }
 }
 

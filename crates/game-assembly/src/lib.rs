@@ -1915,18 +1915,20 @@ impl Simulation {
             else {
                 break;
             };
-            if granted && let Some(runtime) = self.host.state.invocation.as_ref() {
-                runtime
-                    .prepare_record_transfer(
+            if granted {
+                if let Some(runtime) = self.host.state.invocation.as_ref()
+                    && let Some(records) = runtime.prepare_record_transfer(
                         &self.host.storage,
                         intent.source,
                         intent.destination,
                         intent.quantity,
                         None,
                     )?
-                    .stage_into(&self.host.storage, &mut batch)?;
+                {
+                    records.stage_into(&self.host.storage, &mut batch)?;
+                }
+                self.host.storage.apply_batch(batch)?;
             }
-            self.host.storage.apply_batch(batch)?;
             if granted {
                 self.emit(EventKind::Transferred {
                     actor: intent.actor,

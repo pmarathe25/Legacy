@@ -507,3 +507,94 @@ fn staged_stock_and_foreign_receipt_rows_share_one_admission_boundary() {
         Some("accepted")
     );
 }
+
+#[test]
+fn ordered_staging_preserves_foreign_receipts_and_rejects_a_changed_next_prefix() {
+    let mut store = stocks(vec![
+        stock(1, None, 2000, 3000),
+        stock(2, None, 0, 3000),
+        stock(3, None, 0, 3000),
+    ]);
+    let mut phase = plan(
+        &store,
+        None,
+        vec![request(1, 1, 2, 1000), request(2, 1, 3, 1000)],
+        None,
+    )
+    .begin(&store)
+    .unwrap();
+    let mut batch = Batch::new();
+    assert!(
+        phase
+            .stage_next_into(&store, &mut batch)
+            .unwrap()
+            .unwrap()
+            .1
+    );
+    batch.insert(StableId(2), "receipt".to_owned());
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        inventory(&store, InventoryId(1)).unwrap().quantity,
+        Quantity(1000)
+    );
+    assert_eq!(
+        store.get::<String>(StableId(2)).map(String::as_str),
+        Some("receipt")
+    );
+    inventory_mut(&mut store, InventoryId(3))
+        .unwrap()
+        .access
+        .clear();
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        phase.stage_next_into(&store, &mut Batch::new()),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+#[test]
+fn staged_prefix_and_foreign_rejection_publish_nothing_and_denials_stage_no_inventory() {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<String>("test/receipt", |value| {
+            if value == "reject" {
+                Err(Error::Unavailable)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+    let mut store = Store::with_schema(schema);
+    for row in [stock(1, None, 1000, 3000), stock(2, None, 0, 3000)] {
+        insert_inventory(&mut store, row).unwrap();
+    }
+    let before = store.snapshot().unwrap();
+    let mut phase = plan(&store, None, vec![request(1, 1, 2, 500)], None)
+        .begin(&store)
+        .unwrap();
+    let mut batch = Batch::new();
+    assert!(
+        phase
+            .stage_next_into(&store, &mut batch)
+            .unwrap()
+            .unwrap()
+            .1
+    );
+    batch.insert(StableId(2), "reject".to_owned());
+    assert_eq!(store.apply_batch(batch), Err(Error::Unavailable));
+    assert_eq!(store.snapshot().unwrap(), before);
+    let mut phase = plan(&store, None, vec![request(1, 1, 2, 2000)], None)
+        .begin(&store)
+        .unwrap();
+    let mut batch = Batch::new();
+    assert!(
+        !phase
+            .stage_next_into(&store, &mut batch)
+            .unwrap()
+            .unwrap()
+            .1
+    );
+    assert_eq!(batch.edited_ids::<Inventory>().count(), 0);
+    assert_eq!(store.snapshot().unwrap(), before);
+}

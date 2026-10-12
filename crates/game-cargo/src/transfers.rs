@@ -114,12 +114,11 @@ impl ValidatedTransfers {
             return Ok(None);
         };
         effect.validate_opening(store)?;
-        if effect.granted {
-            store.validate_batch(&effect.batch())?;
-            if let Some((_, after)) = &effect.rows {
-                for row in after {
-                    batch.insert(StableId(row.id.0), row.clone());
-                }
+        if effect.granted
+            && let Some((_, after)) = &effect.rows
+        {
+            for row in after {
+                batch.insert(StableId(row.id.0), row.clone());
             }
         }
         let effect = self.remaining.next().expect("checked phase effect");
