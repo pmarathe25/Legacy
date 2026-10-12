@@ -10,4 +10,6 @@ Material deposits check the compartment's actual good and available room before 
 
 Tool allocations also admit prospective consumption: a producer cannot consume the last toolkit it needs or displace another worker's allocated unit. Producers choose their own preferred tool order through that interface.
 
+Physical toolkit projection reads selected uses through small body and placement ports. Cargo excludes unavailable bodies, non-tools and misplaced uses, then allocates in stable order. It queries selected equipment and position lazily and preserves existing use independently of access permission.
+
 Prepared compartment creation and splits validate the new identity, good, quantity, capacity, and opening source row. They stage with other owners' effects. A split preserves the source compartment's grant history. `ValidatedTransfers::stage_next_into` stages each ordered physical transfer so a receiving owner's record changes can join the same batch before its receipt is published.

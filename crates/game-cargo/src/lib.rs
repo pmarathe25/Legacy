@@ -26,7 +26,8 @@ mod storage_tests;
 
 mod planning_projection;
 pub use planning_projection::{
-    Reservation, ReservationTotals, ToolAllocations, ToolSlots, ToolUse,
+    ActualToolFacts, Reservation, ReservationTotals, ToolAllocations, ToolBodyFacts, ToolSlots,
+    ToolUse,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

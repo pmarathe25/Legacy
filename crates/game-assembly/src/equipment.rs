@@ -50,6 +50,60 @@ impl game_workshop::ToolSelectionFacts for WorkshopToolFacts<'_> {
     }
 }
 
+struct ToolAllocationFacts<'a>(&'a Simulation);
+impl game_cargo::ActualToolFacts for ToolAllocationFacts<'_> {
+    fn actors(&self) -> impl Iterator<Item = PersonId> {
+        game_physiology::bodies(&self.0.host.storage).map(|(actor, _)| actor)
+    }
+    fn body(&self, actor: PersonId) -> Option<game_cargo::ToolBodyFacts> {
+        let body = game_physiology::body(&self.0.host.storage, actor)?;
+        Some(game_cargo::ToolBodyFacts {
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+        })
+    }
+    fn selected(&self, actor: PersonId) -> Option<InventoryId> {
+        let activity = self.0.host.storage.activity(actor)?;
+        match *activity {
+            Activity::Work { site } => {
+                game_workshop::selected_work_tool(&self.0.host.storage, actor, site)
+            }
+            Activity::Cultivate { field, .. } => self
+                .0
+                .host
+                .state
+                .agriculture
+                .as_ref()
+                .and_then(|world| world.field(&self.0.host.storage, field))
+                .map(|field| field.tool),
+            Activity::Instruction { .. } | Activity::Practice { .. } => {
+                self.0.social_selected_tool(actor)
+            }
+            Activity::HealthWork { .. } => self.0.health_selected_tool(actor),
+            Activity::Gather { .. } => self.0.ecology_job_tool(actor),
+            Activity::Construct { project, .. } => self
+                .0
+                .host
+                .state
+                .projects
+                .as_ref()
+                .and_then(|_| game_projects::project(&self.0.host.storage, project))
+                .map(|plan| plan.tool),
+            Activity::WritingMemory { .. } => self.0.invocation_selected_tool(actor),
+            _ => None,
+        }
+    }
+    fn stationary_area(&self, actor: PersonId) -> Option<AreaId> {
+        match game_spatial::location(&self.0.host.storage, game_ecs::StableId(actor.0))? {
+            Location::AtArea(area) => Some(*area),
+            _ => None,
+        }
+    }
+    fn inventory_area(&self, stock: &Inventory) -> Option<AreaId> {
+        self.0.inventory_area(stock)
+    }
+}
+
 impl Simulation {
     /// Bind a contact handoff to an actual compartment and the normal timed
     /// transfer action. Permission still comes from the receiving owner.
@@ -177,78 +231,11 @@ impl Simulation {
             .physical
             .as_ref()
             .ok_or(Error::Unavailable)?;
-        let mut uses = Vec::new();
-        for (actor, body) in game_physiology::bodies(&self.host.storage) {
-            let actor = &actor;
-            let activity = self.host.storage.activity(*actor).expect("activity exists");
-            if !body.vitals.alive || body.vitals.health == 0 {
-                continue;
-            }
-            let selected = match *activity {
-                Activity::Work { site } => {
-                    game_workshop::job(&self.host.storage, *actor).and_then(|job| {
-                        game_workshop::site(&self.host.storage, site)
-                            .map(|site| job.tool.unwrap_or(site.tool))
-                    })
-                }
-                Activity::Cultivate { field, .. } => self
-                    .host
-                    .state
-                    .agriculture
-                    .as_ref()
-                    .and_then(|world| world.field(&self.host.storage, field))
-                    .map(|field| field.tool),
-                Activity::Instruction { .. } | Activity::Practice { .. } => {
-                    self.social_selected_tool(*actor)
-                }
-                Activity::HealthWork { .. } => self.health_selected_tool(*actor),
-                Activity::Gather { .. } => self.ecology_job_tool(*actor),
-                Activity::Construct { project, .. } => self
-                    .host
-                    .state
-                    .projects
-                    .as_ref()
-                    .and_then(|_| game_projects::project(&self.host.storage, project))
-                    .map(|plan| plan.tool),
-                Activity::WritingMemory { .. } => self.invocation_selected_tool(*actor),
-                _ => None,
-            };
-            if let Some(tool) = selected
-                && only.is_none_or(|wanted| tool == wanted)
-                && let Some(stock) = game_cargo::inventory(&self.host.storage, tool)
-                && stock.good == Good::Tool
-                && let Some(area) = self.inventory_area(stock)
-                && *game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[self.person_index[actor]].id).0),
-                )
-                .expect("location exists")
-                    == Location::AtArea(area)
-            {
-                uses.push(game_cargo::ToolUse {
-                    actor: *actor,
-                    tool,
-                });
-            }
-        }
-        let selected = |stock: &Inventory| {
-            (stock.good == Good::Tool).then_some(game_cargo::ToolSlots {
-                tool: stock.id,
-                quantity: stock.quantity,
-                last_granted: stock.last_granted,
-            })
-        };
-        let tools = match only {
-            Some(id) => game_cargo::inventory(&self.host.storage, id)
-                .and_then(selected)
-                .into_iter()
-                .collect::<Vec<_>>(),
-            None => game_cargo::inventories(&self.host.storage)
-                .map(|(_, row)| row)
-                .filter_map(selected)
-                .collect(),
-        };
-        game_cargo::ToolAllocations::prepare(tools, uses)
+        game_cargo::ToolAllocations::prepare_actual(
+            &self.host.storage,
+            only,
+            &ToolAllocationFacts(self),
+        )
     }
 
     /// Compute once for an interval or closing commit, before any workers finish.

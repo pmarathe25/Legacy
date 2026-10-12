@@ -1,7 +1,8 @@
 //! Immutable stock reservations and toolkit allocations for one planning batch.
 //! The host supplies actual activity facts; these rules neither grant access nor
 //! replace stock, activity, or permission state.
-use game_core::{Error, InventoryId, PersonId, Quantity};
+use crate::Inventory;
+use game_core::{AreaId, Error, Good, InventoryId, PersonId, Quantity};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +71,20 @@ pub struct ToolUse {
     pub tool: InventoryId,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ToolBodyFacts {
+    pub alive: bool,
+    pub health: u64,
+}
+
+pub trait ActualToolFacts {
+    fn actors(&self) -> impl Iterator<Item = PersonId>;
+    fn body(&self, actor: PersonId) -> Option<ToolBodyFacts>;
+    fn selected(&self, actor: PersonId) -> Option<InventoryId>;
+    fn stationary_area(&self, actor: PersonId) -> Option<AreaId>;
+    fn inventory_area(&self, stock: &Inventory) -> Option<AreaId>;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Allocation {
     slots: u64,
@@ -83,6 +98,49 @@ pub struct ToolAllocations {
 }
 
 impl ToolAllocations {
+    /// Existing physical use persists when access is withdrawn. This projection
+    /// checks bodies, material kind and placement; new-use permission is separate.
+    pub fn prepare_actual(
+        store: &game_ecs::Store,
+        only: Option<InventoryId>,
+        facts: &impl ActualToolFacts,
+    ) -> Result<Self, Error> {
+        let mut uses = Vec::new();
+        for actor in facts.actors() {
+            let Some(body) = facts.body(actor) else {
+                continue;
+            };
+            if !body.alive || body.health == 0 {
+                continue;
+            }
+            if let Some(tool) = facts.selected(actor)
+                && only.is_none_or(|wanted| tool == wanted)
+                && let Some(stock) = crate::inventory(store, tool)
+                && stock.good == Good::Tool
+                && let Some(area) = facts.inventory_area(stock)
+                && facts.stationary_area(actor) == Some(area)
+            {
+                uses.push(ToolUse { actor, tool });
+            }
+        }
+        let selected = |stock: &Inventory| {
+            (stock.good == Good::Tool).then_some(ToolSlots {
+                tool: stock.id,
+                quantity: stock.quantity,
+                last_granted: stock.last_granted,
+            })
+        };
+        let tools = match only {
+            Some(tool) => crate::inventory(store, tool)
+                .and_then(selected)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            None => crate::inventories(store)
+                .filter_map(|(_, stock)| selected(stock))
+                .collect(),
+        };
+        Self::prepare(tools, uses)
+    }
     /// Prospective consumption cannot spend the toolkit needed by its own
     /// production, or displace other actors' already allocated physical units.
     pub fn allows_after_consumption(
@@ -205,6 +263,92 @@ impl ToolAllocations {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actual_tool_projection_uses_physical_selection_without_granting_or_requiring_permission() {
+        let mut schema = game_ecs::Schema::new();
+        crate::register_components(&mut schema).unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
+        for (id, good, area) in [
+            (10, Good::Tool, 1),
+            (20, Good::Food, 1),
+            (30, Good::Tool, 2),
+        ] {
+            crate::insert_inventory(
+                &mut store,
+                Inventory {
+                    id: InventoryId(id),
+                    good,
+                    location: crate::InventoryLocation::Area(AreaId(area)),
+                    quantity: Quantity(1_000),
+                    capacity: Quantity(1_000),
+                    access: Default::default(),
+                    last_granted: None,
+                    spoils_at: None,
+                },
+            )
+            .unwrap();
+        }
+        struct Facts {
+            reverse: bool,
+        }
+        impl ActualToolFacts for Facts {
+            fn actors(&self) -> impl Iterator<Item = PersonId> {
+                let mut actors = (1..=6).map(PersonId).collect::<Vec<_>>();
+                if self.reverse {
+                    actors.reverse();
+                }
+                actors.into_iter()
+            }
+            fn body(&self, actor: PersonId) -> Option<ToolBodyFacts> {
+                Some(ToolBodyFacts {
+                    alive: actor != PersonId(2),
+                    health: if actor == PersonId(3) { 0 } else { 100 },
+                })
+            }
+            fn selected(&self, actor: PersonId) -> Option<InventoryId> {
+                match actor.0 {
+                    1 => Some(InventoryId(10)),
+                    4 => Some(InventoryId(20)),
+                    5 => Some(InventoryId(30)),
+                    6 => None,
+                    _ => panic!("unavailable bodies must not query their selected equipment"),
+                }
+            }
+            fn stationary_area(&self, actor: PersonId) -> Option<AreaId> {
+                assert!([PersonId(1), PersonId(5)].contains(&actor));
+                Some(AreaId(1))
+            }
+            fn inventory_area(&self, stock: &Inventory) -> Option<AreaId> {
+                match stock.location {
+                    crate::InventoryLocation::Area(area) => Some(area),
+                    _ => None,
+                }
+            }
+        }
+        let before = store.snapshot().unwrap();
+        let forward =
+            ToolAllocations::prepare_actual(&store, None, &Facts { reverse: false }).unwrap();
+        let reverse =
+            ToolAllocations::prepare_actual(&store, None, &Facts { reverse: true }).unwrap();
+        assert_eq!(forward, reverse);
+        assert!(forward.allows(PersonId(1), InventoryId(10)));
+        assert!(!forward.allows(PersonId(6), InventoryId(10)));
+        assert!(forward.allows(PersonId(6), InventoryId(30)));
+        assert!(!forward.allows(PersonId(6), InventoryId(20)));
+        let narrow = ToolAllocations::prepare_actual(
+            &store,
+            Some(InventoryId(10)),
+            &Facts { reverse: false },
+        )
+        .unwrap();
+        assert_eq!(
+            narrow.allocated_users(InventoryId(10)).collect::<Vec<_>>(),
+            vec![PersonId(1)]
+        );
+        assert!(!narrow.allows(PersonId(6), InventoryId(30)));
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
 
     fn claim(actor: u64, source: u64, quantity: u64) -> Reservation {
         Reservation {

@@ -20,6 +20,10 @@ pub trait ToolSelectionFacts {
     fn stock(&self, actor: PersonId, stock: &Inventory) -> ToolStockFacts;
     fn allocations(&self) -> Option<ToolAllocations>;
 }
+pub fn selected_work_tool(store: &Store, actor: PersonId, site_id: SiteId) -> Option<InventoryId> {
+    let job = job(store, actor)?;
+    Some(job.tool.unwrap_or(site(store, site_id)?.tool))
+}
 impl Definitions {
     pub fn select_work_tool(
         &self,
