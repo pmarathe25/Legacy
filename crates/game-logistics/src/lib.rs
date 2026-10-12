@@ -109,6 +109,22 @@ pub struct AcquisitionOffer<A> {
     pub requirements: Vec<Prerequisite>,
     pub action: A,
 }
+impl<A> AcquisitionOffer<A> {
+    pub fn map_action<B>(self, map: impl FnOnce(A) -> B) -> AcquisitionOffer<B> {
+        AcquisitionOffer {
+            key: self.key,
+            good: self.good,
+            source: self.source,
+            location: self.location,
+            observed_at: self.observed_at,
+            accessible: self.accessible,
+            quantity: self.quantity,
+            requires_carrying_room: self.requires_carrying_room,
+            requirements: self.requirements,
+            action: map(self.action),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Prerequisite {
     pub requirement: Requirement,

@@ -913,9 +913,6 @@ impl Simulation {
         room: Quantity,
         resources: Option<&equipment::RankingResources>,
     ) -> Vec<game_logistics::AcquisitionOffer<Command>> {
-        use game_logistics::{
-            AcquisitionOffer, OfferYield, Prerequisite, PrerequisitePlacement, Requirement,
-        };
         let Some(world) = &self.host.state.ecology else {
             return Vec::new();
         };
@@ -927,57 +924,36 @@ impl Simulation {
         }) else {
             return Vec::new();
         };
-        let available = self.available_ecology_commands_for_planning(actor, resources);
-        let local = game_ecology::knowledge(&self.host.storage,actor).map(|row|&row.known_resources).into_iter().flat_map(|known| known.values()).filter(|known| known.area == area && known.kind.good() == good).map(|known| {
-            let q = Quantity(quantity.0.min(room.0).min(known.available.0));
-            let facts = game_ecology::GatherFacts { now: self.host.clock().time, area,
-                capable: self.ecology_able(actor) && self.host.state.physical.as_ref().is_some_and(|_| game_physiology::body(&self.host.storage,actor).expect("body exists").vitals.fatigue < self.body_rules(actor).fatigue_limit),
-                adult: self.host.state.development.as_ref().is_none_or(|_| matches!(game_lifecycle::life(&self.host.storage,actor).unwrap().stage, LifeStage::Adult | LifeStage::Elder)),
-                carrying_room: room, tool: self.ecology_tool_for_planning(actor, resources) };
-            game_ecology::LocalAcquisition { resource: known.id,
-                can_prepare: world.gathering_conditions(&self.host.storage, actor, known.id, q, !known.accessible, facts).is_ok(),
-                can_request: available.iter().any(|command| matches!(command, Command::Ecology {action: EcologyAction::RequestAccess {resource}} if *resource == known.id)) }
-        }).collect::<Vec<_>>();
-        let prospects = world.acquisition_prospects(
-            &self.host.storage,
-            game_ecology::AcquisitionNeed {
-                actor,
-                area,
-                now: self.host.clock().time,
-                good,
-                quantity,
-                room,
-            },
-            &local,
-        );
-        let mut offers = prospects
+        let local_actions = self
+            .available_ecology_commands_for_planning(actor, resources)
             .into_iter()
-            .map(|prospect| AcquisitionOffer {
-                key: prospect.resource.0,
-                good,
-                source: None,
-                location: Location::AtArea(prospect.area),
-                observed_at: prospect.observed_at,
-                accessible: true,
-                quantity: OfferYield::Known(prospect.quantity),
-                requires_carrying_room: matches!(&prospect.action, EcologyAction::Gather { .. }),
-                requirements: if prospect.needs_tool {
-                    vec![Prerequisite {
-                        requirement: Requirement {
-                            good: Good::Tool,
-                            quantity: Quantity(1_000),
-                            source: None,
-                        },
-                        placement: PrerequisitePlacement::CarriedInOneLot,
-                    }]
-                } else {
-                    Vec::new()
-                },
-                action: Command::Ecology {
-                    action: prospect.action,
-                },
+            .filter_map(|command| match command {
+                Command::Ecology { action } => Some(action),
+                _ => None,
             })
             .collect::<Vec<_>>();
+        let facts = game_ecology::GatherFacts {
+            now: self.host.clock().time,
+            area,
+            capable: self.ecology_able(actor)
+                && self.host.state.physical.as_ref().is_some_and(|_| {
+                    game_physiology::body(&self.host.storage, actor)
+                        .expect("body exists")
+                        .vitals
+                        .fatigue
+                        < self.body_rules(actor).fatigue_limit
+                }),
+            adult: self.host.state.development.as_ref().is_none_or(|_| {
+                matches!(
+                    game_lifecycle::life(&self.host.storage, actor)
+                        .unwrap()
+                        .stage,
+                    LifeStage::Adult | LifeStage::Elder
+                )
+            }),
+            carrying_room: room,
+            tool: self.ecology_tool_for_planning(actor, resources),
+        };
         let areas = mind
             .routes
             .keys()
@@ -986,32 +962,33 @@ impl Simulation {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        offers.extend(
-            world
-                .exploration_areas(
-                    &self.host.storage,
+        world
+            .acquisition_offers(
+                &self.host.storage,
+                game_ecology::AcquisitionNeed {
                     actor,
                     area,
-                    self.host.clock().time,
-                    &areas,
-                )
-                .into_iter()
-                .map(|(target, inspected)| AcquisitionOffer {
-                    key: target.0,
+                    now: self.host.clock().time,
                     good,
-                    source: None,
-                    location: Location::AtArea(target),
-                    observed_at: inspected,
-                    accessible: true,
-                    quantity: OfferYield::Unknown,
-                    requires_carrying_room: false,
-                    requirements: Vec::new(),
-                    action: Command::Move {
-                        destination: target,
-                    },
-                }),
-        );
-        offers
+                    quantity,
+                    room,
+                },
+                facts,
+                &local_actions,
+                &areas,
+            )
+            .into_iter()
+            .map(|offer| {
+                offer.map_action(|action| match action {
+                    game_ecology::AcquisitionAction::Resource(action) => {
+                        Command::Ecology { action }
+                    }
+                    game_ecology::AcquisitionAction::Explore { destination } => {
+                        Command::Move { destination }
+                    }
+                })
+            })
+            .collect()
     }
     pub(crate) fn ecology_opportunities(
         &self,

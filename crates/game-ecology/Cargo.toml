@@ -8,6 +8,7 @@ license.workspace = true
 game-core.workspace = true
 game-land.workspace = true
 game-ecs.workspace = true
+game-logistics.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

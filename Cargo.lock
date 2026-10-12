@@ -593,6 +593,7 @@ dependencies = [
  "game-core",
  "game-ecs",
  "game-land",
+ "game-logistics",
  "serde",
  "serde_json",
 ]

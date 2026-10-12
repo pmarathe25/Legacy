@@ -567,6 +567,9 @@ mod free_port_tests;
 mod cancellation;
 pub use cancellation::PreparedGatheringCancellation;
 
+mod acquisition;
+pub use acquisition::AcquisitionAction;
+
 /// Apply already accepted site permissions through their physical owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedSiteAccess {

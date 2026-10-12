@@ -12,6 +12,8 @@ Local observation groups supplied actor-area facts and forms personal resource a
 
 Local opportunity systems select the first sixteen sources and validate suggested gathering amounts against real stock, workspace, tools, and time. Narrow callbacks supply quantity suggestions, custodian locations, and route reachability. Autonomous choices use personal source knowledge and remembered remote stock; discovering an access request remains separate from its execution cooldown.
 
+Ecology supplies typed material acquisition offers to `game-logistics`, including required equipment, access requests and exploration. Local gathering uses physical admission facts; remote yields remain dated estimates. Logistics chooses acquisition and delivery steps through that interface without importing the playable assembly.
+
 Prepared access transitions validate local custody and recipient facts, guard resources and request cooldowns, and return permission events. Collection completion reads committed source quality, guards its source and job, and atomically ends the job with any deposit reduction. Other owners admit material, water, and publication effects before commit.
 
 Collection finishing prepares resource depletion and job removal without mutating them. The assembly combines these writes with admitted cargo, water, and activity effects; a full receiving compartment interrupts collection without debiting the natural source. Closing collection still uses the source's current quality after renewal.

@@ -19,5 +19,6 @@ Saves retain the definitions and fingerprints used for that world, and loading a
 save does not require the original files.
 
 Adding a definition supported by an existing mechanic is content work. Adding a
-new mechanic still requires Rust code. Other authored goods, recipes, and
-opening populations are still being moved out of their current code definitions.
+new mechanic still requires Rust code. `workshop/` defines recipes and
+`openings/` defines opening populations and settlements. Goods and several other
+concrete game types are still being moved out of code definitions.

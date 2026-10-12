@@ -50,7 +50,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-cargo` | `game-ecs` | Inventory components, conserved loading and transfer effects, and typed stock access |
 | `game-characters` | `game-ecs`, `game-logistics`; `game-genetics` (optional) | Personal mind and temperament components; material goals; opaque inheritable temperament loci |
 | `game-conflict` | `game-ecs`, `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
-| `game-ecology` | `game-ecs`, `game-land` | Natural resources, plots, gathering, personal knowledge and request components; shared soil; sparse daily renewal effects |
+| `game-ecology` | `game-ecs`, `game-land`, `game-logistics` | Natural resources, plots, gathering, personal knowledge and request components; shared soil; sparse daily renewal effects; typed material offers |
 | `game-environment` | `game-ecs`; `game-content` (optional) | Local climate and weather components; typed calendar and climate loading |
 | `game-genetics` | `game-ecs` | Genomes and frozen inheritance components; opaque allele readers |
 | `game-health` | `game-ecs` | Clinical state, work, water quality, shelters, occupancy, consent offers, and remembered health components; guarded action and interval effects |
