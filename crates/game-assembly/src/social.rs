@@ -2198,13 +2198,8 @@ mod generations {
                 .contains(&grandchild)
         );
         assert!(
-            sim.host
-                .state
-                .institutions
-                .as_ref()
-                .unwrap()
-                .institutions
-                .values()
+            game_society::institutions(&sim.host.storage)
+                .map(|(_, row)| row)
                 .all(|institution| institution
                     .charter
                     .offices

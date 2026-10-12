@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 44;
+const SAVE_VERSION: u32 = 45;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -318,14 +318,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.institutions {
-        for id in world
-            .institutions
-            .keys()
-            .map(|id| id.0)
-            .chain(world.proposals.keys().map(|id| id.0))
-            .chain(world.cases.keys().map(|id| id.0))
-            .chain(world.concepts.keys().map(|id| id.0))
+    if s.state.institutions.is_some() {
+        for id in game_society::institutions(s.components)
+            .map(|(id, _)| id.0)
+            .chain(game_society::proposals(s.components).map(|(id, _)| id.0))
+            .chain(game_society::cases(s.components).map(|(id, _)| id.0))
+            .chain(game_society::concepts(s.components).map(|(id, _)| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
@@ -728,9 +726,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .as_ref()
                     .and_then(|w| w.kernel.commitments.get(&commitment))
                     .is_some_and(|c| c.revision(revision).is_some())
-                    || !s.state.institutions.as_ref().is_some_and(|w| {
-                        w.proposals
-                            .get(&proposal)
+                    || !s.state.institutions.as_ref().is_some_and(|_| {
+                        game_society::proposal(s.components, proposal)
                             .is_some_and(|p| p.institution == institution)
                     })
                 {
@@ -762,7 +759,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .institutions
                     .as_ref()
-                    .is_some_and(|w| w.institutions.contains_key(&institution))
+                    .is_some_and(|_| game_society::institution(s.components, institution).is_some())
                 {
                     return Err(fail());
                 }
@@ -799,11 +796,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .enforcement
                         .as_ref()
                         .is_some_and(|w| w.cases.contains_key(&case))
-                    || !s
-                        .state
-                        .institutions
-                        .as_ref()
-                        .is_some_and(|w| w.institutions.contains_key(&institution))
+                    || !s.state.institutions.as_ref().is_some_and(|_| {
+                        game_society::institution(s.components, institution).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -1530,11 +1525,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 proposer,
             } => {
                 if !people.contains_key(&proposer)
-                    || !s
-                        .state
-                        .institutions
-                        .as_ref()
-                        .is_some_and(|w| w.institutions.contains_key(&institution))
+                    || !s.state.institutions.as_ref().is_some_and(|_| {
+                        game_society::institution(s.components, institution).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -1547,7 +1540,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .institutions
                     .as_ref()
-                    .is_some_and(|w| w.institutions.contains_key(&institution))
+                    .is_some_and(|_| game_society::institution(s.components, institution).is_some())
                 {
                     return Err(fail());
                 }
@@ -1556,10 +1549,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 institution,
                 proposal,
             } => {
-                if !s.state.institutions.as_ref().is_some_and(|w| {
-                    w.institutions.contains_key(&institution)
-                        && w.proposals
-                            .get(&proposal)
+                if !s.state.institutions.as_ref().is_some_and(|_| {
+                    game_society::institution(s.components, institution).is_some()
+                        && game_society::proposal(s.components, proposal)
                             .is_some_and(|p| p.institution == institution)
                 }) {
                     return Err(fail());
@@ -1571,7 +1563,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .state
                         .institutions
                         .as_ref()
-                        .is_some_and(|w| w.cases.contains_key(&case))
+                        .is_some_and(|_| game_society::case(s.components, case).is_some())
                 {
                     return Err(fail());
                 }

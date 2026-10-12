@@ -1,4 +1,5 @@
 use super::*;
+use game_ecs::{Batch, StableId, Store};
 
 /// Admission receipt from the owner of a regional or enforcement change. Its
 /// exact action, institution revision and actor are bound to this attempt.
@@ -74,57 +75,65 @@ pub struct PreparedCommand {
     pub effects: Vec<CommandEffect>,
 }
 impl PreparedCommand {
-    pub fn verify(&self, world: &World) -> Result<(), Error> {
+    pub fn verify(&self, store: &Store) -> Result<(), Error> {
         if self
             .reads
             .iter()
-            .any(|before| world.institutions.get(&before.id) != Some(before))
-            || self
-                .institutions
-                .iter()
-                .any(|(before, after)| world.institutions.get(&after.id) != before.as_ref())
+            .any(|before| crate::storage::institution(store, before.id) != Some(before))
+            || self.institutions.iter().any(|(before, after)| {
+                crate::storage::institution(store, after.id) != before.as_ref()
+            })
             || self
                 .proposals
                 .iter()
-                .any(|(before, after)| world.proposals.get(&after.id) != before.as_ref())
+                .any(|(before, after)| crate::storage::proposal(store, after.id) != before.as_ref())
             || self
                 .concepts
                 .iter()
-                .any(|(id, _)| world.concepts.contains_key(id))
+                .any(|(id, _)| crate::storage::concept(store, id).is_some())
             || self.evidence.iter().any(|(actor, before, _)| {
-                world
-                    .memories
-                    .get(actor)
-                    .is_none_or(|memory| memory.cases != *before)
+                crate::storage::knowledge(store, actor).is_none_or(|memory| memory.cases != *before)
             })
         {
             return Err(Error::Unavailable);
         }
         if let Some(resolution) = &self.resolution {
-            resolution.verify(world)?;
+            resolution.verify(store)?;
         }
         Ok(())
     }
-    pub fn commit(self, world: &mut World) -> Result<(), Error> {
-        self.verify(world)?;
-        // A vote consists entirely of the guarded resolution; no earlier
-        // mutation can make its second validation fail.
+    pub fn stage_into(
+        self,
+        world: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(), Error> {
+        self.verify(store)?;
         if let Some(resolution) = self.resolution {
-            return resolution.commit(world);
+            return resolution.stage_into(world, store, batch);
         }
-        for (_, after) in self.institutions {
-            world.institutions.insert(after.id, after);
+        for (_, row) in self.institutions {
+            batch.insert(StableId(row.id.0), row);
         }
-        for (_, after) in self.proposals {
-            world.proposals.insert(after.id, after);
+        for (_, row) in self.proposals {
+            batch.insert(StableId(row.id.0), row);
         }
         for (id, rule) in self.concepts {
-            world.concepts.insert(id, rule);
+            batch.insert(StableId(id.0), Concept { rule });
         }
-        for (actor, _, after) in self.evidence {
-            world.memories.get_mut(&actor).unwrap().cases = after;
+        for (actor, _, cases) in self.evidence {
+            let mut row = crate::storage::knowledge(store, actor)
+                .ok_or(Error::Unavailable)?
+                .clone();
+            row.cases = cases;
+            batch.insert(StableId(actor.0), row);
         }
         Ok(())
+    }
+    pub fn commit(self, world: &Runtime, store: &mut Store) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        self.stage_into(world, store, &mut batch)?;
+        store.apply_batch(batch)
     }
     fn allocate(&mut self) -> Result<u64, Error> {
         let id = self.next_id;
@@ -168,9 +177,10 @@ fn external_permit(
     }
     Ok(())
 }
-impl World {
+impl Runtime {
     pub fn prepare_command(
         &self,
+        store: &Store,
         action: &InstitutionAction,
         facts: &CommandFacts<'_>,
         ids: CommandIds,
@@ -196,22 +206,23 @@ impl World {
             InstitutionAction::Found { charter, origin } => {
                 facts
                     .references
-                    .validate_charter(self, charter, actor, area, facts.now)?;
+                    .validate_charter(store, charter, actor, area, facts.now)?;
                 if let Some(origin) = origin {
-                    let prior = self.institutions.get(origin).ok_or(Error::Unavailable)?;
+                    let prior =
+                        crate::storage::institution(store, origin).ok_or(Error::Unavailable)?;
                     if !charter.founders.is_subset(&prior.members) {
                         return Err(Error::Unavailable);
                     }
                     plan.reads.push(prior.clone());
                 }
                 let id = InstitutionId(plan.allocate()?);
-                if self.institutions.contains_key(&id) {
+                if crate::storage::institution(store, id).is_some() {
                     return Err(Error::Unavailable);
                 }
                 let mut concepts = Vec::new();
                 for rule in &charter.rules {
                     let concept = ConceptId(plan.allocate()?);
-                    if self.concepts.contains_key(&concept) {
+                    if crate::storage::concept(store, concept).is_some() {
                         return Err(Error::Unavailable);
                     }
                     plan.concepts.push((concept, rule.clone()));
@@ -236,9 +247,7 @@ impl World {
                     },
                 ));
                 for recipient in &charter.founders {
-                    let before = self
-                        .memories
-                        .get(recipient)
+                    let before = crate::storage::knowledge(store, recipient)
                         .ok_or(Error::Unavailable)?
                         .cases
                         .clone();
@@ -254,10 +263,8 @@ impl World {
                     .push(CommandEffect::Publish { institution: id });
             }
             InstitutionAction::Join { institution } => {
-                let before = self
-                    .institutions
-                    .get(institution)
-                    .ok_or(Error::Unavailable)?;
+                let before =
+                    crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
                 if before.charter.jurisdiction != area
                     || before.members.contains(&actor)
                     || before.members.len() >= 64
@@ -321,10 +328,8 @@ impl World {
                 });
             }
             InstitutionAction::Decline { institution } => {
-                let before = self
-                    .institutions
-                    .get(institution)
-                    .ok_or(Error::Unavailable)?;
+                let before =
+                    crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
                 if before.status != InstitutionStatus::Proposed
                     || !before.charter.founders.contains(&actor)
                     || before.members.contains(&actor)
@@ -341,10 +346,8 @@ impl World {
                 });
             }
             InstitutionAction::Leave { institution } => {
-                let before = self
-                    .institutions
-                    .get(institution)
-                    .ok_or(Error::Unavailable)?;
+                let before =
+                    crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
                 if before.status != InstitutionStatus::Active
                     || !before.members.contains(&actor)
                     || before.charter.jurisdiction != area
@@ -372,10 +375,8 @@ impl World {
                 institution,
                 change,
             } => {
-                let before = self
-                    .institutions
-                    .get(institution)
-                    .ok_or(Error::Unavailable)?;
+                let before =
+                    crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
                 if before.status != InstitutionStatus::Active
                     || before.charter.jurisdiction != area
                     || !before.members.contains(&actor)
@@ -388,7 +389,7 @@ impl World {
                 external_permit(before, change, facts)?;
                 facts.references.validate_change(before, change)?;
                 let id = RuleProposalId(plan.allocate()?);
-                if self.proposals.contains_key(&id) {
+                if crate::storage::proposal(store, id).is_some() {
                     return Err(Error::Unavailable);
                 }
                 plan.institutions
@@ -411,10 +412,8 @@ impl World {
                 plan.effects.push(CommandEffect::ObserveRegional);
             }
             InstitutionAction::Vote { proposal, support } => {
-                let before = self.proposals.get(proposal).ok_or(Error::Unavailable)?;
-                let institution = self
-                    .institutions
-                    .get(&before.institution)
+                let before = crate::storage::proposal(store, proposal).ok_or(Error::Unavailable)?;
+                let institution = crate::storage::institution(store, before.institution)
                     .ok_or(Error::Unavailable)?;
                 if before.status != RuleProposalStatus::Proposed
                     || before.base_revision != institution.revision
@@ -435,7 +434,7 @@ impl World {
                 institution.revision.checked_add(1).ok_or(Error::Overflow)?;
                 let mut voted = before.clone();
                 voted.votes.insert(actor, *support);
-                let outcome = self.proposal_outcome_for(&voted, facts.authority)?;
+                let outcome = self.proposal_outcome_for(store, &voted, facts.authority)?;
                 let concept = if outcome == RuleProposalStatus::Adopted
                     && matches!(
                         before.change,
@@ -446,7 +445,7 @@ impl World {
                     None
                 };
                 let mut resolution =
-                    self.prepare_resolution_for(&voted, facts.authority, concept)?;
+                    self.prepare_resolution_for(store, &voted, facts.authority, concept)?;
                 // Admission depends on current membership even for a pending or rejected vote.
                 if resolution.institution_before.is_none() {
                     resolution.institution_before = Some(institution.clone());
@@ -484,10 +483,8 @@ impl World {
                 office,
                 support,
             } => {
-                let before = self
-                    .institutions
-                    .get(institution)
-                    .ok_or(Error::Unavailable)?;
+                let before =
+                    crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
                 if before.status != InstitutionStatus::Active
                     || before.charter.jurisdiction != area
                     || !before.members.contains(&actor)

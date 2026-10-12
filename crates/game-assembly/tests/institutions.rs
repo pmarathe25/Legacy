@@ -143,19 +143,13 @@ fn can_eat(sim: &Simulation) -> bool {
 fn people_construct_and_adopt_rules_from_exclusion_then_do_real_work() {
     let mut sim = fixture(4);
     assert!(
-        sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .is_empty()
+        game_society::institutions(sim.canonical_state().components)
+            .next()
+            .is_none()
     );
     sim.advance(SimDuration(360_000)).unwrap();
-    let world = sim.canonical_state().state.institutions.as_ref().unwrap();
-    let institution = world
-        .institutions
-        .values()
+    let institution = game_society::institutions(sim.canonical_state().components)
+        .map(|(_, row)| row)
         .find(|i| i.status == InstitutionStatus::Active)
         .expect("people founded an arrangement");
     assert!(
@@ -203,9 +197,8 @@ fn people_construct_and_adopt_rules_from_exclusion_then_do_real_work() {
             .any(|e| matches!(e.event, EventKind::Produced { .. }))
     );
     assert!(
-        world
-            .memories
-            .values()
+        game_society::knowledges(sim.canonical_state().components)
+            .map(|(_, row)| row)
             .any(|m| m.values.values().any(|v| v.experiences > 0))
     );
 }
@@ -424,12 +417,8 @@ fn actual_contribution_teaches_a_value_that_changes_a_later_vote() {
     let id = found(&mut sim, charter);
     sim.advance(SimDuration(120_000)).unwrap();
     assert!(
-        sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        game_society::knowledge(sim.canonical_state().components, worker)
             .unwrap()
-            .memories[&worker]
             .values
             .values()
             .any(|v| v.weight >= 500)
@@ -546,41 +535,25 @@ fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
     sim.advance(MINUTE).unwrap();
     informed.advance(MINUTE).unwrap();
     assert!(
-        !sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        !game_society::hearing(sim.canonical_state().components, current)
             .unwrap()
-            .heard[&current]
+            .shared
     );
     assert!(
-        informed
-            .canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        game_society::hearing(informed.canonical_state().components, current)
             .unwrap()
-            .heard[&current]
+            .shared
     );
     assert!(
-        !sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        !game_society::institution(sim.canonical_state().components, id)
             .unwrap()
-            .institutions[&id]
             .grants
             .values()
             .any(|actors| actors.contains(&subject))
     );
     assert!(
-        informed
-            .canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        game_society::institution(informed.canonical_state().components, id)
             .unwrap()
-            .institutions[&id]
             .grants
             .values()
             .any(|actors| actors.contains(&subject))
@@ -667,12 +640,8 @@ fn invalid_scope_is_inert_and_new_factions_require_their_own_consent() {
     assert_eq!(newest.origin, Some(id));
     assert_eq!(newest.status, InstitutionStatus::Proposed);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        game_society::institution(sim.canonical_state().components, id)
             .unwrap()
-            .institutions[&id]
             .status,
         InstitutionStatus::Active
     );

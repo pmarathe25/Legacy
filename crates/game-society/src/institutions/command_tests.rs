@@ -1,20 +1,15 @@
 use super::*;
-fn setup() -> (World, ReferenceFacts, AuthorityFacts) {
+fn setup() -> (Runtime, Store, ReferenceFacts, AuthorityFacts) {
     let people = BTreeSet::from([PersonId(1), PersonId(2), PersonId(3)]);
+    let mut schema = game_ecs::Schema::new();
+    crate::storage::register_components(&mut schema).unwrap();
+    let mut store = Store::with_schema(schema);
+    for actor in &people {
+        insert_knowledge(&mut store, *actor, Knowledge::default()).unwrap();
+    }
     (
-        World {
-            institutions: BTreeMap::new(),
-            proposals: BTreeMap::new(),
-            concepts: BTreeMap::new(),
-            cases: BTreeMap::new(),
-            memories: people
-                .iter()
-                .map(|actor| (*actor, SocialMemory::default()))
-                .collect(),
-            last_event: 0,
-            exclusions: BTreeMap::new(),
-            heard: BTreeMap::new(),
-        },
+        Runtime::default(),
+        store,
         ReferenceFacts {
             people: people.clone(),
             eligible_locations: people.iter().map(|actor| (*actor, AreaId(4))).collect(),
@@ -90,7 +85,8 @@ fn rule() -> InstitutionalRule {
     }
 }
 fn prepare(
-    world: &World,
+    world: &Runtime,
+    store: &Store,
     refs: &ReferenceFacts,
     alive: &AuthorityFacts,
     actor: u64,
@@ -98,6 +94,7 @@ fn prepare(
     first: u64,
 ) -> Result<PreparedCommand, Error> {
     world.prepare_command(
+        store,
         &action,
         &CommandFacts {
             actor: PersonId(actor),
@@ -110,10 +107,11 @@ fn prepare(
         CommandIds { first },
     )
 }
-fn founded() -> (World, ReferenceFacts, AuthorityFacts) {
-    let (mut world, refs, alive) = setup();
+fn founded() -> (Runtime, Store, ReferenceFacts, AuthorityFacts) {
+    let (world, mut store, refs, alive) = setup();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -124,10 +122,11 @@ fn founded() -> (World, ReferenceFacts, AuthorityFacts) {
         100,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         2,
@@ -137,15 +136,16 @@ fn founded() -> (World, ReferenceFacts, AuthorityFacts) {
         102,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
-    (world, refs, alive)
+    (world, store, refs, alive)
 }
 #[test]
 fn founding_requires_actual_personal_acceptance_and_requests_only_promised_funding() {
-    let (mut world, mut refs, alive) = setup();
+    let (world, mut store, mut refs, alive) = setup();
     let proposal = prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -156,22 +156,27 @@ fn founding_requires_actual_personal_acceptance_and_requests_only_promised_fundi
         100,
     )
     .unwrap();
-    assert!(world.institutions.is_empty());
+    assert!(crate::storage::institutions(&store).next().is_none());
     assert_eq!(proposal.next_id, 102);
-    proposal.commit(&mut world).unwrap();
+    proposal.commit(&world, &mut store).unwrap();
     assert_eq!(
-        world.institutions[&InstitutionId(100)].status,
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .status,
         InstitutionStatus::Proposed
     );
     assert_eq!(
-        world.institutions[&InstitutionId(100)].members,
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .members,
         BTreeSet::from([PersonId(1)])
     );
     refs.eligible_locations.insert(PersonId(1), AreaId(5));
-    let before = world.clone();
+    let before = store.snapshot().unwrap();
     assert!(
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             2,
@@ -182,10 +187,11 @@ fn founding_requires_actual_personal_acceptance_and_requests_only_promised_fundi
         )
         .is_err()
     );
-    assert_eq!(world, before);
+    assert_eq!(store.snapshot().unwrap(), before);
     refs.eligible_locations.insert(PersonId(1), AreaId(4));
     let activation = prepare(
         &world,
+        &store,
         &refs,
         &alive,
         2,
@@ -204,18 +210,19 @@ fn founding_requires_actual_personal_acceptance_and_requests_only_promised_fundi
             ..
         })
     ));
-    activation.commit(&mut world).unwrap();
-    let institution = &world.institutions[&InstitutionId(100)];
+    activation.commit(&world, &mut store).unwrap();
+    let institution = &crate::storage::institution(&store, InstitutionId(100)).unwrap();
     assert_eq!(institution.status, InstitutionStatus::Active);
     assert_eq!(institution.funding, vec![AgreementId(102)]);
     assert_eq!(institution.office_support[&0], institution.members);
 }
 #[test]
 fn membership_and_departure_follow_the_particular_charter_and_remove_support_and_grants() {
-    let (mut world, refs, alive) = founded();
+    let (world, mut store, refs, alive) = founded();
     assert!(
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             3,
@@ -226,14 +233,13 @@ fn membership_and_departure_follow_the_particular_charter_and_remove_support_and
         )
         .is_err()
     );
-    world
-        .institutions
-        .get_mut(&InstitutionId(100))
+    crate::storage::institution_mut(&mut store, InstitutionId(100))
         .unwrap()
         .invited
         .insert(PersonId(3));
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         3,
@@ -243,16 +249,15 @@ fn membership_and_departure_follow_the_particular_charter_and_remove_support_and
         104,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
-    world
-        .institutions
-        .get_mut(&InstitutionId(100))
+    crate::storage::institution_mut(&mut store, InstitutionId(100))
         .unwrap()
         .grants
         .insert(ConceptId(101), BTreeSet::from([PersonId(3)]));
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         3,
@@ -262,26 +267,25 @@ fn membership_and_departure_follow_the_particular_charter_and_remove_support_and
         104,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
-    let institution = &world.institutions[&InstitutionId(100)];
+    let institution = &crate::storage::institution(&store, InstitutionId(100)).unwrap();
     assert!(!institution.members.contains(&PersonId(3)));
     assert!(!institution.office_support[&0].contains(&PersonId(3)));
     assert!(!institution.grants[&ConceptId(101)].contains(&PersonId(3)));
-    let mut open = world.clone();
-    open.institutions
-        .get_mut(&InstitutionId(100))
+    let mut open_store = store.clone();
+    crate::storage::institution_mut(&mut open_store, InstitutionId(100))
         .unwrap()
         .charter
         .open_membership = true;
-    open.institutions
-        .get_mut(&InstitutionId(100))
+    crate::storage::institution_mut(&mut open_store, InstitutionId(100))
         .unwrap()
         .invited
         .clear();
     assert!(
         prepare(
-            &open,
+            &world,
+            &open_store,
             &refs,
             &alive,
             3,
@@ -295,9 +299,10 @@ fn membership_and_departure_follow_the_particular_charter_and_remove_support_and
 }
 #[test]
 fn a_declining_founder_rejects_the_proposal_without_obligating_anybody() {
-    let (mut world, refs, alive) = setup();
+    let (world, mut store, refs, alive) = setup();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -308,10 +313,11 @@ fn a_declining_founder_rejects_the_proposal_without_obligating_anybody() {
         100,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         2,
@@ -321,16 +327,24 @@ fn a_declining_founder_rejects_the_proposal_without_obligating_anybody() {
         102,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
     assert_eq!(
-        world.institutions[&InstitutionId(100)].status,
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .status,
         InstitutionStatus::Rejected
     );
-    assert!(world.institutions[&InstitutionId(100)].funding.is_empty());
+    assert!(
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .funding
+            .is_empty()
+    );
     assert!(
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             2,
@@ -344,10 +358,11 @@ fn a_declining_founder_rejects_the_proposal_without_obligating_anybody() {
 }
 #[test]
 fn a_vote_and_resolution_commit_atomically_and_invalidate_competing_proposals() {
-    let (mut world, refs, alive) = founded();
+    let (world, mut store, refs, alive) = founded();
     for first in [104, 105] {
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             1,
@@ -358,43 +373,61 @@ fn a_vote_and_resolution_commit_atomically_and_invalidate_competing_proposals() 
             first,
         )
         .unwrap()
-        .commit(&mut world)
+        .commit(&world, &mut store)
         .unwrap();
     }
     let vote = InstitutionAction::Vote {
         proposal: RuleProposalId(104),
         support: true,
     };
-    prepare(&world, &refs, &alive, 1, vote.clone(), 106)
+    prepare(&world, &store, &refs, &alive, 1, vote.clone(), 106)
         .unwrap()
-        .commit(&mut world)
+        .commit(&world, &mut store)
         .unwrap();
     assert_eq!(
-        world.proposals[&RuleProposalId(104)].status,
+        crate::storage::proposal(&store, RuleProposalId(104))
+            .unwrap()
+            .status,
         RuleProposalStatus::Proposed
     );
-    let before = world.clone();
-    let adoption = prepare(&world, &refs, &alive, 2, vote.clone(), 106).unwrap();
-    assert_eq!(world, before);
+    let before = store.snapshot().unwrap();
+    let adoption = prepare(&world, &store, &refs, &alive, 2, vote.clone(), 106).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
     assert_eq!(adoption.next_id, 107);
-    adoption.commit(&mut world).unwrap();
-    assert_eq!(world.proposals[&RuleProposalId(104)].votes.len(), 2);
+    adoption.commit(&world, &mut store).unwrap();
     assert_eq!(
-        world.proposals[&RuleProposalId(104)].status,
+        crate::storage::proposal(&store, RuleProposalId(104))
+            .unwrap()
+            .votes
+            .len(),
+        2
+    );
+    assert_eq!(
+        crate::storage::proposal(&store, RuleProposalId(104))
+            .unwrap()
+            .status,
         RuleProposalStatus::Adopted
     );
     assert_eq!(
-        world.proposals[&RuleProposalId(105)].status,
+        crate::storage::proposal(&store, RuleProposalId(105))
+            .unwrap()
+            .status,
         RuleProposalStatus::Rejected
     );
-    assert_eq!(world.institutions[&InstitutionId(100)].revision, 1);
-    assert!(prepare(&world, &refs, &alive, 2, vote, 107).is_err());
+    assert_eq!(
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .revision,
+        1
+    );
+    assert!(prepare(&world, &store, &refs, &alive, 2, vote, 107).is_err());
 }
 #[test]
 fn stale_membership_or_proposal_preparation_never_partially_installs_a_vote() {
-    let (mut world, refs, alive) = founded();
+    let (world, mut store, refs, alive) = founded();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -405,10 +438,11 @@ fn stale_membership_or_proposal_preparation_never_partially_installs_a_vote() {
         104,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
     let pending = prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -419,20 +453,23 @@ fn stale_membership_or_proposal_preparation_never_partially_installs_a_vote() {
         105,
     )
     .unwrap();
-    world
-        .institutions
-        .get_mut(&InstitutionId(100))
+    crate::storage::institution_mut(&mut store, InstitutionId(100))
         .unwrap()
         .members
         .remove(&PersonId(2));
-    let before = world.clone();
-    assert_eq!(pending.commit(&mut world), Err(Error::Unavailable));
-    assert_eq!(world, before);
-    assert!(world.proposals[&RuleProposalId(104)].votes.is_empty());
+    let before = store.snapshot().unwrap();
+    assert_eq!(pending.commit(&world, &mut store), Err(Error::Unavailable));
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(
+        crate::storage::proposal(&store, RuleProposalId(104))
+            .unwrap()
+            .votes
+            .is_empty()
+    );
 }
 #[test]
 fn referenced_assets_rule_bounds_and_unknown_named_people_are_checked_without_a_simulation() {
-    let (world, mut refs, alive) = setup();
+    let (world, store, mut refs, alive) = setup();
     let mut charter = charter();
     charter.rules[0].when = RuleExpression::Fact(SocialCondition::KnownStockAtLeast {
         inventory: InventoryId(10),
@@ -442,6 +479,7 @@ fn referenced_assets_rule_bounds_and_unknown_named_people_are_checked_without_a_
     assert!(
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             1,
@@ -458,6 +496,7 @@ fn referenced_assets_rule_bounds_and_unknown_named_people_are_checked_without_a_
     assert!(
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             1,
@@ -475,6 +514,7 @@ fn referenced_assets_rule_bounds_and_unknown_named_people_are_checked_without_a_
     assert!(
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             1,
@@ -490,6 +530,7 @@ fn referenced_assets_rule_bounds_and_unknown_named_people_are_checked_without_a_
     assert!(
         prepare(
             &world,
+            &store,
             &refs,
             &alive,
             1,
@@ -501,25 +542,26 @@ fn referenced_assets_rule_bounds_and_unknown_named_people_are_checked_without_a_
         )
         .is_err()
     );
-    assert!(world.institutions.is_empty());
+    assert!(crate::storage::institutions(&store).next().is_none());
 }
 #[test]
 fn office_support_is_a_personal_choice_and_liveness_only_changes_effective_authority() {
-    let (mut world, refs, mut alive) = founded();
+    let (world, mut store, refs, mut alive) = founded();
     let action = InstitutionAction::SupportOffice {
         institution: InstitutionId(100),
         office: 0,
         support: false,
     };
-    prepare(&world, &refs, &alive, 2, action.clone(), 104)
+    prepare(&world, &store, &refs, &alive, 2, action.clone(), 104)
         .unwrap()
-        .commit(&mut world)
+        .commit(&world, &mut store)
         .unwrap();
-    assert!(prepare(&world, &refs, &alive, 2, action, 104).is_err());
-    let institution = &world.institutions[&InstitutionId(100)];
+    assert!(prepare(&world, &store, &refs, &alive, 2, action, 104).is_err());
+    let institution = &crate::storage::institution(&store, InstitutionId(100)).unwrap();
     assert!(!institution.office_effective(&institution.charter.offices[0], &alive));
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         2,
@@ -531,16 +573,16 @@ fn office_support_is_a_personal_choice_and_liveness_only_changes_effective_autho
         104,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
     alive.alive.remove(&PersonId(1));
-    let institution = &world.institutions[&InstitutionId(100)];
+    let institution = &crate::storage::institution(&store, InstitutionId(100)).unwrap();
     assert!(!institution.office_effective(&institution.charter.offices[0], &alive));
     assert!(institution.members.contains(&PersonId(1)));
 }
 #[test]
 fn external_changes_need_a_matching_owner_permit_and_remain_external_effects() {
-    let (mut world, refs, alive) = founded();
+    let (world, mut store, refs, alive) = founded();
     let change = InstitutionChange::RatifyRegional {
         commitment: RealmCommitmentId(44),
         revision: 2,
@@ -550,7 +592,7 @@ fn external_changes_need_a_matching_owner_permit_and_remain_external_effects() {
         institution: InstitutionId(100),
         change: change.clone(),
     };
-    assert!(prepare(&world, &refs, &alive, 1, action.clone(), 104).is_err());
+    assert!(prepare(&world, &store, &refs, &alive, 1, action.clone(), 104).is_err());
     let mut permit = ExternalChangePermit {
         actor: PersonId(1),
         institution: InstitutionId(100),
@@ -559,6 +601,7 @@ fn external_changes_need_a_matching_owner_permit_and_remain_external_effects() {
     };
     let facts = |permit: &ExternalChangePermit| {
         world.prepare_command(
+            &store,
             &action,
             &CommandFacts {
                 actor: PersonId(1),
@@ -575,15 +618,21 @@ fn external_changes_need_a_matching_owner_permit_and_remain_external_effects() {
     assert!(facts(&permit).is_err());
     permit.actor = PersonId(1);
     let plan = facts(&permit).unwrap();
-    plan.commit(&mut world).unwrap();
-    assert!(world.proposals[&RuleProposalId(104)].votes.is_empty());
+    plan.commit(&world, &mut store).unwrap();
+    assert!(
+        crate::storage::proposal(&store, RuleProposalId(104))
+            .unwrap()
+            .votes
+            .is_empty()
+    );
 }
 
 #[test]
 fn an_adoption_cannot_leave_a_new_concurrent_proposal_at_the_old_revision() {
-    let (mut world, refs, alive) = founded();
+    let (world, mut store, refs, alive) = founded();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -594,10 +643,11 @@ fn an_adoption_cannot_leave_a_new_concurrent_proposal_at_the_old_revision() {
         104,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -608,10 +658,11 @@ fn an_adoption_cannot_leave_a_new_concurrent_proposal_at_the_old_revision() {
         105,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
     let adoption = prepare(
         &world,
+        &store,
         &refs,
         &alive,
         2,
@@ -624,6 +675,7 @@ fn an_adoption_cannot_leave_a_new_concurrent_proposal_at_the_old_revision() {
     .unwrap();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -634,18 +686,19 @@ fn an_adoption_cannot_leave_a_new_concurrent_proposal_at_the_old_revision() {
         105,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
-    let before = world.clone();
-    assert_eq!(adoption.commit(&mut world), Err(Error::Unavailable));
-    assert_eq!(world, before);
+    let before = store.snapshot().unwrap();
+    assert_eq!(adoption.commit(&world, &mut store), Err(Error::Unavailable));
+    assert_eq!(store.snapshot().unwrap(), before);
 }
 
 #[test]
 fn a_new_faction_preparation_rechecks_membership_in_its_chosen_origin() {
-    let (mut world, refs, alive) = founded();
+    let (world, mut store, refs, alive) = founded();
     let fork = prepare(
         &world,
+        &store,
         &refs,
         &alive,
         1,
@@ -658,6 +711,7 @@ fn a_new_faction_preparation_rechecks_membership_in_its_chosen_origin() {
     .unwrap();
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         2,
@@ -667,24 +721,23 @@ fn a_new_faction_preparation_rechecks_membership_in_its_chosen_origin() {
         104,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
-    let before = world.clone();
-    assert_eq!(fork.commit(&mut world), Err(Error::Unavailable));
-    assert_eq!(world, before);
+    let before = store.snapshot().unwrap();
+    assert_eq!(fork.commit(&world, &mut store), Err(Error::Unavailable));
+    assert_eq!(store.snapshot().unwrap(), before);
 }
 
 #[test]
 fn an_adopted_deposition_changes_only_the_named_office_and_actual_voter_support() {
-    let (mut world, refs, alive) = founded();
-    world
-        .institutions
-        .get_mut(&InstitutionId(100))
+    let (world, mut store, refs, alive) = founded();
+    crate::storage::institution_mut(&mut store, InstitutionId(100))
         .unwrap()
         .invited
         .insert(PersonId(3));
     prepare(
         &world,
+        &store,
         &refs,
         &alive,
         3,
@@ -694,9 +747,14 @@ fn an_adopted_deposition_changes_only_the_named_office_and_actual_voter_support(
         104,
     )
     .unwrap()
-    .commit(&mut world)
+    .commit(&world, &mut store)
     .unwrap();
-    assert!(world.institutions[&InstitutionId(100)].office_support[&0].contains(&PersonId(3)));
+    assert!(
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .office_support[&0]
+            .contains(&PersonId(3))
+    );
     let change = InstitutionChange::Adjudicate {
         case: EnforcementCaseId(50),
         remedy: EnforcementRemedy::Depose {
@@ -717,6 +775,7 @@ fn an_adopted_deposition_changes_only_the_named_office_and_actual_voter_support(
         };
         let plan = world
             .prepare_command(
+                &store,
                 &action,
                 &CommandFacts {
                     actor: PersonId(actor),
@@ -730,7 +789,7 @@ fn an_adopted_deposition_changes_only_the_named_office_and_actual_voter_support(
             )
             .unwrap();
         if actor == 2 {
-            let before = &world.institutions[&InstitutionId(100)];
+            let before = &crate::storage::institution(&store, InstitutionId(100)).unwrap();
             let members = before.members.clone();
             let funding = before.funding.clone();
             let grants = before.grants.clone();
@@ -742,8 +801,8 @@ fn an_adopted_deposition_changes_only_the_named_office_and_actual_voter_support(
                     ..
                 }
             )));
-            plan.commit(&mut world).unwrap();
-            let after = &world.institutions[&InstitutionId(100)];
+            plan.commit(&world, &mut store).unwrap();
+            let after = &crate::storage::institution(&store, InstitutionId(100)).unwrap();
             assert_eq!(after.charter.offices[0].holder, PersonId(2));
             assert_eq!(
                 after.office_support[&0],
@@ -753,7 +812,7 @@ fn an_adopted_deposition_changes_only_the_named_office_and_actual_voter_support(
             assert_eq!(after.funding, funding);
             assert_eq!(after.grants, grants);
         } else {
-            plan.commit(&mut world).unwrap();
+            plan.commit(&world, &mut store).unwrap();
         }
         action = InstitutionAction::Vote {
             proposal: RuleProposalId(104),

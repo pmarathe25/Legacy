@@ -1,4 +1,5 @@
 use super::*;
+use game_ecs::Store;
 
 /// Authoritative facts for referenced IDs only. They confer neither title nor
 /// knowledge: the adapter obtains them to validate an attempted transition.
@@ -144,7 +145,7 @@ impl ReferenceFacts {
     }
     pub fn validate_charter(
         &self,
-        world: &World,
+        store: &Store,
         charter: &InstitutionCharter,
         actor: PersonId,
         area: AreaId,
@@ -164,9 +165,7 @@ impl ReferenceFacts {
             || charter.rules.len() > 16
             || charter.contributions.len() > 16
             || charter.evidence.len() > 8
-            || !world
-                .memories
-                .get(&actor)
+            || !crate::storage::knowledge(store, actor)
                 .is_some_and(|memory| charter.evidence.is_subset(&memory.cases))
             || !self.validate_procedure(&charter.procedure, charter)
         {
@@ -408,9 +407,10 @@ impl ReferenceRequest {
         }
     }
 }
-impl World {
+impl Runtime {
     pub fn command_references(
         &self,
+        store: &Store,
         actor: PersonId,
         action: &InstitutionAction,
     ) -> Result<ReferenceRequest, Error> {
@@ -433,14 +433,15 @@ impl World {
                 Some(*institution)
             }
             InstitutionAction::Vote { proposal, .. } => {
-                let proposal = self.proposals.get(proposal).ok_or(Error::Unavailable)?;
+                let proposal =
+                    crate::storage::proposal(store, proposal).ok_or(Error::Unavailable)?;
                 request.change(&proposal.change);
                 Some(proposal.institution)
             }
             _ => return Err(Error::Unavailable),
         };
         if let Some(id) = institution {
-            let institution = self.institutions.get(&id).ok_or(Error::Unavailable)?;
+            let institution = crate::storage::institution(store, id).ok_or(Error::Unavailable)?;
             request.charter(&institution.charter);
             request.people.extend(&institution.members);
         }

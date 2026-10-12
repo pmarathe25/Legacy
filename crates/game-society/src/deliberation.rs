@@ -1,7 +1,9 @@
 //! Local hearings and per-person institution discovery from explicit facts.
 use crate::institutions::*;
+use crate::storage::*;
 use crate::voting::VoterFacts;
 use game_core::*;
+use game_ecs::Store;
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy)]
 pub struct HearingActor {
@@ -43,9 +45,10 @@ pub struct DiscoveryDecision {
     pub search_after: SimTime,
     pub failure: FailureHandling,
 }
-impl World {
+impl Runtime {
     pub fn hearing_intentions(
         &self,
+        store: &Store,
         authority: &AuthorityFacts,
         actors: &[HearingActor],
     ) -> Result<Vec<(PersonId, InstitutionAction)>, Error> {
@@ -56,9 +59,8 @@ impl World {
             }
         }
         let mut choices = Vec::new();
-        for institution in self
-            .institutions
-            .values()
+        for institution in crate::storage::institutions(store)
+            .map(|(_, row)| row)
             .filter(|row| row.status == InstitutionStatus::Active)
         {
             for office in &institution.charter.offices {
@@ -71,16 +73,16 @@ impl World {
                 {
                     continue;
                 }
-                let Some(memory) = self.memories.get(&office.holder) else {
+                let Some(memory) = crate::storage::knowledge(store, office.holder) else {
                     continue;
                 };
                 for id in memory.cases.iter().rev().take(64) {
-                    let case = self.cases.get(id).ok_or(Error::Unavailable)?;
+                    let case = crate::storage::case(store, id).ok_or(Error::Unavailable)?;
                     if case.kind != SocialCaseKind::Exclusion
                         || case.outcome != SocialOutcome::Unresolved
                         || case.area != institution.charter.jurisdiction
                         || !institution.members.contains(&case.subject)
-                        || self.heard.contains_key(id)
+                        || crate::storage::hearing(store, id).is_some()
                         || case
                             .inventory
                             .is_none_or(|inventory| !office.inventories.contains(&inventory))
@@ -89,7 +91,7 @@ impl World {
                         continue;
                     }
                     let score = i64::from(case.need_band) * 100 + i64::from(actor.empathy) - 800
-                        + self.precedent_score(office.holder, case);
+                        + self.precedent_score(store, office.holder, case);
                     choices.push((
                         office.holder,
                         InstitutionAction::HearCase {
@@ -107,6 +109,7 @@ impl World {
     /// Request actual references mechanically; selection and validation remain here.
     pub fn discovery_references(
         &self,
+        store: &Store,
         actor: PersonId,
         area: AreaId,
         sites: &[LivelihoodSite],
@@ -114,14 +117,17 @@ impl World {
     ) -> ReferenceRequest {
         let mut request = ReferenceRequest::default();
         request.people.insert(actor);
-        for institution in self.institutions.values().filter(|row| {
-            row.charter.jurisdiction == area && row.status == InstitutionStatus::Active
-        }) {
+        for institution in crate::storage::institutions(store)
+            .map(|(_, row)| row)
+            .filter(|row| {
+                row.charter.jurisdiction == area && row.status == InstitutionStatus::Active
+            })
+        {
             request.charter(&institution.charter);
         }
-        if let Some(memory) = self.memories.get(&actor) {
+        if let Some(memory) = crate::storage::knowledge(store, actor) {
             for id in &memory.cases {
-                if let Some(case) = self.cases.get(id) {
+                if let Some(case) = crate::storage::case(store, id) {
                     request.people.extend([case.subject, case.counterpart]);
                     request.stocks.extend(case.inventory);
                 }
@@ -132,20 +138,31 @@ impl World {
         request
     }
     /// Call again after the previous person's action commits; this does not freeze a population-wide batch.
-    pub fn discovery_decision(&self, facts: DiscoveryFacts<'_>) -> Option<DiscoveryDecision> {
+    pub fn discovery_decision(
+        &self,
+        store: &Store,
+        facts: DiscoveryFacts<'_>,
+    ) -> Option<DiscoveryDecision> {
         let voter = facts.voter;
         let actor = voter.actor;
         let area = voter.local_area?;
-        if !voter.autonomous || self.memories.get(&actor)?.search_after > facts.now {
+        if !voter.autonomous
+            || crate::storage::knowledge(store, actor).is_none()
+            || crate::storage::requests(store, actor).map_or(SimTime(0), |row| row.search_after)
+                > facts.now
+        {
             return None;
         }
         let search_after = SimTime(facts.now.0.saturating_add(300_000));
-        for institution in self.institutions.values().filter(|row| {
-            row.charter.jurisdiction == area && row.status == InstitutionStatus::Active
-        }) {
+        for institution in crate::storage::institutions(store)
+            .map(|(_, row)| row)
+            .filter(|row| {
+                row.charter.jurisdiction == area && row.status == InstitutionStatus::Active
+            })
+        {
             if !institution.members.contains(&actor)
                 && institution.charter.open_membership
-                && self.charter_vote_score(voter, &institution.charter) >= 0
+                && self.charter_vote_score(store, voter, &institution.charter) >= 0
             {
                 return Some(DiscoveryDecision {
                     action: InstitutionAction::Join {
@@ -159,7 +176,7 @@ impl World {
                 && institution
                     .subjects(&institution.charter.procedure.proposers, facts.authority)
                     .contains(&actor)
-                && self.known_case_count(actor, actor, SocialCaseKind::Default) >= 2
+                && self.known_case_count(store, actor, actor, SocialCaseKind::Default) >= 2
                 && let Some((index, old)) =
                     institution
                         .charter
@@ -197,13 +214,11 @@ impl World {
                 }
             }
         }
-        let case = self
-            .memories
-            .get(&actor)?
+        let case = crate::storage::knowledge(store, actor)?
             .cases
             .iter()
             .rev()
-            .filter_map(|id| self.cases.get(id))
+            .filter_map(|id| crate::storage::case(store, id))
             .find(|case| {
                 case.kind == SocialCaseKind::Exclusion
                     && case.subject == actor
@@ -211,7 +226,7 @@ impl World {
                     && case.area == area
             })?;
         let inventory = case.inventory?;
-        if self.institutions.values().any(|institution|institution.charter.jurisdiction==area
+        if crate::storage::institutions(store).map(|(_, row)| row).any(|institution|institution.charter.jurisdiction==area
             && matches!(institution.status,InstitutionStatus::Active|InstitutionStatus::Proposed)
             && institution.charter.rules.iter().any(|rule|matches!(rule.effect,SocialEffect::Access{inventory:target,..} if target==inventory))) {return None;}
         let owner = case.counterpart;
@@ -259,7 +274,7 @@ impl World {
             stock.clone(),
             eligible,
         ];
-        if self.known_case_count(actor, actor, SocialCaseKind::Default) > 0 {
+        if self.known_case_count(store, actor, actor, SocialCaseKind::Default) > 0 {
             share_conditions.push(RuleExpression::Not(Box::new(RuleExpression::Fact(
                 SocialCondition::KnownDefaultsAtLeast(1),
             ))));
@@ -312,7 +327,7 @@ impl World {
             contributions: Vec::new(),
             evidence: BTreeSet::from([case.id]),
         };
-        (self.charter_vote_score(voter, &charter) >= 0).then_some(DiscoveryDecision {
+        (self.charter_vote_score(store, voter, &charter) >= 0).then_some(DiscoveryDecision {
             action: InstitutionAction::Found {
                 charter,
                 origin: None,
@@ -322,7 +337,8 @@ impl World {
         })
     }
     pub fn record_discovery_attempt(
-        &mut self,
+        &self,
+        store: &mut Store,
         actor: PersonId,
         decision: &DiscoveryDecision,
         accepted: bool,
@@ -330,10 +346,16 @@ impl World {
         if !accepted && decision.failure == FailureHandling::Propagate {
             return Err(Error::Unavailable);
         }
-        self.memories
-            .get_mut(&actor)
-            .ok_or(Error::Unavailable)?
-            .search_after = decision.search_after;
+        if crate::storage::knowledge(store, actor).is_none() {
+            return Err(Error::Unavailable);
+        }
+        insert_requests(
+            store,
+            actor,
+            Requests {
+                search_after: decision.search_after,
+            },
+        )?;
         Ok(())
     }
 }
@@ -360,10 +382,11 @@ pub struct RuleApplications {
     pub institution: InstitutionId,
     pub intents: Vec<RuleIntent>,
 }
-impl World {
+impl Runtime {
     /// Rule publication does not alter hearing, physical liveness or personal stock observations.
     pub fn rule_applications(
         &self,
+        store: &Store,
         authority: &AuthorityFacts,
         speakers: &[RuleSpeaker<'_>],
         locations: &BTreeMap<PersonId, AreaId>,
@@ -376,9 +399,8 @@ impl World {
             }
         }
         let mut batches = Vec::new();
-        for institution in self
-            .institutions
-            .values()
+        for institution in crate::storage::institutions(store)
+            .map(|(_, row)| row)
             .filter(|row| row.status == InstitutionStatus::Active)
         {
             let mut intents = Vec::new();
@@ -407,7 +429,7 @@ impl World {
                         known_stocks: speaker.known_stocks,
                     };
                     if let Some(intent) =
-                        self.rule_intent(institution, index, &input, authority, true, at)
+                        self.rule_intent(store, institution, index, &input, authority, true, at)
                     {
                         intents.push(intent);
                     }
@@ -437,14 +459,14 @@ pub struct DutyWork {
     pub actor: PersonId,
     pub site: SiteId,
 }
-impl World {
+impl Runtime {
     pub fn duty_workers(
         &self,
+        store: &Store,
         ledger: &game_agreements::State,
     ) -> Result<BTreeSet<PersonId>, Error> {
-        let agreements = self
-            .institutions
-            .values()
+        let agreements = crate::storage::institutions(store)
+            .map(|(_, row)| row)
             .filter(|institution| institution.status == InstitutionStatus::Active)
             .flat_map(|institution| {
                 institution
@@ -468,6 +490,7 @@ impl World {
     }
     pub fn duty_work_intentions(
         &self,
+        store: &Store,
         ledger: &game_agreements::State,
         workers: &[DutyWorker<'_>],
     ) -> Result<Vec<DutyWork>, Error> {
@@ -477,9 +500,8 @@ impl World {
                 return Err(Error::Unavailable);
             }
         }
-        let agreements = self
-            .institutions
-            .values()
+        let agreements = crate::storage::institutions(store)
+            .map(|(_, row)| row)
             .filter(|institution| institution.status == InstitutionStatus::Active)
             .flat_map(|institution| {
                 institution

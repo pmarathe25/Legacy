@@ -1,6 +1,8 @@
 //! Hearing and telling a known case are guarded Society transitions.
 use crate::institutions::*;
+use crate::storage::*;
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 pub struct CaseCommandFacts<'a> {
     pub actor: PersonId,
@@ -37,9 +39,10 @@ pub struct PreparedCaseCommand {
     recipient_knows: Option<(PersonId, bool)>,
     change: CaseChange,
 }
-impl World {
+impl Runtime {
     pub fn case_command_record(
         &self,
+        store: &Store,
         action: &InstitutionAction,
         at: SimTime,
     ) -> Option<SocialCaseView> {
@@ -49,7 +52,7 @@ impl World {
         else {
             return None;
         };
-        self.cases.get(case).map(|case| SocialCaseView {
+        crate::storage::case(store, case).map(|case| SocialCaseView {
             id: CaseId(0),
             outcome: SocialOutcome::Refused,
             observed_at: at,
@@ -58,6 +61,7 @@ impl World {
     }
     pub fn prepare_case_command(
         &self,
+        store: &Store,
         action: &InstitutionAction,
         facts: CaseCommandFacts<'_>,
     ) -> Result<PreparedCaseCommand, Error> {
@@ -67,10 +71,8 @@ impl World {
             }
             _ => return Err(Error::Unavailable),
         };
-        let case = self.cases.get(&id).ok_or(Error::Unavailable)?;
-        let actor_knows = self
-            .memories
-            .get(&facts.actor)
+        let case = crate::storage::case(store, id).ok_or(Error::Unavailable)?;
+        let actor_knows = crate::storage::knowledge(store, facts.actor)
             .is_some_and(|memory| memory.cases.contains(&id));
         if !actor_knows {
             return Err(Error::Unavailable);
@@ -82,10 +84,8 @@ impl World {
                 share,
                 ..
             } => {
-                let current = self
-                    .institutions
-                    .get(&institution)
-                    .ok_or(Error::Unavailable)?;
+                let current =
+                    crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
                 let mandate = current
                     .charter
                     .offices
@@ -101,7 +101,7 @@ impl World {
                     || !mandate.inventories.contains(&inventory)
                     || case.kind != SocialCaseKind::Exclusion
                     || case.area != facts.area
-                    || self.heard.contains_key(&id)
+                    || crate::storage::hearing(store, id).is_some()
                     || !current.members.contains(&case.subject)
                 {
                     return Err(Error::Unavailable);
@@ -112,9 +112,9 @@ impl World {
                         .iter()
                         .copied()
                         .find(|id| {
-                            matches!(self.concepts[id].effect,
+                            matches!(crate::storage::concept(store, id).expect("validated Society reference").effect,
                         SocialEffect::Access{inventory:target,allowed:true}if target==inventory)
-                                && self.concepts[id].authority == office
+                                && crate::storage::concept(store, id).expect("validated Society reference").authority == office
                         })
                         .ok_or(Error::Unavailable)?;
                     let mut actors = current.grants.get(&concept).cloned().unwrap_or_default();
@@ -126,7 +126,7 @@ impl World {
                 let refusal = if !share {
                     let refusal = facts
                         .refusal
-                        .filter(|id| id.0 > 0 && !self.cases.contains_key(id))
+                        .filter(|id| id.0 > 0 && !crate::storage::case(store, id).is_some())
                         .ok_or(Error::Unavailable)?;
                     Some((
                         refusal,
@@ -148,7 +148,7 @@ impl World {
                     actor: facts.actor,
                     case: case.clone(),
                     before_institution: Some(current.clone()),
-                    before_heard: self.heard.get(&id).copied(),
+                    before_heard: crate::storage::hearing(store, id).map(|row| row.shared),
                     before_grant: grant
                         .as_ref()
                         .map(|(concept, _)| (*concept, current.grants.get(concept).cloned())),
@@ -169,7 +169,8 @@ impl World {
                 {
                     return Err(Error::Unavailable);
                 }
-                let memory = self.memories.get(&recipient).ok_or(Error::Unavailable)?;
+                let memory =
+                    crate::storage::knowledge(store, recipient).ok_or(Error::Unavailable)?;
                 Ok(PreparedCaseCommand {
                     actor: facts.actor,
                     case: case.clone(),
@@ -186,20 +187,16 @@ impl World {
     }
 }
 impl PreparedCaseCommand {
-    pub fn verify(&self, world: &World) -> Result<(), Error> {
-        if world.cases.get(&self.case.id) != Some(&self.case)
-            || world
-                .memories
-                .get(&self.actor)
+    pub fn verify(&self, store: &Store) -> Result<(), Error> {
+        if crate::storage::case(store, self.case.id) != Some(&self.case)
+            || crate::storage::knowledge(store, self.actor)
                 .is_some_and(|memory| memory.cases.contains(&self.case.id))
                 != self.actor_knows
             || self.before_institution.as_ref().is_some_and(|institution| {
-                world.institutions.get(&institution.id) != Some(institution)
+                crate::storage::institution(store, institution.id) != Some(institution)
             })
             || self.recipient_knows.is_some_and(|(actor, before)| {
-                world
-                    .memories
-                    .get(&actor)
+                crate::storage::knowledge(store, actor)
                     .is_none_or(|memory| memory.cases.contains(&self.case.id) != before)
             })
         {
@@ -210,32 +207,35 @@ impl PreparedCaseCommand {
             refusal,
             ..
         } = &self.change
-            && (world.heard.get(&self.case.id).copied() != self.before_heard
+            && (crate::storage::hearing(store, self.case.id).map(|row| row.shared)
+                != self.before_heard
                 || self.before_grant.as_ref().is_some_and(|(concept, before)| {
-                    world
-                        .institutions
-                        .get(institution)
+                    crate::storage::institution(store, institution)
                         .and_then(|row| row.grants.get(concept))
                         != before.as_ref()
                 })
                 || refusal
                     .as_ref()
-                    .is_some_and(|(id, _, _)| world.cases.contains_key(id)))
+                    .is_some_and(|(id, _, _)| crate::storage::case(store, id).is_some()))
         {
             return Err(Error::Unavailable);
         }
         Ok(())
     }
-    pub fn commit(self, world: &mut World) -> Result<CaseCommandEffects, Error> {
-        self.verify(world)?;
+    pub fn stage_into(
+        self,
+        world: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<CaseCommandEffects, Error> {
+        self.verify(store)?;
         match self.change {
             CaseChange::Tell { recipient } => {
-                world
-                    .memories
-                    .get_mut(&recipient)
-                    .unwrap()
-                    .cases
-                    .insert(self.case.id);
+                let mut row = crate::storage::knowledge(store, recipient)
+                    .ok_or(Error::Unavailable)?
+                    .clone();
+                row.cases.insert(self.case.id);
+                batch.insert(StableId(recipient.0), row);
                 Ok(CaseCommandEffects {
                     publish: None,
                     recorded: None,
@@ -248,23 +248,19 @@ impl PreparedCaseCommand {
                 refusal,
             } => {
                 if let Some((concept, actors)) = grant {
-                    world
-                        .institutions
-                        .get_mut(&institution)
-                        .unwrap()
-                        .grants
-                        .insert(concept, actors);
+                    let mut row = crate::storage::institution(store, institution)
+                        .ok_or(Error::Unavailable)?
+                        .clone();
+                    row.grants.insert(concept, actors);
+                    batch.insert(StableId(institution.0), row);
                 }
-                world.heard.insert(self.case.id, shared);
+                batch.insert(StableId(self.case.id.0), Hearing { shared });
                 let recorded = if let Some((id, case, observers)) = refusal {
                     let subject = case.subject;
-                    world.remember_case(case, None, &observers);
-                    world
-                        .memories
-                        .get_mut(&self.actor)
-                        .unwrap()
-                        .cases
-                        .insert(id);
+                    let mut learning =
+                        world.prepare_case_learning(store, case, None, &observers)?;
+                    learning.also_remember(store, self.actor);
+                    learning.stage_into(store, batch)?;
                     Some((id, subject))
                 } else {
                     None
@@ -275,6 +271,12 @@ impl PreparedCaseCommand {
                 })
             }
         }
+    }
+    pub fn commit(self, world: &Runtime, store: &mut Store) -> Result<CaseCommandEffects, Error> {
+        let mut batch = Batch::new();
+        let effects = self.stage_into(world, store, &mut batch)?;
+        store.apply_batch(batch)?;
+        Ok(effects)
     }
 }
 #[cfg(test)]

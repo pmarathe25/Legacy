@@ -150,22 +150,16 @@ impl Simulation {
             last_event: sim.host.next_event() - 1,
             last_review: sim.host.clock().time,
         });
-        sim.host.state.institutions = Some(institutions::World {
-            institutions: BTreeMap::new(),
-            proposals: BTreeMap::new(),
-            concepts: BTreeMap::new(),
-            cases: BTreeMap::new(),
-            memories: sim
-                .host
-                .state
-                .people
-                .iter()
-                .map(|p| (p.id, institutions::SocialMemory::default()))
-                .collect(),
+        sim.host.state.institutions = Some(institutions::Runtime {
             last_event: sim.host.next_event() - 1,
-            exclusions: BTreeMap::new(),
-            heard: BTreeMap::new(),
         });
+        for person in &sim.host.state.people {
+            game_society::insert_knowledge(
+                &mut sim.host.storage,
+                person.id,
+                game_society::Knowledge::default(),
+            )?;
+        }
         let treasury = sim.debug_add_inventory(
             Good::Food,
             InventoryLocation::Area(court),
@@ -269,14 +263,8 @@ impl Simulation {
                 origin: None,
             },
         )?;
-        let institution = *sim
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .keys()
+        let institution = game_society::institutions(&sim.host.storage)
+            .map(|(id, _)| id)
             .next_back()
             .unwrap();
         for actor in founders.iter().copied().filter(|p| *p != judge) {
@@ -314,14 +302,8 @@ impl Simulation {
                 },
             },
         )?;
-        let proposal = *sim
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .proposals
-            .keys()
+        let proposal = game_society::proposals(&sim.host.storage)
+            .map(|(id, _)| id)
             .next_back()
             .unwrap();
         for actor in [judge, filer] {
@@ -387,13 +369,7 @@ impl Simulation {
         institution: InstitutionId,
         office: u16,
     ) -> Option<&OfficeMandate> {
-        let i = self
-            .host
-            .state
-            .institutions
-            .as_ref()?
-            .institutions
-            .get(&institution)?;
+        let i = game_society::institution(&self.host.storage, institution)?;
         let mandate = i.charter.offices.iter().find(|o| o.slot == office)?;
         self.office_effective(i, mandate).then_some(mandate)
     }
@@ -591,17 +567,10 @@ impl Simulation {
             .state
             .institutions
             .as_ref()
-            .and_then(|w| w.proposals.get(&proposal))
+            .and_then(|_| game_society::proposal(&self.host.storage, proposal))
             .ok_or(Error::Unavailable)?;
-        let community = self
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .get(&institution)
-            .ok_or(Error::Unavailable)?;
+        let community =
+            game_society::institution(&self.host.storage, institution).ok_or(Error::Unavailable)?;
         if record.institution != institution {
             return Err(Error::Unavailable);
         }
@@ -617,7 +586,9 @@ impl Simulation {
         proposal: RuleProposalId,
     ) -> Result<(), Error> {
         let owner_now = self.host.clock().time;
-        let change = self.host.state.institutions.as_ref().unwrap().proposals[&proposal].clone();
+        let change = game_society::proposal(&self.host.storage, proposal)
+            .expect("validated Society reference")
+            .clone();
         match change.change {
             InstitutionChange::EnforcementPolicy { office, policy } => {
                 self.enforcement_world();
@@ -675,7 +646,8 @@ impl Simulation {
                 };
                 record.changed_at = now;
                 record.notice_area = Some(
-                    self.host.state.institutions.as_ref().unwrap().institutions[&institution]
+                    game_society::institution(&self.host.storage, institution)
+                        .expect("validated Society reference")
                         .charter
                         .jurisdiction,
                 );
@@ -910,14 +882,7 @@ impl Simulation {
                 let (topic, target, basis, contact) = self
                     .evidence_for(actor, *evidence)
                     .ok_or(Error::Unavailable)?;
-                let i = self
-                    .host
-                    .state
-                    .institutions
-                    .as_ref()
-                    .unwrap()
-                    .institutions
-                    .get(institution)
+                let i = game_society::institution(&self.host.storage, institution)
                     .ok_or(Error::Unavailable)?;
                 let officer = self
                     .enforcement_office(*institution, *office)
@@ -1040,8 +1005,8 @@ impl Simulation {
                         actual.status,
                         EnforcementStatus::Decided | EnforcementStatus::Refused
                     )
-                    || self.host.state.institutions.as_ref().unwrap().institutions
-                        [&actual.institution]
+                    || game_society::institution(&self.host.storage, actual.institution)
+                        .unwrap()
                         .charter
                         .jurisdiction
                         != area
@@ -1265,14 +1230,8 @@ impl Simulation {
                         snapshot.contact = contact;
                     }
                     known.insert(snapshot.id, *snapshot);
-                    if let Some(memory) = self
-                        .host
-                        .state
-                        .institutions
-                        .as_mut()
-                        .unwrap()
-                        .memories
-                        .get_mut(&talk.recipient)
+                    if let Some(memory) =
+                        game_society::knowledge_mut(&mut self.host.storage, talk.recipient)
                         && memory
                             .institutions
                             .get(&institution.id)
@@ -1388,7 +1347,8 @@ impl Simulation {
                     until,
                 })
             || proposal.deadline < until
-            || self.host.state.institutions.as_ref().unwrap().institutions[&case.institution]
+            || game_society::institution(&self.host.storage, case.institution)
+                .expect("validated Society reference")
                 .charter
                 .jurisdiction
                 != area
@@ -1610,7 +1570,8 @@ impl Simulation {
                         .insert(person, contact);
                 }
                 for policy in policies.iter().filter(|p| {
-                    self.host.state.institutions.as_ref().unwrap().institutions[&p.institution]
+                    game_society::institution(&self.host.storage, p.institution)
+                        .expect("validated Society reference")
                         .charter
                         .jurisdiction
                         == area
@@ -1689,7 +1650,8 @@ impl Simulation {
                     .into_iter()
                     .flat_map(|institutions| institutions.iter())
                     .filter(|(id, _)| {
-                        self.host.state.institutions.as_ref().unwrap().institutions[id]
+                        game_society::institution(&self.host.storage, *id)
+                            .expect("validated Society reference")
                             .charter
                             .jurisdiction
                             == area
@@ -2164,8 +2126,8 @@ impl Simulation {
                             _ => false,
                         }
                 });
-                let institution = &self.host.state.institutions.as_ref().unwrap().institutions
-                    [&policy.institution];
+                let institution =
+                    &game_society::institution(&self.host.storage, policy.institution).unwrap();
                 if !duplicate
                     && policy.policy.topics.contains(&topic)
                     && self
@@ -2421,7 +2383,7 @@ impl Simulation {
                 "invalid enforcement procedures, evidence, work or personal knowledge".into(),
             )
         };
-        let institutions = self.host.state.institutions.as_ref().ok_or_else(bad)?;
+        self.host.state.institutions.as_ref().ok_or_else(bad)?;
         self.host.state.physical.as_ref().ok_or_else(bad)?;
         if world.last_event >= self.host.next_event() {
             return Err(bad());
@@ -2433,11 +2395,11 @@ impl Simulation {
             EnforcementEvidence::Incident(i)=>self.host.state.property.as_ref().is_some_and(|_|game_property::incident(&self.host.storage,i.id).is_some()) && people.contains(&i.actor) && game_cargo::inventory(&self.host.storage, i.source).is_some() && game_cargo::inventory(&self.host.storage, i.destination).is_some() && area(i.area) && i.started_at<=i.changed_at && i.changed_at<=i.learned_at && i.learned_at<=self.host.clock().time && i.quantity.0>0,
             EnforcementEvidence::Assault(a)=>people.contains(&a.attacker) && people.contains(&a.target) && area(a.area) && a.observed_at<=self.host.clock().time && self.host.events().iter().any(|e|EventId(e.sequence)==a.event && e.at==a.observed_at && matches!(e.event,EventKind::Struck {actor,target,damage,..} if actor==a.attacker && target==a.target && damage==a.damage)),
             EnforcementEvidence::Default(o)=>self.host.state.agreements.as_ref().is_some_and(|w|w.obligations.contains_key(&o.id)) && o.defaulted && o.performed<o.amount() && o.observed_at<=o.learned_at && o.learned_at<=self.host.clock().time && o.term.parties().iter().all(|p|people.contains(p)),
-            EnforcementEvidence::Social(c)=>institutions.cases.get(&c.id)==Some(c),
+            EnforcementEvidence::Social(c)=>game_society::case(&self.host.storage,c.id)==Some(c),
         }
         };
         for (id, offices) in &world.policies {
-            let institution = institutions.institutions.get(id).ok_or_else(bad)?;
+            let institution = game_society::institution(&self.host.storage, id).ok_or_else(bad)?;
             for (office, policy) in offices {
                 if policy.institution != *id
                     || policy.office != *office
@@ -2451,10 +2413,8 @@ impl Simulation {
             }
         }
         for (id, case) in &world.cases {
-            let institution = institutions
-                .institutions
-                .get(&case.institution)
-                .ok_or_else(bad)?;
+            let institution =
+                game_society::institution(&self.host.storage, case.institution).ok_or_else(bad)?;
             if *id != case.id
                 || id.0 >= self.host.next_id()
                 || !people.contains(&case.filer)
@@ -2484,9 +2444,7 @@ impl Simulation {
                 return Err(bad());
             }
             if let Some(judgment) = &case.judgment {
-                let proposal = institutions
-                    .proposals
-                    .get(&judgment.proposal)
+                let proposal = game_society::proposal(&self.host.storage, judgment.proposal)
                     .ok_or_else(bad)?;
                 if judgment.id.0 >= self.host.next_id()
                     || judgment.adopted_at > self.host.clock().time
@@ -2619,7 +2577,7 @@ impl Simulation {
                 return Err(bad());
             }
             for (id, offices) in known {
-                if !institutions.institutions.contains_key(id)
+                if !game_society::institution(&self.host.storage, id).is_some()
                     || offices.iter().any(|(slot, p)| {
                         p.institution != *id
                             || p.office != *slot
@@ -2627,7 +2585,8 @@ impl Simulation {
                             || p.observed_at > self.host.clock().time
                             || self
                                 .validate_enforcement_policy(
-                                    &institutions.institutions[id],
+                                    game_society::institution(&self.host.storage, id)
+                                        .expect("validated Society reference"),
                                     *slot,
                                     &p.policy,
                                 )
@@ -2725,13 +2684,8 @@ mod atomic_tests {
         sim.canonical_state().state.people[index].id
     }
     fn court(sim: &Simulation) -> InstitutionId {
-        *sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .keys()
+        game_society::institutions(sim.canonical_state().components)
+            .map(|(id, _)| id)
             .next()
             .unwrap()
     }
@@ -2819,15 +2773,9 @@ mod atomic_tests {
             },
         )
         .unwrap();
-        let proposal = *sim
-            .canonical_state()
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .proposals
-            .keys()
-            .last()
+        let proposal = game_society::proposals(sim.canonical_state().components)
+            .map(|(id, _)| id)
+            .next_back()
             .unwrap();
         for who in [judge, filer] {
             sim.debug_institution_action(
@@ -2868,15 +2816,9 @@ mod atomic_tests {
             },
         )
         .unwrap();
-        let proposal = *sim
-            .canonical_state()
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .proposals
-            .keys()
-            .last()
+        let proposal = game_society::proposals(sim.canonical_state().components)
+            .map(|(id, _)| id)
+            .next_back()
             .unwrap();
         sim.debug_institution_action(
             judge,

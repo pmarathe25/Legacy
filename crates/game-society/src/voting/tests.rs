@@ -27,17 +27,25 @@ fn voter(knowledge: &Knowledge) -> VoterFacts<'_> {
         knowledge,
     }
 }
-fn world() -> World {
-    World {
-        institutions: BTreeMap::new(),
-        proposals: BTreeMap::new(),
-        concepts: BTreeMap::new(),
-        cases: BTreeMap::new(),
-        memories: BTreeMap::new(),
-        last_event: 0,
-        exclusions: BTreeMap::new(),
-        heard: BTreeMap::new(),
+fn world() -> (Runtime, Store) {
+    let mut schema = game_ecs::Schema::new();
+    crate::register_components(&mut schema).unwrap();
+    (Runtime::default(), Store::with_schema(schema))
+}
+fn seed_institution(store: &mut Store, mut row: Institution) {
+    if row.concepts.is_empty() {
+        for (n, rule) in row.charter.rules.iter().enumerate() {
+            let id = ConceptId(row.id.0 * 100 + n as u64);
+            crate::storage::insert_concept(
+                store,
+                id,
+                crate::storage::Concept { rule: rule.clone() },
+            )
+            .unwrap();
+            row.concepts.push(id);
+        }
     }
+    crate::storage::insert_institution(store, row.id, row).unwrap();
 }
 fn labor() -> InstitutionalRule {
     InstitutionalRule {
@@ -108,7 +116,7 @@ fn stock(amount: u64) -> StockKnowledge {
 #[test]
 fn access_uses_personal_stock_threshold_and_actual_custodian_fact() {
     let mut known = Knowledge::default();
-    let state = world();
+    let (state, store) = world();
     let c = charter(vec![]);
     let rule = InstitutionalRule {
         effect: SocialEffect::Access {
@@ -117,13 +125,19 @@ fn access_uses_personal_stock_threshold_and_actual_custodian_fact() {
         },
         ..labor()
     };
-    assert_eq!(state.rule_vote_score(&voter(&known), &c, &rule), 0);
+    assert_eq!(state.rule_vote_score(&store, &voter(&known), &c, &rule), 0);
     known.stocks.insert(InventoryId(4), stock(999));
-    assert_eq!(state.rule_vote_score(&voter(&known), &c, &rule), 0);
+    assert_eq!(state.rule_vote_score(&store, &voter(&known), &c, &rule), 0);
     known.stocks.insert(InventoryId(4), stock(1_000));
-    assert_eq!(state.rule_vote_score(&voter(&known), &c, &rule), 1_200);
+    assert_eq!(
+        state.rule_vote_score(&store, &voter(&known), &c, &rule),
+        1_200
+    );
     known.custodians.insert(InventoryId(4), PersonId(1));
-    assert_eq!(state.rule_vote_score(&voter(&known), &c, &rule), 900);
+    assert_eq!(
+        state.rule_vote_score(&store, &voter(&known), &c, &rule),
+        900
+    );
     let denied = InstitutionalRule {
         effect: SocialEffect::Access {
             inventory: InventoryId(4),
@@ -131,17 +145,24 @@ fn access_uses_personal_stock_threshold_and_actual_custodian_fact() {
         },
         ..rule
     };
-    assert_eq!(state.rule_vote_score(&voter(&known), &c, &denied), -1_200);
+    assert_eq!(
+        state.rule_vote_score(&store, &voter(&known), &c, &denied),
+        -1_200
+    );
 }
 #[test]
 fn labor_delivery_and_office_beneficiaries_keep_their_distinct_costs() {
     let known = Knowledge::default();
-    let state = world();
+    let (state, store) = world();
     let mut c = charter(vec![]);
     let rule = labor();
-    assert_eq!(state.rule_vote_score(&voter(&known), &c, &rule), -500);
+    assert_eq!(
+        state.rule_vote_score(&store, &voter(&known), &c, &rule),
+        -500
+    );
     assert_eq!(
         state.rule_vote_score(
+            &store,
             &VoterFacts {
                 supports_others: true,
                 ..voter(&known)
@@ -167,7 +188,7 @@ fn labor_delivery_and_office_beneficiaries_keep_their_distinct_costs() {
         },
         authority: 0,
     };
-    assert_eq!(state.rule_vote_score(&voter(&known), &c, &own), 200);
+    assert_eq!(state.rule_vote_score(&store, &voter(&known), &c, &own), 200);
     let delivery = InstitutionalRule {
         effect: SocialEffect::Delivery {
             source: InventoryId(4),
@@ -179,26 +200,42 @@ fn labor_delivery_and_office_beneficiaries_keep_their_distinct_costs() {
         ..labor()
     };
     assert_eq!(
-        state.rule_vote_score(&voter(&known), &c, &delivery),
+        state.rule_vote_score(&store, &voter(&known), &c, &delivery),
         -100_000
     );
 }
 #[test]
 fn learning_uses_only_latest32_effect_matches_and_clamps_in_both_directions() {
-    let mut state = world();
+    let (state, mut store) = world();
     let rule = labor();
     let actor = PersonId(1);
     for id in 1..=33 {
-        state.concepts.insert(ConceptId(id), rule.clone());
-        state.memories.entry(actor).or_default().values.insert(
+        crate::storage::insert_concept(
+            &mut store,
             ConceptId(id),
-            ConceptValue {
-                weight: if id == 1 { 2_000 } else { 1 },
-                experiences: 1,
-            },
-        );
+            crate::storage::Concept { rule: rule.clone() },
+        )
+        .unwrap();
+        if crate::storage::knowledge(&store, actor).is_none() {
+            crate::storage::insert_knowledge(
+                &mut store,
+                actor,
+                crate::storage::Knowledge::default(),
+            )
+            .unwrap();
+        }
+        crate::storage::knowledge_mut(&mut store, actor)
+            .unwrap()
+            .values
+            .insert(
+                ConceptId(id),
+                ConceptValue {
+                    weight: if id == 1 { 2_000 } else { 1 },
+                    experiences: 1,
+                },
+            );
     }
-    assert_eq!(state.learned_rule_score(actor, &rule), 32);
+    assert_eq!(state.learned_rule_score(&store, actor, &rule), 32);
     let changed_amount = InstitutionalRule {
         effect: SocialEffect::Labor {
             site: SiteId(20),
@@ -208,7 +245,7 @@ fn learning_uses_only_latest32_effect_matches_and_clamps_in_both_directions() {
         },
         ..rule.clone()
     };
-    assert_eq!(state.learned_rule_score(actor, &changed_amount), 32);
+    assert_eq!(state.learned_rule_score(&store, actor, &changed_amount), 32);
     let unrelated = InstitutionalRule {
         effect: SocialEffect::Access {
             inventory: InventoryId(4),
@@ -216,21 +253,29 @@ fn learning_uses_only_latest32_effect_matches_and_clamps_in_both_directions() {
         },
         ..rule.clone()
     };
-    assert_eq!(state.learned_rule_score(actor, &unrelated), 0);
-    for value in state.memories.get_mut(&actor).unwrap().values.values_mut() {
+    assert_eq!(state.learned_rule_score(&store, actor, &unrelated), 0);
+    for value in crate::storage::knowledge_mut(&mut store, actor)
+        .unwrap()
+        .values
+        .values_mut()
+    {
         value.weight = 2_000;
     }
-    assert_eq!(state.learned_rule_score(actor, &rule), 4_000);
-    for value in state.memories.get_mut(&actor).unwrap().values.values_mut() {
+    assert_eq!(state.learned_rule_score(&store, actor, &rule), 4_000);
+    for value in crate::storage::knowledge_mut(&mut store, actor)
+        .unwrap()
+        .values
+        .values_mut()
+    {
         value.weight = -2_000;
     }
-    assert_eq!(state.learned_rule_score(actor, &rule), -4_000);
+    assert_eq!(state.learned_rule_score(&store, actor, &rule), -4_000);
 }
 #[test]
 fn charter_trust_and_promised_contributions_preserve_signed_scores() {
     let mut known = Knowledge::default();
     known.trust.insert(PersonId(2), 150);
-    let state = world();
+    let (state, store) = world();
     let mut c = charter(vec![]);
     c.contributions.push(AgreementTerm::Labor {
         debtor: PersonId(1),
@@ -239,7 +284,7 @@ fn charter_trust_and_promised_contributions_preserve_signed_scores() {
         millis: 60_000,
         deadline: SimTime(60_000),
     });
-    assert_eq!(state.charter_vote_score(&voter(&known), &c), -350);
+    assert_eq!(state.charter_vote_score(&store, &voter(&known), &c), -350);
     c.contributions[0] = AgreementTerm::Delivery {
         debtor: PersonId(2),
         creditor: PersonId(1),
@@ -248,22 +293,22 @@ fn charter_trust_and_promised_contributions_preserve_signed_scores() {
         quantity: Quantity(700),
         deadline: SimTime(60_000),
     };
-    assert_eq!(state.charter_vote_score(&voter(&known), &c), 850);
+    assert_eq!(state.charter_vote_score(&store, &voter(&known), &c), 850);
 }
 #[test]
 fn founder_replies_are_local_autonomous_unanswered_and_ordered_without_mutation() {
     let known = Knowledge::default();
-    let mut state = world();
-    state.institutions.insert(
-        InstitutionId(11),
+    let (state, mut store) = world();
+    seed_institution(
+        &mut store,
         institution(11, vec![labor()], InstitutionStatus::Proposed),
     );
-    state.institutions.insert(
-        InstitutionId(10),
+    seed_institution(
+        &mut store,
         institution(10, vec![], InstitutionStatus::Proposed),
     );
-    let before = state.clone();
-    let replies = state.formation_replies(&[voter(&known)]).unwrap();
+    let before = store.snapshot().unwrap();
+    let replies = state.formation_replies(&store, &[voter(&known)]).unwrap();
     assert_eq!(
         replies,
         vec![
@@ -281,45 +326,47 @@ fn founder_replies_are_local_autonomous_unanswered_and_ordered_without_mutation(
             )
         ]
     );
-    assert_eq!(state, before);
+    assert_eq!(store.snapshot().unwrap(), before);
     assert!(
         state
-            .formation_replies(&[VoterFacts {
-                local_area: None,
-                ..voter(&known)
-            }])
+            .formation_replies(
+                &store,
+                &[VoterFacts {
+                    local_area: None,
+                    ..voter(&known)
+                }]
+            )
             .unwrap()
             .is_empty()
     );
     assert!(
         state
-            .formation_replies(&[VoterFacts {
-                autonomous: false,
-                ..voter(&known)
-            }])
+            .formation_replies(
+                &store,
+                &[VoterFacts {
+                    autonomous: false,
+                    ..voter(&known)
+                }]
+            )
             .unwrap()
             .is_empty()
     );
     assert!(
         state
-            .formation_replies(&[voter(&known), voter(&known)])
+            .formation_replies(&store, &[voter(&known), voter(&known)])
             .is_err()
     );
-    state
-        .institutions
-        .get_mut(&InstitutionId(10))
+    crate::storage::institution_mut(&mut store, InstitutionId(10))
         .unwrap()
         .members
         .insert(PersonId(1));
-    state
-        .institutions
-        .get_mut(&InstitutionId(11))
+    crate::storage::institution_mut(&mut store, InstitutionId(11))
         .unwrap()
         .declined
         .insert(PersonId(1));
     assert!(
         state
-            .formation_replies(&[voter(&known)])
+            .formation_replies(&store, &[voter(&known)])
             .unwrap()
             .is_empty()
     );
@@ -327,7 +374,7 @@ fn founder_replies_are_local_autonomous_unanswered_and_ordered_without_mutation(
 #[test]
 fn real_institutional_labor_and_remembered_contribution_change_later_founder_response() {
     let known = Knowledge::default();
-    let mut society = world();
+    let (society, mut store) = world();
     let actor = PersonId(1);
     let beneficiary = PersonId(2);
     let rule = labor();
@@ -337,14 +384,19 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
     active
         .office_support
         .insert(0, BTreeSet::from([beneficiary]));
-    society.concepts.insert(ConceptId(21), rule.clone());
-    society.institutions.insert(active.id, active);
-    society.institutions.insert(
-        InstitutionId(11),
+    crate::storage::insert_concept(
+        &mut store,
+        ConceptId(21),
+        crate::storage::Concept { rule: rule.clone() },
+    )
+    .unwrap();
+    seed_institution(&mut store, active);
+    seed_institution(
+        &mut store,
         institution(11, vec![rule], InstitutionStatus::Proposed),
     );
     assert_eq!(
-        society.formation_replies(&[voter(&known)]).unwrap(),
+        society.formation_replies(&store, &[voter(&known)]).unwrap(),
         vec![(
             actor,
             InstitutionAction::Decline {
@@ -358,7 +410,8 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
     let stocks = BTreeMap::new();
     let intent = society
         .rule_intent(
-            &society.institutions[&InstitutionId(10)],
+            &store,
+            crate::storage::institution(&store, InstitutionId(10)).unwrap(),
             0,
             &ConditionInput {
                 observer: beneficiary,
@@ -395,7 +448,9 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
         .unwrap()
         .commit(&mut agreements)
         .unwrap();
-    society.register_duty(&intent, AgreementId(40)).unwrap();
+    society
+        .register_duty(&mut store, &intent, AgreementId(40))
+        .unwrap();
     agreements
         .prepare_labor(
             SimTime(0),
@@ -409,33 +464,42 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
         .commit(&mut agreements)
         .unwrap();
     assert_eq!(agreements.obligations[&ObligationId(41)].performed, 60_000);
-    society.remember_case(
-        SocialCaseView {
-            id: CaseId(30),
-            kind: SocialCaseKind::Cooperation,
-            subject: actor,
-            counterpart: beneficiary,
-            area: AreaId(3),
-            inventory: None,
-            good: Good::Timber,
-            need_band: 0,
-            reciprocal: false,
-            outcome: SocialOutcome::Contributed,
-            observed_at: SimTime(60_000),
-        },
-        Some(concept),
-        &BTreeMap::from([(actor, 500)]),
+    society
+        .remember_case(
+            &mut store,
+            SocialCaseView {
+                id: CaseId(30),
+                kind: SocialCaseKind::Cooperation,
+                subject: actor,
+                counterpart: beneficiary,
+                area: AreaId(3),
+                inventory: None,
+                good: Good::Timber,
+                need_band: 0,
+                reciprocal: false,
+                outcome: SocialOutcome::Contributed,
+                observed_at: SimTime(60_000),
+            },
+            Some(concept),
+            &BTreeMap::from([(actor, 500)]),
+        )
+        .unwrap();
+    assert_eq!(
+        crate::storage::knowledge(&store, actor).unwrap().values[&concept].weight,
+        500
     );
-    assert_eq!(society.memories[&actor].values[&concept].weight, 500);
     assert_eq!(
         society.charter_vote_score(
+            &store,
             &voter(&known),
-            &society.institutions[&InstitutionId(11)].charter
+            &crate::storage::institution(&store, InstitutionId(11))
+                .unwrap()
+                .charter
         ),
         0
     );
     assert_eq!(
-        society.formation_replies(&[voter(&known)]).unwrap(),
+        society.formation_replies(&store, &[voter(&known)]).unwrap(),
         vec![(
             actor,
             InstitutionAction::Join {

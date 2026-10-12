@@ -1,6 +1,7 @@
 //! Institutional publication and social-case witnesses preserve personal locality.
 use crate::institutions::*;
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy)]
 pub struct ObserverFacts {
@@ -89,9 +90,10 @@ pub struct PreparedPublication {
     before: Vec<(PersonId, Option<InstitutionView>)>,
     view: InstitutionView,
 }
-impl World {
+impl Runtime {
     pub fn actual_institution_view(
         &self,
+        store: &Store,
         institution: &Institution,
         authority: &AuthorityFacts,
         at: SimTime,
@@ -117,9 +119,8 @@ impl World {
                     effective: institution.office_effective(office, authority),
                 })
                 .collect(),
-            proposals: self
-                .proposals
-                .values()
+            proposals: crate::storage::proposals(store)
+                .map(|(_, row)| row)
                 .filter(|proposal| proposal.institution == institution.id)
                 .rev()
                 .take(32)
@@ -140,8 +141,8 @@ impl World {
             observed_at: at,
         }
     }
-    pub fn institution_views(&self, actor: PersonId) -> Vec<InstitutionView> {
-        self.memories.get(&actor).map_or_else(Vec::new, |memory| {
+    pub fn institution_views(&self, store: &Store, actor: PersonId) -> Vec<InstitutionView> {
+        crate::storage::knowledge(store, actor).map_or_else(Vec::new, |memory| {
             memory
                 .institutions
                 .values()
@@ -151,33 +152,33 @@ impl World {
                 .collect()
         })
     }
-    pub fn social_case_views(&self, actor: PersonId) -> Vec<SocialCaseView> {
-        self.memories.get(&actor).map_or_else(Vec::new, |memory| {
+    pub fn social_case_views(&self, store: &Store, actor: PersonId) -> Vec<SocialCaseView> {
+        crate::storage::knowledge(store, actor).map_or_else(Vec::new, |memory| {
             memory
                 .cases
                 .iter()
                 .rev()
                 .take(64)
-                .filter_map(|id| self.cases.get(id).cloned())
+                .filter_map(|id| crate::storage::case(store, id).cloned())
                 .collect()
         })
     }
     pub fn prepare_publication(
         &self,
+        store: &Store,
         id: InstitutionId,
         authority: &AuthorityFacts,
         at: SimTime,
         index: &ObservationIndex<'_>,
     ) -> Result<PreparedPublication, Error> {
-        let institution = self.institutions.get(&id).ok_or(Error::Unavailable)?;
+        let institution = crate::storage::institution(store, id).ok_or(Error::Unavailable)?;
         let before = index
             .publication_witnesses(institution)
             .into_iter()
             .map(|actor| {
                 (
                     actor,
-                    self.memories
-                        .get(&actor)
+                    crate::storage::knowledge(store, actor)
                         .and_then(|memory| memory.institutions.get(&id))
                         .cloned(),
                 )
@@ -185,33 +186,29 @@ impl World {
             .collect();
         Ok(PreparedPublication {
             institution: institution.clone(),
-            proposals: self
-                .proposals
-                .values()
+            proposals: crate::storage::proposals(store)
+                .map(|(_, row)| row)
                 .filter(|proposal| proposal.institution == id)
                 .rev()
                 .take(32)
                 .cloned()
                 .collect(),
             before,
-            view: self.actual_institution_view(institution, authority, at),
+            view: self.actual_institution_view(store, institution, authority, at),
         })
     }
 }
 impl PreparedPublication {
-    pub fn verify(&self, world: &World) -> Result<(), Error> {
-        if world.institutions.get(&self.institution.id) != Some(&self.institution)
-            || world
-                .proposals
-                .values()
+    pub fn verify(&self, store: &Store) -> Result<(), Error> {
+        if crate::storage::institution(store, self.institution.id) != Some(&self.institution)
+            || crate::storage::proposals(store)
+                .map(|(_, row)| row)
                 .filter(|proposal| proposal.institution == self.institution.id)
                 .rev()
                 .take(32)
                 .ne(self.proposals.iter())
             || self.before.iter().any(|(actor, before)| {
-                world
-                    .memories
-                    .get(actor)
+                crate::storage::knowledge(store, actor)
                     .and_then(|memory| memory.institutions.get(&self.institution.id))
                     != before.as_ref()
             })
@@ -220,35 +217,47 @@ impl PreparedPublication {
         }
         Ok(())
     }
-    pub fn commit(self, world: &mut World) -> Result<(), Error> {
-        self.verify(world)?;
+    pub fn stage_into(
+        self,
+        _world: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(), Error> {
+        self.verify(store)?;
         for (actor, _) in self.before {
-            world
-                .memories
-                .entry(actor)
-                .or_default()
-                .institutions
+            let mut row = crate::storage::knowledge(store, actor)
+                .cloned()
+                .unwrap_or_default();
+            row.institutions
                 .insert(self.institution.id, self.view.clone());
+            batch.insert(StableId(actor.0), row);
         }
         Ok(())
+    }
+    pub fn commit(self, world: &Runtime, store: &mut Store) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        self.stage_into(world, store, &mut batch)?;
+        store.apply_batch(batch)
     }
 }
 #[cfg(test)]
 mod tests;
 
-impl World {
+impl Runtime {
     pub fn institution_opportunities(
         &self,
+        store: &Store,
         actor: PersonId,
         area: AreaId,
         authority: &AuthorityFacts,
     ) -> Vec<InstitutionAction> {
-        let Some(memory) = self.memories.get(&actor) else {
+        let Some(memory) = crate::storage::knowledge(store, actor) else {
             return Vec::new();
         };
         let mut actions = Vec::new();
         for id in memory.institutions.keys().rev().take(64) {
-            let institution = &self.institutions[id];
+            let institution =
+                crate::storage::institution(store, *id).expect("validated Society reference");
             if institution.charter.jurisdiction != area {
                 continue;
             }
@@ -279,14 +288,14 @@ impl World {
                 }
             }
         }
-        for proposal in self
-            .proposals
-            .values()
+        for proposal in crate::storage::proposals(store)
+            .map(|(_, row)| row)
             .rev()
             .filter(|proposal| proposal.status == RuleProposalStatus::Proposed)
             .take(32)
         {
-            let institution = &self.institutions[&proposal.institution];
+            let institution = crate::storage::institution(store, proposal.institution)
+                .expect("validated Society reference");
             if institution.charter.jurisdiction == area
                 && institution.members.contains(&actor)
                 && institution

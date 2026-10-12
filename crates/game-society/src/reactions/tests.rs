@@ -1,11 +1,12 @@
 use super::*;
 use crate::policy_fixtures::*;
+use crate::storage::Exclusions;
 #[test]
 fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_without_change() {
     for (hunger, expected) in [(119_999, 0), (120_000, 1), (300_000, 2), (540_000, 3)] {
         assert_eq!(need_band(hunger), expected);
     }
-    let mut state = world();
+    let (state, mut store) = world();
     let subject = SubjectFacts {
         actor: PersonId(1),
         area: Some(AreaId(3)),
@@ -13,10 +14,11 @@ fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_with
     };
     let known = BTreeMap::from([(InventoryId(4), stock(2_000))]);
     let owners = BTreeMap::from([(InventoryId(4), PersonId(2))]);
-    let reactions = state.exclusion_reactions(subject, &known, &owners, SimTime(0));
+    let reactions = state.exclusion_reactions(&store, subject, &known, &owners, SimTime(0));
     assert_eq!(reactions.len(), 1);
     state
         .commit_case_reaction(
+            &mut store,
             reactions[0].clone(),
             CaseId(30),
             &BTreeMap::from([(PersonId(1), 500)]),
@@ -24,12 +26,13 @@ fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_with
         .unwrap();
     assert!(
         state
-            .exclusion_reactions(subject, &known, &owners, SimTime(60_000))
+            .exclusion_reactions(&store, subject, &known, &owners, SimTime(60_000))
             .is_empty()
     );
     assert_eq!(
         state
             .exclusion_reactions(
+                &store,
                 SubjectFacts {
                     hunger: 300_000,
                     ..subject
@@ -45,13 +48,13 @@ fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_with
     available.get_mut(&InventoryId(4)).unwrap().accessible = true;
     assert!(
         state
-            .exclusion_reactions(subject, &available, &owners, SimTime(60_000))
+            .exclusion_reactions(&store, subject, &available, &owners, SimTime(60_000))
             .is_empty()
     );
 }
 #[test]
 fn one_real_labor_receipt_and_output_are_not_interpreted_as_two_contributions() {
-    let mut state = world();
+    let (state, mut store) = world();
     let actor = PersonId(1);
     let counterpart = PersonId(2);
     let asset = CaseAsset {
@@ -118,30 +121,42 @@ fn one_real_labor_receipt_and_output_are_not_interpreted_as_two_contributions() 
     };
     assert!(
         state
-            .receipt_reaction(&receipts[0], facts, SimTime(60_000), &index)
+            .receipt_reaction(&store, &receipts[0], facts, SimTime(60_000), &index)
             .is_none()
     );
     let reaction = state
-        .receipt_reaction(&receipts[1], facts, SimTime(60_000), &index)
+        .receipt_reaction(&store, &receipts[1], facts, SimTime(60_000), &index)
         .unwrap();
     state
-        .commit_case_reaction(reaction, CaseId(30), &BTreeMap::from([(actor, 500)]))
+        .commit_case_reaction(
+            &mut store,
+            reaction,
+            CaseId(30),
+            &BTreeMap::from([(actor, 500)]),
+        )
         .unwrap();
     assert_eq!(
-        state.known_case_count(actor, actor, SocialCaseKind::Cooperation),
+        state.known_case_count(&store, actor, actor, SocialCaseKind::Cooperation),
         1
     );
 }
 #[test]
 fn received_support_clears_only_its_exclusion_once_and_stale_guard_is_inert() {
-    let mut state = world();
-    state.cases.insert(
+    let (state, mut store) = world();
+    crate::storage::insert_case(
+        &mut store,
         CaseId(30),
         case(30, 1, SocialCaseKind::Exclusion, SocialOutcome::Unresolved),
-    );
-    state
-        .exclusions
-        .insert(PersonId(1), BTreeMap::from([(InventoryId(4), CaseId(30))]));
+    )
+    .unwrap();
+    crate::storage::insert_exclusions(
+        &mut store,
+        PersonId(1),
+        Exclusions {
+            stores: BTreeMap::from([(InventoryId(4), CaseId(30))]),
+        },
+    )
+    .unwrap();
     let receipt = SocialReceipt::SupportReceived {
         actor: PersonId(1),
         source: InventoryId(4),
@@ -153,22 +168,30 @@ fn received_support_clears_only_its_exclusion_once_and_stale_guard_is_inert() {
         hunger: 300_000,
     };
     let reaction = state
-        .receipt_reaction(&receipt, facts, SimTime(60_000), &index)
+        .receipt_reaction(&store, &receipt, facts, SimTime(60_000), &index)
         .unwrap();
     let stale = reaction.clone();
     state
-        .commit_case_reaction(reaction, CaseId(31), &BTreeMap::from([(PersonId(1), 500)]))
+        .commit_case_reaction(
+            &mut store,
+            reaction,
+            CaseId(31),
+            &BTreeMap::from([(PersonId(1), 500)]),
+        )
         .unwrap();
     assert!(
         state
-            .receipt_reaction(&receipt, facts, SimTime(60_000), &index)
+            .receipt_reaction(&store, &receipt, facts, SimTime(60_000), &index)
             .is_none()
     );
     assert!(
         state
-            .commit_case_reaction(stale, CaseId(32), &BTreeMap::new())
+            .commit_case_reaction(&mut store, stale, CaseId(32), &BTreeMap::new())
             .is_err()
     );
-    assert!(!state.cases.contains_key(&CaseId(32)));
-    assert_eq!(state.cases[&CaseId(31)].outcome, SocialOutcome::Shared);
+    assert!(!crate::storage::case(&store, CaseId(32)).is_some());
+    assert_eq!(
+        crate::storage::case(&store, CaseId(31)).unwrap().outcome,
+        SocialOutcome::Shared
+    );
 }

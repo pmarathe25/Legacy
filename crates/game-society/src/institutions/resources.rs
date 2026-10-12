@@ -1,6 +1,7 @@
 //! Resource demand for social cases from closing owner receipts and bounded
 //! native institutional maintenance. Reservation does not record any case.
 use super::*;
+use game_ecs::Store;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InstitutionResourceDemand {
     pub ids: u64,
@@ -26,9 +27,29 @@ pub fn case_receipt_demand(receipts: &[CaseReceipt]) -> Result<u64, Error> {
     receipts.iter().filter(|receipt|!matches!(receipt,CaseReceipt::Production{actor,site} if attributed.contains(&(*actor,*site))))
         .try_fold(0u64,|total,_|total.checked_add(1).ok_or(Error::Overflow))
 }
-impl World {
+impl Runtime {
+    /// Active duties must fit in the simulation clock before closing work starts.
+    pub fn preflight_rule_deadlines(&self, store: &Store, at: SimTime) -> Result<(), Error> {
+        for (_, institution) in crate::storage::institutions(store)
+            .filter(|(_, row)| row.status == InstitutionStatus::Active)
+        {
+            for rule in &institution.charter.rules {
+                let due_after = match rule.effect {
+                    SocialEffect::Labor { due_after, .. }
+                    | SocialEffect::Delivery { due_after, .. } => Some(due_after),
+                    _ => None,
+                };
+                if let Some(duration) = due_after {
+                    at.0.checked_add(duration.0).ok_or(Error::Overflow)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn closing_resource_demand(
         &self,
+        store: &Store,
         population_after_births: u64,
         review: bool,
         ledger: game_agreements::ClosingReceiptDemand,
@@ -44,17 +65,16 @@ impl World {
                 .checked_mul(20)
                 .and_then(|n| n.checked_add(64))
                 .ok_or(Error::Overflow)?;
-            let unheard = self
-                .cases
-                .values()
+            let unheard = crate::storage::cases(store)
+                .map(|(_, row)| row)
                 .filter(|case| {
                     case.kind == SocialCaseKind::Exclusion
                         && case.outcome == SocialOutcome::Unresolved
-                        && !self.heard.contains_key(&case.id)
+                        && !crate::storage::hearing(store, case.id).is_some()
                 })
                 .count() as u64;
             maintenance = maintenance.checked_add(unheard).ok_or(Error::Overflow)?;
-            for institution in self.institutions.values() {
+            for institution in crate::storage::institutions(store).map(|(_, row)| row) {
                 // A chosen subject set can combine 64 members, 64 named people,
                 // and eight office holders. Rule adoption may run before duties;
                 // sixteen is the validated charter rule count, not a new cap.
@@ -73,9 +93,8 @@ impl World {
             }
             // Pending adoption can allocate a concept. Actual votes are bounded by
             // the registry and no additional abstract institutions are fabricated.
-            let proposals = self
-                .proposals
-                .values()
+            let proposals = crate::storage::proposals(store)
+                .map(|(_, row)| row)
                 .filter(|proposal| proposal.status == RuleProposalStatus::Proposed)
                 .count() as u64;
             maintenance = maintenance.checked_add(proposals).ok_or(Error::Overflow)?;
@@ -101,18 +120,13 @@ mod tests {
     use super::*;
     #[test]
     fn ledger_cases_pending_receipts_and_new_people_have_checked_additive_demand() {
-        let world = World {
-            institutions: BTreeMap::new(),
-            proposals: BTreeMap::new(),
-            concepts: BTreeMap::new(),
-            cases: BTreeMap::new(),
-            memories: BTreeMap::new(),
-            last_event: 0,
-            exclusions: BTreeMap::new(),
-            heard: BTreeMap::new(),
-        };
+        let world = Runtime::default();
+        let mut schema = game_ecs::Schema::new();
+        crate::storage::register_components(&mut schema).unwrap();
+        let store = Store::with_schema(schema);
         let demand = world
             .closing_resource_demand(
+                &store,
                 16,
                 true,
                 game_agreements::ClosingReceiptDemand {
@@ -127,22 +141,23 @@ mod tests {
         assert_eq!(demand.ids, 16 * 20 + 64 + 1000 + 7 + 3 + 2);
         assert_eq!(demand.events, demand.ids + 4);
         let before = world
-            .closing_resource_demand(15, true, Default::default(), 0, 0)
+            .closing_resource_demand(&store, 15, true, Default::default(), 0, 0)
             .unwrap();
         let after = world
-            .closing_resource_demand(16, true, Default::default(), 0, 0)
+            .closing_resource_demand(&store, 16, true, Default::default(), 0, 0)
             .unwrap();
         assert_eq!(after.ids - before.ids, 20);
         assert_eq!(after.events - before.events, 20);
         assert_eq!(
             world
-                .closing_resource_demand(u64::MAX, false, Default::default(), 0, 0)
+                .closing_resource_demand(&store, u64::MAX, false, Default::default(), 0, 0)
                 .unwrap()
                 .ids,
             0
         );
         assert_eq!(
             world.closing_resource_demand(
+                &store,
                 u64::MAX,
                 true,
                 game_agreements::ClosingReceiptDemand::default(),
@@ -170,5 +185,37 @@ mod tests {
             },
         ];
         assert_eq!(case_receipt_demand(&receipts).unwrap(), 3);
+    }
+    #[test]
+    fn only_active_duty_deadlines_are_preflighted_without_mutation() {
+        use crate::policy_fixtures::{institution, labor, seed_institution, world};
+        let (runtime, mut store) = world();
+        seed_institution(
+            &mut store,
+            institution(10, vec![labor()], InstitutionStatus::Proposed),
+        );
+        let opening = store.snapshot().unwrap();
+        runtime
+            .preflight_rule_deadlines(&store, SimTime(u64::MAX))
+            .unwrap();
+        assert_eq!(store.snapshot().unwrap(), opening);
+        crate::storage::institution_mut(&mut store, InstitutionId(10))
+            .unwrap()
+            .status = InstitutionStatus::Active;
+        let active = store.snapshot().unwrap();
+        runtime
+            .preflight_rule_deadlines(&store, SimTime(u64::MAX - 180_000))
+            .unwrap();
+        assert_eq!(
+            runtime.preflight_rule_deadlines(&store, SimTime(u64::MAX - 180_000 + 1)),
+            Err(Error::Overflow)
+        );
+        assert_eq!(store.snapshot().unwrap(), active);
+        crate::storage::institution_mut(&mut store, InstitutionId(10))
+            .unwrap()
+            .status = InstitutionStatus::Dissolved;
+        runtime
+            .preflight_rule_deadlines(&store, SimTime(u64::MAX))
+            .unwrap();
     }
 }

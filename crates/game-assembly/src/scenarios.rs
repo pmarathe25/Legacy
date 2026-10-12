@@ -459,19 +459,16 @@ impl Simulation {
         self.host.state.property = Some(game_property::Runtime {
             last_event: self.host.next_event() - 1,
         });
-        self.host.state.institutions = Some(institutions::World {
-            institutions: BTreeMap::new(),
-            proposals: BTreeMap::new(),
-            concepts: BTreeMap::new(),
-            cases: BTreeMap::new(),
-            memories: people
-                .iter()
-                .map(|p| (*p, institutions::SocialMemory::default()))
-                .collect(),
+        self.host.state.institutions = Some(institutions::Runtime {
             last_event: self.host.next_event() - 1,
-            exclusions: BTreeMap::new(),
-            heard: BTreeMap::new(),
         });
+        for person in &self.host.state.people {
+            game_society::insert_knowledge(
+                &mut self.host.storage,
+                person.id,
+                game_society::Knowledge::default(),
+            )?;
+        }
         self.host.state.projects = Some(game_projects::Runtime {
             rules: projects::Rules {
                 construction_labor: SimDuration(16 * 3_600_000),
@@ -1058,14 +1055,8 @@ impl Simulation {
                 origin: None,
             },
         )?;
-        let institution = *self
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .keys()
+        let institution = game_society::institutions(&self.host.storage)
+            .map(|(id, _)| id)
             .next_back()
             .unwrap();
         for actor in founders.into_iter().filter(|actor| *actor != ruler) {
@@ -1080,7 +1071,8 @@ impl Simulation {
             .filter(|person| *person != ruler)
             .collect::<Vec<_>>()
         {
-            if !self.host.state.institutions.as_ref().unwrap().institutions[&institution]
+            if !game_society::institution(&self.host.storage, institution)
+                .expect("validated Society reference")
                 .members
                 .contains(&actor)
             {
@@ -1297,14 +1289,8 @@ impl Simulation {
         self.observe_invocation_deaths()?;
         // The existing council chooses a living steward. The successor child
         // receives neither this office nor the previous character's assets.
-        let institution = *self
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .keys()
+        let institution = game_society::institutions(&self.host.storage)
+            .map(|(id, _)| id)
             .next()
             .unwrap();
         self.debug_institution_action(
@@ -1317,17 +1303,12 @@ impl Simulation {
                 },
             },
         )?;
-        let proposal = *self
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .proposals
-            .keys()
+        let proposal = game_society::proposals(&self.host.storage)
+            .map(|(id, _)| id)
             .next_back()
             .unwrap();
-        for actor in self.host.state.institutions.as_ref().unwrap().institutions[&institution]
+        for actor in game_society::institution(&self.host.storage, institution)
+            .expect("validated Society reference")
             .members
             .iter()
             .copied()
@@ -1343,7 +1324,8 @@ impl Simulation {
                 },
             )?;
         }
-        for actor in self.host.state.institutions.as_ref().unwrap().institutions[&institution]
+        for actor in game_society::institution(&self.host.storage, institution)
+            .expect("validated Society reference")
             .members
             .iter()
             .copied()
@@ -1620,24 +1602,12 @@ mod tests {
     fn the_founder_and_established_ruler_have_different_actual_supported_authority() {
         let founder = opening("settlement-founder", 1);
         let established = opening("established-ruler", 1);
-        let founder_office = founder
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .values()
+        let founder_office = game_society::institutions(&founder.host.storage)
+            .map(|(_, row)| row)
             .next()
             .unwrap();
-        let ruler_office = established
-            .host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .institutions
-            .values()
+        let ruler_office = game_society::institutions(&established.host.storage)
+            .map(|(_, row)| row)
             .next()
             .unwrap();
         assert_ne!(
@@ -1726,13 +1696,8 @@ mod tests {
                 .all(|skill| skill.level == 0 && skill.practice_ms == 0)
         );
         assert!(
-            sim.host
-                .state
-                .institutions
-                .as_ref()
-                .unwrap()
-                .institutions
-                .values()
+            game_society::institutions(&sim.host.storage)
+                .map(|(_, row)| row)
                 .all(|institution| institution
                     .charter
                     .offices

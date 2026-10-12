@@ -1,7 +1,9 @@
 //! Executable, bounded social arrangements people can propose and recognize.
 use crate::enforcement::{EnforcementPolicy, EnforcementRemedy};
+use crate::storage::*;
 use game_agreements::AgreementTerm;
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -305,23 +307,10 @@ pub struct RuleProposal {
     pub base_revision: u64,
     pub status: RuleProposalStatus,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct SocialMemory {
-    pub cases: BTreeSet<CaseId>,
-    pub values: BTreeMap<ConceptId, ConceptValue>,
-    pub institutions: BTreeMap<InstitutionId, InstitutionView>,
-    pub search_after: SimTime,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub institutions: BTreeMap<InstitutionId, Institution>,
-    pub proposals: BTreeMap<RuleProposalId, RuleProposal>,
-    pub concepts: BTreeMap<ConceptId, InstitutionalRule>,
-    pub cases: BTreeMap<CaseId, SocialCaseView>,
-    pub memories: BTreeMap<PersonId, SocialMemory>,
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Runtime {
     pub last_event: u64,
-    pub exclusions: BTreeMap<PersonId, BTreeMap<InventoryId, CaseId>>,
-    pub heard: BTreeMap<CaseId, bool>,
 }
 
 /// Authoritative liveness supplied by the physical owner. Membership and
@@ -368,22 +357,22 @@ pub struct ConditionInput<'a> {
     pub own_hunger: u64,
     pub known_stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
 }
-impl World {
+impl Runtime {
     pub fn known_case_count(
         &self,
+        store: &Store,
         observer: PersonId,
         subject: PersonId,
         kind: SocialCaseKind,
     ) -> usize {
-        self.memories.get(&observer).map_or(0, |memory| {
+        crate::storage::knowledge(store, observer).map_or(0, |memory| {
             memory
                 .cases
                 .iter()
                 .rev()
                 .take(64)
                 .filter(|id| {
-                    self.cases
-                        .get(id)
+                    crate::storage::case(store, *id)
                         .is_some_and(|c| c.subject == subject && c.kind == kind)
                 })
                 .count()
@@ -391,6 +380,7 @@ impl World {
     }
     pub fn condition_holds(
         &self,
+        store: &Store,
         institution: &Institution,
         input: &ConditionInput<'_>,
         expression: &RuleExpression,
@@ -398,11 +388,11 @@ impl World {
         match expression {
             RuleExpression::All(items) => items
                 .iter()
-                .all(|e| self.condition_holds(institution, input, e)),
+                .all(|e| self.condition_holds(store, institution, input, e)),
             RuleExpression::Any(items) => items
                 .iter()
-                .any(|e| self.condition_holds(institution, input, e)),
-            RuleExpression::Not(item) => !self.condition_holds(institution, input, item),
+                .any(|e| self.condition_holds(store, institution, input, e)),
+            RuleExpression::Not(item) => !self.condition_holds(store, institution, input, item),
             RuleExpression::Fact(condition) => match condition {
                 SocialCondition::Local => input.subject_local,
                 SocialCondition::Member => institution.members.contains(&input.subject),
@@ -410,9 +400,9 @@ impl World {
                     if input.observer == input.subject {
                         input.own_hunger >= *amount
                     } else {
-                        self.memories.get(&input.observer).is_some_and(|memory| {
+                        crate::storage::knowledge(store, input.observer).is_some_and(|memory| {
                             memory.cases.iter().rev().take(64).any(|id| {
-                                self.cases.get(id).is_some_and(|c| {
+                                crate::storage::case(store, id).is_some_and(|c| {
                                     c.subject == input.subject
                                         && c.need_band > 0
                                         && u64::from(c.need_band) * 180_000 >= *amount
@@ -436,13 +426,11 @@ impl World {
                     {
                         return false;
                     }
-                    if institution.concepts.iter().any(|id|self.concepts.get(id).is_some_and(|r|matches!(r.effect,SocialEffect::Access {inventory:target,allowed:true} if target==*inventory)) && institution.grants.get(id).is_some_and(|people|people.contains(&input.subject))) {return false;}
-                    self.memories
-                        .get(&input.observer)
+                    if institution.concepts.iter().any(|id|crate::storage::concept(store, id).is_some_and(|r|matches!(r.effect,SocialEffect::Access {inventory:target,allowed:true} if target==*inventory)) && institution.grants.get(id).is_some_and(|people|people.contains(&input.subject))) {return false;}
+                    crate::storage::knowledge(store, input.observer)
                         .and_then(|memory| {
                             memory.cases.iter().rev().take(64).find_map(|id| {
-                                self.cases
-                                    .get(id)
+                                crate::storage::case(store, id)
                                     .filter(|c| {
                                         c.subject == input.subject
                                             && c.kind == SocialCaseKind::Exclusion
@@ -457,20 +445,25 @@ impl World {
                 }
                 SocialCondition::KnownCooperationAtLeast(amount) => {
                     self.known_case_count(
+                        store,
                         input.observer,
                         input.subject,
                         SocialCaseKind::Cooperation,
                     ) >= usize::from(*amount)
                 }
                 SocialCondition::KnownDefaultsAtLeast(amount) => {
-                    self.known_case_count(input.observer, input.subject, SocialCaseKind::Default)
-                        >= usize::from(*amount)
+                    self.known_case_count(
+                        store,
+                        input.observer,
+                        input.subject,
+                        SocialCaseKind::Default,
+                    ) >= usize::from(*amount)
                 }
             },
         }
     }
-    pub fn precedent_score(&self, observer: PersonId, case: &SocialCaseView) -> i64 {
-        let Some(memory) = self.memories.get(&observer) else {
+    pub fn precedent_score(&self, store: &Store, observer: PersonId, case: &SocialCaseView) -> i64 {
+        let Some(memory) = crate::storage::knowledge(store, observer) else {
             return 0;
         };
         let mut candidates = memory
@@ -479,7 +472,7 @@ impl World {
             .rev()
             .take(64)
             .filter_map(|id| {
-                let prior = self.cases.get(id)?;
+                let prior = crate::storage::case(store, id)?;
                 if prior.id == case.id
                     || prior.kind != case.kind
                     || prior.good != case.good
@@ -522,24 +515,24 @@ pub struct PreparedResolution {
     pub outcome: RuleProposalStatus,
     pub external_change: Option<InstitutionChange>,
 }
-impl World {
+impl Runtime {
     pub fn proposal_outcome(
         &self,
+        store: &Store,
         id: RuleProposalId,
         facts: &AuthorityFacts,
     ) -> Result<RuleProposalStatus, Error> {
-        let proposal = self.proposals.get(&id).ok_or(Error::Unavailable)?;
-        self.proposal_outcome_for(proposal, facts)
+        let proposal = crate::storage::proposal(store, id).ok_or(Error::Unavailable)?;
+        self.proposal_outcome_for(store, proposal, facts)
     }
     fn proposal_outcome_for(
         &self,
+        store: &Store,
         proposal: &RuleProposal,
         facts: &AuthorityFacts,
     ) -> Result<RuleProposalStatus, Error> {
-        let institution = self
-            .institutions
-            .get(&proposal.institution)
-            .ok_or(Error::Unavailable)?;
+        let institution =
+            crate::storage::institution(store, proposal.institution).ok_or(Error::Unavailable)?;
         if proposal.status != RuleProposalStatus::Proposed
             || proposal.base_revision != institution.revision
         {
@@ -571,25 +564,25 @@ impl World {
     /// External domain decisions are returned to the coordinator, never executed here.
     pub fn prepare_resolution(
         &self,
+        store: &Store,
         id: RuleProposalId,
         facts: &AuthorityFacts,
         concept: Option<ConceptId>,
     ) -> Result<PreparedResolution, Error> {
-        let proposal = self.proposals.get(&id).ok_or(Error::Unavailable)?;
-        self.prepare_resolution_for(proposal, facts, concept)
+        let proposal = crate::storage::proposal(store, id).ok_or(Error::Unavailable)?;
+        self.prepare_resolution_for(store, proposal, facts, concept)
     }
     fn prepare_resolution_for(
         &self,
+        store: &Store,
         proposal: &RuleProposal,
         facts: &AuthorityFacts,
         concept: Option<ConceptId>,
     ) -> Result<PreparedResolution, Error> {
         let id = proposal.id;
-        let outcome = self.proposal_outcome_for(proposal, facts)?;
-        let institution = self
-            .institutions
-            .get(&proposal.institution)
-            .ok_or(Error::Unavailable)?;
+        let outcome = self.proposal_outcome_for(store, proposal, facts)?;
+        let institution =
+            crate::storage::institution(store, proposal.institution).ok_or(Error::Unavailable)?;
         let mut plan = PreparedResolution {
             institution_before: None,
             institution_after: None,
@@ -600,15 +593,24 @@ impl World {
             external_change: None,
         };
         if outcome == RuleProposalStatus::Proposed {
-            if self.proposals.get(&id) != Some(proposal) {
-                plan.proposals
-                    .push((self.proposals[&id].clone(), proposal.clone()));
+            if crate::storage::proposal(store, id) != Some(proposal) {
+                plan.proposals.push((
+                    crate::storage::proposal(store, id)
+                        .expect("validated Society reference")
+                        .clone(),
+                    proposal.clone(),
+                ));
             }
             return Ok(plan);
         }
         let mut changed = proposal.clone();
         changed.status = outcome;
-        plan.proposals.push((self.proposals[&id].clone(), changed));
+        plan.proposals.push((
+            crate::storage::proposal(store, id)
+                .expect("validated Society reference")
+                .clone(),
+            changed,
+        ));
         if outcome == RuleProposalStatus::Rejected {
             return Ok(plan);
         }
@@ -616,7 +618,7 @@ impl World {
         match &proposal.change {
             InstitutionChange::AddRule(rule) | InstitutionChange::ReplaceRule { rule, .. } => {
                 let id = concept.ok_or(Error::Unavailable)?;
-                if self.concepts.contains_key(&id) {
+                if crate::storage::concept(store, id).is_some() {
                     return Err(Error::Unavailable);
                 }
                 plan.concept = Some((id, rule.clone()));
@@ -708,8 +710,8 @@ impl World {
         }
         after.revision = after.revision.checked_add(1).ok_or(Error::Overflow)?;
         plan.competing_proposals = Some(
-            self.proposals
-                .values()
+            crate::storage::proposals(store)
+                .map(|(_, row)| row)
                 .filter(|proposal| {
                     proposal.institution == institution.id
                         && proposal.status == RuleProposalStatus::Proposed
@@ -717,11 +719,14 @@ impl World {
                 .map(|proposal| proposal.id)
                 .collect(),
         );
-        for other in self.proposals.values().filter(|p| {
-            p.institution == institution.id
-                && p.status == RuleProposalStatus::Proposed
-                && p.id != id
-        }) {
+        for other in crate::storage::proposals(store)
+            .map(|(_, row)| row)
+            .filter(|p| {
+                p.institution == institution.id
+                    && p.status == RuleProposalStatus::Proposed
+                    && p.id != id
+            })
+        {
             let mut rejected = other.clone();
             rejected.status = RuleProposalStatus::Rejected;
             plan.proposals.push((other.clone(), rejected));
@@ -732,26 +737,25 @@ impl World {
     }
 }
 impl PreparedResolution {
-    pub fn verify(&self, state: &World) -> Result<(), Error> {
+    pub fn verify(&self, store: &Store) -> Result<(), Error> {
         if self
             .institution_before
             .as_ref()
-            .is_some_and(|old| state.institutions.get(&old.id) != Some(old))
+            .is_some_and(|old| crate::storage::institution(store, old.id) != Some(old))
             || self
                 .proposals
                 .iter()
-                .any(|(old, _)| state.proposals.get(&old.id) != Some(old))
+                .any(|(old, _)| crate::storage::proposal(store, old.id) != Some(old))
             || self
                 .concept
                 .as_ref()
-                .is_some_and(|(id, _)| state.concepts.contains_key(id))
+                .is_some_and(|(id, _)| crate::storage::concept(store, id).is_some())
             || self.competing_proposals.as_ref().is_some_and(|expected| {
                 let Some(institution) = &self.institution_before else {
                     return true;
                 };
-                state
-                    .proposals
-                    .values()
+                crate::storage::proposals(store)
+                    .map(|(_, row)| row)
                     .filter(|proposal| {
                         proposal.institution == institution.id
                             && proposal.status == RuleProposalStatus::Proposed
@@ -765,18 +769,28 @@ impl PreparedResolution {
         }
         Ok(())
     }
-    pub fn commit(self, state: &mut World) -> Result<(), Error> {
-        self.verify(state)?;
+    pub fn stage_into(
+        self,
+        _state: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(), Error> {
+        self.verify(store)?;
         if let Some((id, rule)) = self.concept {
-            state.concepts.insert(id, rule);
+            batch.insert(StableId(id.0), Concept { rule });
         }
-        if let Some(institution) = self.institution_after {
-            state.institutions.insert(institution.id, institution);
+        if let Some(row) = self.institution_after {
+            batch.insert(StableId(row.id.0), row);
         }
-        for (_, proposal) in self.proposals {
-            state.proposals.insert(proposal.id, proposal);
+        for (_, row) in self.proposals {
+            batch.insert(StableId(row.id.0), row);
         }
         Ok(())
+    }
+    pub fn commit(self, state: &Runtime, store: &mut Store) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        self.stage_into(state, store, &mut batch)?;
+        store.apply_batch(batch)
     }
 }
 
@@ -798,9 +812,12 @@ pub enum RuleIntent {
         term: AgreementTerm,
     },
 }
-impl World {
+impl Runtime {
+    // Store is explicit; the remaining arguments are the existing bounded rule evaluation facts.
+    #[allow(clippy::too_many_arguments)]
     pub fn rule_intent(
         &self,
+        store: &Store,
         institution: &Institution,
         index: usize,
         input: &ConditionInput<'_>,
@@ -821,7 +838,7 @@ impl World {
             || !institution
                 .subjects(&rule.subjects, authority)
                 .contains(&input.subject)
-            || !self.condition_holds(institution, input, &rule.when)
+            || !self.condition_holds(store, institution, input, &rule.when)
         {
             return None;
         }
@@ -836,9 +853,7 @@ impl World {
             });
         }
         if !institution.members.contains(&input.subject)
-            || self
-                .institutions
-                .get(&institution.id)?
+            || crate::storage::institution(store, institution.id)?
                 .applied
                 .get(&concept)
                 .is_some_and(|people| people.contains_key(&input.subject))
@@ -905,7 +920,11 @@ impl World {
         })
     }
     /// Records the institution's own grant overlay, not an inventory permission.
-    pub fn apply_access_intent(&mut self, intent: &RuleIntent) -> Result<bool, Error> {
+    pub fn apply_access_intent(
+        &self,
+        store: &mut Store,
+        intent: &RuleIntent,
+    ) -> Result<bool, Error> {
         let RuleIntent::Access {
             institution,
             concept,
@@ -917,15 +936,12 @@ impl World {
         else {
             return Err(Error::Unavailable);
         };
-        let current = self
-            .institutions
-            .get(institution)
-            .ok_or(Error::Unavailable)?;
+        let current = crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
         if !current.concepts.contains(concept) {
             return Err(Error::Unavailable);
         }
-        let matching=current.concepts.iter().filter(|id|self.concepts.get(id).is_some_and(|rule|matches!(rule.effect,SocialEffect::Access {inventory:target,..} if target==*inventory))).copied().collect::<Vec<_>>();
-        let current = self.institutions.get_mut(institution).unwrap();
+        let matching=current.concepts.iter().filter(|id|crate::storage::concept(store, *id).is_some_and(|rule|matches!(rule.effect,SocialEffect::Access {inventory:target,..} if target==*inventory))).copied().collect::<Vec<_>>();
+        let current = crate::storage::institution_mut(store, institution).unwrap();
         if *allowed {
             return Ok(current.grants.entry(*concept).or_default().insert(*actor));
         }
@@ -938,7 +954,8 @@ impl World {
         Ok(changed)
     }
     pub fn register_duty(
-        &mut self,
+        &self,
+        store: &mut Store,
         intent: &RuleIntent,
         agreement: AgreementId,
     ) -> Result<(), Error> {
@@ -951,10 +968,8 @@ impl World {
         else {
             return Err(Error::Unavailable);
         };
-        let current = self
-            .institutions
-            .get_mut(institution)
-            .ok_or(Error::Unavailable)?;
+        let current =
+            crate::storage::institution_mut(store, institution).ok_or(Error::Unavailable)?;
         if !current.concepts.contains(concept)
             || current
                 .applied
@@ -970,18 +985,27 @@ impl World {
             .insert(*actor, agreement);
         Ok(())
     }
-    pub fn remember_case(
-        &mut self,
+    pub fn prepare_case_learning(
+        &self,
+        store: &Store,
         case: SocialCaseView,
         concept: Option<ConceptId>,
         observers: &BTreeMap<PersonId, u16>,
-    ) {
-        self.cases.insert(case.id, case.clone());
+    ) -> Result<PreparedCaseLearning, Error> {
+        if concept.is_some_and(|id| crate::storage::concept(store, id).is_none()) {
+            return Err(Error::Unavailable);
+        }
+        case.validate_shape()?;
+        let mut edits = Vec::new();
         for (observer, empathy) in observers {
-            let memory = self.memories.entry(*observer).or_default();
-            memory.cases.insert(case.id);
+            if observer.0 == 0 {
+                return Err(Error::Unavailable);
+            }
+            let before = crate::storage::knowledge(store, *observer).cloned();
+            let mut after = before.clone().unwrap_or_default();
+            after.cases.insert(case.id);
             if let Some(concept) = concept {
-                let value = memory.values.entry(concept).or_insert(ConceptValue {
+                let value = after.values.entry(concept).or_insert(ConceptValue {
                     weight: 0,
                     experiences: 0,
                 });
@@ -996,22 +1020,41 @@ impl World {
                     SocialOutcome::Defaulted => -300,
                     _ => 0,
                 };
-                value.weight = (value.weight + gain).clamp(-2_000, 2_000);
+                value.weight = (value.weight + gain).clamp(-2000, 2000);
                 value.experiences = value.experiences.saturating_add(1);
             }
+            edits.push((*observer, before, after));
         }
+        Ok(PreparedCaseLearning {
+            before_case: crate::storage::case(store, case.id).cloned(),
+            case,
+            edits,
+        })
+    }
+    pub fn remember_case(
+        &self,
+        store: &mut Store,
+        case: SocialCaseView,
+        concept: Option<ConceptId>,
+        observers: &BTreeMap<PersonId, u16>,
+    ) -> Result<(), Error> {
+        let plan = self.prepare_case_learning(store, case, concept, observers)?;
+        let mut batch = Batch::new();
+        plan.stage_into(store, &mut batch)?;
+        store.apply_batch(batch)
     }
 }
 
-impl World {
+impl Runtime {
     pub fn allows_access(
         &self,
+        store: &Store,
         actor: PersonId,
         inventory: InventoryId,
         authority: &AuthorityFacts,
     ) -> bool {
-        self.institutions.values().filter(|i|i.status==InstitutionStatus::Active).any(|i|i.concepts.iter().any(|id| {
-            let Some(rule)=self.concepts.get(id) else{return false;};let Some(office)=i.charter.offices.iter().find(|o|o.slot==rule.authority) else{return false;};
+        crate::storage::institutions(store).map(|(_, row)| row).filter(|i|i.status==InstitutionStatus::Active).any(|i|i.concepts.iter().any(|id| {
+            let Some(rule)=crate::storage::concept(store, id) else{return false;};let Some(office)=i.charter.offices.iter().find(|o|o.slot==rule.authority) else{return false;};
             matches!(rule.effect,SocialEffect::Access {inventory:target,allowed:true} if target==inventory) && i.office_effective(office,authority) && i.grants.get(id).is_some_and(|people|people.contains(&actor))
         }))
     }
@@ -1020,7 +1063,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (World, AuthorityFacts) {
+    fn fixture() -> (Runtime, Store, AuthorityFacts) {
         let people = BTreeSet::from([PersonId(11), PersonId(12), PersonId(13)]);
         let rule = InstitutionalRule {
             subjects: Subjects::members(),
@@ -1072,17 +1115,12 @@ mod tests {
             funding: Vec::new(),
             revision: 0,
         };
-        let world = World {
-            institutions: BTreeMap::from([(institution.id, institution)]),
-            proposals: BTreeMap::new(),
-            concepts: BTreeMap::from([(ConceptId(3), rule)]),
-            cases: BTreeMap::new(),
-            memories: BTreeMap::new(),
-            last_event: 0,
-            exclusions: BTreeMap::new(),
-            heard: BTreeMap::new(),
-        };
-        (world, AuthorityFacts { alive: people })
+        let mut schema = game_ecs::Schema::new();
+        crate::storage::register_components(&mut schema).unwrap();
+        let mut store = Store::with_schema(schema);
+        insert_concept(&mut store, ConceptId(3), Concept { rule }).unwrap();
+        insert_institution(&mut store, institution.id, institution).unwrap();
+        (Runtime::default(), store, AuthorityFacts { alive: people })
     }
     fn case(outcome: SocialOutcome) -> SocialCaseView {
         SocialCaseView {
@@ -1101,8 +1139,8 @@ mod tests {
     }
     #[test]
     fn support_and_liveness_determine_office_power_without_replacing_the_person() {
-        let (mut world, mut authority) = fixture();
-        let i = world.institutions.get_mut(&InstitutionId(2)).unwrap();
+        let (_world, mut store, mut authority) = fixture();
+        let i = crate::storage::institution_mut(&mut store, InstitutionId(2)).unwrap();
         let office = i.charter.offices[0].clone();
         assert!(i.office_effective(&office, &authority));
         authority.alive.remove(&PersonId(12));
@@ -1122,7 +1160,7 @@ mod tests {
     }
     #[test]
     fn conditions_use_only_the_observers_known_cases_and_stocks() {
-        let (mut world, _) = fixture();
+        let (world, mut store, _) = fixture();
         let stocks = BTreeMap::new();
         let input = ConditionInput {
             observer: PersonId(11),
@@ -1132,21 +1170,30 @@ mod tests {
             known_stocks: &stocks,
         };
         let expression = RuleExpression::Fact(SocialCondition::HungerAtLeast(200_000));
-        let i = world.institutions[&InstitutionId(2)].clone();
-        assert!(!world.condition_holds(&i, &input, &expression));
-        world.remember_case(
-            case(SocialOutcome::Unresolved),
-            None,
-            &BTreeMap::from([(PersonId(13), 500)]),
-        );
-        assert!(!world.condition_holds(&i, &input, &expression));
-        world.remember_case(
-            case(SocialOutcome::Unresolved),
-            None,
-            &BTreeMap::from([(PersonId(11), 500)]),
-        );
-        assert!(world.condition_holds(&i, &input, &expression));
+        let i = crate::storage::institution(&store, InstitutionId(2))
+            .unwrap()
+            .clone();
+        assert!(!world.condition_holds(&store, &i, &input, &expression));
+        world
+            .remember_case(
+                &mut store,
+                case(SocialOutcome::Unresolved),
+                None,
+                &BTreeMap::from([(PersonId(13), 500)]),
+            )
+            .unwrap();
+        assert!(!world.condition_holds(&store, &i, &input, &expression));
+        world
+            .remember_case(
+                &mut store,
+                case(SocialOutcome::Unresolved),
+                None,
+                &BTreeMap::from([(PersonId(11), 500)]),
+            )
+            .unwrap();
+        assert!(world.condition_holds(&store, &i, &input, &expression));
         assert!(world.condition_holds(
+            &store,
             &i,
             &input,
             &RuleExpression::Fact(SocialCondition::Excluded {
@@ -1156,8 +1203,12 @@ mod tests {
     }
     #[test]
     fn chosen_quorum_ignores_outsiders_and_atomically_adopts_and_invalidates_stale_proposals() {
-        let (mut world, authority) = fixture();
-        let change = InstitutionChange::AddRule(world.concepts[&ConceptId(3)].clone());
+        let (world, mut store, authority) = fixture();
+        let change = InstitutionChange::AddRule(
+            crate::storage::concept(&store, ConceptId(3))
+                .unwrap()
+                .clone(),
+        );
         let proposal = RuleProposal {
             id: RuleProposalId(30),
             institution: InstitutionId(2),
@@ -1167,41 +1218,58 @@ mod tests {
             base_revision: 0,
             status: RuleProposalStatus::Proposed,
         };
-        world.proposals.insert(proposal.id, proposal.clone());
+        insert_proposal(&mut store, proposal.id, proposal.clone()).unwrap();
         assert_eq!(
-            world.proposal_outcome(proposal.id, &authority).unwrap(),
+            world
+                .proposal_outcome(&store, proposal.id, &authority)
+                .unwrap(),
             RuleProposalStatus::Proposed
         );
-        world
-            .proposals
-            .get_mut(&proposal.id)
+        crate::storage::proposal_mut(&mut store, proposal.id)
             .unwrap()
             .votes
             .insert(PersonId(12), true);
-        world.proposals.insert(
+        insert_proposal(
+            &mut store,
             RuleProposalId(31),
             RuleProposal {
                 id: RuleProposalId(31),
                 ..proposal.clone()
             },
-        );
-        let before = world.clone();
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
         let prepared = world
-            .prepare_resolution(proposal.id, &authority, Some(ConceptId(32)))
+            .prepare_resolution(&store, proposal.id, &authority, Some(ConceptId(32)))
             .unwrap();
-        assert_eq!(world, before);
-        prepared.commit(&mut world).unwrap();
-        assert_eq!(world.institutions[&InstitutionId(2)].revision, 1);
-        assert_eq!(world.institutions[&InstitutionId(2)].charter.rules.len(), 2);
+        assert_eq!(store.snapshot().unwrap(), before);
+        prepared.commit(&world, &mut store).unwrap();
         assert_eq!(
-            world.proposals[&RuleProposalId(31)].status,
+            crate::storage::institution(&store, InstitutionId(2))
+                .unwrap()
+                .revision,
+            1
+        );
+        assert_eq!(
+            crate::storage::institution(&store, InstitutionId(2))
+                .unwrap()
+                .charter
+                .rules
+                .len(),
+            2
+        );
+        assert_eq!(
+            crate::storage::proposal(&store, RuleProposalId(31))
+                .unwrap()
+                .status,
             RuleProposalStatus::Rejected
         );
     }
     #[test]
     fn stale_prepared_decision_changes_nothing() {
-        let (mut world, authority) = fixture();
-        world.proposals.insert(
+        let (world, mut store, authority) = fixture();
+        insert_proposal(
+            &mut store,
             RuleProposalId(30),
             RuleProposal {
                 id: RuleProposalId(30),
@@ -1212,22 +1280,21 @@ mod tests {
                 base_revision: 0,
                 status: RuleProposalStatus::Proposed,
             },
-        );
+        )
+        .unwrap();
         let plan = world
-            .prepare_resolution(RuleProposalId(30), &authority, None)
+            .prepare_resolution(&store, RuleProposalId(30), &authority, None)
             .unwrap();
-        world
-            .institutions
-            .get_mut(&InstitutionId(2))
+        crate::storage::institution_mut(&mut store, InstitutionId(2))
             .unwrap()
             .revision = 1;
-        let before = world.clone();
-        assert_eq!(plan.commit(&mut world), Err(Error::Unavailable));
-        assert_eq!(world, before);
+        let before = store.snapshot().unwrap();
+        assert_eq!(plan.commit(&world, &mut store), Err(Error::Unavailable));
+        assert_eq!(store.snapshot().unwrap(), before);
     }
     #[test]
     fn policy_returns_a_real_duty_request_once_and_records_only_its_receipt() {
-        let (mut world, authority) = fixture();
+        let (world, mut store, authority) = fixture();
         let rule = InstitutionalRule {
             subjects: Subjects::members(),
             when: RuleExpression::Fact(SocialCondition::Member),
@@ -1240,8 +1307,8 @@ mod tests {
             },
             authority: 0,
         };
-        world.concepts.insert(ConceptId(4), rule.clone());
-        let i = world.institutions.get_mut(&InstitutionId(2)).unwrap();
+        insert_concept(&mut store, ConceptId(4), Concept { rule: rule.clone() }).unwrap();
+        let i = crate::storage::institution_mut(&mut store, InstitutionId(2)).unwrap();
         i.charter.rules.push(rule);
         i.concepts.push(ConceptId(4));
         let i = i.clone();
@@ -1254,7 +1321,7 @@ mod tests {
             known_stocks: &stocks,
         };
         let intent = world
-            .rule_intent(&i, 1, &input, &authority, true, SimTime(60_000))
+            .rule_intent(&store, &i, 1, &input, &authority, true, SimTime(60_000))
             .unwrap();
         assert!(matches!(
             intent,
@@ -1267,18 +1334,27 @@ mod tests {
                 ..
             }
         ));
-        assert!(world.institutions[&i.id].applied.is_empty());
-        world.register_duty(&intent, AgreementId(50)).unwrap();
+        assert!(
+            crate::storage::institution(&store, i.id)
+                .unwrap()
+                .applied
+                .is_empty()
+        );
+        world
+            .register_duty(&mut store, &intent, AgreementId(50))
+            .unwrap();
         assert!(
             world
-                .rule_intent(&i, 1, &input, &authority, true, SimTime(120_000))
+                .rule_intent(&store, &i, 1, &input, &authority, true, SimTime(120_000))
                 .is_none()
         );
     }
     #[test]
     fn unsupported_access_and_unknown_precedents_do_not_affect_outcomes() {
-        let (mut world, mut authority) = fixture();
-        let i = world.institutions[&InstitutionId(2)].clone();
+        let (world, mut store, mut authority) = fixture();
+        let i = crate::storage::institution(&store, InstitutionId(2))
+            .unwrap()
+            .clone();
         let stocks = BTreeMap::new();
         let input = ConditionInput {
             observer: PersonId(11),
@@ -1288,29 +1364,74 @@ mod tests {
             known_stocks: &stocks,
         };
         let intent = world
-            .rule_intent(&i, 0, &input, &authority, true, SimTime(0))
+            .rule_intent(&store, &i, 0, &input, &authority, true, SimTime(0))
             .unwrap();
-        assert!(world.apply_access_intent(&intent).unwrap());
-        assert!(world.allows_access(PersonId(12), InventoryId(20), &authority));
+        assert!(world.apply_access_intent(&mut store, &intent).unwrap());
+        assert!(world.allows_access(&store, PersonId(12), InventoryId(20), &authority));
         authority.alive.clear();
-        assert!(!world.allows_access(PersonId(12), InventoryId(20), &authority));
+        assert!(!world.allows_access(&store, PersonId(12), InventoryId(20), &authority));
         let prior = case(SocialOutcome::Shared);
-        world.remember_case(
-            prior.clone(),
-            Some(ConceptId(3)),
-            &BTreeMap::from([(PersonId(13), 500)]),
-        );
+        world
+            .remember_case(
+                &mut store,
+                prior.clone(),
+                Some(ConceptId(3)),
+                &BTreeMap::from([(PersonId(13), 500)]),
+            )
+            .unwrap();
         let next = SocialCaseView {
             id: CaseId(41),
             ..prior
         };
-        assert_eq!(world.precedent_score(PersonId(11), &next), 0);
-        assert_eq!(world.precedent_score(PersonId(13), &next), 600);
-        let saved = serde_json::to_vec(&world).unwrap();
-        assert_eq!(world, serde_json::from_slice::<World>(&saved).unwrap());
+        assert_eq!(world.precedent_score(&store, PersonId(11), &next), 0);
+        assert_eq!(world.precedent_score(&store, PersonId(13), &next), 600);
+        let saved = serde_json::to_vec(&store.snapshot().unwrap()).unwrap();
+        let restored = Store::restore(
+            store.schema().clone(),
+            serde_json::from_slice(&saved).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(store, restored);
     }
 }
 
 #[cfg(test)]
 #[path = "institutions/command_tests.rs"]
 mod command_tests;
+
+/// Only the new case and the memories of its actual witnesses are captured.
+pub struct PreparedCaseLearning {
+    before_case: Option<SocialCaseView>,
+    case: SocialCaseView,
+    edits: Vec<(PersonId, Option<Knowledge>, Knowledge)>,
+}
+impl PreparedCaseLearning {
+    pub fn verify(&self, store: &Store) -> Result<(), Error> {
+        if crate::storage::case(store, self.case.id) != self.before_case.as_ref()
+            || self.edits.iter().any(|(actor, before, _)| {
+                crate::storage::knowledge(store, *actor) != before.as_ref()
+            })
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    pub fn also_remember(&mut self, store: &Store, actor: PersonId) {
+        if let Some((_, _, after)) = self.edits.iter_mut().find(|(id, _, _)| *id == actor) {
+            after.cases.insert(self.case.id);
+        } else {
+            let before = crate::storage::knowledge(store, actor).cloned();
+            let mut after = before.clone().unwrap_or_default();
+            after.cases.insert(self.case.id);
+            self.edits.push((actor, before, after));
+        }
+    }
+    pub fn stage_into(self, store: &Store, batch: &mut Batch) -> Result<(), Error> {
+        self.verify(store)?;
+        batch.insert(StableId(self.case.id.0), self.case);
+        for (actor, _, after) in self.edits {
+            batch.insert(StableId(actor.0), after);
+        }
+        Ok(())
+    }
+}

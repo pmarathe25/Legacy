@@ -30,17 +30,35 @@ pub fn voter(knowledge: &Knowledge) -> VoterFacts<'_> {
         knowledge,
     }
 }
-pub fn world() -> World {
-    World {
-        institutions: BTreeMap::new(),
-        proposals: BTreeMap::new(),
-        concepts: BTreeMap::new(),
-        cases: BTreeMap::new(),
-        memories: BTreeMap::new(),
-        last_event: 0,
-        exclusions: BTreeMap::new(),
-        heard: BTreeMap::new(),
+pub fn world() -> (Runtime, game_ecs::Store) {
+    let mut schema = game_ecs::Schema::new();
+    crate::storage::register_components(&mut schema).unwrap();
+    (Runtime::default(), game_ecs::Store::with_schema(schema))
+}
+pub fn seed_institution(store: &mut game_ecs::Store, mut row: Institution) {
+    if row.concepts.is_empty() {
+        for (n, rule) in row.charter.rules.iter().enumerate() {
+            let id = ConceptId(row.id.0 * 100 + n as u64);
+            crate::storage::insert_concept(
+                store,
+                id,
+                crate::storage::Concept { rule: rule.clone() },
+            )
+            .unwrap();
+            row.concepts.push(id);
+        }
     }
+    crate::storage::insert_institution(store, row.id, row).unwrap();
+}
+pub fn ensure_memory(
+    store: &mut game_ecs::Store,
+    actor: PersonId,
+) -> &mut crate::storage::Knowledge {
+    if crate::storage::knowledge(store, actor).is_none() {
+        crate::storage::insert_knowledge(store, actor, crate::storage::Knowledge::default())
+            .unwrap();
+    }
+    crate::storage::knowledge_mut(store, actor).unwrap()
 }
 pub fn labor() -> InstitutionalRule {
     InstitutionalRule {

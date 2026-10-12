@@ -33,11 +33,11 @@ fn case_witness_limit_keeps_roster_order_and_subject_even_when_absent_or_dead() 
 }
 #[test]
 fn local_publication_preserves_absent_memories_and_rejects_stale_plan_before_any_write() {
-    let mut state = world();
+    let (state, mut store) = world();
     let mut i = institution(10, vec![], InstitutionStatus::Active);
     i.members = BTreeSet::from([PersonId(1), PersonId(2)]);
     i.office_support.insert(0, BTreeSet::from([PersonId(2)]));
-    state.institutions.insert(i.id, i);
+    seed_institution(&mut store, i);
     let roster = [
         observer(1, Some(AreaId(3))),
         observer(2, Some(AreaId(3))),
@@ -48,14 +48,12 @@ fn local_publication_preserves_absent_memories_and_rejects_stale_plan_before_any
         alive: BTreeSet::from([PersonId(1), PersonId(2)]),
     };
     state
-        .prepare_publication(InstitutionId(10), &authority, SimTime(10), &index)
+        .prepare_publication(&store, InstitutionId(10), &authority, SimTime(10), &index)
         .unwrap()
-        .commit(&mut state)
+        .commit(&state, &mut store)
         .unwrap();
-    assert!(state.institution_views(PersonId(1))[0].offices[0].effective);
-    state
-        .institutions
-        .get_mut(&InstitutionId(10))
+    assert!(state.institution_views(&store, PersonId(1))[0].offices[0].effective);
+    crate::storage::institution_mut(&mut store, InstitutionId(10))
         .unwrap()
         .charter
         .purpose = "Updated terms".into();
@@ -63,37 +61,37 @@ fn local_publication_preserves_absent_memories_and_rejects_stale_plan_before_any
     away[0].area = None;
     let index = ObservationIndex::new(&away).unwrap();
     state
-        .prepare_publication(InstitutionId(10), &authority, SimTime(20), &index)
+        .prepare_publication(&store, InstitutionId(10), &authority, SimTime(20), &index)
         .unwrap()
-        .commit(&mut state)
+        .commit(&state, &mut store)
         .unwrap();
     assert_eq!(
-        state.institution_views(PersonId(1))[0].observed_at,
+        state.institution_views(&store, PersonId(1))[0].observed_at,
         SimTime(10)
     );
     assert_eq!(
-        state.institution_views(PersonId(2))[0].charter.purpose,
+        state.institution_views(&store, PersonId(2))[0]
+            .charter
+            .purpose,
         "Updated terms"
     );
     let pending = state
-        .prepare_publication(InstitutionId(10), &authority, SimTime(30), &index)
+        .prepare_publication(&store, InstitutionId(10), &authority, SimTime(30), &index)
         .unwrap();
-    state
-        .institutions
-        .get_mut(&InstitutionId(10))
+    crate::storage::institution_mut(&mut store, InstitutionId(10))
         .unwrap()
         .revision += 1;
-    let old = state.institution_views(PersonId(2));
-    assert!(pending.commit(&mut state).is_err());
-    assert_eq!(state.institution_views(PersonId(2)), old);
+    let old = state.institution_views(&store, PersonId(2));
+    assert!(pending.commit(&state, &mut store).is_err());
+    assert_eq!(state.institution_views(&store, PersonId(2)), old);
 }
 #[test]
 fn closed_publication_and_command_opportunities_use_only_local_known_institutions() {
-    let mut state = world();
+    let (state, mut store) = world();
     let mut i = institution(10, vec![], InstitutionStatus::Active);
     i.charter.open_membership = false;
     i.members = BTreeSet::from([PersonId(1), PersonId(2)]);
-    state.institutions.insert(i.id, i);
+    seed_institution(&mut store, i);
     let roster = [
         observer(1, Some(AreaId(3))),
         observer(2, Some(AreaId(3))),
@@ -104,18 +102,18 @@ fn closed_publication_and_command_opportunities_use_only_local_known_institution
         alive: BTreeSet::from([PersonId(1), PersonId(2)]),
     };
     state
-        .prepare_publication(InstitutionId(10), &authority, SimTime(0), &index)
+        .prepare_publication(&store, InstitutionId(10), &authority, SimTime(0), &index)
         .unwrap()
-        .commit(&mut state)
+        .commit(&state, &mut store)
         .unwrap();
-    assert!(state.institution_views(PersonId(3)).is_empty());
+    assert!(state.institution_views(&store, PersonId(3)).is_empty());
     assert!(
         state
-            .institution_opportunities(PersonId(3), AreaId(3), &authority)
+            .institution_opportunities(&store, PersonId(3), AreaId(3), &authority)
             .is_empty()
     );
     assert_eq!(
-        state.institution_opportunities(PersonId(1), AreaId(3), &authority),
+        state.institution_opportunities(&store, PersonId(1), AreaId(3), &authority),
         vec![
             InstitutionAction::Leave {
                 institution: InstitutionId(10)
@@ -129,7 +127,7 @@ fn closed_publication_and_command_opportunities_use_only_local_known_institution
     );
     assert!(
         state
-            .institution_opportunities(PersonId(1), AreaId(4), &authority)
+            .institution_opportunities(&store, PersonId(1), AreaId(4), &authority)
             .is_empty()
     );
 }

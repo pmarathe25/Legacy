@@ -155,7 +155,7 @@ pub struct AssemblyState {
     #[serde(default)]
     pub property: Option<game_property::Runtime>,
     #[serde(default)]
-    pub institutions: Option<institutions::World>,
+    pub institutions: Option<institutions::Runtime>,
     #[serde(default)]
     pub skills: Option<skills::Runtime>,
     #[serde(default)]

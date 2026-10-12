@@ -2,6 +2,7 @@
 use crate::institutions::*;
 use game_agreements::AgreementTerm;
 use game_core::*;
+use game_ecs::Store;
 use std::collections::BTreeMap;
 
 /// These ports read facts. The Society owner supplies every judgment and threshold.
@@ -19,9 +20,14 @@ pub struct VoterFacts<'a> {
     pub supports_others: bool,
     pub knowledge: &'a dyn VotingKnowledge,
 }
-impl World {
-    pub fn learned_rule_score(&self, actor: PersonId, rule: &InstitutionalRule) -> i64 {
-        let Some(memory) = self.memories.get(&actor) else {
+impl Runtime {
+    pub fn learned_rule_score(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        rule: &InstitutionalRule,
+    ) -> i64 {
+        let Some(memory) = crate::storage::knowledge(store, actor) else {
             return 0;
         };
         memory
@@ -30,7 +36,7 @@ impl World {
             .rev()
             .take(32)
             .map(|(id, value)| {
-                let old = &self.concepts[id];
+                let old = &crate::storage::concept(store, id).expect("validated Society reference");
                 let same = match (&old.effect, &rule.effect) {
                     (
                         SocialEffect::Access {
@@ -66,6 +72,7 @@ impl World {
     }
     pub fn rule_vote_score(
         &self,
+        store: &Store,
         voter: &VoterFacts<'_>,
         charter: &InstitutionCharter,
         rule: &InstitutionalRule,
@@ -126,14 +133,19 @@ impl World {
                 }
             }
         }
-        score + self.learned_rule_score(actor, rule)
+        score + self.learned_rule_score(store, actor, rule)
     }
-    pub fn charter_vote_score(&self, voter: &VoterFacts<'_>, charter: &InstitutionCharter) -> i64 {
+    pub fn charter_vote_score(
+        &self,
+        store: &Store,
+        voter: &VoterFacts<'_>,
+        charter: &InstitutionCharter,
+    ) -> i64 {
         let actor = voter.actor;
         let mut score: i64 = charter
             .rules
             .iter()
-            .map(|rule| self.rule_vote_score(voter, charter, rule))
+            .map(|rule| self.rule_vote_score(store, voter, charter, rule))
             .sum();
         for office in &charter.offices {
             score += i64::from(voter.knowledge.trust(office.holder));
@@ -154,6 +166,7 @@ impl World {
     /// Prepare every response against the same opening state before any command runs.
     pub fn formation_replies(
         &self,
+        store: &Store,
         voters: &[VoterFacts<'_>],
     ) -> Result<Vec<(PersonId, InstitutionAction)>, Error> {
         let mut by_actor = BTreeMap::new();
@@ -163,9 +176,8 @@ impl World {
             }
         }
         let mut replies = Vec::new();
-        for institution in self
-            .institutions
-            .values()
+        for institution in crate::storage::institutions(store)
+            .map(|(_, row)| row)
             .filter(|row| row.status == InstitutionStatus::Proposed)
         {
             for actor in &institution.charter.founders {
@@ -179,7 +191,7 @@ impl World {
                 {
                     continue;
                 }
-                let action = if self.charter_vote_score(voter, &institution.charter) >= 0 {
+                let action = if self.charter_vote_score(store, voter, &institution.charter) >= 0 {
                     InstitutionAction::Join {
                         institution: institution.id,
                     }

@@ -5,7 +5,7 @@ use game_society::institutions::{
     CommandEffect, CommandFacts, CommandIds, ExternalChangePermit, ReferenceFacts,
     ReferenceRequest, StockReference,
 };
-pub use game_society::institutions::{Institution, RuleProposal, SocialMemory, World};
+pub use game_society::institutions::{Institution, RuleProposal, Runtime};
 
 struct InstitutionalVotingKnowledge<'a> {
     stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
@@ -60,22 +60,16 @@ impl Simulation {
             },
             decisions::Aspiration::SupportOthers,
         )?;
-        sim.host.state.institutions = Some(World {
-            institutions: BTreeMap::new(),
-            proposals: BTreeMap::new(),
-            concepts: BTreeMap::new(),
-            cases: BTreeMap::new(),
-            memories: sim
-                .host
-                .state
-                .people
-                .iter()
-                .map(|p| (p.id, SocialMemory::default()))
-                .collect(),
+        sim.host.state.institutions = Some(Runtime {
             last_event: sim.host.next_event() - 1,
-            exclusions: BTreeMap::new(),
-            heard: BTreeMap::new(),
         });
+        for person in &sim.host.state.people {
+            game_society::insert_knowledge(
+                &mut sim.host.storage,
+                person.id,
+                game_society::Knowledge::default(),
+            )?;
+        }
         Ok(sim)
     }
 
@@ -107,14 +101,18 @@ impl Simulation {
             .state
             .institutions
             .as_ref()
-            .map_or_else(Vec::new, |world| world.institution_views(actor))
+            .map_or_else(Vec::new, |world| {
+                world.institution_views(&self.host.storage, actor)
+            })
     }
     pub fn social_case_view(&self, actor: PersonId) -> Vec<SocialCaseView> {
         self.host
             .state
             .institutions
             .as_ref()
-            .map_or_else(Vec::new, |world| world.social_case_views(actor))
+            .map_or_else(Vec::new, |world| {
+                world.social_case_views(&self.host.storage, actor)
+            })
     }
     pub fn debug_institution_action(
         &mut self,
@@ -129,13 +127,13 @@ impl Simulation {
         values: bool,
         precedents: bool,
     ) -> Result<(), Error> {
-        let m = self
-            .host
+        self.host
             .state
             .institutions
-            .as_mut()
-            .and_then(|w| w.memories.get_mut(&actor))
+            .as_ref()
             .ok_or(Error::Unavailable)?;
+        let m =
+            game_society::knowledge_mut(&mut self.host.storage, actor).ok_or(Error::Unavailable)?;
         if values {
             m.values.clear();
         }
@@ -165,9 +163,8 @@ impl Simulation {
             return self.execute_institution_transition(actor, area, action);
         }
         let authority = game_society::institutions::AuthorityFacts {
-            alive: w
-                .institutions
-                .values()
+            alive: game_society::institutions(&self.host.storage)
+                .map(|(_, row)| row)
                 .flat_map(|institution| self.institution_authority_facts(institution).alive)
                 .collect(),
         };
@@ -176,7 +173,7 @@ impl Simulation {
         } else {
             None
         };
-        let refusal = w.case_command_record(action, self.time());
+        let refusal = w.case_command_record(&self.host.storage, action, self.time());
         let roster = self.social_observer_facts();
         let index = game_society::perception::ObservationIndex::new(&roster)?;
         let observers = refusal
@@ -189,6 +186,7 @@ impl Simulation {
         }
         let refusal_id = refusal.map(|_| CaseId(self.host.next_id()));
         let plan = w.prepare_case_command(
+            &self.host.storage,
             action,
             game_society::case_commands::CaseCommandFacts {
                 actor,
@@ -200,7 +198,10 @@ impl Simulation {
                 refusal_observers: &observers,
             },
         )?;
-        let effects = plan.commit(self.host.state.institutions.as_mut().unwrap())?;
+        let effects = plan.commit(
+            self.host.state.institutions.as_ref().unwrap(),
+            &mut self.host.storage,
+        )?;
         if let Some((case, subject)) = effects.recorded {
             self.host.allocate_ids(1)?;
             self.emit(EventKind::SocialCaseRecorded {
@@ -229,25 +230,10 @@ impl Simulation {
         self.preflight_institutions_at(self.host.clock().time)
     }
     pub(crate) fn preflight_institutions_at(&self, at: SimTime) -> Result<(), Error> {
-        let Some(w) = &self.host.state.institutions else {
+        let Some(runtime) = &self.host.state.institutions else {
             return Ok(());
         };
-        for rule in w
-            .institutions
-            .values()
-            .filter(|i| i.status == InstitutionStatus::Active)
-            .flat_map(|i| i.charter.rules.iter())
-        {
-            let due_after = match rule.effect {
-                SocialEffect::Labor { due_after, .. }
-                | SocialEffect::Delivery { due_after, .. } => Some(due_after),
-                _ => None,
-            };
-            if let Some(duration) = due_after {
-                at.0.checked_add(duration.0).ok_or(Error::Overflow)?;
-            }
-        }
-        Ok(())
+        runtime.preflight_rule_deadlines(&self.host.storage, at)
     }
 
     pub(crate) fn closing_institution_demand(
@@ -319,10 +305,8 @@ impl Simulation {
                     Some(CaseReceipt::Production { actor, site })
                 }
                 EventKind::Ate { actor, source, .. }
-                    if world
-                        .exclusions
-                        .get(&actor)
-                        .is_some_and(|stores| stores.contains_key(&source)) =>
+                    if game_society::exclusions(&self.host.storage, actor)
+                        .is_some_and(|stores| stores.stores.contains_key(&source)) =>
                 {
                     Some(CaseReceipt::Support)
                 }
@@ -339,10 +323,8 @@ impl Simulation {
                         .expect("inventory exists")
                         .location
                         == InventoryLocation::Carried(actor)
-                    && world
-                        .exclusions
-                        .get(&actor)
-                        .is_some_and(|stores| stores.contains_key(&source)) =>
+                    && game_society::exclusions(&self.host.storage, actor)
+                        .is_some_and(|stores| stores.stores.contains_key(&source)) =>
                 {
                     Some(CaseReceipt::Support)
                 }
@@ -353,7 +335,14 @@ impl Simulation {
             }
         }
         let pending = game_society::institutions::case_receipt_demand(&receipts)?;
-        world.closing_resource_demand(population, review, ledger, pending, direct)
+        world.closing_resource_demand(
+            &self.host.storage,
+            population,
+            review,
+            ledger,
+            pending,
+            direct,
+        )
     }
 
     fn institution_authority_facts(
@@ -400,13 +389,12 @@ impl Simulation {
             return false;
         };
         let authority = game_society::institutions::AuthorityFacts {
-            alive: world
-                .institutions
-                .values()
+            alive: game_society::institutions(&self.host.storage)
+                .map(|(_, row)| row)
                 .flat_map(|i| self.institution_authority_facts(i).alive)
                 .collect(),
         };
-        world.allows_access(actor, inventory, &authority)
+        world.allows_access(&self.host.storage, actor, inventory, &authority)
     }
 
     fn social_observer_facts(&self) -> Vec<game_society::perception::ObserverFacts> {
@@ -445,12 +433,17 @@ impl Simulation {
         let index = game_society::perception::ObservationIndex::new(&roster)
             .expect("unique observer roster");
         let world = self.host.state.institutions.as_ref().unwrap();
-        let authority = self.institution_authority_facts(&world.institutions[&id]);
+        let authority = self.institution_authority_facts(
+            game_society::institution(&self.host.storage, id).expect("validated Society reference"),
+        );
         let publication = world
-            .prepare_publication(id, &authority, self.time(), &index)
+            .prepare_publication(&self.host.storage, id, &authority, self.time(), &index)
             .expect("known institution");
         publication
-            .commit(self.host.state.institutions.as_mut().unwrap())
+            .commit(
+                self.host.state.institutions.as_ref().unwrap(),
+                &mut self.host.storage,
+            )
             .expect("immediate publication guard");
     }
     fn institution_reference_facts(&self, request: &ReferenceRequest) -> ReferenceFacts {
@@ -523,7 +516,7 @@ impl Simulation {
             .institutions
             .as_ref()
             .ok_or(Error::Unavailable)?;
-        let request = world.command_references(actor, action)?;
+        let request = world.command_references(&self.host.storage, actor, action)?;
         let references = self.institution_reference_facts(&request);
         let authority = game_society::institutions::AuthorityFacts {
             alive: request
@@ -544,11 +537,18 @@ impl Simulation {
             InstitutionAction::Propose {
                 institution,
                 change,
-            } => Some((&world.institutions[institution], change, true)),
+            } => Some((
+                &game_society::institution(&self.host.storage, institution)
+                    .expect("validated Society reference"),
+                change,
+                true,
+            )),
             InstitutionAction::Vote { proposal, .. } => {
-                let proposal = &world.proposals[proposal];
+                let proposal = &game_society::proposal(&self.host.storage, proposal)
+                    .expect("validated Society reference");
                 Some((
-                    &world.institutions[&proposal.institution],
+                    &game_society::institution(&self.host.storage, proposal.institution)
+                        .expect("validated Society reference"),
                     &proposal.change,
                     false,
                 ))
@@ -588,6 +588,7 @@ impl Simulation {
             None
         };
         let plan = world.prepare_command(
+            &self.host.storage,
             action,
             &CommandFacts {
                 actor,
@@ -667,13 +668,16 @@ impl Simulation {
                 }
             }
         }
-        plan.verify(self.host.state.institutions.as_ref().unwrap())?;
+        plan.verify(&self.host.storage)?;
         let effects = plan.effects.clone();
         let next_id = plan.next_id;
         if let Some(funding) = &funding {
             funding.check(&self.host.state.agreements.as_ref().unwrap().ledger)?;
         }
-        plan.commit(self.host.state.institutions.as_mut().unwrap())?;
+        plan.commit(
+            self.host.state.institutions.as_ref().unwrap(),
+            &mut self.host.storage,
+        )?;
         if let Some(funding) = funding {
             funding.commit(&mut self.host.state.agreements.as_mut().unwrap().ledger)?;
         }
@@ -774,9 +778,8 @@ impl Simulation {
 
     fn apply_institution_rules(&mut self) -> Result<(), Error> {
         let world = self.host.state.institutions.as_ref().unwrap();
-        let holders = world
-            .institutions
-            .values()
+        let holders = game_society::institutions(&self.host.storage)
+            .map(|(_, row)| row)
             .filter(|institution| institution.status == InstitutionStatus::Active)
             .flat_map(|institution| {
                 institution
@@ -815,14 +818,18 @@ impl Simulation {
             })
             .collect();
         let authority = game_society::institutions::AuthorityFacts {
-            alive: world
-                .institutions
-                .values()
+            alive: game_society::institutions(&self.host.storage)
+                .map(|(_, row)| row)
                 .flat_map(|institution| self.institution_authority_facts(institution).alive)
                 .collect(),
         };
-        let applications =
-            world.rule_applications(&authority, &speakers, &locations, self.time())?;
+        let applications = world.rule_applications(
+            &self.host.storage,
+            &authority,
+            &speakers,
+            &locations,
+            self.time(),
+        )?;
         for application in applications {
             for intent in application.intents {
                 match &intent {
@@ -838,7 +845,7 @@ impl Simulation {
                             .institutions
                             .as_mut()
                             .unwrap()
-                            .apply_access_intent(&intent)?
+                            .apply_access_intent(&mut self.host.storage, &intent)?
                         {
                             self.emit(EventKind::InstitutionRuleApplied {
                                 institution: *institution,
@@ -861,7 +868,7 @@ impl Simulation {
                             .institutions
                             .as_mut()
                             .unwrap()
-                            .register_duty(&intent, agreement)?;
+                            .register_duty(&mut self.host.storage, &intent, agreement)?;
                         self.emit(EventKind::InstitutionRuleApplied {
                             institution: *institution,
                             rule: *index,
@@ -902,7 +909,7 @@ impl Simulation {
             .institutions
             .as_mut()
             .unwrap()
-            .commit_case_reaction(reaction, id, &observers)?;
+            .commit_case_reaction(&mut self.host.storage, reaction, id, &observers)?;
         self.emit(EventKind::SocialCaseRecorded { case: id, actor });
         Ok(id)
     }
@@ -1015,16 +1022,15 @@ impl Simulation {
         };
         let cursor = world.last_event;
         let last = self.host.next_event() - 1;
-        if world.memories.len() != self.host.state.people.len() {
+        if game_society::knowledges(&self.host.storage).count() != self.host.state.people.len() {
             for person in &self.host.state.people {
-                self.host
-                    .state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .memories
-                    .entry(person.id)
-                    .or_default();
+                if game_society::knowledge(&self.host.storage, person.id).is_none() {
+                    game_society::insert_knowledge(
+                        &mut self.host.storage,
+                        person.id,
+                        game_society::Knowledge::default(),
+                    )?;
+                }
             }
         }
         let receipts = self
@@ -1054,7 +1060,13 @@ impl Simulation {
                 .institutions
                 .as_ref()
                 .unwrap()
-                .receipt_reaction(&receipt, subject, self.time(), &receipt_index)
+                .receipt_reaction(
+                    &self.host.storage,
+                    &receipt,
+                    subject,
+                    self.time(),
+                    &receipt_index,
+                )
             {
                 self.commit_social_reaction(reaction, &witnesses)?;
             }
@@ -1074,6 +1086,7 @@ impl Simulation {
             let mut subject = self.case_subject_facts(actor);
             subject.area = Some(area);
             reactions.extend(world.exclusion_reactions(
+                &self.host.storage,
                 subject,
                 &mind.knowledge,
                 &self.host.state.agreements.as_ref().unwrap().custodians,
@@ -1118,73 +1131,10 @@ impl Simulation {
             knowledge,
         }
     }
-    fn rule_vote_score(
-        &self,
-        actor: PersonId,
-        charter: &InstitutionCharter,
-        rule: &InstitutionalRule,
-    ) -> i64 {
-        let knowledge = self.institutional_vote_knowledge(actor);
-        self.host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .rule_vote_score(
-                &self.institutional_vote_facts(actor, &knowledge),
-                charter,
-                rule,
-            )
-    }
-    fn charter_vote_score(&self, actor: PersonId, charter: &InstitutionCharter) -> i64 {
-        let knowledge = self.institutional_vote_knowledge(actor);
-        self.host
-            .state
-            .institutions
-            .as_ref()
-            .unwrap()
-            .charter_vote_score(&self.institutional_vote_facts(actor, &knowledge), charter)
-    }
-
-    fn change_vote_score(
-        &self,
-        actor: PersonId,
-        i: &Institution,
-        change: &InstitutionChange,
-    ) -> i64 {
-        match change {
-            InstitutionChange::RatifyRegional { .. }
-            | InstitutionChange::AuthorizeRegionalPassage { .. } => {
-                self.realm_vote_score(actor, change)
-            }
-            InstitutionChange::EnforcementPolicy { .. } | InstitutionChange::Adjudicate { .. } => {
-                self.enforcement_vote_score(actor, i, change)
-            }
-            InstitutionChange::AddRule(rule) => self.rule_vote_score(actor, &i.charter, rule),
-            InstitutionChange::ReplaceRule { index, rule } => {
-                self.rule_vote_score(actor, &i.charter, rule)
-                    - self.rule_vote_score(actor, &i.charter, &i.charter.rules[*index as usize])
-            }
-            InstitutionChange::RemoveRule { index } => {
-                -self.rule_vote_score(actor, &i.charter, &i.charter.rules[*index as usize])
-            }
-            InstitutionChange::Appoint { holder, .. } => i64::from(
-                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                    .unwrap()
-                    .relationships
-                    .get(holder)
-                    .map_or(0, |r| r.trust),
-            ),
-            InstitutionChange::Procedure(_) | InstitutionChange::Invite(_) => 0,
-            InstitutionChange::Dissolve => -self.charter_vote_score(actor, &i.charter),
-        }
-    }
-
     fn hear_known_cases(&mut self) -> Result<(), Error> {
         let world = self.host.state.institutions.as_ref().unwrap();
-        let holders = world
-            .institutions
-            .values()
+        let holders = game_society::institutions(&self.host.storage)
+            .map(|(_, row)| row)
             .flat_map(|institution| {
                 institution
                     .charter
@@ -1209,13 +1159,12 @@ impl Simulation {
             })
             .collect::<Vec<_>>();
         let authority = game_society::institutions::AuthorityFacts {
-            alive: world
-                .institutions
-                .values()
+            alive: game_society::institutions(&self.host.storage)
+                .map(|(_, row)| row)
                 .flat_map(|institution| self.institution_authority_facts(institution).alive)
                 .collect(),
         };
-        let choices = world.hearing_intentions(&authority, &actors)?;
+        let choices = world.hearing_intentions(&self.host.storage, &authority, &actors)?;
         for (actor, choice) in choices {
             let _ = self.institution_command(actor, &choice);
         }
@@ -1228,9 +1177,8 @@ impl Simulation {
         self.reconcile_institutions()?;
         self.observe_exclusions()?;
         let w = self.host.state.institutions.as_ref().unwrap();
-        let founders = w
-            .institutions
-            .values()
+        let founders = game_society::institutions(&self.host.storage)
+            .map(|(_, row)| row)
             .filter(|row| row.status == InstitutionStatus::Proposed)
             .flat_map(|row| row.charter.founders.iter().copied())
             .collect::<BTreeSet<_>>();
@@ -1242,37 +1190,65 @@ impl Simulation {
             .iter()
             .map(|(actor, knowledge)| self.institutional_vote_facts(*actor, knowledge))
             .collect::<Vec<_>>();
-        let mut replies = w.formation_replies(&facts)?;
-        for p in w
-            .proposals
-            .values()
-            .filter(|p| p.status == RuleProposalStatus::Proposed)
-        {
-            let i = &w.institutions[&p.institution];
-            for actor in self
-                .subjects(i, &i.charter.procedure.voters)
-                .intersection(&i.members)
-                .filter(|id| **id != self.host.state.ruler && !p.votes.contains_key(id))
-            {
-                if self.social_area(*actor).ok() != Some(i.charter.jurisdiction) {
-                    continue;
+        let mut replies = w.formation_replies(&self.host.storage, &facts)?;
+        let voters = self
+            .host
+            .state
+            .people
+            .iter()
+            .map(|person| (person.id, self.institutional_vote_knowledge(person.id)))
+            .collect::<Vec<_>>();
+        let voter_facts = voters
+            .iter()
+            .map(|(actor, knowledge)| self.institutional_vote_facts(*actor, knowledge))
+            .collect::<Vec<_>>();
+        let authority = game_society::institutions::AuthorityFacts {
+            alive: game_society::institutions(&self.host.storage)
+                .flat_map(|(_, i)| self.institution_authority_facts(i).alive)
+                .collect(),
+        };
+        let requests = w.proposal_vote_requests(&self.host.storage, &authority, &voter_facts)?;
+        let proposers = game_society::proposals(&self.host.storage)
+            .map(|(_, p)| p.proposer)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|actor| game_society::proposal_voting::ProposerFacts {
+                actor,
+                area: self.social_area(actor).ok(),
+                social_penalty: self.invocation_social_penalty(actor),
+            })
+            .collect::<Vec<_>>();
+        let mut foreign = Vec::new();
+        for (proposal, actor) in requests {
+            let p = game_society::proposal(&self.host.storage, proposal).expect("proposal exists");
+            let i = game_society::institution(&self.host.storage, p.institution)
+                .expect("institution exists");
+            let score = match &p.change {
+                InstitutionChange::RatifyRegional { .. }
+                | InstitutionChange::AuthorizeRegionalPassage { .. } => {
+                    Some(self.realm_vote_score(actor, &p.change))
                 }
-                replies.push((
-                    *actor,
-                    InstitutionAction::Vote {
-                        proposal: p.id,
-                        support: self.change_vote_score(*actor, i, &p.change)
-                            - if self.social_area(p.proposer).ok() == self.social_area(*actor).ok()
-                            {
-                                self.invocation_social_penalty(p.proposer)
-                            } else {
-                                0
-                            }
-                            >= 0,
-                    },
-                ));
+                InstitutionChange::EnforcementPolicy { .. }
+                | InstitutionChange::Adjudicate { .. } => {
+                    Some(self.enforcement_vote_score(actor, i, &p.change))
+                }
+                _ => None,
+            };
+            if let Some(score) = score {
+                foreign.push(game_society::proposal_voting::ForeignVoteJudgment {
+                    proposal,
+                    actor,
+                    score,
+                });
             }
         }
+        replies.extend(w.proposal_replies(
+            &self.host.storage,
+            &authority,
+            &voter_facts,
+            &proposers,
+            &foreign,
+        )?);
         for (actor, action) in replies {
             let _ = self.institution_command(actor, &action);
         }
@@ -1287,7 +1263,10 @@ impl Simulation {
         use game_society::deliberation::{DutyWorker, LivelihoodSite};
         let world = self.host.state.institutions.as_ref().unwrap();
         let people = world
-            .duty_workers(&self.host.state.agreements.as_ref().unwrap().ledger)
+            .duty_workers(
+                &self.host.storage,
+                &self.host.state.agreements.as_ref().unwrap().ledger,
+            )
             .expect("known duty ledger");
         let site_sets = people
             .iter()
@@ -1340,6 +1319,7 @@ impl Simulation {
             .collect::<Vec<_>>();
         let intentions = world
             .duty_work_intentions(
+                &self.host.storage,
                 &self.host.state.agreements.as_ref().unwrap().ledger,
                 &workers,
             )
@@ -1391,7 +1371,8 @@ impl Simulation {
                     .collect::<Vec<_>>();
             let recruits = by_area.get(&area).map_or(&[][..], Vec::as_slice);
             let world = self.host.state.institutions.as_ref().unwrap();
-            let request = world.discovery_references(actor, area, &sites, recruits);
+            let request =
+                world.discovery_references(&self.host.storage, actor, area, &sites, recruits);
             let references = self.institution_reference_facts(&request);
             let authority = game_society::institutions::AuthorityFacts {
                 alive: request
@@ -1404,14 +1385,17 @@ impl Simulation {
                     })
                     .collect(),
             };
-            let decision = world.discovery_decision(DiscoveryFacts {
-                voter: &voter,
-                now: self.time(),
-                authority: &authority,
-                references: &references,
-                sites: &sites,
-                recruits,
-            });
+            let decision = world.discovery_decision(
+                &self.host.storage,
+                DiscoveryFacts {
+                    voter: &voter,
+                    now: self.time(),
+                    authority: &authority,
+                    references: &references,
+                    sites: &sites,
+                    recruits,
+                },
+            );
             let Some(decision) = decision else {
                 continue;
             };
@@ -1425,7 +1409,7 @@ impl Simulation {
                 .institutions
                 .as_mut()
                 .unwrap()
-                .record_discovery_attempt(actor, &decision, accepted)?;
+                .record_discovery_attempt(&mut self.host.storage, actor, &decision, accepted)?;
         }
         Ok(())
     }
@@ -1437,14 +1421,13 @@ impl Simulation {
             return Vec::new();
         };
         let authority = game_society::institutions::AuthorityFacts {
-            alive: world
-                .institutions
-                .values()
+            alive: game_society::institutions(&self.host.storage)
+                .map(|(_, row)| row)
                 .flat_map(|institution| self.institution_authority_facts(institution).alive)
                 .collect(),
         };
         world
-            .institution_opportunities(actor, area, &authority)
+            .institution_opportunities(&self.host.storage, actor, area, &authority)
             .into_iter()
             .map(|action| Command::Institution { action })
             .collect()
@@ -1452,315 +1435,67 @@ impl Simulation {
 }
 
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
-    let Some(w) = &s.state.institutions else {
+    let Some(runtime) = &s.state.institutions else {
+        if game_society::institutions(s.components).next().is_some()
+            || game_society::proposals(s.components).next().is_some()
+            || game_society::concepts(s.components).next().is_some()
+            || game_society::cases(s.components).next().is_some()
+            || game_society::knowledges(s.components).next().is_some()
+            || game_society::request_rows(s.components).next().is_some()
+            || game_society::exclusion_rows(s.components).next().is_some()
+            || game_society::hearings(s.components).next().is_some()
+        {
+            return Err(Error::InvalidSave(
+                "society components require their runtime".into(),
+            ));
+        }
         return Ok(());
     };
     let fail = || Error::InvalidSave("invalid institution state".into());
-    let people: BTreeSet<_> = s.state.people.iter().map(|p| p.id).collect();
-    let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
-    s.state.physical.as_ref().ok_or_else(fail)?;
-    let agreements = s.state.agreements.as_ref().ok_or_else(fail)?;
-    if s.state.decisions.is_none()
-        || w.last_event >= s.next_event
-        || w.memories.keys().any(|id| !people.contains(id))
-    {
+    if s.state.physical.is_none() || s.state.decisions.is_none() {
         return Err(fail());
     }
-    fn expression_valid(
-        e: &RuleExpression,
-        s: &CanonicalState,
-        depth: usize,
-        nodes: &mut usize,
-    ) -> bool {
-        *nodes += 1;
-        if depth > 4 || *nodes > 24 {
-            return false;
-        }
-        match e {
-            RuleExpression::All(items) | RuleExpression::Any(items) => {
-                !items.is_empty()
-                    && items.len() <= 8
-                    && items
-                        .iter()
-                        .all(|e| expression_valid(e, s, depth + 1, nodes))
-            }
-            RuleExpression::Not(e) => expression_valid(e, s, depth + 1, nodes),
-            RuleExpression::Fact(SocialCondition::KnownStockAtLeast {
-                inventory,
-                quantity,
-            }) => game_cargo::inventory(s.components, *(inventory)).is_some() && quantity.0 > 0,
-            RuleExpression::Fact(SocialCondition::Excluded { inventory }) => {
-                game_cargo::inventory(s.components, *(inventory)).is_some()
-            }
-            RuleExpression::Fact(SocialCondition::HungerAtLeast(n)) => *n > 0,
-            RuleExpression::Fact(
-                SocialCondition::KnownCooperationAtLeast(n)
-                | SocialCondition::KnownDefaultsAtLeast(n),
-            ) => (1..=64).contains(n),
-            _ => true,
-        }
-    }
-    let subjects_valid = |subjects: &Subjects, offices: &[OfficeMandate]| {
-        (subjects.members || !subjects.named.is_empty() || !subjects.offices.is_empty())
-            && subjects.named.len() <= 64
-            && subjects.named.is_subset(&people)
-            && subjects.offices.len() <= 8
-            && subjects
-                .offices
-                .iter()
-                .all(|slot| offices.iter().any(|o| o.slot == *slot))
-    };
-    let rule_references = |rule: &InstitutionalRule| {
-        if rule.subjects.named.len() > 64
-            || !rule.subjects.named.is_subset(&people)
-            || !expression_valid(&rule.when, s, 0, &mut 0)
-        {
-            return false;
-        }
-        let beneficiary = |b: &Beneficiary| match b {
-            Beneficiary::Person(id) => people.contains(id),
-            Beneficiary::Office(_) => true,
-        };
-        match &rule.effect {
-            SocialEffect::Access { inventory, .. } => {
-                game_cargo::inventory(s.components, *(inventory)).is_some()
-            }
-            SocialEffect::Labor {
-                site,
-                millis,
-                beneficiary: b,
-                due_after,
-            } => {
-                game_workshop::site(s.components, *site).is_some()
-                    && *millis > 0
-                    && due_after.0 >= *millis
-                    && beneficiary(b)
-            }
-            SocialEffect::Delivery {
-                source,
-                destination,
-                quantity,
-                beneficiary: b,
-                due_after,
-            } => {
-                source != destination
-                    && quantity.0 > 0
-                    && due_after.0 >= 120_000
-                    && game_cargo::inventory(s.components, *(source))
-                        .zip(game_cargo::inventory(s.components, *(destination)))
-                        .is_some_and(|(a, b)| a.good == b.good && quantity.0 <= b.capacity.0)
-                    && beneficiary(b)
-            }
-        }
-    };
-    for (id, rule) in &w.concepts {
-        if id.0 >= s.next_id || !rule_references(rule) {
-            return Err(fail());
-        }
-    }
-    for (id, i) in &w.institutions {
-        let c = &i.charter;
-        if *id != i.id
-            || id.0 >= s.next_id
-            || i.origin
-                .is_some_and(|id| !w.institutions.contains_key(&id) || id == i.id)
-            || c.purpose.is_empty()
-            || c.purpose.len() > 160
-            || !areas.contains(&c.jurisdiction)
-            || !(2..=8).contains(&c.founders.len())
-            || !c.founders.is_subset(&people)
-            || i.members.len() > 64
-            || !i.members.is_subset(&people)
-            || !i.declined.is_subset(&c.founders)
-            || !i.invited.is_subset(&people)
-            || c.offices.is_empty()
-            || c.offices.len() > 8
-            || c.rules.len() > 16
-            || i.concepts.len() != c.rules.len()
-            || c.evidence.len() > 8
-            || c.evidence.iter().any(|id| !w.cases.contains_key(id))
-            || !subjects_valid(&c.procedure.proposers, &c.offices)
-            || !subjects_valid(&c.procedure.voters, &c.offices)
-            || !(1..=64).contains(&c.procedure.minimum_support)
-        {
-            return Err(fail());
-        }
-        let mut slots = BTreeSet::new();
-        for office in &c.offices {
-            if !slots.insert(office.slot)
-                || !people.contains(&office.holder)
-                || office.minimum_support == 0
-                || usize::from(office.minimum_support) > c.founders.len()
-                || office.inventories.len() > 16
-                || office.sites.len() > 16
-                || office.powers.is_empty()
-                || office
-                    .inventories
-                    .iter()
-                    .any(|id| !game_cargo::inventory(s.components, *(id)).is_some())
-                || office
-                    .sites
-                    .iter()
-                    .any(|id| game_workshop::site(s.components, *id).is_none())
-            {
-                return Err(fail());
-            }
-        }
-        for (rule, concept) in c.rules.iter().zip(&i.concepts) {
-            let office = c
-                .offices
-                .iter()
-                .find(|o| o.slot == rule.authority)
-                .ok_or_else(fail)?;
-            if w.concepts.get(concept) != Some(rule) || !subjects_valid(&rule.subjects, &c.offices)
-            {
-                return Err(fail());
-            }
-            let valid = match &rule.effect {
-                SocialEffect::Access { inventory, .. } => {
-                    office.powers.contains(&OfficePower::Access)
-                        && office.inventories.contains(inventory)
-                }
-                SocialEffect::Labor { site, .. } => {
-                    office.powers.contains(&OfficePower::Labor) && office.sites.contains(site)
-                }
-                SocialEffect::Delivery {
-                    source,
-                    destination,
-                    ..
-                } => {
-                    office.powers.contains(&OfficePower::Delivery)
-                        && office.inventories.contains(source)
-                        && office.inventories.contains(destination)
-                }
-            };
-            if !valid {
-                return Err(fail());
-            }
-        }
-        if i.office_support
+    let agreements = s.state.agreements.as_ref().ok_or_else(fail)?;
+    let request = runtime.validation_references(s.components);
+    let people = s.state.people.iter().map(|p| p.id).collect::<BTreeSet<_>>();
+    let areas = s.state.areas.iter().map(|a| a.id).collect::<BTreeSet<_>>();
+    let references = ReferenceFacts {
+        people: request.people.intersection(&people).copied().collect(),
+        eligible_locations: BTreeMap::new(),
+        stocks: request
+            .stocks
             .iter()
-            .any(|(slot, ids)| !slots.contains(slot) || !ids.is_subset(&i.members))
-            || i.grants.iter().any(|(concept, actors)| {
-                !i.concepts.contains(concept)
-                    || !actors.is_subset(&people)
-                    || !matches!(
-                        w.concepts[concept].effect,
-                        SocialEffect::Access { allowed: true, .. }
+            .filter_map(|id| {
+                game_cargo::inventory(s.components, *id).map(|row| {
+                    (
+                        *id,
+                        StockReference {
+                            area: None,
+                            custodian: None,
+                            good: row.good,
+                            capacity: row.capacity,
+                        },
                     )
-            })
-            || i.applied.iter().any(|(concept, actors)| {
-                !w.concepts.contains_key(concept)
-                    || actors.iter().any(|(actor, id)| {
-                        !people.contains(actor) || !agreements.agreements.contains_key(id)
-                    })
-            })
-            || i.funding
-                .iter()
-                .any(|id| !agreements.agreements.contains_key(id))
-            || c.contributions.len() > 16
-        {
-            return Err(fail());
-        }
-        if matches!(
-            i.status,
-            InstitutionStatus::Proposed | InstitutionStatus::Rejected
-        ) && (!i.members.is_subset(&c.founders)
-            || !i.funding.is_empty()
-            || !i.applied.is_empty()
-            || !i.grants.is_empty())
-        {
-            return Err(fail());
-        }
-        if matches!(
-            i.status,
-            InstitutionStatus::Active | InstitutionStatus::Dissolved
-        ) && i.funding.len() != c.contributions.len()
-        {
-            return Err(fail());
-        }
-        for (term, id) in c.contributions.iter().zip(&i.funding) {
-            if agreements.agreements[id].terms != vec![term.clone()] {
-                return Err(fail());
-            }
-        }
-    }
-    for (id, p) in &w.proposals {
-        let i = w.institutions.get(&p.institution).ok_or_else(fail)?;
-        if *id != p.id
-            || id.0 >= s.next_id
-            || !people.contains(&p.proposer)
-            || p.base_revision > i.revision
-            || (p.status == RuleProposalStatus::Proposed && p.base_revision != i.revision)
-            || p.votes.keys().any(|id| !people.contains(id))
-        {
-            return Err(fail());
-        }
-        match &p.change {
-            InstitutionChange::AddRule(rule) | InstitutionChange::ReplaceRule { rule, .. } => {
-                if !rule_references(rule) {
-                    return Err(fail());
-                }
-            }
-            InstitutionChange::Appoint { holder, .. } | InstitutionChange::Invite(holder)
-                if !people.contains(holder) =>
-            {
-                return Err(fail());
-            }
-            _ => {}
-        }
-    }
-    for (id, case) in &w.cases {
-        if *id != case.id
-            || id.0 >= s.next_id
-            || !people.contains(&case.subject)
-            || !people.contains(&case.counterpart)
-            || !areas.contains(&case.area)
-            || case
-                .inventory
-                .is_some_and(|id| !game_cargo::inventory(s.components, id).is_some())
-            || case.need_band > 3
-            || case.observed_at > s.time
-        {
-            return Err(fail());
-        }
-    }
-    if w.exclusions.iter().any(|(actor, stores)| {
-        !people.contains(actor)
-            || stores.iter().any(|(inventory, id)| {
-                w.cases.get(id).is_none_or(|c| {
-                    c.subject != *actor
-                        || c.inventory != Some(*inventory)
-                        || c.kind != SocialCaseKind::Exclusion
                 })
             })
-    }) || w.heard.keys().any(|id| !w.cases.contains_key(id))
-    {
-        return Err(fail());
-    }
-    for memory in w.memories.values() {
-        if memory.cases.iter().any(|id| !w.cases.contains_key(id))
-            || memory.values.iter().any(|(id, value)| {
-                !w.concepts.contains_key(id)
-                    || !(-2_000..=2_000).contains(&value.weight)
-                    || value.experiences == 0
-            })
-            || memory.institutions.iter().any(|(id, view)| {
-                !w.institutions.contains_key(id)
-                    || *id != view.id
-                    || view.observed_at > s.time
-                    || !view.members.is_subset(&people)
-                    || !view.charter.founders.is_subset(&people)
-                    || view
-                        .proposals
-                        .iter()
-                        .any(|p| !w.proposals.contains_key(&p.id))
-            })
-        {
-            return Err(fail());
-        }
-    }
-    Ok(())
+            .collect(),
+        sites: request
+            .sites
+            .iter()
+            .filter_map(|id| game_workshop::site(s.components, *id).map(|row| (*id, row.area)))
+            .collect(),
+    };
+    runtime.validate(
+        s.components,
+        &game_society::save_validation::ValidationFacts {
+            at: s.time,
+            next_id: s.next_id,
+            next_event: s.next_event,
+            areas: &areas,
+            references: &references,
+            agreements: &agreements.ledger,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1856,13 +1591,9 @@ mod closing_resource_tests {
     fn closing_defaults_must_preflight_every_social_case_before_publishing() {
         let mut sim = many_defaults();
         assert!(
-            sim.host
-                .state
-                .institutions
-                .as_ref()
-                .unwrap()
-                .institutions
-                .is_empty()
+            game_society::institutions(&sim.host.storage)
+                .next()
+                .is_none()
         );
         assert_eq!(sim.host.state.people.len(), 15);
         let before = sim.canonical_snapshot().unwrap();
@@ -1898,15 +1629,7 @@ mod closing_resource_tests {
                 .count(),
             1000
         );
-        assert!(
-            sim.host
-                .state
-                .institutions
-                .as_ref()
-                .unwrap()
-                .cases
-                .is_empty()
-        );
+        assert!(game_society::cases(&sim.host.storage).next().is_none());
         {
             let mut authored: serde_json::Value =
                 serde_json::from_slice(&sim.save().unwrap()).unwrap();
@@ -1942,10 +1665,7 @@ mod closing_resource_tests {
         let mut sim = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
         sim.advance(SimDuration(1)).unwrap();
         assert_eq!(sim.host.next_id(), u64::MAX);
-        assert_eq!(
-            sim.host.state.institutions.as_ref().unwrap().cases.len(),
-            1000
-        );
+        assert_eq!(game_society::cases(&sim.host.storage).count(), 1000);
         assert!(
             sim.host
                 .state

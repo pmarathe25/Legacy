@@ -51,21 +51,21 @@ fn fixture(seed: u64) -> (Simulation, Context) {
         game_assembly::decisions::Aspiration::Comfort,
     )
     .unwrap();
-    let institutions = sim.canonical_state().state.institutions.as_ref().unwrap();
-    let a = institutions
-        .institutions
-        .values()
+    let a = game_society::institutions(sim.canonical_state().components)
+        .map(|(_, row)| row)
         .find(|i| i.charter.purpose == "Willowbank trading council")
         .unwrap()
         .id;
-    let b = institutions
-        .institutions
-        .values()
+    let b = game_society::institutions(sim.canonical_state().components)
+        .map(|(_, row)| row)
         .find(|i| i.charter.purpose == "Northwood trading council")
         .unwrap()
         .id;
     let stock = |institution: InstitutionId, good| {
-        *institutions.institutions[&institution].charter.offices[0]
+        *game_society::institution(sim.canonical_state().components, institution)
+            .unwrap()
+            .charter
+            .offices[0]
             .inventories
             .iter()
             .find(|id| {
@@ -191,15 +191,9 @@ fn ratify(
     };
     sim.debug_actor_command(delegate, Command::Institution { action })
         .unwrap();
-    let proposal = *sim
-        .canonical_state()
-        .state
-        .institutions
-        .as_ref()
-        .unwrap()
-        .proposals
-        .keys()
-        .last()
+    let proposal = game_society::proposals(sim.canonical_state().components)
+        .map(|(id, _)| id)
+        .next_back()
         .unwrap();
     for p in [delegate, voter] {
         sim.debug_actor_command(
@@ -214,12 +208,8 @@ fn ratify(
         .unwrap();
     }
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        game_society::proposal(sim.canonical_state().components, proposal)
             .unwrap()
-            .proposals[&proposal]
             .status,
         RuleProposalStatus::Adopted
     );

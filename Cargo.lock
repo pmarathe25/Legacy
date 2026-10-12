@@ -795,6 +795,7 @@ version = "0.1.0"
 dependencies = [
  "game-agreements",
  "game-core",
+ "game-ecs",
  "serde",
  "serde_json",
 ]

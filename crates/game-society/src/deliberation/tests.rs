@@ -1,5 +1,6 @@
 use super::*;
 use crate::policy_fixtures::*;
+use crate::policy_fixtures::{Knowledge, case, institution};
 fn alive() -> AuthorityFacts {
     AuthorityFacts {
         alive: refs().people,
@@ -17,26 +18,27 @@ fn recruits() -> Vec<Recruit> {
 }
 #[test]
 fn hearings_require_held_power_locality_personal_case_knowledge_and_ordered_current_authority() {
-    let mut state = world();
+    let (state, mut store) = world();
     let mut i = institution(10, vec![], InstitutionStatus::Active);
     i.members = BTreeSet::from([PersonId(1), PersonId(2)]);
     i.office_support.insert(0, BTreeSet::from([PersonId(2)]));
     i.charter.offices[0]
         .powers
         .insert(OfficePower::HearAccessCases);
-    state.institutions.insert(i.id, i);
-    state.cases.insert(
+    seed_institution(&mut store, i);
+    crate::storage::insert_case(
+        &mut store,
         CaseId(30),
         case(30, 1, SocialCaseKind::Exclusion, SocialOutcome::Unresolved),
-    );
-    state.cases.insert(
+    )
+    .unwrap();
+    crate::storage::insert_case(
+        &mut store,
         CaseId(31),
         case(31, 1, SocialCaseKind::Exclusion, SocialOutcome::Unresolved),
-    );
-    state
-        .memories
-        .entry(PersonId(2))
-        .or_default()
+    )
+    .unwrap();
+    ensure_memory(&mut store, PersonId(2))
         .cases
         .insert(CaseId(30));
     let judge = HearingActor {
@@ -55,12 +57,15 @@ fn hearings_require_held_power_locality_personal_case_knowledge_and_ordered_curr
         },
     );
     assert_eq!(
-        state.hearing_intentions(&alive(), &[judge]).unwrap(),
+        state
+            .hearing_intentions(&store, &alive(), &[judge])
+            .unwrap(),
         vec![action]
     );
     assert!(
         state
             .hearing_intentions(
+                &store,
                 &alive(),
                 &[HearingActor {
                     area: None,
@@ -73,6 +78,7 @@ fn hearings_require_held_power_locality_personal_case_knowledge_and_ordered_curr
     assert!(
         state
             .hearing_intentions(
+                &store,
                 &AuthorityFacts {
                     alive: BTreeSet::from([PersonId(1)])
                 },
@@ -81,16 +87,17 @@ fn hearings_require_held_power_locality_personal_case_knowledge_and_ordered_curr
             .unwrap()
             .is_empty()
     );
-    state.heard.insert(CaseId(30), false);
+    crate::storage::insert_hearing(&mut store, CaseId(30), Hearing { shared: false }).unwrap();
     assert!(
         state
-            .hearing_intentions(&alive(), &[judge])
+            .hearing_intentions(&store, &alive(), &[judge])
             .unwrap()
             .is_empty()
     );
-    state.heard.clear();
+    crate::storage::remove_hearing(&mut store, CaseId(30)).unwrap();
     for id in 32..=95 {
-        state.cases.insert(
+        crate::storage::insert_case(
+            &mut store,
             CaseId(id),
             case(
                 id,
@@ -98,17 +105,16 @@ fn hearings_require_held_power_locality_personal_case_knowledge_and_ordered_curr
                 SocialCaseKind::Cooperation,
                 SocialOutcome::Contributed,
             ),
-        );
-        state
-            .memories
-            .get_mut(&PersonId(2))
+        )
+        .unwrap();
+        crate::storage::knowledge_mut(&mut store, PersonId(2))
             .unwrap()
             .cases
             .insert(CaseId(id));
     }
     assert!(
         state
-            .hearing_intentions(&alive(), &[judge])
+            .hearing_intentions(&store, &alive(), &[judge])
             .unwrap()
             .is_empty()
     );
@@ -128,37 +134,41 @@ fn ordered_default_reform_precedes_later_join_and_invalid_deeper_rule_falls_thro
         },
         ..labor()
     };
-    let mut state = world();
+    let (state, mut store) = world();
     let mut i = institution(10, vec![access], InstitutionStatus::Active);
     i.members.insert(PersonId(1));
-    state.institutions.insert(i.id, i);
-    state.institutions.insert(
+    seed_institution(&mut store, i);
+    crate::storage::insert_institution(
+        &mut store,
         InstitutionId(11),
         institution(11, vec![], InstitutionStatus::Active),
-    );
+    )
+    .unwrap();
     for id in [30, 31] {
-        state.cases.insert(
+        crate::storage::insert_case(
+            &mut store,
             CaseId(id),
             case(id, 1, SocialCaseKind::Default, SocialOutcome::Defaulted),
-        );
-        state
-            .memories
-            .entry(PersonId(1))
-            .or_default()
+        )
+        .unwrap();
+        ensure_memory(&mut store, PersonId(1))
             .cases
             .insert(CaseId(id));
     }
-    let decide = |state: &World| {
-        state.discovery_decision(DiscoveryFacts {
-            voter: &v,
-            now: SimTime(0),
-            authority: &alive,
-            references: &refs,
-            sites: &[],
-            recruits: &roster,
-        })
+    let decide = |state: &Runtime, store: &Store| {
+        state.discovery_decision(
+            store,
+            DiscoveryFacts {
+                voter: &v,
+                now: SimTime(0),
+                authority: &alive,
+                references: &refs,
+                sites: &[],
+                recruits: &roster,
+            },
+        )
     };
-    let first = decide(&state).unwrap();
+    let first = decide(&state, &store).unwrap();
     assert!(matches!(
         first.action,
         InstitutionAction::Propose {
@@ -167,24 +177,29 @@ fn ordered_default_reform_precedes_later_join_and_invalid_deeper_rule_falls_thro
         }
     ));
     state
-        .record_discovery_attempt(PersonId(1), &first, false)
+        .record_discovery_attempt(&mut store, PersonId(1), &first, false)
         .unwrap();
-    assert_eq!(state.memories[&PersonId(1)].search_after, SimTime(300_000));
-    assert!(decide(&state).is_none());
-    state.memories.get_mut(&PersonId(1)).unwrap().search_after = SimTime(0);
+    assert_eq!(
+        crate::storage::requests(&store, PersonId(1))
+            .unwrap()
+            .search_after,
+        SimTime(300_000)
+    );
+    assert!(decide(&state, &store).is_none());
+    crate::storage::requests_mut(&mut store, PersonId(1))
+        .unwrap()
+        .search_after = SimTime(0);
     let mut expression = RuleExpression::Fact(SocialCondition::Member);
     for _ in 0..4 {
         expression = RuleExpression::Not(Box::new(expression));
     }
-    state
-        .institutions
-        .get_mut(&InstitutionId(10))
+    crate::storage::institution_mut(&mut store, InstitutionId(10))
         .unwrap()
         .charter
         .rules[0]
         .when = expression;
     assert!(matches!(
-        decide(&state).unwrap().action,
+        decide(&state, &store).unwrap().action,
         InstitutionAction::Join {
             institution: InstitutionId(11)
         }
@@ -205,29 +220,31 @@ fn perceived_exclusion_creates_valid_charter_and_previous_public_commit_blocks_d
         area: AreaId(3),
         accessible: true,
     }];
-    let mut state = world();
+    let (state, mut store) = world();
     for actor in &refs.people {
-        state.memories.entry(*actor).or_default();
+        ensure_memory(&mut store, *actor);
     }
-    state.cases.insert(
+    crate::storage::insert_case(
+        &mut store,
         CaseId(30),
         case(30, 1, SocialCaseKind::Exclusion, SocialOutcome::Unresolved),
-    );
-    state
-        .memories
-        .entry(PersonId(1))
-        .or_default()
+    )
+    .unwrap();
+    ensure_memory(&mut store, PersonId(1))
         .cases
         .insert(CaseId(30));
     let decision = state
-        .discovery_decision(DiscoveryFacts {
-            voter: &v,
-            now: SimTime(0),
-            authority: &alive,
-            references: &refs,
-            sites: &sites,
-            recruits: &roster,
-        })
+        .discovery_decision(
+            &store,
+            DiscoveryFacts {
+                voter: &v,
+                now: SimTime(0),
+                authority: &alive,
+                references: &refs,
+                sites: &sites,
+                recruits: &roster,
+            },
+        )
         .unwrap();
     let InstitutionAction::Found { ref charter, .. } = decision.action else {
         panic!("exclusion produces a charter")
@@ -249,6 +266,7 @@ fn perceived_exclusion_creates_valid_charter_and_previous_public_commit_blocks_d
     assert_eq!(decision.failure, FailureHandling::Propagate);
     state
         .prepare_command(
+            &store,
             &decision.action,
             &CommandFacts {
                 actor: PersonId(1),
@@ -261,19 +279,18 @@ fn perceived_exclusion_creates_valid_charter_and_previous_public_commit_blocks_d
             CommandIds { first: 100 },
         )
         .unwrap()
-        .commit(&mut state)
+        .commit(&state, &mut store)
         .unwrap();
     state
-        .record_discovery_attempt(PersonId(1), &decision, true)
+        .record_discovery_attempt(&mut store, PersonId(1), &decision, true)
         .unwrap();
-    state.cases.insert(
+    crate::storage::insert_case(
+        &mut store,
         CaseId(31),
         case(31, 3, SocialCaseKind::Exclusion, SocialOutcome::Unresolved),
-    );
-    state
-        .memories
-        .entry(PersonId(3))
-        .or_default()
+    )
+    .unwrap();
+    ensure_memory(&mut store, PersonId(3))
         .cases
         .insert(CaseId(31));
     let next = VoterFacts {
@@ -282,29 +299,32 @@ fn perceived_exclusion_creates_valid_charter_and_previous_public_commit_blocks_d
     };
     assert!(
         state
-            .discovery_decision(DiscoveryFacts {
-                voter: &next,
-                now: SimTime(0),
-                authority: &alive,
-                references: &refs,
-                sites: &sites,
-                recruits: &roster
-            })
+            .discovery_decision(
+                &store,
+                DiscoveryFacts {
+                    voter: &next,
+                    now: SimTime(0),
+                    authority: &alive,
+                    references: &refs,
+                    sites: &sites,
+                    recruits: &roster
+                }
+            )
             .is_none()
     );
     // The preceding actor's actual command is visible to the next preparation.
-    assert_eq!(state.institutions.len(), 1);
+    assert_eq!(crate::storage::institutions(&store).count(), 1);
 }
 
 #[test]
 fn declared_duty_uses_physiological_budget_and_individual_willingness_without_duplicate_work() {
-    let mut state = world();
+    let (state, mut store) = world();
     let mut institution = institution(10, vec![labor()], InstitutionStatus::Active);
     institution.applied.insert(
         ConceptId(21),
         BTreeMap::from([(PersonId(1), AgreementId(40))]),
     );
-    state.institutions.insert(institution.id, institution);
+    seed_institution(&mut store, institution);
     let mut ledger = game_agreements::State::default();
     ledger
         .prepare_institutional_duties(
@@ -341,7 +361,9 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
         sites: &sites,
     };
     assert_eq!(
-        state.duty_work_intentions(&ledger, &[worker]).unwrap(),
+        state
+            .duty_work_intentions(&store, &ledger, &[worker])
+            .unwrap(),
         vec![DutyWork {
             actor: PersonId(1),
             site: SiteId(20)
@@ -359,7 +381,7 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
     };
     assert!(
         state
-            .duty_work_intentions(&ledger, &[unwilling])
+            .duty_work_intentions(&store, &ledger, &[unwilling])
             .unwrap()
             .is_empty()
     );
@@ -375,7 +397,7 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
     };
     assert!(
         state
-            .duty_work_intentions(&ledger, &[exhausted])
+            .duty_work_intentions(&store, &ledger, &[exhausted])
             .unwrap()
             .is_empty()
     );

@@ -55,7 +55,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-health` | `game-ecs` | Clinical state, work, water quality, shelters, occupancy, consent offers, and remembered health components; guarded action and interval effects |
 | `game-lifecycle` | `game-ecs`; `game-genetics` (optional) | Life and pregnancy components; guarded age and birth transitions; opaque inheritable reproductive characteristics |
 | `game-invocation` | `game-ecs`, `game-characters` | Native personal costs and warning records; consent, guarded progression and validation; historical-controller intentions over borrowed character memories |
-| `game-lineage` | `game-logistics` | Care provision delivery requirements and receipts |
+| `game-lineage` | `game-logistics`, `game-transport`, `game-ecs` | Care provision delivery requirements and receipts; guardian rescue from personal observations and actual carrying support |
 | `game-missions` | `game-agreements`, `game-conflict`, `game-logistics`, `game-transport` | Objective terms, member delivery plans, travel and tactical intentions, reinforcement and engagement participants |
 | `game-openings` | `game-content`, `game-ecology`, `game-property` | Authored opening and settlement declarations, validated independently of simulation startup |
 | `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components and numerical integration; opaque inheritable physical characteristics |
@@ -63,7 +63,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-transport` | `game-ecs` | Native carrying groups, lift offers and jobs, approaches, paused routes and dated support knowledge; guarded sparse changes |
 | `game-property` | `game-ecs` | Native claims, incidents, stock provenance, personal attitudes, dated knowledge, actions and request deadlines; guarded sparse changes |
 | `game-realm` | `game-agreements`, `game-missions` | Diplomatic terms and objectives |
-| `game-society` | `game-agreements` | Obligations and disputes |
+| `game-society` | `game-agreements`, `game-ecs` | Obligations and disputes |
 | `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
 | `game-workshop` | `game-ecs`, `game-cargo`, `game-skills`, `game-content` | Native sites and jobs; saved recipe definitions, material inputs and outputs, work rates and craft practice effects |
 

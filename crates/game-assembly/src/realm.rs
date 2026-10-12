@@ -197,14 +197,8 @@ impl Simulation {
                     origin: None,
                 },
             )?;
-            let institution = *sim
-                .host
-                .state
-                .institutions
-                .as_ref()
-                .unwrap()
-                .institutions
-                .keys()
+            let institution = game_society::institutions(&sim.host.storage)
+                .map(|(id, _)| id)
                 .next_back()
                 .unwrap();
             sim.debug_institution_action(voter, InstitutionAction::Join { institution })?;
@@ -308,14 +302,7 @@ impl Simulation {
             let mut mandate = office.mandate.clone();
             let mut authorized = known.status == InstitutionStatus::Active;
             if fresh_local && p.representative == actor {
-                let actual = self
-                    .host
-                    .state
-                    .institutions
-                    .as_ref()
-                    .unwrap()
-                    .institutions
-                    .get(&p.institution)
+                let actual = game_society::institution(&self.host.storage, p.institution)
                     .ok_or(Error::Unavailable)?;
                 mandate = actual
                     .charter
@@ -582,15 +569,16 @@ impl Simulation {
                     .commit(&mut self.host.state.realm.as_mut().unwrap().kernel)
                     .is_ok()
             {
-                let memory = self
-                    .host
-                    .state
-                    .institutions
-                    .as_mut()
-                    .unwrap()
-                    .memories
-                    .entry(talk.recipient)
-                    .or_default();
+                if game_society::knowledge(&self.host.storage, talk.recipient).is_none() {
+                    game_society::insert_knowledge(
+                        &mut self.host.storage,
+                        talk.recipient,
+                        game_society::Knowledge::default(),
+                    )
+                    .expect("valid report recipient");
+                }
+                let memory =
+                    game_society::knowledge_mut(&mut self.host.storage, talk.recipient).unwrap();
                 for snapshot in talk.institutions {
                     if memory
                         .institutions
@@ -783,7 +771,7 @@ impl Simulation {
             .state
             .institutions
             .as_ref()
-            .and_then(|w| w.proposals.get(&proposal))
+            .and_then(|_| game_society::proposal(&self.host.storage, proposal))
             .ok_or(Error::Unavailable)?;
         let InstitutionChange::RatifyRegional {
             commitment,
@@ -835,7 +823,9 @@ impl Simulation {
         proposal: RuleProposalId,
         status: RuleProposalStatus,
     ) -> Result<(), Error> {
-        let record = self.host.state.institutions.as_ref().unwrap().proposals[&proposal].clone();
+        let record = game_society::proposal(&self.host.storage, proposal)
+            .expect("validated Society reference")
+            .clone();
         let Some(plan) = self.realm_native_plan(institution, proposal, status)? else {
             return Ok(());
         };
@@ -856,7 +846,8 @@ impl Simulation {
             proposal,
             adopted,
         });
-        let area = self.host.state.institutions.as_ref().unwrap().institutions[&institution]
+        let area = game_society::institution(&self.host.storage, institution)
+            .expect("validated Society reference")
             .charter
             .jurisdiction;
         self.realm_publish_proposal(commitment, revision, area)?;
@@ -969,14 +960,8 @@ impl Simulation {
                         },
                     },
                 )?;
-                let id = self
-                    .host
-                    .state
-                    .institutions
-                    .as_ref()
-                    .unwrap()
-                    .proposals
-                    .values()
+                let id = game_society::proposals(&self.host.storage)
+                    .map(|(_, row)| row)
                     .find(|p| p.id.0 >= before && p.proposer == actor)
                     .ok_or(Error::Unavailable)?
                     .id;
@@ -1166,7 +1151,8 @@ impl Simulation {
             {
                 p.commit(&mut self.host.state.realm.as_mut().unwrap().kernel)?;
             }
-            let actual = &self.host.state.institutions.as_ref().unwrap().proposals[&proposal];
+            let actual = &game_society::proposal(&self.host.storage, proposal)
+                .expect("validated Society reference");
             if matches!(actual.change, InstitutionChange::RatifyRegional { .. })
                 && status == RuleProposalStatus::Proposed
             {
@@ -1715,18 +1701,22 @@ impl Simulation {
         };
         world.rules.validate()?;
         let bad = || Error::InvalidSave("invalid realm communication or owner references".into());
-        let institutions = self.host.state.institutions.as_ref().ok_or_else(bad)?;
+        self.host.state.institutions.as_ref().ok_or_else(bad)?;
         let agreements = self.host.state.agreements.as_ref().ok_or_else(bad)?;
         let refs = game_realm::References {
             people: self.person_index.keys().copied().collect(),
             areas: self.host.state.areas.iter().map(|a| a.id).collect(),
-            institutions: institutions.institutions.keys().copied().collect(),
+            institutions: game_society::institutions(&self.host.storage)
+                .map(|(id, _)| id)
+                .collect(),
             inventories: game_cargo::inventories(&self.host.storage)
                 .map(|(id, _)| id)
                 .collect(),
             agreements: agreements.agreements.keys().copied().collect(),
             obligations: agreements.obligations.keys().copied().collect(),
-            proposals: institutions.proposals.keys().copied().collect(),
+            proposals: game_society::proposals(&self.host.storage)
+                .map(|(id, _)| id)
+                .collect(),
             missions: self
                 .host
                 .state
@@ -1805,7 +1795,7 @@ impl Simulation {
                     }
                 }
                 (PendingOwner::Passage(id), Some(Term::Passage { .. })) => {
-                    if institutions.proposals.get(id).is_none_or(|p| {
+                    if game_society::proposal(&self.host.storage, id).is_none_or(|p| {
                         p.change
                             != InstitutionChange::AuthorizeRegionalPassage {
                                 commitment: key.commitment,

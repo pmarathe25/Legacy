@@ -1036,15 +1036,7 @@ mod tests {
                     })
                     .unwrap();
                 assert_eq!(event.at.0 - conceived.at.0, 10 * MINUTE.0);
-                assert!(
-                    one.host
-                        .state
-                        .institutions
-                        .as_ref()
-                        .unwrap()
-                        .memories
-                        .contains_key(child)
-                );
+                assert!(game_society::knowledge(&one.host.storage, *child).is_some());
                 assert_eq!(
                     game_lifecycle::life(&one.host.storage, *child)
                         .expect("life exists")

@@ -5,13 +5,8 @@ fn actor(sim: &Simulation, index: usize) -> PersonId {
     sim.canonical_state().state.people[index].id
 }
 fn court(sim: &Simulation) -> InstitutionId {
-    *sim.canonical_state()
-        .state
-        .institutions
-        .as_ref()
-        .unwrap()
-        .institutions
-        .keys()
+    game_society::institutions(sim.canonical_state().components)
+        .map(|(id, _)| id)
         .next()
         .unwrap()
 }
@@ -99,15 +94,9 @@ fn decide(sim: &mut Simulation, case: EnforcementCaseId, remedy: EnforcementReme
         },
     )
     .unwrap();
-    let proposal = *sim
-        .canonical_state()
-        .state
-        .institutions
-        .as_ref()
-        .unwrap()
-        .proposals
-        .keys()
-        .last()
+    let proposal = game_society::proposals(sim.canonical_state().components)
+        .map(|(id, _)| id)
+        .next_back()
         .unwrap();
     for who in [judge, filer] {
         sim.debug_institution_action(
@@ -379,12 +368,8 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
     );
     assert_eq!(sim.canonical_state().state.ruler, judge);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .institutions
-            .as_ref()
+        game_society::institution(sim.canonical_state().components, institution)
             .unwrap()
-            .institutions[&institution]
             .charter
             .offices[0]
             .holder,

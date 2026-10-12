@@ -1,6 +1,7 @@
 //! Social interpretations of actual receipts and personally known exclusion.
 use crate::institutions::*;
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy)]
 pub struct SubjectFacts {
@@ -94,25 +95,33 @@ pub fn need_band(hunger: u64) -> u8 {
         0
     }
 }
-impl World {
-    pub fn linked_rule_concept(&self, agreement: AgreementId) -> Option<ConceptId> {
-        self.institutions.values().find_map(|institution| {
-            institution.applied.iter().find_map(|(concept, people)| {
-                people
-                    .values()
-                    .any(|id| *id == agreement)
-                    .then_some(*concept)
+impl Runtime {
+    pub fn linked_rule_concept(&self, store: &Store, agreement: AgreementId) -> Option<ConceptId> {
+        crate::storage::institutions(store)
+            .map(|(_, row)| row)
+            .find_map(|institution| {
+                institution.applied.iter().find_map(|(concept, people)| {
+                    people
+                        .values()
+                        .any(|id| *id == agreement)
+                        .then_some(*concept)
+                })
             })
-        })
     }
-    pub fn sharing_concept(&self, actor: PersonId, source: InventoryId) -> Option<ConceptId> {
-        self.institutions.values().find_map(|institution|institution.concepts.iter().find(|id|
-            matches!(self.concepts[id].effect,SocialEffect::Access{inventory,allowed:true}if inventory==source)
+    pub fn sharing_concept(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        source: InventoryId,
+    ) -> Option<ConceptId> {
+        crate::storage::institutions(store).map(|(_, row)| row).find_map(|institution|institution.concepts.iter().find(|id|
+            matches!(crate::storage::concept(store, *id).expect("validated Society reference").effect,SocialEffect::Access{inventory,allowed:true}if inventory==source)
                 &&institution.grants.get(id).is_some_and(|people|people.contains(&actor))).copied())
     }
     /// Interpret one receipt against state after the previous receipt has committed.
     pub fn receipt_reaction(
         &self,
+        store: &Store,
         receipt: &SocialReceipt,
         subject: SubjectFacts,
         at: SimTime,
@@ -160,7 +169,7 @@ impl World {
                     SocialCaseKind::Cooperation,
                     SocialOutcome::Contributed,
                     true,
-                    self.linked_rule_concept(agreement),
+                    self.linked_rule_concept(store, agreement),
                     true,
                 )
             }
@@ -194,13 +203,13 @@ impl World {
                     return None;
                 }
                 asset.area = subject.area;
-                let concept = self.linked_rule_concept(agreement);
+                let concept = self.linked_rule_concept(store, agreement);
                 make(
                     counterpart,
                     asset,
                     SocialCaseKind::Default,
                     SocialOutcome::Defaulted,
-                    self.known_case_count(actor, actor, SocialCaseKind::Cooperation) > 0,
+                    self.known_case_count(store, actor, actor, SocialCaseKind::Cooperation) > 0,
                     concept,
                     concept.is_some(),
                 )
@@ -215,6 +224,7 @@ impl World {
                     return None;
                 }
                 self.receipt_reaction(
+                    store,
                     &SocialReceipt::SupportReceived { actor, source },
                     subject,
                     at,
@@ -222,6 +232,7 @@ impl World {
                 )
             }
             SocialReceipt::Ate { actor, source } => self.receipt_reaction(
+                store,
                 &SocialReceipt::SupportReceived { actor, source },
                 subject,
                 at,
@@ -231,11 +242,10 @@ impl World {
                 if actor != subject.actor {
                     return None;
                 }
-                let old = self
-                    .exclusions
-                    .get(&actor)?
+                let old = crate::storage::exclusions(store, actor)?
+                    .stores
                     .get(&source)
-                    .and_then(|id| self.cases.get(id))?;
+                    .and_then(|id| crate::storage::case(store, id))?;
                 Some(CaseReaction {
                     case: SocialCaseView {
                         id: CaseId(0),
@@ -243,16 +253,15 @@ impl World {
                         observed_at: at,
                         ..old.clone()
                     },
-                    concept: self.sharing_concept(actor, source),
+                    concept: self.sharing_concept(store, actor, source),
                     public: true,
                     clear_exclusion: Some((actor, source)),
                     set_exclusion: None,
                     exclusion_guard: Some((
                         actor,
                         source,
-                        self.exclusions
-                            .get(&actor)
-                            .and_then(|rows| rows.get(&source))
+                        crate::storage::exclusions(store, actor)
+                            .and_then(|rows| rows.stores.get(&source))
                             .copied(),
                     )),
                 })
@@ -261,6 +270,7 @@ impl World {
     }
     pub fn exclusion_reactions(
         &self,
+        store: &Store,
         subject: SubjectFacts,
         known: &BTreeMap<InventoryId, StockKnowledge>,
         custodians: &BTreeMap<InventoryId, PersonId>,
@@ -291,11 +301,9 @@ impl World {
             .take(8)
             .filter_map(|stock| {
                 let owner = *custodians.get(&stock.inventory)?;
-                if self
-                    .exclusions
-                    .get(&subject.actor)
-                    .and_then(|rows| rows.get(&stock.inventory))
-                    .and_then(|id| self.cases.get(id))
+                if crate::storage::exclusions(store, subject.actor)
+                    .and_then(|rows| rows.stores.get(&stock.inventory))
+                    .and_then(|id| crate::storage::case(store, id))
                     .is_some_and(|case| case.need_band == band)
                 {
                     return None;
@@ -311,6 +319,7 @@ impl World {
                         good: stock.good,
                         need_band: band,
                         reciprocal: self.known_case_count(
+                            store,
                             subject.actor,
                             subject.actor,
                             SocialCaseKind::Cooperation,
@@ -325,32 +334,32 @@ impl World {
                     exclusion_guard: Some((
                         subject.actor,
                         stock.inventory,
-                        self.exclusions
-                            .get(&subject.actor)
-                            .and_then(|rows| rows.get(&stock.inventory))
+                        crate::storage::exclusions(store, subject.actor)
+                            .and_then(|rows| rows.stores.get(&stock.inventory))
                             .copied(),
                     )),
                 })
             })
             .collect()
     }
-    pub fn commit_case_reaction(
-        &mut self,
+    pub fn stage_case_reaction(
+        &self,
+        store: &Store,
         mut reaction: CaseReaction,
         id: CaseId,
         observers: &BTreeMap<PersonId, u16>,
+        batch: &mut Batch,
     ) -> Result<(), Error> {
         if id.0 == 0
-            || self.cases.contains_key(&id)
+            || crate::storage::case(store, id).is_some()
             || reaction
                 .concept
-                .is_some_and(|concept| !self.concepts.contains_key(&concept))
+                .is_some_and(|concept| !crate::storage::concept(store, concept).is_some())
             || reaction
                 .exclusion_guard
                 .is_some_and(|(actor, source, before)| {
-                    self.exclusions
-                        .get(&actor)
-                        .and_then(|rows| rows.get(&source))
+                    crate::storage::exclusions(store, actor)
+                        .and_then(|rows| rows.stores.get(&source))
                         .copied()
                         != before
                 })
@@ -358,11 +367,9 @@ impl World {
             return Err(Error::Unavailable);
         }
         if let Some((actor, source)) = reaction.clear_exclusion
-            && self
-                .exclusions
-                .get(&actor)
-                .and_then(|rows| rows.get(&source))
-                .and_then(|id| self.cases.get(id))
+            && crate::storage::exclusions(store, actor)
+                .and_then(|rows| rows.stores.get(&source))
+                .and_then(|id| crate::storage::case(store, id))
                 .is_none_or(|case| {
                     case.subject != reaction.case.subject
                         || case.inventory != reaction.case.inventory
@@ -372,14 +379,35 @@ impl World {
             return Err(Error::Unavailable);
         }
         reaction.case.id = id;
-        self.remember_case(reaction.case, reaction.concept, observers);
+        let learning =
+            self.prepare_case_learning(store, reaction.case, reaction.concept, observers)?;
+        learning.stage_into(store, batch)?;
         if let Some((actor, source)) = reaction.clear_exclusion {
-            self.exclusions.get_mut(&actor).unwrap().remove(&source);
+            let mut row = crate::storage::exclusions(store, actor)
+                .ok_or(Error::Unavailable)?
+                .clone();
+            row.stores.remove(&source);
+            batch.insert(StableId(actor.0), row);
         }
         if let Some((actor, source)) = reaction.set_exclusion {
-            self.exclusions.entry(actor).or_default().insert(source, id);
+            let mut row = crate::storage::exclusions(store, actor)
+                .cloned()
+                .unwrap_or_default();
+            row.stores.insert(source, id);
+            batch.insert(StableId(actor.0), row);
         }
         Ok(())
+    }
+    pub fn commit_case_reaction(
+        &self,
+        store: &mut Store,
+        reaction: CaseReaction,
+        id: CaseId,
+        observers: &BTreeMap<PersonId, u16>,
+    ) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        self.stage_case_reaction(store, reaction, id, observers, &mut batch)?;
+        store.apply_batch(batch)
     }
 }
 #[cfg(test)]
