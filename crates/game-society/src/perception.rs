@@ -317,31 +317,40 @@ impl Runtime {
     }
 }
 
-/// A timed foreign report delivers frozen institutional views. Fresh native
-/// observation remains authoritative for this person's dated local memory.
+/// Timed reports update only the dated institution entries they deliver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedInstitutionReports {
     actor: PersonId,
-    before: Option<crate::Knowledge>,
-    after: crate::Knowledge,
+    present: bool,
+    before: BTreeMap<InstitutionId, Option<InstitutionView>>,
+    after: BTreeMap<InstitutionId, InstitutionView>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstitutionReportsGuard {
     key: game_ecs::BatchKey,
-    actor: PersonId,
+    source: PreparedInstitutionReports,
 }
 impl InstitutionReportsGuard {
+    pub fn validate_source(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.source.check_source(store)?;
+        self.validate(batch)
+    }
     pub fn validate(&self, batch: &Batch) -> Result<(), Error> {
-        if self.key != batch.key()
-            || batch
-                .edited_ids::<crate::Knowledge>()
-                .filter(|id| id.0 == self.actor.0)
-                .collect::<Vec<_>>()
-                != vec![StableId(self.actor.0)]
-        {
-            Err(Error::Unavailable)
-        } else {
-            Ok(())
+        let edits = batch
+            .edited_ids::<crate::Knowledge>()
+            .filter(|id| id.0 == self.source.actor.0)
+            .count();
+        if self.key != batch.key() || edits != usize::from(!self.source.present) {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    /// Publish only after every owner guard and the shared batch were admitted.
+    pub fn finish(self, store: &mut Store) {
+        let knowledge =
+            crate::knowledge_mut(store, self.source.actor).expect("admitted receiving knowledge");
+        for (id, view) in self.source.after {
+            knowledge.institutions.insert(id, view);
         }
     }
 }
@@ -350,40 +359,77 @@ pub fn prepare_institution_reports(
     actor: PersonId,
     reports: &[InstitutionView],
 ) -> Result<PreparedInstitutionReports, Error> {
-    let before = crate::knowledge(store, actor).cloned();
-    let mut after = before.clone().unwrap_or_default();
+    prepare_institution_reports_with_ties(store, actor, reports, ReportTie::KeepCurrent)
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportTie {
+    KeepCurrent,
+    Receive,
+}
+pub fn prepare_institution_reports_with_ties(
+    store: &Store,
+    actor: PersonId,
+    reports: &[InstitutionView],
+    ties: ReportTie,
+) -> Result<PreparedInstitutionReports, Error> {
+    if actor.0 == 0 || reports.iter().any(|report| report.id.0 == 0) {
+        return Err(Error::InvalidConfiguration(
+            "invalid institutional report identity".into(),
+        ));
+    }
+    let knowledge = crate::knowledge(store, actor);
+    let mut before = BTreeMap::new();
+    let mut after = BTreeMap::new();
     for report in reports {
-        if after
-            .institutions
-            .get(&report.id)
-            .is_none_or(|old| old.observed_at < report.observed_at)
-        {
-            after.institutions.insert(report.id, report.clone());
+        let old = before.entry(report.id).or_insert_with(|| {
+            knowledge
+                .and_then(|row| row.institutions.get(&report.id))
+                .cloned()
+        });
+        let latest = after.get(&report.id).or(old.as_ref());
+        if latest.is_none_or(|old: &InstitutionView| {
+            old.observed_at < report.observed_at
+                || ties == ReportTie::Receive && old.observed_at == report.observed_at
+        }) {
+            after.insert(report.id, report.clone());
         }
     }
     Ok(PreparedInstitutionReports {
         actor,
+        present: knowledge.is_some(),
         before,
         after,
     })
 }
 impl PreparedInstitutionReports {
+    fn check_source(&self, store: &Store) -> Result<(), Error> {
+        let knowledge = crate::knowledge(store, self.actor);
+        if knowledge.is_some() != self.present
+            || self.before.iter().any(|(id, before)| {
+                knowledge.and_then(|row| row.institutions.get(id)) != before.as_ref()
+            })
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
     pub fn stage_into(
         self,
         store: &Store,
         batch: &mut Batch,
     ) -> Result<InstitutionReportsGuard, Error> {
-        if crate::knowledge(store, self.actor) != self.before.as_ref()
-            || batch.touches::<crate::Knowledge>(StableId(self.actor.0))
-        {
+        self.check_source(store)?;
+        if batch.touches::<crate::Knowledge>(StableId(self.actor.0)) {
             return Err(Error::Unavailable);
         }
-        batch.insert(StableId(self.actor.0), self.after);
+        if !self.present {
+            batch.insert(StableId(self.actor.0), crate::Knowledge::default());
+        }
         let guard = InstitutionReportsGuard {
             key: batch.key(),
-            actor: self.actor,
+            source: self,
         };
-        guard.validate(batch)?;
+        guard.validate_source(store, batch)?;
         Ok(guard)
     }
 }

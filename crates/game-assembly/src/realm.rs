@@ -563,14 +563,18 @@ impl Simulation {
         if let Some(g) = realm_guard {
             g.validate(&batch).expect("regional knowledge footprint");
         }
-        if let Some((a, b)) = guards {
-            a.validate(&batch).expect("institutional report footprint");
+        if let Some((a, b)) = &guards {
+            a.validate_source(&self.host.storage, &batch)
+                .expect("institutional report footprint");
             b.validate(&batch).expect("stock report footprint");
         }
         self.host
             .storage
             .apply_batch(batch)
             .expect("admitted regional report");
+        if let Some((institutions, _)) = guards {
+            institutions.finish(&mut self.host.storage);
+        }
         self.publish_realm_event(event);
     }
     pub(crate) fn realm_actor_busy(&self, actor: PersonId) -> bool {

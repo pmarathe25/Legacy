@@ -131,3 +131,125 @@ fn closed_publication_and_command_opportunities_use_only_local_known_institution
             .is_empty()
     );
 }
+fn dated_report(id: u64, at: u64, purpose: &str) -> InstitutionView {
+    let row = institution(id, vec![], InstitutionStatus::Active);
+    let mut charter = row.charter;
+    charter.purpose = purpose.into();
+    InstitutionView {
+        id: row.id,
+        origin: None,
+        charter,
+        members: BTreeSet::new(),
+        declined: BTreeSet::new(),
+        status: row.status,
+        offices: vec![],
+        proposals: vec![],
+        funding: vec![],
+        duties: vec![],
+        observed_at: SimTime(at),
+    }
+}
+#[test]
+fn reports_preserve_unrelated_learning_and_choose_equal_date_policy_explicitly() {
+    for (tie, expected) in [
+        (ReportTie::KeepCurrent, "old"),
+        (ReportTie::Receive, "incoming"),
+    ] {
+        let (_, mut store) = world();
+        store
+            .insert_or_spawn(StableId(1), crate::Knowledge::default())
+            .unwrap();
+        crate::knowledge_mut(&mut store, PersonId(1))
+            .unwrap()
+            .institutions
+            .insert(InstitutionId(10), dated_report(10, 5, "old"));
+        let plan = prepare_institution_reports_with_ties(
+            &store,
+            PersonId(1),
+            &[
+                dated_report(10, 5, "incoming"),
+                dated_report(10, 4, "older"),
+            ],
+            tie,
+        )
+        .unwrap();
+        let mut batch = Batch::new();
+        let guard = plan.stage_into(&store, &mut batch).unwrap();
+        let unrelated = dated_report(11, 8, "independent");
+        crate::knowledge_mut(&mut store, PersonId(1))
+            .unwrap()
+            .institutions
+            .insert(InstitutionId(11), unrelated.clone());
+        guard.validate_source(&store, &batch).unwrap();
+        store.apply_batch(batch).unwrap();
+        guard.finish(&mut store);
+        let known = crate::knowledge(&store, PersonId(1)).unwrap();
+        assert_eq!(
+            known.institutions[&InstitutionId(10)].charter.purpose,
+            expected
+        );
+        assert_eq!(known.institutions[&InstitutionId(11)], unrelated);
+    }
+}
+#[test]
+fn report_final_guard_rejects_selected_source_replacement_and_conflicting_row_edit() {
+    let (_, mut store) = world();
+    store
+        .insert_or_spawn(StableId(1), crate::Knowledge::default())
+        .unwrap();
+    let mut batch = Batch::new();
+    let guard =
+        prepare_institution_reports(&store, PersonId(1), &[dated_report(10, 5, "incoming")])
+            .unwrap()
+            .stage_into(&store, &mut batch)
+            .unwrap();
+    crate::knowledge_mut(&mut store, PersonId(1))
+        .unwrap()
+        .institutions
+        .insert(InstitutionId(10), dated_report(10, 6, "newer"));
+    assert!(guard.validate_source(&store, &batch).is_err());
+    crate::knowledge_mut(&mut store, PersonId(1))
+        .unwrap()
+        .institutions
+        .remove(&InstitutionId(10));
+    guard.validate_source(&store, &batch).unwrap();
+    batch.insert(StableId(1), crate::Knowledge::default());
+    assert!(guard.validate_source(&store, &batch).is_err());
+    assert!(
+        !crate::knowledge(&store, PersonId(1))
+            .unwrap()
+            .institutions
+            .contains_key(&InstitutionId(10))
+    );
+}
+#[test]
+fn absent_report_recipient_is_created_only_in_the_admitted_batch() {
+    let (_, mut store) = world();
+    let mut batch = Batch::new();
+    let guard =
+        prepare_institution_reports(&store, PersonId(99), &[dated_report(10, 5, "incoming")])
+            .unwrap()
+            .stage_into(&store, &mut batch)
+            .unwrap();
+    assert!(crate::knowledge(&store, PersonId(99)).is_none());
+    assert!(!store.contains(StableId(99)));
+    guard.validate_source(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    guard.finish(&mut store);
+    assert_eq!(
+        crate::knowledge(&store, PersonId(99)).unwrap().institutions[&InstitutionId(10)]
+            .observed_at,
+        SimTime(5)
+    );
+}
+
+#[test]
+fn malformed_report_identity_is_rejected_before_any_receiving_write() {
+    let (_, store) = world();
+    let original = store.snapshot().unwrap();
+    assert!(
+        prepare_institution_reports(&store, PersonId(1), &[dated_report(0, 5, "invalid")]).is_err()
+    );
+    assert!(prepare_institution_reports(&store, PersonId(0), &[]).is_err());
+    assert_eq!(store.snapshot().unwrap(), original);
+}
