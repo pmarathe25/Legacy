@@ -117,6 +117,12 @@ impl Batch {
         self.edits.push(backend::remove_edit::<C>(id));
         self
     }
+    /// Whether a combined batch writes or removes this typed row. Owners use
+    /// this before publication to protect rows needed by sparse finalization.
+    pub fn touches<C: Component>(&self, id: StableId) -> bool {
+        let key = (id, std::any::TypeId::of::<C>());
+        self.edits.iter().any(|edit| edit.key() == key)
+    }
 }
 impl Store {
     pub fn with_schema(schema: Schema) -> Self {
@@ -799,5 +805,19 @@ mod tests {
         assert_eq!(store, before);
         store.apply_batch(admitted).unwrap();
         assert_eq!(store.get::<u64>(StableId(1)), Some(&10));
+    }
+    #[test]
+    fn batch_footprint_is_typed_and_includes_insertions_and_absent_removals() {
+        let store = fixture(false);
+        let before = store.snapshot().unwrap();
+        let mut batch = Batch::new();
+        batch.insert(StableId(1), Count(9));
+        batch.remove::<Name>(StableId(8));
+        assert!(batch.touches::<Count>(StableId(1)));
+        assert!(batch.touches::<Name>(StableId(8)));
+        assert!(!batch.touches::<Name>(StableId(1)));
+        assert!(!batch.touches::<Count>(StableId(8)));
+        assert!(!batch.touches::<Count>(StableId(2)));
+        assert_eq!(store.snapshot().unwrap(), before);
     }
 }
