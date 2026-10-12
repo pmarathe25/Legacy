@@ -443,4 +443,162 @@ mod tests {
         invalid.rules.adulthood = invalid.rules.infancy;
         assert!(validate_runtime(&invalid, &store, SimTime(1_000)).is_err());
     }
+    #[test]
+    fn lifespan_response_guards_age_rules_clock_and_survival_before_publication() {
+        let (runtime, mut store) = fixture_world();
+        let facts = LifespanFacts {
+            actor: PersonId(1),
+            now: SimTime(1_000),
+            alive: true,
+            lifespan_loss: 100_000,
+        };
+        let prepared = runtime.prepare_lifespan_change(&store, facts).unwrap();
+        let batch = game_ecs::Batch::new();
+        assert!(matches!(
+            prepared.check(&runtime, &store, facts, &batch).unwrap(),
+            LifespanResponse::Deadline {
+                actor: PersonId(1),
+                ..
+            }
+        ));
+        assert!(
+            prepared
+                .check(
+                    &runtime,
+                    &store,
+                    LifespanFacts {
+                        now: SimTime(1_001),
+                        ..facts
+                    },
+                    &batch
+                )
+                .is_err()
+        );
+        assert!(
+            prepared
+                .check(
+                    &runtime,
+                    &store,
+                    LifespanFacts {
+                        alive: false,
+                        ..facts
+                    },
+                    &batch
+                )
+                .is_err()
+        );
+        let mut changed = runtime.clone();
+        changed.rules.lifespan.0 += 1;
+        assert!(prepared.check(&changed, &store, facts, &batch).is_err());
+        let mut foreign = game_ecs::Batch::new();
+        foreign.remove::<Life>(game_ecs::StableId(1));
+        assert!(prepared.check(&runtime, &store, facts, &foreign).is_err());
+        life_mut(&mut store, PersonId(1)).unwrap().initial_age.0 += 1;
+        assert!(prepared.check(&runtime, &store, facts, &batch).is_err());
+        let dead = LifespanFacts {
+            alive: false,
+            lifespan_loss: u64::MAX,
+            ..facts
+        };
+        assert_eq!(
+            runtime
+                .prepare_lifespan_change(&store, dead)
+                .unwrap()
+                .check(&runtime, &store, dead, &batch)
+                .unwrap(),
+            LifespanResponse::Unchanged
+        );
+        let expires = LifespanFacts {
+            lifespan_loss: runtime.rules.lifespan.0,
+            ..facts
+        };
+        assert_eq!(
+            runtime
+                .prepare_lifespan_change(&store, expires)
+                .unwrap()
+                .check(&runtime, &store, expires, &batch)
+                .unwrap(),
+            LifespanResponse::Died { actor: PersonId(1) }
+        );
+    }
+}
+
+/// A lifespan penalty changes death or the next age deadline; a dead body is unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifespanResponse {
+    Unchanged,
+    Died {
+        actor: PersonId,
+    },
+    Deadline {
+        actor: PersonId,
+        at: Option<SimTime>,
+    },
+}
+/// The physical owner supplies survival. Invocation supplies the accepted penalty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LifespanFacts {
+    pub actor: PersonId,
+    pub now: SimTime,
+    pub alive: bool,
+    pub lifespan_loss: u64,
+}
+#[derive(Clone, Debug)]
+pub struct PreparedLifespanResponse {
+    before: Life,
+    rules: Rules,
+    facts: LifespanFacts,
+    response: LifespanResponse,
+}
+impl PreparedLifespanResponse {
+    /// Validate the final composition before publishing any cost or session edits.
+    /// A concurrent age-row edit is incompatible with this already-evaluated response.
+    pub fn check(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        facts: LifespanFacts,
+        batch: &game_ecs::Batch,
+    ) -> Result<LifespanResponse, Error> {
+        if self.facts != facts
+            || self.rules != runtime.rules
+            || life(store, facts.actor) != Some(&self.before)
+            || batch.touches::<Life>(game_ecs::StableId(facts.actor.0))
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(self.response)
+    }
+}
+impl Runtime {
+    pub fn prepare_lifespan_change(
+        &self,
+        store: &Store,
+        facts: LifespanFacts,
+    ) -> Result<PreparedLifespanResponse, Error> {
+        if !self.rules.valid() {
+            return Err(Error::Unavailable);
+        }
+        let before = life(store, facts.actor).ok_or(Error::Unavailable)?.clone();
+        let response = if !facts.alive {
+            LifespanResponse::Unchanged
+        } else {
+            let effect =
+                self.evaluate_age(store, facts.actor, facts.now, facts.lifespan_loss, true)?;
+            if effect.died {
+                LifespanResponse::Died { actor: facts.actor }
+            } else {
+                LifespanResponse::Deadline {
+                    actor: facts.actor,
+                    at: effect.next_deadline,
+                }
+            }
+        };
+        Ok(PreparedLifespanResponse {
+            before,
+            rules: self.rules.clone(),
+            facts,
+            response,
+        })
+    }
 }

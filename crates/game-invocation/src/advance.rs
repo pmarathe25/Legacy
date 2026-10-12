@@ -18,14 +18,14 @@ impl ControlState {
         mut alive: impl FnMut(PersonId) -> bool,
     ) -> Result<PreparedAdvance, Error> {
         next.0.checked_sub(now.0).ok_or(Error::Overflow)?;
+        one_session(store)?;
         let mut updates = Vec::new();
         for (actor, before) in burdens(store) {
             if !alive(actor) {
                 continue;
             }
             let active = self
-                .active
-                .as_ref()
+                .active(store)
                 .filter(|active| active.actor == actor)
                 .map(|active| ActiveInput {
                     life_count: active.lives.len(),
@@ -47,7 +47,7 @@ impl ControlState {
         }
         Ok(PreparedAdvance {
             rules: self.rules.clone(),
-            active: self.active.clone(),
+            active: self.active(store).cloned(),
             updates,
         })
     }
@@ -60,7 +60,7 @@ impl PreparedAdvance {
         batch: &mut Batch,
     ) -> Result<(), Error> {
         if state.rules != self.rules
-            || state.active != self.active
+            || state.active(store) != self.active.as_ref()
             || self
                 .updates
                 .iter()

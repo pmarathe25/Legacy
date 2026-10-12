@@ -130,8 +130,8 @@ pub(crate) fn fixture() -> (Runtime, Store, Facts) {
         )
         .unwrap();
     }
-    let mut control = ControlState::new(Rules::fixture()).unwrap();
-    control.active = Some(Active {
+    let control = ControlState::new(Rules::fixture()).unwrap();
+    let active = Active {
         actor: ACTOR,
         lives: BTreeSet::from([LIFE]),
         started: SimTime(0),
@@ -140,7 +140,18 @@ pub(crate) fn fixture() -> (Runtime, Store, Facts) {
         next_loss_burden: 300000,
         next_controller: SimTime(0),
         dominant: None,
-    });
+    };
+    store
+        .insert_or_spawn(
+            StableId(ACTOR.0),
+            ControlSession {
+                actor: ACTOR,
+                active: Some(active),
+                activation: None,
+                warning: None,
+            },
+        )
+        .unwrap();
     let person = MemoryPerson {
         location: Location::AtArea(AreaId(3)),
         independent: true,
@@ -338,9 +349,9 @@ fn memory_validation_checks_native_keys_foreign_references_and_activity_reciproc
                 .filter_map(|id| self.person(id).map(|person| (id, person.activity)))
         }
     }
-    let (mut runtime, mut store, facts) = fixture();
-    runtime
-        .control
+    let (runtime, mut store, facts) = fixture();
+    session_mut(&mut store, ACTOR)
+        .unwrap()
         .active
         .as_mut()
         .unwrap()

@@ -4,6 +4,7 @@ use game_core::{Error, PersonId, WarningId};
 use game_ecs::{Schema, StableId, Store};
 
 pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
+    crate::register_session(schema)?;
     schema.register::<Burden>("invocation/burden", validate_burden)?;
     schema.register::<InvocationWarning>("invocation/warning", validate_warning)
 }
@@ -56,7 +57,10 @@ pub fn warnings(store: &Store) -> impl Iterator<Item = (WarningId, &InvocationWa
         .map(|(id, row)| (WarningId(id.0), row))
 }
 pub fn validate_absent(store: &Store) -> Result<(), Error> {
-    if store.count::<Burden>() != 0 || store.count::<InvocationWarning>() != 0 {
+    if store.count::<Burden>() != 0
+        || store.count::<InvocationWarning>() != 0
+        || store.count::<crate::ControlSession>() != 0
+    {
         return Err(Error::InvalidSave(
             "invocation components without runtime".into(),
         ));

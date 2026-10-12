@@ -4,6 +4,11 @@ use crate::*;
 
 pub use game_invocation::{Activation, Active, Burden, Consent, Episode, Rules, Warning, severity};
 
+pub(crate) struct PreparedInvocationReview {
+    prepared: game_invocation::PreparedControl,
+    actor: PersonId,
+    decision: game_invocation::ControllerDecision,
+}
 pub type World = game_invocation::Runtime;
 pub type PastLife = game_invocation::PastLife<game_api::Command>;
 pub use game_invocation::{MemoryAction, MemoryWork, Record};
@@ -287,16 +292,6 @@ impl Simulation {
         finish.validate_batch(&self.host.storage, &batch)?;
         self.host.storage.apply_batch(batch)?;
         finish.finish(&mut self.host.storage);
-        let dead = game_invocation::burdens(&self.host.storage)
-            .map(|(actor, _)| actor)
-            .chain(self.invocation_control_actor())
-            .filter(|p| {
-                !game_physiology::body(&self.host.storage, *p)
-                    .unwrap()
-                    .vitals
-                    .alive
-            })
-            .collect();
         let prepared = self
             .host
             .state
@@ -304,7 +299,10 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .control
-            .prepare_deaths(&self.host.storage, &dead, self.host.clock().time);
+            .prepare_observed_deaths(&self.host.storage, self.host.clock().time, |actor| {
+                game_physiology::body(&self.host.storage, actor)
+                    .is_some_and(|body| body.vitals.alive)
+            })?;
         self.apply_invocation_control(prepared)?;
         Ok(())
     }
@@ -347,32 +345,22 @@ impl Simulation {
         }
     }
     fn invocation_ready(&self, actor: PersonId) -> bool {
-        self.host
-            .state
-            .lineage
-            .as_ref()
-            .is_some_and(|lineage| lineage.current() == Some(actor))
-            && self.host.state.physical.is_some()
-            && game_physiology::body(&self.host.storage, actor).is_some()
-            && self
-                .host
-                .state
-                .invocation
-                .as_ref()
-                .is_some_and(|w| w.control.ready(actor, &self.invocation_admission(actor)))
+        self.host.state.invocation.as_ref().is_some_and(|runtime| {
+            runtime
+                .control
+                .ready(actor, &self.invocation_admission(actor))
+        })
     }
     pub(crate) fn past_life_controls_actor(&self, actor: PersonId) -> bool {
-        let episode = self
-            .host
-            .state
-            .invocation
-            .as_ref()
-            .and_then(|w| w.control.active.as_ref())
-            .and_then(|a| a.episode.as_ref());
-        let alive = self.host.state.physical.is_some()
-            && game_physiology::body(&self.host.storage, actor)
-                .is_some_and(|body| body.vitals.alive);
-        game_invocation::controls_actor(episode, actor, self.host.clock().time, alive)
+        self.host.state.invocation.as_ref().is_some_and(|runtime| {
+            runtime.control.controls(
+                &self.host.storage,
+                actor,
+                self.host.clock().time,
+                game_physiology::body(&self.host.storage, actor)
+                    .is_some_and(|body| body.vitals.alive),
+            )
+        })
     }
     pub(crate) fn required_invocation_input(&self) -> Option<WarningId> {
         self.host
@@ -380,8 +368,7 @@ impl Simulation {
             .invocation
             .as_ref()?
             .control
-            .warning
-            .as_ref()
+            .pending_consent(&self.host.storage)
             .map(|w| w.id)
     }
     fn reconcile_invocation_control(&mut self) -> Result<(), Error> {
@@ -408,17 +395,7 @@ impl Simulation {
         actor: PersonId,
         action: &InvocationAction,
     ) -> Result<(), Error> {
-        use game_invocation::ControlAction;
-        let control = match action {
-            InvocationAction::Activate { lives } => Some(ControlAction::Activate {
-                lives: lives.clone(),
-            }),
-            InvocationAction::Dismiss => Some(ControlAction::Dismiss),
-            InvocationAction::AcceptWarning { warning } => {
-                Some(ControlAction::AcceptWarning { warning: *warning })
-            }
-            _ => None,
-        };
+        let control = action.control_action();
         if let Some(action) = control {
             let w = self
                 .host
@@ -512,23 +489,42 @@ impl Simulation {
             .iter()
             .filter_map(|effect| {
                 if let ControlEffect::FatigueCharge { actor, quantity } = effect {
-                    Some(game_physiology::prepare_fatigue_charge(
-                        &self.host.storage,
-                        *actor,
-                        *quantity,
-                        self.host
-                            .state
-                            .physical
-                            .as_ref()
-                            .unwrap()
-                            .rules
-                            .fatigue_limit,
-                    ))
+                    Some(
+                        game_physiology::prepare_fatigue_charge(
+                            &self.host.storage,
+                            *actor,
+                            *quantity,
+                            self.host
+                                .state
+                                .physical
+                                .as_ref()
+                                .unwrap()
+                                .rules
+                                .fatigue_limit,
+                        )
+                        .map(|charge| (*actor, charge)),
+                    )
                 } else {
                     None
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let mut lifespan = BTreeMap::new();
+        if let Some(lifecycle) = &self.host.state.development {
+            for effect in &prepared.effects {
+                if let ControlEffect::LifespanChanged { actor } = effect {
+                    let survival = game_physiology::prepare_survival(&self.host.storage, *actor)?;
+                    let facts = game_lifecycle::LifespanFacts {
+                        actor: *actor,
+                        now: self.host.clock().time,
+                        alive: survival.alive(),
+                        lifespan_loss: prepared.lifespan_loss_after(&self.host.storage, *actor),
+                    };
+                    let response = lifecycle.prepare_lifespan_change(&self.host.storage, facts)?;
+                    lifespan.insert(*actor, (facts, survival, response));
+                }
+            }
+        }
         let effects = prepared.effects.clone();
         let route_reactions = effects
             .iter()
@@ -546,13 +542,17 @@ impl Simulation {
         let canonical = self.canonical_state();
         let memory_resets = memory_ending.activity_resets(&MemorySaveFacts(&canonical));
         let mut batch = game_ecs::Batch::new();
-        let finish = prepared.stage_into(
+        let control_receipt = prepared.stage_into(
             &self.host.state.invocation.as_ref().unwrap().control,
             &self.host.storage,
             &mut batch,
         )?;
-        for charge in charges {
-            charge.stage_into(&self.host.storage, &mut batch)?;
+        let mut fatigue_receipts = BTreeMap::new();
+        for (actor, charge) in charges {
+            fatigue_receipts.insert(
+                actor,
+                charge.stage_into_with_receipt(&self.host.storage, &mut batch)?,
+            );
         }
         memory_ending.stage_into(runtime, &self.host.storage, None, &mut batch)?;
         for actor in memory_resets {
@@ -560,13 +560,41 @@ impl Simulation {
         }
         let route_admissions = route_reactions
             .into_iter()
-            .map(|plan| plan.stage_into(&self.host.storage, &mut batch))
-            .collect::<Result<Vec<_>, _>>()?;
-        for admission in &route_admissions {
+            .map(|(recall, plan)| {
+                let actor = plan.actor();
+                let admission = plan.stage_into(&self.host.storage, &mut batch)?;
+                Ok((actor, recall, admission))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        for (actor, recall, admission) in &route_admissions {
+            recall.validate_batch::<game_api::Command>(
+                &self.host.storage,
+                game_transport::route_steps(&self.host.storage, *actor),
+                &batch,
+            )?;
             admission.validate_footprint(&batch)?;
         }
+        control_receipt.validate_batch(
+            &self.host.state.invocation.as_ref().unwrap().control,
+            &self.host.storage,
+            &batch,
+        )?;
+        let lifespan = lifespan
+            .into_iter()
+            .map(|(actor, (mut facts, survival, response))| {
+                facts.now = self.host.clock().time;
+                facts.alive =
+                    survival.check(&self.host.storage, &batch, fatigue_receipts.get(&actor))?;
+                let response = response.check(
+                    self.host.state.development.as_ref().unwrap(),
+                    &self.host.storage,
+                    facts,
+                    &batch,
+                )?;
+                Ok((actor, response))
+            })
+            .collect::<Result<BTreeMap<_, _>, Error>>()?;
         self.host.storage.apply_batch(batch)?;
-        finish.finish(&mut self.host.state.invocation.as_mut().unwrap().control);
         if warning.is_some() {
             self.host.allocate_ids(1)?;
         }
@@ -617,7 +645,11 @@ impl Simulation {
                         lost_control |= !controlled;
                     }
                 }
-                ControlEffect::LifespanChanged { actor } => self.reschedule_invocation_age(actor),
+                ControlEffect::LifespanChanged { actor } => {
+                    if let Some(response) = lifespan.get(&actor) {
+                        self.apply_lifespan_response(*response);
+                    }
+                }
                 ControlEffect::DeathCleanup { .. } => {}
                 ControlEffect::ControllerSelected { .. } => {}
             }
@@ -635,26 +667,25 @@ impl Simulation {
         }
         Ok(())
     }
-    fn reschedule_invocation_age(&mut self, actor: PersonId) {
-        let Some(development) = &self.host.state.development else {
-            return;
-        };
-        let life = game_lifecycle::life(&self.host.storage, actor).expect("life exists");
-        let lifespan = development
-            .rules
-            .lifespan
-            .0
-            .saturating_sub(self.invocation_lifespan_loss(actor));
-        let age = self.host.clock().time.0 - life.born.0 + life.initial_age.0;
-        if age >= lifespan {
-            self.end_life(actor);
-            return;
+    fn apply_lifespan_response(&mut self, response: game_lifecycle::LifespanResponse) {
+        match response {
+            game_lifecycle::LifespanResponse::Unchanged => {}
+            game_lifecycle::LifespanResponse::Died { actor } => self.end_life(actor),
+            game_lifecycle::LifespanResponse::Deadline { actor, at } => {
+                for due in self.host.state.due.values_mut() {
+                    due.retain(|due| !matches!(due,Due::Age(id)if *id==actor));
+                }
+                self.host.state.due.retain(|_, due| !due.is_empty());
+                if let Some(at) = at {
+                    self.host
+                        .state
+                        .due
+                        .entry(at)
+                        .or_default()
+                        .push(Due::Age(actor));
+                }
+            }
         }
-        for due in self.host.state.due.values_mut() {
-            due.retain(|d| !matches!(d,Due::Age(id)if *id==actor));
-        }
-        self.host.state.due.retain(|_, due| !due.is_empty());
-        self.schedule_age(actor);
     }
     pub(crate) fn invocation_lifespan_loss(&self, actor: PersonId) -> u64 {
         self.host
@@ -665,40 +696,21 @@ impl Simulation {
             .map_or(0, |b| b.lifespan_loss)
     }
 
-    fn cost_input<'a>(active: &'a Active) -> game_invocation::ActiveInput<'a> {
-        game_invocation::ActiveInput {
-            life_count: active.lives.len(),
-            accepted: &active.accepted,
-            episode: active.episode.as_ref(),
-            next_loss_burden: active.next_loss_burden,
-        }
-    }
     pub(crate) fn invocation_rates(&self, actor: PersonId) -> (u64, u64) {
-        let Some(w) = &self.host.state.invocation else {
+        let Some(runtime) = &self.host.state.invocation else {
             return (0, 0);
         };
-        let before = game_invocation::burden(&self.host.storage, actor)
-            .cloned()
-            .unwrap_or_default();
-        let active = w
-            .control
-            .active
-            .as_ref()
-            .filter(|a| a.actor == actor)
-            .map(Self::cost_input);
-        let alive = game_physiology::body(&self.host.storage, actor)
-            .unwrap()
-            .vitals
-            .alive;
-        let rates = game_invocation::body_rates(
-            &w.control.rules,
-            &before,
-            active,
-            actor,
-            self.host.clock().time,
-            alive,
-        )
-        .expect("validated invocation rates");
+        let rates = runtime
+            .body_rates(
+                &self.host.storage,
+                actor,
+                self.host.clock().time,
+                game_physiology::body(&self.host.storage, actor)
+                    .unwrap()
+                    .vitals
+                    .alive,
+            )
+            .expect("validated invocation rates");
         (rates.fatigue_per_mille, rates.health_harm_per_mille)
     }
     pub(crate) fn evaluate_invocation(&self, next: SimTime) -> Result<PendingInvocation, Error> {
@@ -745,22 +757,9 @@ impl Simulation {
         })
     }
     pub(crate) fn invocation_allocation_bound(&self, next: SimTime) -> u64 {
-        let Some(w) = &self.host.state.invocation else {
-            return 0;
-        };
-        let actions = w.memory_allocation_bound(&self.host.storage, next);
-        let warning = u64::from(w.control.active.is_some() || w.control.activation.is_some());
-        let controller = if w
-            .control
-            .active
-            .as_ref()
-            .is_some_and(|a| a.episode.is_some() && a.next_controller <= next)
-        {
-            2
-        } else {
-            0
-        };
-        actions + warning + controller
+        self.host.state.invocation.as_ref().map_or(0, |runtime| {
+            runtime.allocation_bound(&self.host.storage, next)
+        })
     }
     pub(crate) fn commit_invocation(&mut self, pending: PendingInvocation) -> Result<(), Error> {
         if self.host.state.invocation.is_none() {
@@ -784,37 +783,20 @@ impl Simulation {
         let Some(w) = &self.host.state.invocation else {
             return limit;
         };
-        let alive = game_invocation::burdens(&self.host.storage)
-            .map(|(actor, _)| actor)
-            .filter(|p| {
-                game_physiology::body(&self.host.storage, *p)
-                    .unwrap()
-                    .vitals
-                    .alive
-            })
-            .collect();
         let mut next =
             w.control
-                .boundary(&self.host.storage, self.host.clock().time, limit, &alive);
+                .boundary_for(&self.host.storage, self.host.clock().time, limit, |actor| {
+                    game_physiology::body(&self.host.storage, actor)
+                        .is_some_and(|body| body.vitals.alive)
+                });
         next = w.memory_boundary(&self.host.storage, self.host.clock().time, next);
         next
     }
 
     pub(crate) fn borrowed_skill_level(&self, actor: PersonId, skill: Skill) -> u16 {
-        let Some(w) = &self.host.state.invocation else {
-            return 0;
-        };
-        let Some(a) = w.control.active.as_ref().filter(|a| a.actor == actor) else {
-            return 0;
-        };
-        game_invocation::borrowed_level(a.lives.iter().map(|id| {
-            game_invocation::archive::<game_api::Command>(&self.host.storage, *id)
-                .unwrap()
-                .skills
-                .iter()
-                .find(|entry| entry.skill == skill)
-                .map_or(0, |entry| entry.level)
-        }))
+        self.host.state.invocation.as_ref().map_or(0, |runtime| {
+            runtime.borrowed_skill::<game_api::Command>(&self.host.storage, actor, skill)
+        })
     }
     pub(crate) fn invocation_work_rate(
         &self,
@@ -831,156 +813,138 @@ impl Simulation {
         own: SkillRate,
         body: SkillRate,
     ) -> SkillRate {
-        let Some(w) = &self.host.state.invocation else {
+        let Some(runtime) = &self.host.state.invocation else {
             return own;
         };
-        let state = game_invocation::burden(&self.host.storage, actor)
-            .cloned()
-            .unwrap_or_default();
-        let bonus = self
-            .host
-            .state
-            .skills
-            .as_ref()
-            .map_or(10, |s| s.rules.work_bonus_per_level);
-        let borrowing = w
-            .control
-            .active
-            .as_ref()
-            .is_some_and(|active| active.actor == actor);
-        game_invocation::borrowed_work_rate(
-            own,
-            body,
-            &state,
-            borrowing.then(|| self.borrowed_skill_level(actor, skill)),
-            bonus,
-        )
-        .expect("validated frozen body and invocation rate bounds")
+        runtime
+            .work_rate::<game_api::Command>(
+                &self.host.storage,
+                actor,
+                skill,
+                own,
+                body,
+                self.host
+                    .state
+                    .skills
+                    .as_ref()
+                    .map_or(10, |skills| skills.rules.work_bonus_per_level),
+            )
+            .expect("validated frozen body and invocation rate bounds")
     }
     pub(crate) fn invocation_combat_damage(
         &self,
         actor: PersonId,
         base: u64,
     ) -> Result<u64, Error> {
-        let Some(_) = &self.host.state.invocation else {
+        let Some(runtime) = &self.host.state.invocation else {
             return Ok(base);
         };
-        let state = game_invocation::burden(&self.host.storage, actor)
-            .cloned()
-            .unwrap_or_default();
-        let own = self.own_skill_level(actor, Skill::Combat);
-        let borrowed = self.borrowed_skill_level(actor, Skill::Combat);
-        let bonus = self
-            .host
-            .state
-            .skills
-            .as_ref()
-            .map_or(5, |s| s.rules.damage_bonus_per_level);
-        game_invocation::borrowed_combat_damage(base, own, borrowed, bonus, &state)
+        runtime.combat_damage::<game_api::Command>(
+            &self.host.storage,
+            actor,
+            base,
+            self.own_skill_level(actor, Skill::Combat),
+            self.host
+                .state
+                .skills
+                .as_ref()
+                .map_or(5, |skills| skills.rules.damage_bonus_per_level),
+        )
     }
     pub(crate) fn invocation_routes(
         &self,
         actor: PersonId,
     ) -> Option<BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>> {
-        let w = self.host.state.invocation.as_ref()?;
-        let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
-        let current =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
-                .routes;
-        Some(game_invocation::recalled_routes(
-            current,
-            a.lives.iter().map(|id| {
-                &game_invocation::archive::<game_api::Command>(&self.host.storage, *id)
-                    .unwrap()
-                    .mind
-                    .routes
-            }),
-        ))
+        self.host
+            .state
+            .invocation
+            .as_ref()?
+            .routes_for::<game_api::Command>(
+                &self.host.storage,
+                actor,
+                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)?
+                    .routes,
+            )
     }
     pub(crate) fn prepare_dismissed_route(
         &self,
         actor: PersonId,
-    ) -> Result<Option<game_transport::PreparedRoute>, Error> {
-        let location = game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
-            .ok_or(Error::Unavailable)?;
-        let current =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                .ok_or(Error::Unavailable)?
-                .routes;
-        game_invocation::retained_route_after_dismissal(
-            current,
-            location,
+    ) -> Result<
+        Option<(
+            game_invocation::PreparedRecallLoss,
+            game_transport::PreparedRoute,
+        )>,
+        Error,
+    > {
+        let Some(recall) = game_invocation::prepare_recall_loss::<game_api::Command>(
+            &self.host.storage,
+            actor,
             game_transport::route_steps(&self.host.storage, actor),
-        )
-        .map(|route| game_transport::prepare_route_replacement(&self.host.storage, actor, route))
-        .transpose()
+        )?
+        else {
+            return Ok(None);
+        };
+        let route = game_transport::prepare_route_replacement(
+            &self.host.storage,
+            actor,
+            recall.replacement().to_vec(),
+        )?;
+        Ok(Some((recall, route)))
     }
-
     pub(crate) fn invocation_personality(&self, actor: PersonId) -> Option<decisions::Personality> {
-        let w = self.host.state.invocation.as_ref()?;
-        let a = w.control.active.as_ref().filter(|a| a.actor == actor)?;
-        let life = a.dominant.or_else(|| a.lives.iter().next().copied())?;
-        let empty = game_invocation::Burden::default();
-        let burden = game_invocation::burden(&self.host.storage, actor).unwrap_or(&empty);
-        Some(game_invocation::controller_personality(
-            &game_invocation::archive::<game_api::Command>(&self.host.storage, life)
-                .unwrap()
-                .mind
-                .personality,
-            burden,
-        ))
-    }
-    pub(crate) fn invocation_social_penalty(&self, actor: PersonId) -> i64 {
         self.host
             .state
             .invocation
-            .as_ref()
-            .and_then(|_| game_invocation::burden(&self.host.storage, actor))
-            .map_or(0, |b| {
-                i64::from(b.emotional_disruption)
-                    + i64::from(b.temporary_identity)
-                    + i64::from(b.permanent_identity)
-            })
+            .as_ref()?
+            .invoked_personality::<game_api::Command>(&self.host.storage, actor)
+    }
+    pub(crate) fn invocation_social_penalty(&self, actor: PersonId) -> i64 {
+        self.host.state.invocation.as_ref().map_or(0, |runtime| {
+            runtime.social_penalty(&self.host.storage, actor)
+        })
     }
     pub(crate) fn review_invocation(&mut self) -> Result<(), Error> {
-        use game_invocation::ControlEffect;
-        let Some(actor) = self
+        let Some(prepared) = self.prepare_invocation_controller()? else {
+            return Ok(());
+        };
+        let review = {
+            let roster = game_spatial::LocalRoster::build(&self.host.storage)?;
+            self.prepare_invocation_review(prepared, &roster)
+        };
+        self.apply_invocation_review(review)
+    }
+    pub(crate) fn prepare_invocation_controller(
+        &self,
+    ) -> Result<Option<game_invocation::PreparedControl>, Error> {
+        let Some(control) = self
             .host
             .state
             .invocation
             .as_ref()
-            .and_then(|w| w.control.active.as_ref())
-            .map(|a| a.actor)
+            .map(|runtime| &runtime.control)
         else {
-            return Ok(());
+            return Ok(None);
+        };
+        let Some(actor) = control.actor(&self.host.storage) else {
+            return Ok(None);
         };
         let alive = game_physiology::body(&self.host.storage, actor)
             .unwrap()
             .vitals
             .alive;
-        let Some(prepared) = self
-            .host
-            .state
-            .invocation
-            .as_ref()
-            .unwrap()
-            .control
-            .prepare_controller(&self.host.storage, self.host.clock().time, alive)?
-        else {
-            return Ok(());
-        };
-        let (life, changed) = prepared
-            .effects
-            .iter()
-            .find_map(|e| match e {
-                ControlEffect::ControllerSelected { life, changed, .. } => Some((*life, *changed)),
-                _ => None,
-            })
-            .unwrap();
-        prepared.commit(
-            &mut self.host.state.invocation.as_mut().unwrap().control,
-            &mut self.host.storage,
-        )?;
+        control.prepare_controller(&self.host.storage, self.host.clock().time, alive)
+    }
+    pub(crate) fn prepare_invocation_review(
+        &self,
+        prepared: game_invocation::PreparedControl,
+        roster: &game_spatial::LocalRoster<'_>,
+    ) -> PreparedInvocationReview {
+        let subject = prepared
+            .controller_subject()
+            .expect("prepared controller subject");
+        let actor = subject.actor;
+        let life = subject.life;
+        let changed = subject.changed;
         let controller_actor = actor;
         let active = self
             .host
@@ -989,8 +953,7 @@ impl Simulation {
             .as_ref()
             .unwrap()
             .control
-            .active
-            .as_ref()
+            .active(&self.host.storage)
             .unwrap();
         let past = &game_invocation::archive::<game_api::Command>(&self.host.storage, life)
             .unwrap()
@@ -1011,23 +974,18 @@ impl Simulation {
             Location::AtArea(area) => Some(area),
             _ => None,
         };
-        let local = self
-            .host
-            .state
-            .people
-            .iter()
-            .filter(|person| {
-                area.is_some_and(|area| {
-                    game_spatial::location(&self.host.storage, game_ecs::StableId(person.id.0))
-                        == Some(&Location::AtArea(area))
-                }) && game_physiology::body(&self.host.storage, person.id)
-                    .unwrap()
-                    .vitals
+        let local = area
+            .into_iter()
+            .flat_map(|area| roster.raw_at_area(area))
+            .filter_map(|id| {
+                let person = PersonId(id.0);
+                let body = game_physiology::body(&self.host.storage, person)?;
+                body.vitals
                     .alive
-            })
-            .map(|person| game_invocation::ControllerPerson {
-                person: person.id,
-                contact: self.transport_same_place(controller_actor, person.id),
+                    .then(|| game_invocation::ControllerPerson {
+                        person,
+                        contact: self.transport_same_place(controller_actor, person),
+                    })
             });
         let historical_routes: Vec<_> = active
             .lives
@@ -1039,7 +997,9 @@ impl Simulation {
                     .routes
             })
             .collect();
-        let personality = self.invocation_personality(controller_actor).unwrap();
+        let personality = prepared
+            .controller_personality::<game_api::Command>(&self.host.storage)
+            .unwrap();
         let activity = match *self.host.storage.activity(controller_actor).unwrap() {
             Activity::Eat { .. } => game_invocation::ControllerActivity::Eat,
             Activity::Load { .. } => game_invocation::ControllerActivity::Load,
@@ -1080,6 +1040,22 @@ impl Simulation {
                 current_routes: &current.routes,
                 historical_routes: &historical_routes,
             });
+        PreparedInvocationReview {
+            prepared,
+            actor: controller_actor,
+            decision,
+        }
+    }
+    pub(crate) fn apply_invocation_review(
+        &mut self,
+        review: PreparedInvocationReview,
+    ) -> Result<(), Error> {
+        review.prepared.commit(
+            &self.host.state.invocation.as_ref().unwrap().control,
+            &mut self.host.storage,
+        )?;
+        let controller_actor = review.actor;
+        let decision = review.decision;
         if let game_invocation::ControllerDecision::Act { action, ready } = decision {
             let result = if ready {
                 self.apply_invocation_action(controller_actor, action)
@@ -1122,25 +1098,16 @@ impl Simulation {
         &self,
         lives: BTreeSet<PersonId>,
     ) -> Result<InvocationPreview, Error> {
-        let w = self
-            .host
+        self.host
             .state
             .invocation
             .as_ref()
-            .ok_or(Error::Unavailable)?;
-        w.control.preview(
-            &self.host.storage,
-            &self.invocation_admission(self.host.state.ruler),
-            lives,
-            |life, skill| {
-                game_invocation::archive::<game_api::Command>(&self.host.storage, life)
-                    .unwrap()
-                    .skills
-                    .iter()
-                    .find(|entry| entry.skill == skill)
-                    .map_or(0, |entry| entry.level)
-            },
-        )
+            .ok_or(Error::Unavailable)?
+            .preview::<game_api::Command>(
+                &self.host.storage,
+                &self.invocation_admission(self.host.state.ruler),
+                lives,
+            )
     }
     pub(crate) fn invocation_view(&self) -> Option<InvocationView> {
         let w = self.host.state.invocation.as_ref()?;
@@ -1148,27 +1115,19 @@ impl Simulation {
         let b = game_invocation::burden(&self.host.storage, actor)
             .cloned()
             .unwrap_or_default();
-        let active = w.control.active.as_ref().filter(|a| a.actor == actor);
+        let active = w
+            .control
+            .active(&self.host.storage)
+            .filter(|a| a.actor == actor);
         let lives = active.map_or_else(BTreeSet::new, |a| a.lives.clone());
         let memories = w.invoked_life_views::<game_api::Command>(&self.host.storage, actor);
         let records = w.record_views(&self.host.storage, &MemoryBindings(self), actor);
-        let preview_lives = w
-            .control
-            .activation
-            .as_ref()
-            .map_or_else(|| lives.clone(), |plan| plan.lives.clone());
-        let preview = if preview_lives.is_empty() {
-            InvocationPreview {
-                lives: BTreeSet::new(),
-                burden_rate: 0,
-                activation_burden: 0,
-                activation_fatigue: 0,
-                borrowed_skills: Vec::new(),
-                next_cost_in: None,
-            }
-        } else {
-            self.invocation_preview(preview_lives).ok()?
-        };
+        let preview = w
+            .current_preview::<game_api::Command>(
+                &self.host.storage,
+                &self.invocation_admission(actor),
+            )
+            .ok()?;
         Some(InvocationView {
             ready: self.invocation_ready(actor),
             available_lives: w.available_lives::<game_api::Command>(&self.host.storage),
@@ -1180,11 +1139,15 @@ impl Simulation {
             emotional_disruption: b.emotional_disruption,
             permanent_identity: b.permanent_identity,
             lifespan_loss: SimDuration(b.lifespan_loss),
-            player_control: !self.past_life_controls_actor(actor)
-                && game_physiology::body(&self.host.storage, actor)
+            player_control: w.control.player_control(
+                &self.host.storage,
+                actor,
+                self.host.clock().time,
+                game_physiology::body(&self.host.storage, actor)
                     .unwrap()
                     .vitals
                     .alive,
+            ),
             loss_ends: active.and_then(|a| a.episode.as_ref()).map(|e| e.ends),
             warning: w.control.pending_warning(&self.host.storage).cloned(),
             preview,
@@ -1193,35 +1156,21 @@ impl Simulation {
         })
     }
     pub(crate) fn available_invocation_commands(&self, actor: PersonId) -> Vec<Command> {
-        let Some(w) = &self.host.state.invocation else {
-            return Vec::new();
-        };
-        if self.past_life_controls_actor(actor) {
-            return Vec::new();
-        }
-        let mut actions: Vec<_> = w
-            .control
-            .available_actions(&self.host.storage, &self.invocation_admission(actor))
-            .into_iter()
-            .map(|action| match action {
-                game_invocation::ControlAction::Activate { lives } => {
-                    InvocationAction::Activate { lives }
-                }
-                game_invocation::ControlAction::Dismiss => InvocationAction::Dismiss,
-                game_invocation::ControlAction::AcceptWarning { warning } => {
-                    InvocationAction::AcceptWarning { warning }
-                }
+        self.host
+            .state
+            .invocation
+            .as_ref()
+            .map_or_else(Vec::new, |runtime| {
+                runtime
+                    .available_invocation_actions(
+                        &self.host.storage,
+                        &self.invocation_admission(actor),
+                        &MemoryBindings(self),
+                    )
+                    .into_iter()
+                    .map(|action| Command::Invocation { action })
+                    .collect()
             })
-            .collect();
-        actions.extend(w.available_memory_actions(
-            &self.host.storage,
-            &MemoryBindings(self),
-            actor,
-        ));
-        actions
-            .into_iter()
-            .map(|action| Command::Invocation { action })
-            .collect()
     }
 
     pub(crate) fn invocation_selected_tool(&self, actor: PersonId) -> Option<InventoryId> {
@@ -1656,7 +1605,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .control
-                .active
+                .active(&sim.host.storage)
                 .is_none()
         );
         assert_eq!(sim.borrowed_skill_level(actor, Skill::Craft), 0);
@@ -1904,8 +1853,7 @@ mod tests {
             .as_ref()
             .unwrap()
             .control
-            .active
-            .as_ref()
+            .active(&sim.host.storage)
             .unwrap()
             .episode
             .as_ref()
@@ -1926,6 +1874,14 @@ mod tests {
             },
         )
         .unwrap();
+        let before_queries = restored.save().unwrap();
+        for _ in 0..8 {
+            let _ = restored.invocation_view().unwrap();
+            let _ = restored.available_invocation_commands(actor);
+            let _ = restored.invocation_preview(BTreeSet::from([life])).unwrap();
+            let _ = restored.canonical_snapshot().unwrap();
+        }
+        assert_eq!(restored.save().unwrap(), before_queries);
         sim.advance(SimDuration(ends.0 - sim.host.clock().time.0))
             .unwrap();
         while restored.host.clock().time < ends {
@@ -1968,7 +1924,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .control
-                .active
+                .active(&sim.host.storage)
                 .is_none()
         );
         assert!(
@@ -2031,8 +1987,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .control
-                .active
-                .as_ref()
+                .active(&sim.host.storage)
                 .unwrap()
                 .dominant,
             Some(life)
@@ -2061,8 +2016,8 @@ mod tests {
         let saved = sim.save().unwrap();
         let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
         let control = &value["state"]["state"]["invocation"]["control"];
-        assert_eq!(control.as_object().unwrap().len(), 4);
-        for field in ["people", "warnings"] {
+        assert_eq!(control.as_object().unwrap().len(), 1);
+        for field in ["people", "warnings", "active", "activation", "warning"] {
             assert!(control.get(field).is_none());
             let mut forged = value.clone();
             forged["state"]["state"]["invocation"]["control"][field] = serde_json::json!({});
@@ -2071,7 +2026,11 @@ mod tests {
                     .is_err()
             );
         }
-        for column in ["invocation/burden", "invocation/warning"] {
+        for column in [
+            "invocation/burden",
+            "invocation/warning",
+            "invocation/session",
+        ] {
             assert!(
                 !value["state"]["components"]["columns"][column]
                     .as_array()
@@ -2105,7 +2064,7 @@ mod tests {
         let saved = sim.save().unwrap();
         let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
         let area = sim.host.state.areas[0].id.0;
-        for attack in 0..5 {
+        for attack in 0..9 {
             let mut forged = value.clone();
             match attack {
                 0 => forged["state"]["state"]["invocation"] = serde_json::Value::Null,
@@ -2118,12 +2077,33 @@ mod tests {
                         serde_json::json!(999999)
                 }
                 3 => {
-                    forged["state"]["state"]["invocation"]["control"]["warning"]["id"] =
-                        serde_json::json!(999999)
+                    forged["state"]["components"]["columns"]["invocation/session"][0]["value"]["warning"]
+                        ["id"] = serde_json::json!(999999)
+                }
+                4 => {
+                    forged["state"]["components"]["columns"]["invocation/session"][0]["value"]["warning"]
+                        ["view"] = serde_json::json!({})
+                }
+                5 => {
+                    forged["state"]["components"]["columns"]["invocation/session"][0]["entity"] =
+                        serde_json::json!(area)
+                }
+                6 => {
+                    forged["state"]["components"]["columns"]["invocation/session"][0]["value"]["actor"] =
+                        serde_json::json!(area)
+                }
+                7 => {
+                    forged["state"]["components"]["columns"]["invocation/session"][0]["value"]["activation"]
+                        ["lives"] = serde_json::json!([])
                 }
                 _ => {
-                    forged["state"]["state"]["invocation"]["control"]["warning"]["view"] =
-                        serde_json::json!({})
+                    let mut second =
+                        forged["state"]["components"]["columns"]["invocation/session"][0].clone();
+                    second["entity"] = serde_json::json!(area);
+                    forged["state"]["components"]["columns"]["invocation/session"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(second);
                 }
             }
             assert!(
@@ -2271,6 +2251,32 @@ mod tests {
                 Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
                     .is_err(),
                 "record restore attack {attack}"
+            );
+            assert_eq!(sim.save().unwrap(), saved);
+        }
+    }
+    #[test]
+    fn native_session_restoration_rejects_future_start_and_episode_deadline_mismatch() {
+        let mut sim = ready(1);
+        let life = past(&sim);
+        activate(&mut sim, BTreeSet::from([life]));
+        let warning = approach_loss(&mut sim);
+        act(&mut sim, InvocationAction::AcceptWarning { warning }).unwrap();
+        let saved = sim.save().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        for attack in 0..4 {
+            let mut forged = value.clone();
+            let active = &mut forged["state"]["components"]["columns"]["invocation/session"][0]["value"]
+                ["active"];
+            match attack {
+                0 => active["started"] = serde_json::json!(sim.host.clock().time.0 + 1),
+                1 => active["episode"]["starts"] = serde_json::json!(sim.host.clock().time.0 + 1),
+                2 => active["episode"]["ends"] = serde_json::json!(sim.host.clock().time.0),
+                _ => active["next_controller"] = serde_json::json!(u64::MAX),
+            }
+            assert!(
+                Simulation::load(&serde_json::to_vec(&forged).unwrap(), Execution::default())
+                    .is_err()
             );
             assert_eq!(sim.save().unwrap(), saved);
         }

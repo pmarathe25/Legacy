@@ -648,8 +648,11 @@ dependencies = [
  "game-characters",
  "game-core",
  "game-ecs",
+ "game-lifecycle",
  "game-physiology",
  "game-society",
+ "game-spatial",
+ "game-transport",
  "serde",
  "serde_json",
 ]

@@ -118,7 +118,7 @@ impl Runtime {
         if local {
             effect = MemoryEffect::Interrupted { actor };
             let recalls = |content: &RecordedMemory| {
-                self.control.active.as_ref().is_some_and(|active| {
+                self.control.active(store).is_some_and(|active| {
                     active.actor == actor && active.lives.contains(&content.life())
                 })
             };
@@ -262,7 +262,7 @@ impl Runtime {
         Ok(PreparedMemoryCompletion {
             at: now,
             action,
-            active: self.control.active.clone(),
+            active: self.control.active(store).cloned(),
             allocation_start,
             allocation_demand,
             effect,
@@ -295,7 +295,7 @@ impl PreparedMemoryCompletion {
         batch: &mut Batch,
     ) -> Result<MemoryCompletion, Error> {
         if now != self.at
-            || runtime.control.active != self.active
+            || runtime.control.active(store) != self.active.as_ref()
             || memory_action(store, self.action.actor) != Some(&self.action)
         {
             return Err(Error::Unavailable);

@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 49;
+const SAVE_VERSION: u32 = 50;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,

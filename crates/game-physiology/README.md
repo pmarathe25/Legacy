@@ -11,3 +11,5 @@ Trait `Runtime` retains definitions and the next expression deadline. Personal `
 The trait owner selects physical training from supplied skill-level facts and scales exact work-rate fractions. Its prepared refresh evaluates old and new phenotypes, preserves the injury fraction and fixed-point remainder, and keeps dead bodies dead. Commit checks the used allele pairs, development and body rows, actor membership, definitions, and deadline before admitting one batch and advancing the expression cadence.
 
 The crate registers plain components in the host's shared store; it owns no second store and exposes no engine-specific types. `Body` contains vitals and fractional remainders. Missing bodies stay absent; configured limits remain explicit integration inputs.
+
+Instant fatigue charges can stage an opaque `FatigueReceipt` into a shared batch. A prepared survival guard accepts only that receipt from the same batch with its exact body-row footprint; unrelated body writes and removals fail before publication.

@@ -48,7 +48,7 @@ fn complete(
 }
 #[test]
 fn written_native_record_completes_at_deadline_and_reading_survives_dismissal() {
-    let (mut runtime, mut store, facts) = fixture();
+    let (runtime, mut store, facts) = fixture();
     let writing = start(&runtime, &mut store, &facts, &request());
     assert_eq!(
         runtime.due_memory_actions(&store, SimTime(writing.completes.0 - 1)),
@@ -81,7 +81,7 @@ fn written_native_record_completes_at_deadline_and_reading_survives_dismissal() 
             .knowledge
             .contains_key(&InventoryId(2))
     );
-    runtime.control.active = None;
+    store.remove::<ControlSession>(StableId(ACTOR.0)).unwrap();
     let reading = start_at(
         &runtime,
         &mut store,
@@ -113,7 +113,7 @@ fn written_native_record_completes_at_deadline_and_reading_survives_dismissal() 
 }
 #[test]
 fn completion_rechecks_tools_capacity_control_and_teaching_collateral() {
-    let (mut runtime, mut store, mut facts) = fixture();
+    let (runtime, mut store, mut facts) = fixture();
     let writing = start(&runtime, &mut store, &facts, &request());
     facts.tool = false;
     assert_eq!(
@@ -149,7 +149,7 @@ fn completion_rechecks_tools_capacity_control_and_teaching_collateral() {
         .prepare_memory_completion::<u8>(&store, &facts, ACTOR, teaching.completes, 40)
         .unwrap();
     assert_eq!(plan.participants(), &[ACTOR, PersonId(11)]);
-    runtime.control.active = None;
+    store.remove::<ControlSession>(StableId(ACTOR.0)).unwrap();
     assert!(
         plan.stage_into::<u8>(
             &runtime,
@@ -375,7 +375,7 @@ fn archives_capture_once_and_only_refresh_skills_in_the_death_tick() {
     assert_eq!(archive::<u8>(&store, ACTOR).unwrap().skills[0].level, 12);
 }
 
-fn dismiss(runtime: &mut Runtime, store: &mut Store, now: SimTime) -> Vec<PersonId> {
+fn dismiss(runtime: &Runtime, store: &mut Store, now: SimTime) -> Vec<PersonId> {
     let facts = AdmissionFacts {
         actor: ACTOR,
         now,
@@ -395,19 +395,21 @@ fn dismiss(runtime: &mut Runtime, store: &mut Store, now: SimTime) -> Vec<Person
         .unwrap();
     let ending = runtime.prepare_memory_control_reactions(store, &control.effects);
     let mut batch = Batch::new();
-    let finish = control
+    let receipt = control
         .stage_into(&runtime.control, store, &mut batch)
         .unwrap();
     let participants = ending.stage_into(runtime, store, None, &mut batch).unwrap();
+    receipt
+        .validate_batch(&runtime.control, store, &batch)
+        .unwrap();
     store.apply_batch(batch).unwrap();
-    finish.finish(&mut runtime.control);
     participants
 }
 #[test]
 fn composed_control_dismissal_ends_writing_but_reading_still_learns() {
-    let (mut runtime, mut store, facts) = fixture();
+    let (runtime, mut store, facts) = fixture();
     start(&runtime, &mut store, &facts, &request());
-    assert_eq!(dismiss(&mut runtime, &mut store, SimTime(1)), vec![ACTOR]);
+    assert_eq!(dismiss(&runtime, &mut store, SimTime(1)), vec![ACTOR]);
     assert!(memory_action(&store, ACTOR).is_none());
     assert_eq!(
         game_cargo::inventory(&store, crate::memory_start::tests::MATERIAL)
@@ -415,7 +417,7 @@ fn composed_control_dismissal_ends_writing_but_reading_still_learns() {
             .quantity,
         Quantity(1000)
     );
-    let (mut runtime, mut store, facts) = fixture();
+    let (runtime, mut store, facts) = fixture();
     let writing = start(&runtime, &mut store, &facts, &request());
     complete(&runtime, &mut store, &facts, writing.completes, 40);
     let reading = start_at(
@@ -427,7 +429,7 @@ fn composed_control_dismissal_ends_writing_but_reading_still_learns() {
         },
         writing.completes,
     );
-    assert!(dismiss(&mut runtime, &mut store, SimTime(reading.completes.0 - 1)).is_empty());
+    assert!(dismiss(&runtime, &mut store, SimTime(reading.completes.0 - 1)).is_empty());
     assert_eq!(memory_action(&store, ACTOR), Some(&reading));
     assert_eq!(
         complete(&runtime, &mut store, &facts, reading.completes, 42),

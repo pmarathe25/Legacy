@@ -210,8 +210,7 @@ fn edited_recipe_controls_normal_work_and_is_saved_with_the_selected_site() {
     assert!(
         invocation
             .control
-            .active
-            .as_ref()
+            .active(state.components)
             .is_none_or(|active| active.actor != actor)
     );
     assert!(

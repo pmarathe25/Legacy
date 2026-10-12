@@ -80,8 +80,7 @@ impl Runtime {
         actor: PersonId,
     ) -> Vec<InvokedLifeView> {
         self.control
-            .active
-            .as_ref()
+            .active(store)
             .filter(|active| active.actor == actor)
             .into_iter()
             .flat_map(|active| &active.lives)

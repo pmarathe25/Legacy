@@ -13,6 +13,9 @@ game-characters.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-spatial.workspace = true
+game-transport.workspace = true
+game-lifecycle.workspace = true
 game-physiology.workspace = true
 serde_json.workspace = true
 

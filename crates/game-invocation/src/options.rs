@@ -7,8 +7,7 @@ use std::collections::BTreeSet;
 impl ControlState {
     pub fn available_actions(&self, store: &Store, facts: &AdmissionFacts) -> Vec<ControlAction> {
         if controls_actor(
-            self.active
-                .as_ref()
+            self.active(store)
                 .and_then(|active| active.episode.as_ref()),
             facts.actor,
             facts.now,
@@ -25,8 +24,7 @@ impl ControlState {
             });
         }
         if self
-            .active
-            .as_ref()
+            .active(store)
             .is_some_and(|active| active.actor == facts.actor)
             || self
                 .pending_warning(store)
@@ -34,12 +32,11 @@ impl ControlState {
         {
             actions.push(ControlAction::Dismiss);
         }
-        if self.ready(facts.actor, facts) && self.warning.is_none() {
+        if self.ready(facts.actor, facts) && self.pending_consent(store).is_none() {
             for life in facts.archived.iter().rev().take(32) {
                 let lives = BTreeSet::from([*life]);
                 if self
-                    .active
-                    .as_ref()
+                    .active(store)
                     .is_none_or(|active| active.lives != lives)
                 {
                     actions.push(ControlAction::Activate { lives });
@@ -50,10 +47,7 @@ impl ControlState {
     }
     /// The body's life and clock are factual inputs; choosing the active owner is invocation policy.
     pub fn actor(&self, store: &Store) -> Option<PersonId> {
-        self.active
-            .as_ref()
-            .map(|active| active.actor)
-            .or_else(|| self.pending_warning(store).map(|warning| warning.actor))
+        one_session(store).ok().flatten().map(|(actor, _)| actor)
     }
     pub fn next_cost_for(
         &self,
@@ -64,8 +58,7 @@ impl ControlState {
         let empty = Burden::default();
         let before = burden(store, actor).unwrap_or(&empty);
         let next_loss = self
-            .active
-            .as_ref()
+            .active(store)
             .filter(|active| active.actor == actor)
             .map_or(self.rules.loss_threshold, |active| active.next_loss_burden);
         next_cost_after(&self.rules, before, lives, next_loss)
@@ -80,7 +73,7 @@ mod tests {
         let mut schema = game_ecs::Schema::new();
         register_components(&mut schema).unwrap();
         let mut store = Store::with_schema(schema);
-        let mut control = ControlState::new(Rules::fixture()).unwrap();
+        let control = ControlState::new(Rules::fixture()).unwrap();
         let actor = PersonId(100);
         let mut facts = AdmissionFacts {
             actor,
@@ -103,7 +96,7 @@ mod tests {
             matches!(&actions[0], ControlAction::Activate { lives } if lives == &BTreeSet::from([PersonId(40)]))
         );
         insert_burden(&mut store, actor, Burden::default()).unwrap();
-        control.active = Some(Active {
+        let active = Active {
             actor,
             lives: BTreeSet::from([PersonId(40)]),
             started: facts.now,
@@ -116,7 +109,18 @@ mod tests {
             next_loss_burden: 1,
             next_controller: facts.now,
             dominant: None,
-        });
+        };
+        store
+            .insert_or_spawn(
+                game_ecs::StableId(actor.0),
+                ControlSession {
+                    actor,
+                    active: Some(active),
+                    activation: None,
+                    warning: None,
+                },
+            )
+            .unwrap();
         assert!(control.available_actions(&store, &facts).is_empty());
         assert_eq!(control.actor(&store), Some(actor));
     }

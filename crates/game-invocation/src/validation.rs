@@ -15,6 +15,12 @@ impl ControlState {
     pub fn validate(&self, store: &Store, facts: ControlValidation<'_>) -> Result<(), Error> {
         let fail = || Error::InvalidSave("invalid invocation control".into());
         validate_rules(&self.rules).map_err(|_| fail())?;
+        let row = one_session(store).map_err(|_| fail())?;
+        if row.is_some_and(|(actor, _)| {
+            !facts.incarnations.contains(&actor) || facts.current != Some(actor)
+        }) {
+            return Err(fail());
+        }
         let valid_lives = |selected: &BTreeSet<PersonId>| {
             !selected.is_empty() && selected.len() <= 8 && selected.is_subset(facts.archived)
         };
@@ -44,7 +50,7 @@ impl ControlState {
                 return Err(fail());
             }
         }
-        if let Some(active) = &self.active {
+        if let Some(active) = self.active(store) {
             if facts.current != Some(active.actor)
                 || !valid_lives(&active.lives)
                 || burden(store, active.actor).is_none()
@@ -65,17 +71,17 @@ impl ControlState {
                     || episode.ends.0 - episode.starts.0 != self.rules.loss_duration.0
                     || active.next_controller < facts.now
                     || active.next_controller > episode.ends
-                    || self.warning.is_some()
-                    || self.activation.is_some())
+                    || self.pending_consent(store).is_some()
+                    || self.activation(store).is_some())
             {
                 return Err(fail());
             }
         }
-        if let Some(activation) = &self.activation
+        if let Some(activation) = self.activation(store)
             && (facts.current != Some(activation.actor)
                 || !valid_lives(&activation.lives)
                 || !consent_valid(&activation.accepted)
-                || !self.warning.as_ref().is_some_and(|pending| {
+                || !self.pending_consent(store).is_some_and(|pending| {
                     pending.activation.as_ref() == Some(&activation.lives)
                         && warning(store, pending.id)
                             .is_some_and(|view| view.actor == activation.actor)
@@ -97,7 +103,7 @@ impl ControlState {
                 return Err(fail());
             }
         }
-        if let Some(pending) = &self.warning
+        if let Some(pending) = self.pending_consent(store)
             && (warning(store, pending.id).is_none_or(|view| facts.current != Some(view.actor))
                 || pending
                     .activation

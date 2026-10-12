@@ -88,7 +88,7 @@ impl PreparedMemoryStart {
     ) -> Result<MemoryAction, Error> {
         if now != self.at
             || runtime.control.rules != self.rules
-            || runtime.control.active != self.active
+            || runtime.control.active(store) != self.active.as_ref()
             || memory_action(store, self.action.actor) != self.before.as_ref()
         {
             return Err(Error::Unavailable);
@@ -165,8 +165,7 @@ impl Runtime {
             || person.health == 0
             || controls_actor(
                 self.control
-                    .active
-                    .as_ref()
+                    .active(store)
                     .and_then(|active| active.episode.as_ref()),
                 actor,
                 now,
@@ -180,8 +179,7 @@ impl Runtime {
             |life: PersonId, inventory: InventoryId| -> Result<RecordedMemory, Error> {
                 if !self
                     .control
-                    .active
-                    .as_ref()
+                    .active(store)
                     .is_some_and(|active| active.actor == actor && active.lives.contains(&life))
                 {
                     return Err(Error::Unavailable);
@@ -226,8 +224,7 @@ impl Runtime {
             } => {
                 if !self
                     .control
-                    .active
-                    .as_ref()
+                    .active(store)
                     .is_some_and(|active| active.actor == actor && active.lives.contains(life))
                 {
                     return Err(Error::Unavailable);
@@ -353,7 +350,7 @@ impl Runtime {
             at: now,
             request: request.clone(),
             rules: self.control.rules.clone(),
-            active: self.control.active.clone(),
+            active: self.control.active(store).cloned(),
             before: memory_action(store, actor).cloned(),
             action,
             material,
@@ -370,7 +367,20 @@ impl Runtime {
         store: &Store,
         facts: &impl MemoryFacts,
         actor: PersonId,
+        now: SimTime,
     ) -> Vec<InvocationAction> {
+        if facts.person(actor, actor).is_none_or(|person| {
+            controls_actor(
+                self.control
+                    .active(store)
+                    .and_then(|active| active.episode.as_ref()),
+                actor,
+                now,
+                person.alive,
+            )
+        }) {
+            return Vec::new();
+        }
         records(store)
             .filter(|(id, _)| self.can_read_record(store, facts, actor, *id))
             .take(32)

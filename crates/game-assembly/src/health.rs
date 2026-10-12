@@ -2269,11 +2269,7 @@ impl Simulation {
     fn health_mind(&self, actor: PersonId) -> Option<&decisions::Mind> {
         if self.past_life_controls_actor(actor) {
             let w = self.host.state.invocation.as_ref()?;
-            let active = w.control.active.as_ref()?;
-            let life = active.dominant?;
-            return Some(
-                &game_invocation::archive::<game_api::Command>(&self.host.storage, life)?.mind,
-            );
+            return w.controller_mind::<game_api::Command>(&self.host.storage, actor);
         }
         game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
     }

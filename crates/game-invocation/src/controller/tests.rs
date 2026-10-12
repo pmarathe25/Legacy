@@ -299,7 +299,7 @@ fn current_and_earlier_historical_routes_win_and_burden_changes_traits_exactly()
 fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assembly() {
     let actor = PersonId(42);
     let lives = BTreeSet::from([PersonId(1), PersonId(2)]);
-    let mut control = ControlState::new(Rules::fixture()).unwrap();
+    let control = ControlState::new(Rules::fixture()).unwrap();
     let mut schema = game_ecs::Schema::new();
     register_components(&mut schema).unwrap();
     let mut store = game_ecs::Store::with_schema(schema);
@@ -327,10 +327,10 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
             Some(WarningId(1)),
         )
         .unwrap()
-        .commit(&mut control, &mut store)
+        .commit(&control, &mut store)
         .unwrap();
     let mut warning_id = 2;
-    while let Some(warning) = control.warning.clone() {
+    while let Some(warning) = control.pending_consent(&store).cloned() {
         control
             .prepare_action(
                 &store,
@@ -342,7 +342,7 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
                 Some(WarningId(warning_id)),
             )
             .unwrap()
-            .commit(&mut control, &mut store)
+            .commit(&control, &mut store)
             .unwrap();
         warning_id += 1;
     }
@@ -350,10 +350,10 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
     control
         .prepare_review(&store, &facts, Some(WarningId(warning_id)))
         .unwrap()
-        .commit(&mut control, &mut store)
+        .commit(&control, &mut store)
         .unwrap();
     warning_id += 1;
-    while let Some(warning) = control.warning.clone() {
+    while let Some(warning) = control.pending_consent(&store).cloned() {
         control
             .prepare_action(
                 &store,
@@ -365,7 +365,7 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
                 Some(WarningId(warning_id)),
             )
             .unwrap()
-            .commit(&mut control, &mut store)
+            .commit(&control, &mut store)
             .unwrap();
         warning_id += 1;
     }
@@ -402,8 +402,8 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
                 _ => None,
             })
             .unwrap();
-        prepared.commit(&mut control, &mut store).unwrap();
-        let chosen = control.active.as_ref().unwrap().dominant.unwrap();
+        prepared.commit(&control, &mut store).unwrap();
+        let chosen = control.active(&store).unwrap().dominant.unwrap();
         assert_eq!(chosen, expected_life);
         let memory = if chosen == PersonId(1) {
             &survivor

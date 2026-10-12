@@ -1,6 +1,6 @@
 use crate::*;
 use game_core::*;
-use game_ecs::{Batch, Store};
+use game_ecs::{Batch, BatchKey, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,19 +50,11 @@ pub struct Warning {
 #[serde(deny_unknown_fields)]
 pub struct ControlState {
     pub rules: Rules,
-    pub active: Option<Active>,
-    pub activation: Option<Activation>,
-    pub warning: Option<Warning>,
 }
 impl ControlState {
     pub fn new(rules: Rules) -> Result<Self, Error> {
         validate_rules(&rules)?;
-        Ok(Self {
-            rules,
-            active: None,
-            activation: None,
-            warning: None,
-        })
+        Ok(Self { rules })
     }
 }
 /// Current-life/body and actual guidance come from their owners. The archive
@@ -134,27 +126,11 @@ pub enum ControlEffect {
 /// A prepared frame copies only the one control episode and touched burdens,
 /// never archives, physical stock, recorded memories, or an entire simulation.
 #[derive(Clone, Debug)]
-pub struct ControlFinalization {
-    active: Option<Active>,
-    activation: Option<Activation>,
-    warning: Option<Warning>,
-}
-impl ControlFinalization {
-    /// Publish metadata only after the shared component batch has succeeded.
-    pub fn finish(self, state: &mut ControlState) {
-        state.active = self.active;
-        state.activation = self.activation;
-        state.warning = self.warning;
-    }
-}
-#[derive(Clone, Debug)]
 pub struct PreparedControl {
     at: SimTime,
     admission: Option<AdmissionFacts>,
     rules: Rules,
-    before_active: Option<Active>,
-    before_activation: Option<Activation>,
-    before_warning: Option<Warning>,
+    before_session: Option<(PersonId, ControlSession)>,
     before_warning_record: Option<InvocationWarning>,
     active: Option<Active>,
     activation: Option<Activation>,
@@ -163,29 +139,85 @@ pub struct PreparedControl {
     new_warning: Option<InvocationWarning>,
     pub effects: Vec<ControlEffect>,
 }
+/// Required native rows and the owner-staged footprint of this exact composition.
+#[derive(Clone, Debug)]
+pub struct ControlReceipt {
+    batch: BatchKey,
+    rules: Rules,
+    before_session: Option<(PersonId, ControlSession)>,
+    before_warning_record: Option<InvocationWarning>,
+    burdens: BTreeMap<PersonId, Option<Burden>>,
+    session_edit: Option<PersonId>,
+    after_actor: Option<PersonId>,
+    warning: Option<WarningId>,
+    new_warning: Option<WarningId>,
+}
+impl ControlReceipt {
+    pub fn validate_batch(
+        &self,
+        state: &ControlState,
+        store: &Store,
+        batch: &Batch,
+    ) -> Result<(), Error> {
+        if self.batch != batch.key()
+            || self.rules != state.rules
+            || one_session(store)?.map(|(actor, row)| (actor, row.clone())) != self.before_session
+            || state.pending_warning(store) != self.before_warning_record.as_ref()
+            || self
+                .burdens
+                .iter()
+                .any(|(actor, before)| burden(store, *actor) != before.as_ref())
+            || self
+                .new_warning
+                .is_some_and(|id| warning(store, id).is_some())
+            || self.after_actor.is_some_and(|actor| {
+                !self.burdens.contains_key(&actor) && burden(store, actor).is_none()
+            })
+            || batch.edited_ids::<ControlSession>().collect::<Vec<_>>()
+                != self
+                    .session_edit
+                    .into_iter()
+                    .map(|actor| StableId(actor.0))
+                    .collect::<Vec<_>>()
+            || self.warning.is_some_and(|id| {
+                batch
+                    .edited_ids::<InvocationWarning>()
+                    .filter(|edited| *edited == StableId(id.0))
+                    .count()
+                    != usize::from(self.new_warning == Some(id))
+            })
+            || self.after_actor.is_some_and(|actor| {
+                batch
+                    .edited_ids::<Burden>()
+                    .filter(|edited| *edited == StableId(actor.0))
+                    .count()
+                    != usize::from(self.burdens.contains_key(&actor))
+            })
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+}
 impl PreparedControl {
-    fn frame(state: &ControlState, store: &Store, at: SimTime) -> Self {
-        Self {
+    fn frame(state: &ControlState, store: &Store, at: SimTime) -> Result<Self, Error> {
+        Ok(Self {
+            before_session: one_session(store)?.map(|(actor, row)| (actor, row.clone())),
             at,
             admission: None,
             rules: state.rules.clone(),
-            before_active: state.active.clone(),
-            before_activation: state.activation.clone(),
-            before_warning: state.warning.clone(),
             before_warning_record: state.pending_warning(store).cloned(),
-            active: state.active.clone(),
-            activation: state.activation.clone(),
-            warning: state.warning.clone(),
+            active: state.active(store).cloned(),
+            activation: state.activation(store).cloned(),
+            warning: state.pending_consent(store).cloned(),
             burdens: BTreeMap::new(),
             new_warning: None,
             effects: Vec::new(),
-        }
+        })
     }
     pub fn check(&self, state: &ControlState, store: &Store) -> Result<(), Error> {
         if state.rules != self.rules
-            || state.active != self.before_active
-            || state.activation != self.before_activation
-            || state.warning != self.before_warning
+            || one_session(store)?.map(|(actor, row)| (actor, row.clone())) != self.before_session
             || state.pending_warning(store) != self.before_warning_record.as_ref()
             || self
                 .burdens
@@ -205,26 +237,69 @@ impl PreparedControl {
         state: &ControlState,
         store: &Store,
         batch: &mut Batch,
-    ) -> Result<ControlFinalization, Error> {
+    ) -> Result<ControlReceipt, Error> {
         self.check(state, store)?;
+        let before_actor = self.before_session.as_ref().map(|(actor, _)| *actor);
+        let after_actor = self
+            .active
+            .as_ref()
+            .map(|active| active.actor)
+            .or_else(|| self.activation.as_ref().map(|activation| activation.actor))
+            .or_else(|| self.new_warning.as_ref().map(|warning| warning.actor))
+            .or(before_actor.filter(|_| self.warning.is_some()));
+        if before_actor
+            .zip(after_actor)
+            .is_some_and(|(before, after)| before != after)
+        {
+            return Err(Error::Unavailable);
+        }
+        let guards = ControlReceipt {
+            batch: batch.key(),
+            rules: self.rules.clone(),
+            before_session: self.before_session,
+            before_warning_record: self.before_warning_record,
+            burdens: self
+                .burdens
+                .iter()
+                .map(|(actor, (before, _))| (*actor, before.clone()))
+                .collect(),
+            session_edit: after_actor.or(before_actor),
+            after_actor,
+            warning: self.warning.as_ref().map(|pending| pending.id),
+            new_warning: self.new_warning.as_ref().map(|warning| warning.id),
+        };
         for (actor, (_, value)) in self.burdens {
             batch.insert(game_ecs::StableId(actor.0), value);
         }
         if let Some(value) = self.new_warning {
             batch.insert(game_ecs::StableId(value.id.0), value);
         }
-        Ok(ControlFinalization {
-            active: self.active,
-            activation: self.activation,
-            warning: self.warning,
-        })
+        if let Some(actor) = after_actor {
+            batch.insert(
+                game_ecs::StableId(actor.0),
+                ControlSession {
+                    actor,
+                    active: self.active,
+                    activation: self.activation,
+                    warning: self.warning,
+                },
+            );
+        } else if let Some(actor) = before_actor {
+            batch.remove::<ControlSession>(game_ecs::StableId(actor.0));
+        }
+        Ok(guards)
     }
-    pub fn commit(self, state: &mut ControlState, store: &mut Store) -> Result<(), Error> {
+    pub fn commit(self, state: &ControlState, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        let finalization = self.stage_into(state, store, &mut batch)?;
-        store.apply_batch(batch)?;
-        finalization.finish(state);
-        Ok(())
+        let receipt = self.stage_into(state, store, &mut batch)?;
+        receipt.validate_batch(state, store, &batch)?;
+        store.apply_batch(batch)
+    }
+    pub fn lifespan_loss_after(&self, store: &Store, actor: PersonId) -> u64 {
+        self.burdens.get(&actor).map_or_else(
+            || burden(store, actor).map_or(0, |row| row.lifespan_loss),
+            |(_, after)| after.lifespan_loss,
+        )
     }
     pub fn at(&self) -> SimTime {
         self.at
@@ -441,7 +516,7 @@ impl PreparedControl {
 }
 impl ControlState {
     pub fn pending_warning<'a>(&self, store: &'a Store) -> Option<&'a InvocationWarning> {
-        warning(store, self.warning.as_ref()?.id)
+        warning(store, self.pending_consent(store)?.id)
     }
     pub fn ready(&self, actor: PersonId, f: &AdmissionFacts) -> bool {
         f.current == Some(actor) && f.alive && f.independent && f.learning >= f.required_learning
@@ -455,11 +530,11 @@ impl ControlState {
         id: Option<WarningId>,
     ) -> Result<PreparedControl, Error> {
         if f.actor != actor
-            || self.active.as_ref().is_some_and(|a| a.actor != actor)
+            || self.active(store).is_some_and(|a| a.actor != actor)
             || !f.alive
             || f.health == 0
             || controls_actor(
-                self.active.as_ref().and_then(|a| a.episode.as_ref()),
+                self.active(store).and_then(|a| a.episode.as_ref()),
                 actor,
                 f.now,
                 f.alive,
@@ -467,7 +542,7 @@ impl ControlState {
         {
             return Err(Error::Unavailable);
         }
-        let mut plan = PreparedControl::frame(self, store, f.now);
+        let mut plan = PreparedControl::frame(self, store, f.now)?;
         plan.admission = Some(f.clone());
         match action {
             ControlAction::Activate { lives } => {
@@ -476,8 +551,8 @@ impl ControlState {
                     || lives.len() > 8
                     || !lives.is_subset(&f.archived)
                     || lives.contains(&actor)
-                    || self.warning.is_some()
-                    || self.active.as_ref().is_some_and(|a| a.lives == *lives)
+                    || self.pending_consent(store).is_some()
+                    || self.active(store).is_some_and(|a| a.lives == *lives)
                 {
                     return Err(Error::Unavailable);
                 }
@@ -490,8 +565,8 @@ impl ControlState {
                 plan.review(store, f, id)?;
             }
             ControlAction::Dismiss => {
-                if !self.active.as_ref().is_some_and(|a| a.actor == actor)
-                    && !self.warning.as_ref().is_some_and(|w| {
+                if !self.active(store).is_some_and(|a| a.actor == actor)
+                    && !self.pending_consent(store).is_some_and(|w| {
                         warning(store, w.id).is_some_and(|view| view.actor == actor)
                     })
                 {
@@ -507,8 +582,7 @@ impl ControlState {
             }
             ControlAction::AcceptWarning { warning } => {
                 let pending = self
-                    .warning
-                    .as_ref()
+                    .pending_consent(store)
                     .filter(|p| {
                         p.id == *warning
                             && crate::warning(store, p.id).is_some_and(|view| view.actor == actor)
@@ -569,17 +643,16 @@ impl ControlState {
         id: Option<WarningId>,
     ) -> Result<PreparedControl, Error> {
         let owner = self
-            .active
-            .as_ref()
+            .active(store)
             .map(|a| a.actor)
             .or_else(|| self.pending_warning(store).map(|view| view.actor))
-            .or_else(|| self.activation.as_ref().map(|a| a.actor));
+            .or_else(|| self.activation(store).map(|a| a.actor));
         if owner.is_some_and(|actor| actor != f.actor) {
             return Err(Error::Unavailable);
         }
-        let mut plan = PreparedControl::frame(self, store, f.now);
+        let mut plan = PreparedControl::frame(self, store, f.now)?;
         plan.admission = Some(f.clone());
-        if let Some(a) = &self.active {
+        if let Some(a) = self.active(store) {
             if !f.alive {
                 plan.active = None;
                 plan.activation = None;
@@ -609,7 +682,7 @@ impl ControlState {
                     until: None,
                 });
             }
-        } else if let Some(w) = &self.warning
+        } else if let Some(w) = self.pending_consent(store)
             && !f.alive
         {
             plan.warning = None;
@@ -630,19 +703,18 @@ impl ControlState {
         store: &Store,
         dead: &BTreeSet<PersonId>,
         now: SimTime,
-    ) -> PreparedControl {
-        let mut plan = PreparedControl::frame(self, store, now);
+    ) -> Result<PreparedControl, Error> {
+        let mut plan = PreparedControl::frame(self, store, now)?;
         for actor in dead {
             if burden(store, *actor).is_some_and(|b| b.uninterrupted > 0) {
                 plan.burden(store, *actor).uninterrupted = 0;
             }
         }
         let owner = self
-            .active
-            .as_ref()
+            .active(store)
             .map(|a| a.actor)
             .or_else(|| self.pending_warning(store).map(|view| view.actor))
-            .or_else(|| self.activation.as_ref().map(|a| a.actor));
+            .or_else(|| self.activation(store).map(|a| a.actor));
         if let Some(actor) = owner
             && dead.contains(&actor)
         {
@@ -651,7 +723,7 @@ impl ControlState {
             plan.warning = None;
             plan.effects.push(ControlEffect::DeathCleanup { actor });
         }
-        plan
+        Ok(plan)
     }
     /// Only selects the due historical controller. Its private memories/goals
     /// and actual physical commands remain with their respective owners.
@@ -661,7 +733,8 @@ impl ControlState {
         now: SimTime,
         alive: bool,
     ) -> Result<Option<PreparedControl>, Error> {
-        let Some(a) = &self.active else {
+        one_session(store)?;
+        let Some(a) = self.active(store) else {
             return Ok(None);
         };
         if !controls_actor(a.episode.as_ref(), a.actor, now, alive) || a.next_controller > now {
@@ -680,7 +753,7 @@ impl ControlState {
                 .ok_or(Error::Overflow)?
                 .min(episode.ends.0),
         );
-        let mut plan = PreparedControl::frame(self, store, now);
+        let mut plan = PreparedControl::frame(self, store, now)?;
         let active = plan.active.as_mut().unwrap();
         active.dominant = Some(life);
         active.next_controller = next;
@@ -700,11 +773,11 @@ impl ControlState {
     ) -> SimTime {
         let mut next = limit;
         for (actor, b) in burdens(store) {
-            if alive.contains(&actor) && !self.active.as_ref().is_some_and(|a| a.actor == actor) {
+            if alive.contains(&actor) && !self.active(store).is_some_and(|a| a.actor == actor) {
                 next = recovery_boundary(&self.rules, b, now, next);
             }
         }
-        if let Some(a) = &self.active
+        if let Some(a) = self.active(store)
             && alive.contains(&a.actor)
         {
             let b = burden(store, a.actor).cloned().unwrap_or_default();

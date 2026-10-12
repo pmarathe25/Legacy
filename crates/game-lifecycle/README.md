@@ -9,3 +9,5 @@ Prepared transitions decide conception completion, pregnancy loss, birth, aging,
 Runtime row methods take the store explicitly. `PreparedLifecycle` captures its rules and exact rows, including the relevant active gestation membership. Commit rechecks those inputs and publishes all lifecycle edits through one typed batch before returning phase effects. A rejected birth cannot publish only the child or only the pregnancy record, and their stable entity IDs must differ.
 
 The `heredity` module interprets configured allele combinations as reproductive roles. Genetics only transmits those combinations; lifecycle retains their biological meaning. This integration is available through the optional `genetics` feature.
+
+`prepare_lifespan_change` evaluates an explicit accepted lifespan penalty and physical survival fact. Its guarded response retains the opening life row, rules, and clock; final composition rejects foreign life-row changes before publishing the cost. A living person yields death or its next age deadline. An already dead body yields no response and retains the permanent penalty.
