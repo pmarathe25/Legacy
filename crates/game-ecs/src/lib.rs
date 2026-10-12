@@ -101,13 +101,39 @@ pub struct Store {
 /// Sparse typed writes, admitted together before any row or entity changes.
 /// Features guard their opening values before submitting a batch. A component
 /// may appear only once per entity; removing an absent row is a no-op.
-#[derive(Default)]
+/// Opaque, noncanonical identity of a staged batch. It proves affinity only;
+/// owners still validate final footprints and opening values before publication.
+#[derive(Clone)]
+pub struct BatchKey(std::sync::Arc<()>);
+impl PartialEq for BatchKey {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for BatchKey {}
+impl fmt::Debug for BatchKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BatchKey(..)")
+    }
+}
 pub struct Batch {
+    key: BatchKey,
     edits: Vec<Box<dyn backend::Edit>>,
+}
+impl Default for Batch {
+    fn default() -> Self {
+        Self {
+            key: BatchKey(std::sync::Arc::new(())),
+            edits: Vec::new(),
+        }
+    }
 }
 impl Batch {
     pub fn new() -> Self {
         Self::default()
+    }
+    pub fn key(&self) -> BatchKey {
+        self.key.clone()
     }
     pub fn insert<C: Component>(&mut self, id: StableId, value: C) -> &mut Self {
         self.edits.push(backend::insert_edit(id, value));
@@ -849,5 +875,19 @@ mod tests {
         let before = store.snapshot().unwrap();
         assert!(store.apply_batch(batch).is_err());
         assert_eq!(store.snapshot().unwrap(), before);
+    }
+    #[test]
+    fn batch_identity_is_retained_across_appends_and_distinct_from_equal_contents() {
+        let mut original = Batch::new();
+        let key = original.key();
+        original.insert(StableId(1), Count(9));
+        let mut equal_contents = Batch::new();
+        equal_contents.insert(StableId(1), Count(9));
+        assert_eq!(key, original.key());
+        assert_ne!(key, equal_contents.key());
+        original.remove::<Name>(StableId(8));
+        assert_eq!(key.clone(), original.key());
+        drop(original);
+        assert_ne!(key, Batch::default().key());
     }
 }
