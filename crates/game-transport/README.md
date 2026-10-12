@@ -6,6 +6,10 @@ Typed route replacements guard their opening rows and issue admissions bound to 
 
 Prepared motion handles stopping, arrival, birth attachment, lift completion, departure, approach, retreat, resume, putdown, confinement release and load reconciliation. Spatial remains the Location authority. Motion stages Transport and Location edits together, provides projected location facts for receiving owners, and emits ordered effects for activity interruption, shelter movement, deadlines, dependent indexing and public events.
 
+`MotionPlan` owns the prepared variants and their staging dispatcher. Transport also owns automatic lifting after an offer, the closing failure reaction, interrupted continuation, personal views and arrival overflow preflight. `IncomingCargo` supplies only carrying admission over Cargo's proposed conserved prefix; Cargo retains inventory balances, transfer selection and physical stock effects.
+
+Support review captures common Spatial candidate IDs once, then reads current placement and tactical contact before its stable witness bound. A stationary review finalization rejects actual Location changes or any undeclared Location edit before publication, so subsequent recipients can reuse the shared per-cell candidates while evaluating their current eligibility.
+
 A `MotionBatch` collects independent plans and coalesces compatible sparse rows. Its finalization must validate the complete CarryGroup/Lift footprint after all participants stage and before the host applies the shared batch. Undeclared carrying edges reject publication. Exact Location/Route read reservations reject conflicting foreign writes or removals through ordinary host admission. Selected body, topology, road, time and lift action facts reject stale plans.
 
 Health owns effective-shelter selection, occupancy and observations through its own prepared placement interface. Motion never chooses a shelter. Tactical reach and obstacles belong to Conflict; its contact result accompanies Spatial-resolved anchor identities.

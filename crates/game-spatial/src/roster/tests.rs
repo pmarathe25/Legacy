@@ -64,6 +64,24 @@ fn raw_stationary_visibility_is_distinct_from_carried_area_and_coarse_road_cells
         [StableId(1), StableId(2), StableId(3), StableId(4)]
     );
     assert_eq!(roster.indexed(), 100);
+    let candidates = roster.into_candidates();
+    assert_eq!(
+        candidates
+            .at_location(&Location::AtArea(AreaId(10)))
+            .collect::<Vec<_>>(),
+        [StableId(1), StableId(2), StableId(3), StableId(4)]
+    );
+    assert_eq!(
+        candidates
+            .at_location(&Location::StoppedOnRoad {
+                from: AreaId(11),
+                to: AreaId(10),
+                progress: SimDuration(60),
+                duration: SimDuration(100)
+            })
+            .collect::<Vec<_>>(),
+        [StableId(1), StableId(2), StableId(3), StableId(4)]
+    );
 }
 #[test]
 fn value_change_birth_carrier_reassignment_and_restoration_rebuild_from_canonical_rows() {

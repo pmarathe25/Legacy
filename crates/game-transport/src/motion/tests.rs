@@ -631,3 +631,230 @@ fn a_deadline_wave_preserves_outsider_event_order_between_coupled_bearers() {
     );
     assert!(approaches(&store).next().is_none());
 }
+
+#[derive(Clone)]
+struct RequestFacts {
+    bodies: BTreeMap<PersonId, Body>,
+    permission: CarryPermissionInput,
+    contact: bool,
+    escaping: bool,
+}
+impl BodyFacts for RequestFacts {
+    fn body(&self, actor: PersonId) -> Option<Body> {
+        self.bodies.get(&actor).cloned()
+    }
+}
+impl LiftActivityFacts for RequestFacts {
+    fn escaping(&self, actor: PersonId) -> Option<bool> {
+        self.bodies.contains_key(&actor).then_some(self.escaping)
+    }
+}
+impl LiftRequestFacts for RequestFacts {
+    fn permission(&self, actor: PersonId) -> Option<CarryPermissionInput> {
+        self.bodies
+            .contains_key(&actor)
+            .then(|| self.permission.clone())
+    }
+    fn moving(&self, _: PersonId) -> bool {
+        false
+    }
+    fn contact(&self, _: PersonId, _: PersonId) -> bool {
+        self.contact
+    }
+}
+fn requests() -> (Runtime, Store, RequestFacts) {
+    let (runtime, mut store) = fixture();
+    remove_group(&mut store, PersonId(3)).unwrap();
+    for id in 1..=3 {
+        game_spatial::set_location(&mut store, StableId(id), Location::AtArea(AreaId(10))).unwrap();
+    }
+    let bodies = (1..=3)
+        .map(|id| {
+            (
+                PersonId(id),
+                Body {
+                    position: Position::Area(AreaId(10)),
+                    mass: Quantity(6_000),
+                    cargo: Quantity(0),
+                    capacity: Quantity(10_000),
+                    can_hold: true,
+                    can_walk: true,
+                    can_bear: true,
+                },
+            )
+        })
+        .collect();
+    (
+        runtime,
+        store,
+        RequestFacts {
+            bodies,
+            permission: CarryPermissionInput {
+                independent: true,
+                combat_restricted: false,
+                alive: true,
+                health: 100,
+                incapacitation: None,
+                yielded_captors: None,
+                captive_captor: None,
+            },
+            contact: true,
+            escaping: false,
+        },
+    )
+}
+#[test]
+fn real_offer_acceptance_and_failed_closing_are_owner_policies_without_assembly() {
+    let (mut runtime, mut store, mut facts) = requests();
+    let plan = runtime
+        .prepare_offer_request(
+            &store,
+            OfferRequest {
+                bearer: PersonId(1),
+                passenger: PersonId(3),
+            },
+            SimTime(0),
+            &facts,
+        )
+        .unwrap();
+    let mut batch = Batch::new();
+    let finish = plan
+        .stage_into(&runtime, &store, &facts, SimTime(0), &mut batch)
+        .unwrap();
+    finish.validate_preserving_locations(&batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    finish.finish(&mut runtime);
+    assert!(
+        runtime
+            .prepare_automatic_lift(
+                &store,
+                OfferedSupport::Single {
+                    bearer: PersonId(1),
+                    passenger: PersonId(3)
+                },
+                SimTime(0),
+                &facts
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        runtime
+            .prepare_accept_request(
+                &store,
+                AcceptCarryRequest {
+                    passenger: PersonId(3),
+                    bearers: vec![PersonId(1), PersonId(1)]
+                },
+                SimTime(0),
+                &facts
+            )
+            .is_err()
+    );
+    let before = store.snapshot().unwrap();
+    let view = runtime
+        .view(&store, &facts, PersonId(3), SimTime(0))
+        .unwrap();
+    assert_eq!(view.mass, Quantity(6_000));
+    assert_eq!(view.offers.len(), 1);
+    assert_eq!(store.snapshot().unwrap(), before);
+    let plan = runtime
+        .prepare_accept_request(
+            &store,
+            AcceptCarryRequest {
+                passenger: PersonId(3),
+                bearers: vec![PersonId(1)],
+            },
+            SimTime(0),
+            &facts,
+        )
+        .unwrap();
+    let mut changed = facts.clone();
+    changed.permission.alive = false;
+    assert!(
+        plan.stage_into(&runtime, &store, &changed, SimTime(0), &mut Batch::new())
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    let plan = runtime
+        .prepare_accept_request(
+            &store,
+            AcceptCarryRequest {
+                passenger: PersonId(3),
+                bearers: vec![PersonId(1)],
+            },
+            SimTime(0),
+            &facts,
+        )
+        .unwrap();
+    let completes = plan
+        .projection()
+        .effects()
+        .iter()
+        .find_map(|effect| match effect {
+            MotionEffect::StartLift { completes, .. } => Some(*completes),
+            _ => None,
+        })
+        .unwrap();
+    let mut batch = Batch::new();
+    let finish = plan
+        .stage_into(&runtime, &store, &facts, SimTime(0), &mut batch)
+        .unwrap();
+    finish.validate_preserving_locations(&batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    finish.finish(&mut runtime);
+    facts.bodies.get_mut(&PersonId(1)).unwrap().can_walk = false;
+    let result = runtime
+        .prepare_lift_completion_by_bearer(&store, PersonId(1), completes, &facts, &facts)
+        .map(|_| ());
+    assert_eq!(
+        lift_closing_reaction(PersonId(1), result),
+        Some(LiftClosingReaction::Cancel(PersonId(1)))
+    );
+    runtime
+        .prepare_lift_cancellation_motion(&store, PersonId(1), completes)
+        .commit(&mut runtime, &mut store, &facts, completes)
+        .unwrap();
+    assert!(lift(&store, PersonId(3)).is_none());
+    assert!(group(&store, PersonId(3)).is_none());
+}
+#[test]
+fn review_phase_rejects_actual_motion_and_undeclared_foreign_location_before_publication() {
+    let (runtime, store, facts) = requests();
+    let before = store.snapshot().unwrap();
+    let plan = runtime
+        .prepare_offer_request(
+            &store,
+            OfferRequest {
+                bearer: PersonId(1),
+                passenger: PersonId(3),
+            },
+            SimTime(0),
+            &facts,
+        )
+        .unwrap();
+    let mut batch = Batch::new();
+    let finish = plan
+        .stage_into(&runtime, &store, &facts, SimTime(0), &mut batch)
+        .unwrap();
+    finish.validate_preserving_locations(&batch).unwrap();
+    batch.insert(StableId(99), Location::AtArea(AreaId(10)));
+    finish.validate_footprint(&batch).unwrap();
+    assert_eq!(
+        finish.validate_preserving_locations(&batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    let (runtime, store) = fixture();
+    let mut batch = Batch::new();
+    let finish = runtime
+        .prepare_stop(&store, PersonId(1), SimTime(40))
+        .unwrap()
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    finish.validate_footprint(&batch).unwrap();
+    assert_eq!(
+        finish.validate_preserving_locations(&batch),
+        Err(Error::Unavailable)
+    );
+}

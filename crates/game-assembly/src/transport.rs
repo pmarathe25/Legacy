@@ -2,7 +2,7 @@
 //! Carrying changes physical support, never ownership, kinship, or government.
 use crate::*;
 pub use game_transport::{
-    Action, Authority, Body, CarryGroup, Permission, Position, RoadPosition, Rules, Runtime, View,
+    Action, Authority, Body, CarryGroup, Position, RoadPosition, Rules, Runtime, View,
 };
 
 pub(crate) struct TransportBodyLookup<'a> {
@@ -35,21 +35,6 @@ impl game_transport::BodyFacts for TransportBodyLookup<'_> {
             .transport_body_facts_at(std::iter::once(person), self.now)
             .ok()?
             .remove(&actor)
-    }
-}
-
-pub(crate) struct ReceivedTransportBodies<'a> {
-    pub actual: TransportBodyLookup<'a>,
-    pub received: BTreeMap<PersonId, Quantity>,
-}
-impl game_transport::BodyFacts for ReceivedTransportBodies<'_> {
-    fn body(&self, actor: PersonId) -> Option<Body> {
-        let mut body = game_transport::BodyFacts::body(&self.actual, actor)?;
-        body.cargo.0 = body
-            .cargo
-            .0
-            .checked_add(self.received.get(&actor).map_or(0, |amount| amount.0))?;
-        Some(body)
     }
 }
 
@@ -264,6 +249,7 @@ impl Simulation {
             self.host.clock().time,
             &mut batch,
         )?;
+        game_transport::require_no_location_edits(&batch)?;
         self.host.storage.apply_batch(batch)?;
         Ok(finish.finish(
             self.host
@@ -356,8 +342,8 @@ impl Simulation {
         let Some(owner) = self.host.state.transport.as_ref() else {
             return;
         };
-        let Ok(plan) =
-            owner.prepare_confinement_release(&self.host.storage, target, self.host.clock().time)
+        let Some(plan) =
+            owner.confinement_release_response(&self.host.storage, target, self.host.clock().time)
         else {
             return;
         };
@@ -368,7 +354,7 @@ impl Simulation {
         let Some(owner) = self.host.state.transport.as_ref() else {
             return;
         };
-        let Ok(plan) = owner.prepare_birth_motion(
+        let Some(plan) = owner.birth_response(
             &self.host.storage,
             child,
             gestator,
@@ -437,41 +423,19 @@ impl Simulation {
         if self.host.state.transport.is_none() {
             return;
         }
-        let Ok(plan) = self.prepare_transport_reconciliation() else {
+        let Some(plan) = self.prepare_transport_reconciliation() else {
             return;
         };
         self.apply_motion(plan)
             .expect("guarded transport reconciliation");
     }
-    fn carry_permission(
-        &self,
-        passenger: PersonId,
-        bearers: &BTreeSet<PersonId>,
-        accepted: bool,
-    ) -> Permission {
-        Permission::from_facts(
-            bearers,
-            accepted,
-            &self
-                .transport_permission_facts(passenger)
-                .expect("known carry passenger"),
-        )
-    }
-    fn begin_transport_lift(
-        &mut self,
-        passenger: PersonId,
-        bearers: BTreeSet<PersonId>,
-        accepted: bool,
-    ) -> Result<(), Error> {
-        let plan = self.prepare_transport_lift_start(passenger, bearers, accepted)?;
-        self.apply_motion(plan)
-    }
     pub(crate) fn complete_transport_lift(&mut self, actor: PersonId) {
-        let Ok(plan) = self.prepare_transport_lift_finish(actor) else {
-            self.interrupt_transport_lift(actor);
-            return;
-        };
-        if self.apply_motion(plan).is_err() {
+        let outcome = self
+            .prepare_transport_lift_finish(actor)
+            .and_then(|plan| self.apply_motion(plan));
+        if let Some(game_transport::LiftClosingReaction::Cancel(actor)) =
+            game_transport::lift_closing_reaction(actor, outcome)
+        {
             self.interrupt_transport_lift(actor);
         }
     }
@@ -487,6 +451,7 @@ impl Simulation {
         self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))
             .expect("guarded lift action reactions");
     }
+    #[cfg(test)]
     pub(crate) fn transport_approach_road(
         &mut self,
         actor: PersonId,
@@ -500,7 +465,14 @@ impl Simulation {
         actor: PersonId,
         action: &Action,
     ) -> Result<(), Error> {
-        let owner_now = self.host.clock().time;
+        self.transport_command_scoped(actor, action, game_transport::MotionScope::Ordinary)
+    }
+    fn transport_command_scoped(
+        &mut self,
+        actor: PersonId,
+        action: &Action,
+        scope: game_transport::MotionScope,
+    ) -> Result<(), Error> {
         self.host.preflight_records(0, 0, 1)?;
         if self.host.state.transport.is_none() || !self.person_index.contains_key(&actor) {
             return Err(Error::Unavailable);
@@ -508,24 +480,19 @@ impl Simulation {
         match action {
             Action::OfferCarry { passenger } => {
                 let change = self.prepare_transport_offer(actor, *passenger)?;
-                self.apply_motion(change)?;
-                let bearers = BTreeSet::from([actor]);
-                if self
-                    .carry_permission(*passenger, &bearers, false)
-                    .authority()
-                    .is_ok()
+                self.apply_motion_scoped(change, scope)?;
+                if let Some(plan) =
+                    self.prepare_automatic_transport_lift(game_transport::OfferedSupport::Single {
+                        bearer: actor,
+                        passenger: *passenger,
+                    })?
                 {
-                    // A lone willing bearer may need companions. Preserve the
-                    // offer when it cannot yet support the actual body.
-                    match self.begin_transport_lift(*passenger, bearers, false) {
-                        Ok(()) | Err(Error::Unavailable) => {}
-                        Err(e) => return Err(e),
-                    }
+                    self.apply_motion_scoped(plan, scope)?;
                 }
             }
             Action::AcceptCarry { bearers } => {
                 let plan = self.prepare_transport_accept(actor, bearers)?;
-                self.apply_motion(plan)?;
+                self.apply_motion_scoped(plan, scope)?;
             }
             Action::RefuseCarry { bearer } => {
                 let change = self
@@ -539,87 +506,59 @@ impl Simulation {
             }
             Action::JoinCarry { passenger } => {
                 let change = self.prepare_transport_offer(actor, *passenger)?;
-                self.apply_motion(change)?;
-                let bearers = self.host.state.transport.as_ref().unwrap().join_bearers(
-                    &self.host.storage,
-                    &self.transport_body_lookup(),
-                    *passenger,
-                    owner_now,
-                );
-                if self
-                    .carry_permission(*passenger, &bearers, false)
-                    .authority()
-                    .is_ok()
+                self.apply_motion_scoped(change, scope)?;
+                if let Some(plan) =
+                    self.prepare_automatic_transport_lift(game_transport::OfferedSupport::Joined {
+                        passenger: *passenger,
+                    })?
                 {
-                    match self.begin_transport_lift(*passenger, bearers, false) {
-                        Ok(()) | Err(Error::Unavailable) => {}
-                        Err(e) => return Err(e),
-                    }
+                    self.apply_motion_scoped(plan, scope)?;
                 }
             }
             Action::PutDown { passenger } | Action::WithdrawSupport { passenger } => {
                 let plan = self.prepare_transport_putdown(actor, *passenger)?;
-                self.apply_motion(plan)?;
+                self.apply_motion_scoped(plan, scope)?;
             }
             Action::Stop => {
                 let plan = self.prepare_requested_transport_stop(actor)?;
-                self.apply_motion(plan)?;
+                self.apply_motion_scoped(plan, scope)?;
             }
             Action::Resume => {
                 let plan = self.prepare_transport_resume(actor)?;
-                self.apply_motion(plan)?;
+                self.apply_motion_scoped(plan, scope)?;
             }
             Action::ReturnToArea { destination } => {
                 let plan = self.prepare_transport_return_request(actor, *destination)?;
-                self.apply_motion(plan)?;
+                self.apply_motion_scoped(plan, scope)?;
             }
             Action::ApproachRoad {
                 from,
                 to,
                 progress,
                 duration,
-            } => self.transport_approach_road(
-                actor,
-                RoadPosition {
-                    from: *from,
-                    to: *to,
-                    progress: *progress,
-                    duration: *duration,
-                },
+            } => self.apply_motion_scoped(
+                self.prepare_transport_approach(
+                    actor,
+                    RoadPosition {
+                        from: *from,
+                        to: *to,
+                        progress: *progress,
+                        duration: *duration,
+                    },
+                )?,
+                scope,
             )?,
         }
         self.host.bump_revision(1)?;
         Ok(())
     }
     pub(crate) fn transport_view(&self, actor: PersonId) -> Option<View> {
-        let w = self.host.state.transport.as_ref()?;
-        let body = game_transport::BodyFacts::body(&self.transport_body_lookup(), actor)?;
-        Some(View {
-            mass: body.mass,
-            carried_by: game_transport::group(&self.host.storage, actor)
-                .map_or_else(Vec::new, |g| g.bearers.iter().copied().collect()),
-            passengers: game_transport::groups(&self.host.storage)
-                .map(|(_, row)| row)
-                .filter(|g| g.bearers.contains(&actor))
-                .map(|g| g.passenger)
-                .collect(),
-            body_load: self.transport_body_load(actor),
-            offers: game_transport::offer_inboxes(&self.host.storage)
-                .map(|(_, row)| row)
-                .flat_map(|offers| offers.by_bearer.values())
-                .filter(|o| {
-                    (o.passenger == actor || o.bearer == actor)
-                        && o.expires > self.host.clock().time
-                })
-                .cloned()
-                .collect(),
-            responses: w
-                .responses
-                .iter()
-                .filter(|r| r.passenger == actor || r.bearer == actor)
-                .cloned()
-                .collect(),
-        })
+        self.host.state.transport.as_ref()?.view(
+            &self.host.storage,
+            &self.transport_body_lookup(),
+            actor,
+            self.host.clock().time,
+        )
     }
     pub(crate) fn review_transport_choices(&mut self) -> Result<(), Error> {
         let now = self.host.clock().time;
@@ -629,6 +568,11 @@ impl Simulation {
         let recipients: Vec<_> = game_transport::offer_inboxes(&self.host.storage)
             .map(|(id, _)| id)
             .collect();
+        let candidates = if recipients.is_empty() {
+            None
+        } else {
+            Some(game_spatial::LocalRoster::build(&self.host.storage)?.into_candidates())
+        };
         for passenger in recipients {
             let body =
                 game_physiology::body(&self.host.storage, passenger).ok_or(Error::Unavailable)?;
@@ -685,13 +629,10 @@ impl Simulation {
             );
             let Some(choice) = choice else { continue };
             let present = if choice.support.is_some() {
-                self.host
-                    .state
-                    .people
-                    .iter()
-                    .map(|person| person.id)
-                    .filter(|observer| self.transport_same_place(*observer, passenger))
-                    .collect::<Vec<_>>()
+                self.local_transport_witnesses(
+                    candidates.as_ref().expect("offer review spatial phase"),
+                    passenger,
+                )?
             } else {
                 Vec::new()
             };
@@ -703,7 +644,11 @@ impl Simulation {
             )?;
             self.apply_transport_change(change)?;
             for action in choice.actions {
-                self.transport_command(passenger, &action)?;
+                self.transport_command_scoped(
+                    passenger,
+                    &action,
+                    game_transport::MotionScope::StationaryReview,
+                )?;
             }
         }
         let requests: Vec<_> = game_transport::support_knowledges(&self.host.storage)
@@ -770,10 +715,11 @@ impl Simulation {
                 },
             );
             if let Some(action) = action {
-                match self.transport_command(actor, &action) {
-                    Ok(()) | Err(Error::Unavailable) => {}
-                    Err(error) => return Err(error),
-                }
+                game_transport::support_attempt_result(self.transport_command_scoped(
+                    actor,
+                    &action,
+                    game_transport::MotionScope::StationaryReview,
+                ))?;
             }
         }
         Ok(())

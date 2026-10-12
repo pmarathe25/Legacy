@@ -9,3 +9,5 @@ Intrinsic validation checks identifiers and geometry. Explicit topology and time
 The common area graph path function uses directed positive-duration roads, checked cumulative costs and stable lexical ties. Characters and Transport bind their own known graphs and interpret the resulting path.
 
 `LocalRoster` builds once for an immutable query phase. It separates raw stationary identities, carrier-resolved area placement, coarse cells, and undirected road candidates. It holds an immutable Store borrow; drop it before any Location value change, birth, carrier reassignment or restore, then rebuild. It is a derived index rather than persistent state. Exact road-point comparison remains with the movement owner.
+
+`into_candidates` captures shared per-area and road ID lists for a declared phase that admits no Location changes. Its iterator merges at most three borrowed lists in stable ID order without copying each crowded cell per actor. Receiving owners recheck current contact and eligibility and must enforce the phase's no-change condition on the final composed batch before publication. A capture has no automatic persistent invalidation.

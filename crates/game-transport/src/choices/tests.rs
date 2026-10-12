@@ -1,5 +1,64 @@
 use super::*;
 
+#[test]
+fn shared_local_candidates_reborrow_current_contact_before_stable_witness_cap() {
+    let mut schema = game_ecs::Schema::new();
+    game_spatial::register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    for id in 1..=100 {
+        game_spatial::set_location(
+            &mut store,
+            game_ecs::StableId(id),
+            Location::AtArea(AreaId(10)),
+        )
+        .unwrap();
+    }
+    for id in 101..=200 {
+        game_spatial::set_location(
+            &mut store,
+            game_ecs::StableId(id),
+            Location::AtArea(AreaId(11)),
+        )
+        .unwrap();
+    }
+    let candidates = game_spatial::LocalRoster::build(&store)
+        .unwrap()
+        .into_candidates();
+    struct Contact {
+        excluded: BTreeSet<PersonId>,
+        reads: std::cell::Cell<usize>,
+    }
+    impl SupportWitnessFacts for Contact {
+        fn person(&self, actor: PersonId) -> bool {
+            actor.0 <= 200
+        }
+        fn tactical_contact(&self, actor: PersonId, _: PersonId) -> bool {
+            self.reads.set(self.reads.get() + 1);
+            !self.excluded.contains(&actor)
+        }
+    }
+    let mut facts = Contact {
+        excluded: BTreeSet::from([PersonId(17)]),
+        reads: std::cell::Cell::new(0),
+    };
+    let before = store.snapshot().unwrap();
+    let observers =
+        local_support_observers(&store, &candidates, PersonId(1), SimTime(0), &facts).unwrap();
+    assert_eq!(observers.len(), 64);
+    assert_eq!(observers.first(), Some(&PersonId(2)));
+    assert_eq!(observers.last(), Some(&PersonId(66)));
+    assert!(!observers.contains(&PersonId(17)));
+    assert_eq!(facts.reads.get(), 65);
+    facts.excluded.insert(PersonId(2));
+    facts.reads.set(0);
+    let observers =
+        local_support_observers(&store, &candidates, PersonId(1), SimTime(0), &facts).unwrap();
+    assert_eq!(observers.first(), Some(&PersonId(3)));
+    assert_eq!(observers.last(), Some(&PersonId(67)));
+    assert_eq!(facts.reads.get(), 66);
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+
 fn bodies() -> BTreeMap<PersonId, Body> {
     (1..=4)
         .map(|id| {

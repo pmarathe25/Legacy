@@ -188,7 +188,7 @@ pub fn resolve_locations<'a>(
 mod tests;
 
 mod roster;
-pub use roster::LocalRoster;
+pub use roster::{CandidateIds, LocalCandidates, LocalRoster};
 
 mod navigation;
 pub use navigation::{RoadGraph, shortest_path};

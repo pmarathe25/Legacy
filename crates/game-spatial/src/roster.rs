@@ -93,6 +93,16 @@ impl<'a> LocalRoster<'a> {
     pub fn indexed(&self) -> usize {
         self.resolved.len()
     }
+    /// Capture candidate identities for a declared phase that permits no
+    /// Location value changes. Drop this capture before any spatial mutation.
+    /// Current contact and eligibility still come from the receiving owner.
+    pub fn into_candidates(self) -> LocalCandidates {
+        LocalCandidates {
+            areas: self.resolved_areas,
+            roads: self.roads,
+            incident_roads: self.incident_roads,
+        }
+    }
     /// Candidate IDs only. The movement owner must still compare exact road
     /// fractions at its actual timestamp, including reversed and endpoint rows.
     pub fn position_candidates(&self, actor: StableId) -> Result<Vec<StableId>, Error> {
@@ -113,6 +123,53 @@ impl<'a> LocalRoster<'a> {
             Location::Carried { .. } => unreachable!("resolved canonical location"),
         }
         Ok(candidates.into_iter().collect())
+    }
+}
+
+/// Shared per-cell identities, rather than one crowded-cell copy per actor.
+/// This is an explicit phase capture, with no persistent invalidation claim.
+pub struct LocalCandidates {
+    areas: BTreeMap<AreaId, BTreeSet<StableId>>,
+    roads: BTreeMap<(AreaId, AreaId), BTreeSet<StableId>>,
+    incident_roads: BTreeMap<AreaId, BTreeSet<StableId>>,
+}
+impl LocalCandidates {
+    pub fn at_location(&self, location: &Location) -> CandidateIds<'_> {
+        let mut lists = Vec::new();
+        match location {
+            Location::AtArea(area) => {
+                lists.extend(self.areas.get(area).map(BTreeSet::iter));
+                lists.extend(self.incident_roads.get(area).map(BTreeSet::iter));
+            }
+            Location::InTransit { from, to, .. } | Location::StoppedOnRoad { from, to, .. } => {
+                lists.extend(self.roads.get(&road_key(*from, *to)).map(BTreeSet::iter));
+                lists.extend(self.areas.get(from).map(BTreeSet::iter));
+                lists.extend(self.areas.get(to).map(BTreeSet::iter));
+            }
+            Location::Carried { .. } => {}
+        }
+        CandidateIds {
+            lists: lists.into_iter().map(Iterator::peekable).collect(),
+        }
+    }
+}
+pub struct CandidateIds<'a> {
+    lists: Vec<std::iter::Peekable<std::collections::btree_set::Iter<'a, StableId>>>,
+}
+impl Iterator for CandidateIds<'_> {
+    type Item = StableId;
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self
+            .lists
+            .iter_mut()
+            .filter_map(|list| list.peek().map(|id| **id))
+            .min()?;
+        for list in &mut self.lists {
+            if list.peek().is_some_and(|id| **id == next) {
+                list.next();
+            }
+        }
+        Some(next)
     }
 }
 fn road_key(from: AreaId, to: AreaId) -> (AreaId, AreaId) {

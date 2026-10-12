@@ -754,7 +754,6 @@ impl Simulation {
             .expect("actor exists");
         self.transport_death(id);
         self.interrupt_actor_activity(id);
-        game_transport::replace_route(&mut self.host.storage, id, Vec::new()).expect("actor route");
         for due in self.host.state.due.values_mut() {
             due.retain(|d| !matches!(d, Due::Age(p) | Due::Arrive(p) if *p == id));
         }

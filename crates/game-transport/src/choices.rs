@@ -63,6 +63,43 @@ pub fn support_observers(
         .collect()
 }
 
+pub trait SupportWitnessFacts {
+    fn person(&self, actor: PersonId) -> bool;
+    fn tactical_contact(&self, a: PersonId, b: PersonId) -> bool;
+}
+
+/// A requested voluntary support attempt may remain pending when it cannot
+/// presently be executed. Other failures keep their original error.
+pub fn support_attempt_result(result: Result<(), Error>) -> Result<(), Error> {
+    match result {
+        Ok(()) | Err(Error::Unavailable) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+pub fn local_support_observers(
+    store: &game_ecs::Store,
+    candidates: &game_spatial::LocalCandidates,
+    passenger: PersonId,
+    now: SimTime,
+    facts: &impl SupportWitnessFacts,
+) -> Result<Vec<PersonId>, Error> {
+    let here = game_spatial::resolve(store, game_ecs::StableId(passenger.0))?;
+    let position = position_from_location(&here, now)?;
+    Ok(candidates
+        .at_location(&here)
+        .map(|id| PersonId(id.0))
+        .filter(|observer| *observer != passenger && facts.person(*observer))
+        .filter(|observer| {
+            game_spatial::resolve(store, game_ecs::StableId(observer.0))
+                .ok()
+                .and_then(|location| position_from_location(&location, now).ok())
+                .is_some_and(|point| point.same_point(position))
+                && facts.tactical_contact(*observer, passenger)
+        })
+        .take(64)
+        .collect())
+}
+
 impl Runtime {
     /// The body provider supplies physical facts lazily. A moving or carried
     /// actor's action list does not require a population body catalog.

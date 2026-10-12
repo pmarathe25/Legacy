@@ -1,34 +1,7 @@
 //! Owner-prepared motion admission and factual effect bindings.
 use crate::*;
-use game_transport::{MotionEffect, PreparedMotion};
-pub(crate) enum MotionPlan {
-    Direct(PreparedMotion),
-    Stop(game_transport::PreparedRequestedStop),
-    PutDown(game_transport::PreparedPutDown),
-    Journey(game_transport::PreparedJourney),
-    Continuation(game_transport::PreparedContinuation),
-    Road(game_transport::PreparedRoadMotion),
-    Lift(game_transport::PreparedLiftMotion),
-    LiftStart(game_transport::PreparedLiftStart),
-    Offer(game_transport::PreparedCarryOffer),
-    Reconcile(game_transport::PreparedReconciliation),
-}
-impl MotionPlan {
-    fn projection(&self) -> &PreparedMotion {
-        match self {
-            Self::Direct(plan) => plan,
-            Self::Stop(plan) => plan.projection(),
-            Self::PutDown(plan) => plan.projection(),
-            Self::Journey(plan) => plan.projection(),
-            Self::Continuation(plan) => plan.projection(),
-            Self::Road(plan) => plan.projection(),
-            Self::Lift(plan) => plan.projection(),
-            Self::LiftStart(plan) => plan.projection(),
-            Self::Offer(plan) => plan.projection(),
-            Self::Reconcile(plan) => plan.projection(),
-        }
-    }
-}
+use game_transport::MotionEffect;
+pub(crate) use game_transport::MotionPlan;
 struct Roads<'a>(&'a Simulation);
 impl game_transport::RoadFacts for Roads<'_> {
     fn duration(&self, from: AreaId, to: AreaId) -> Option<SimDuration> {
@@ -184,6 +157,13 @@ impl Simulation {
             .expect("default transport configuration")
     }
     pub(crate) fn apply_motion(&mut self, plan: MotionPlan) -> Result<(), Error> {
+        self.apply_motion_scoped(plan, game_transport::MotionScope::Ordinary)
+    }
+    pub(crate) fn apply_motion_scoped(
+        &mut self,
+        plan: MotionPlan,
+        scope: game_transport::MotionScope,
+    ) -> Result<(), Error> {
         let effects = plan.projection().effects().to_vec();
         let interrupt = effects
             .iter()
@@ -296,83 +276,14 @@ impl Simulation {
             .checked_add(interruptions.event_count()?)
             .ok_or(Error::Overflow)?;
         self.host.preflight_records(0, total, 0)?;
-        let fallback = self.transport_default_runtime();
-        let runtime = self.host.state.transport.as_ref().unwrap_or(&fallback);
         let mut batch = game_ecs::Batch::new();
-        let finish = match plan {
-            MotionPlan::Continuation(plan) => plan.stage_into(
-                self.host.state.transport.as_ref(),
-                &self.host.storage,
-                &Journeys(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::Journey(plan) => plan.stage_into(
-                self.host.state.transport.as_ref(),
-                &self.host.storage,
-                &Journeys(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::Stop(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &Journeys(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::PutDown(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &Journeys(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::Direct(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &self.transport_body_lookup(),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::Road(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &self.transport_body_lookup(),
-                &Roads(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::Offer(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &Carry(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::LiftStart(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &Carry(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::Lift(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &self.transport_body_lookup(),
-                &Activities(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-            MotionPlan::Reconcile(plan) => plan.stage_into(
-                runtime,
-                &self.host.storage,
-                &Reconciliation(self),
-                self.host.clock().time,
-                &mut batch,
-            )?,
-        };
+        let finish = plan.stage_into(
+            self.host.state.transport.as_ref(),
+            &self.host.storage,
+            &Inputs(self),
+            self.host.clock().time,
+            &mut batch,
+        )?;
         let health = health
             .map(|plan| {
                 plan.stage_into(
@@ -392,13 +303,12 @@ impl Simulation {
         }
         let mut interrupted = interruptions.stage_into(self, &mut batch, &final_activities)?;
         lift_reactions.validate(&Activities(self))?;
-        finish.validate_footprint(&batch)?;
+        finish.validate_scope(&batch, scope)?;
         if let Some(health) = &health {
             health.validate_footprint(&batch)?;
         }
         self.host.storage.apply_batch(batch)?;
-        let mut fallback = fallback;
-        finish.finish(self.host.state.transport.as_mut().unwrap_or(&mut fallback));
+        finish.finish_optional(self.host.state.transport.as_mut());
         let mut health_effects = health.map(|finish| finish.finish()).unwrap_or_default();
         for effect in effects {
             match effect {
@@ -511,13 +421,12 @@ impl Simulation {
             )
             .map(MotionPlan::Lift)
     }
-    pub(crate) fn prepare_transport_reconciliation(&self) -> Result<MotionPlan, Error> {
+    pub(crate) fn prepare_transport_reconciliation(&self) -> Option<MotionPlan> {
         self.host
             .state
             .transport
-            .as_ref()
-            .ok_or(Error::Unavailable)?
-            .prepare_reconciliation(
+            .as_ref()?
+            .reconciliation_response(
                 &self.host.storage,
                 self.host.clock().time,
                 &Reconciliation(self),
@@ -544,28 +453,22 @@ impl Simulation {
 }
 
 impl Simulation {
-    pub(crate) fn prepare_transport_lift_start(
+    pub(crate) fn prepare_automatic_transport_lift(
         &self,
-        passenger: PersonId,
-        bearers: BTreeSet<PersonId>,
-        accepted: bool,
-    ) -> Result<MotionPlan, Error> {
+        offered: game_transport::OfferedSupport,
+    ) -> Result<Option<MotionPlan>, Error> {
         self.host
             .state
             .transport
             .as_ref()
             .ok_or(Error::Unavailable)?
-            .prepare_lift_request(
+            .prepare_automatic_lift(
                 &self.host.storage,
-                game_transport::LiftRequest {
-                    passenger,
-                    bearers,
-                    accepted,
-                },
+                offered,
                 self.host.clock().time,
                 &Carry(self),
             )
-            .map(MotionPlan::LiftStart)
+            .map(|plan| plan.map(MotionPlan::LiftStart))
     }
     pub(crate) fn transport_permission_facts(
         &self,
@@ -608,7 +511,7 @@ impl Simulation {
         origin: AreaId,
         destination: AreaId,
     ) -> Result<MotionPlan, Error> {
-        game_transport::prepare_continued_journey(
+        game_transport::prepare_continuation_response(
             &self.host.storage,
             game_transport::ContinuedJourney {
                 actor,
@@ -723,5 +626,71 @@ impl Simulation {
                 &Roads(self),
             )
             .map(MotionPlan::Road)
+    }
+}
+
+struct Inputs<'a>(&'a Simulation);
+impl game_transport::MotionInputs for Inputs<'_> {
+    fn bodies(&self) -> impl game_transport::BodyFacts + '_ {
+        self.0.transport_body_lookup()
+    }
+    fn journeys(&self) -> impl game_transport::JourneyFacts + '_ {
+        Journeys(self.0)
+    }
+    fn roads(&self) -> impl game_transport::RoadFacts + '_ {
+        Roads(self.0)
+    }
+    fn carrying(&self) -> impl game_transport::LiftRequestFacts + '_ {
+        Carry(self.0)
+    }
+    fn activities(&self) -> impl game_transport::LiftActivityFacts + '_ {
+        Activities(self.0)
+    }
+    fn reconciliation(&self) -> impl game_transport::ReconciliationFacts + '_ {
+        Reconciliation(self.0)
+    }
+}
+
+struct Witnesses<'a>(&'a Simulation);
+impl game_transport::SupportWitnessFacts for Witnesses<'_> {
+    fn person(&self, actor: PersonId) -> bool {
+        self.0.person_index.contains_key(&actor)
+    }
+    fn tactical_contact(&self, a: PersonId, b: PersonId) -> bool {
+        let anchor = |actor: PersonId| {
+            game_spatial::resolved_anchor(&self.0.host.storage, game_ecs::StableId(actor.0))
+                .ok()
+                .map(|(id, _)| PersonId(id.0))
+        };
+        match (&self.0.host.state.combat, anchor(a), anchor(b)) {
+            (None, _, _) => true,
+            (Some(combat), Some(a), Some(b)) => combat.physical_contact(a, b),
+            _ => false,
+        }
+    }
+}
+impl Simulation {
+    pub(crate) fn local_transport_witnesses(
+        &self,
+        candidates: &game_spatial::LocalCandidates,
+        passenger: PersonId,
+    ) -> Result<Vec<PersonId>, Error> {
+        game_transport::local_support_observers(
+            &self.host.storage,
+            candidates,
+            passenger,
+            self.host.clock().time,
+            &Witnesses(self),
+        )
+    }
+}
+
+impl Simulation {
+    pub(crate) fn transport_preflight_arrival(
+        &self,
+        actor: PersonId,
+        at: SimTime,
+    ) -> Result<(), Error> {
+        game_transport::preflight_arrival_continuation(&self.host.storage, actor, at, &Roads(self))
     }
 }

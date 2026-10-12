@@ -33,6 +33,24 @@ pub struct TravelRequest {
     pub actor: PersonId,
     pub destination: AreaId,
 }
+
+pub fn preflight_arrival_continuation(
+    store: &Store,
+    actor: PersonId,
+    boundary: SimTime,
+    roads: &impl RoadFacts,
+) -> Result<(), Error> {
+    if let Some(to) = route_steps(store, actor).first() {
+        let Some(Location::InTransit { to: from, .. }) =
+            game_spatial::location(store, StableId(actor.0))
+        else {
+            return Err(Error::InvalidSave("arrival outside transit".into()));
+        };
+        let duration = roads.duration(*from, *to).ok_or(Error::NoRoute)?;
+        boundary.0.checked_add(duration.0).ok_or(Error::Overflow)?;
+    }
+    Ok(())
+}
 pub struct PreparedJourney {
     motion: PreparedMotion,
     actor: PersonId,
@@ -155,6 +173,7 @@ impl PreparedJourney {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContinuedJourney {
     pub actor: PersonId,
     pub origin: AreaId,
@@ -215,6 +234,90 @@ fn continuing_facts<'a, F: JourneyFacts>(
 pub struct PreparedContinuation {
     journey: PreparedJourney,
     request: ContinuedJourney,
+}
+
+pub enum PreparedContinuationResponse {
+    Continue(PreparedContinuation),
+    Interrupted(PreparedInterruptedContinuation),
+}
+pub struct PreparedInterruptedContinuation {
+    motion: PreparedMotion,
+    request: ContinuedJourney,
+    readiness: TravelReadiness,
+    carrying: bool,
+}
+pub fn prepare_continuation_response(
+    store: &Store,
+    request: ContinuedJourney,
+    facts: &impl JourneyFacts,
+    runtime: Option<&Runtime>,
+    now: SimTime,
+) -> Result<PreparedContinuationResponse, Error> {
+    match prepare_continued_journey(store, request, facts, runtime, now) {
+        Ok(plan) => Ok(PreparedContinuationResponse::Continue(plan)),
+        Err(Error::Unavailable) => {
+            let readiness = facts.readiness(request.actor).ok_or(Error::Unavailable)?;
+            game_spatial::location(store, StableId(request.actor.0)).ok_or(Error::Unavailable)?;
+            let fallback = Runtime::new(Rules::default())?;
+            let owner = runtime.unwrap_or(&fallback);
+            let mut motion = PreparedMotion::new(owner, now);
+            let linked = motion.transport.guard_topology(store, [request.actor]);
+            for actor in linked.iter().copied() {
+                motion.locations.guard(store, actor);
+            }
+            if runtime.is_some() {
+                motion.transport.guard_bodies(facts, linked)?;
+            }
+            motion.transport.routes.set(store, request.actor, None);
+            motion.route_replacements.insert(request.actor);
+            motion.transport.result.push(MotionEffect::Interrupted {
+                actor: request.actor,
+            });
+            Ok(PreparedContinuationResponse::Interrupted(
+                PreparedInterruptedContinuation {
+                    motion,
+                    readiness,
+                    request,
+                    carrying: runtime.is_some(),
+                },
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+impl PreparedContinuationResponse {
+    pub fn projection(&self) -> &PreparedMotion {
+        match self {
+            Self::Continue(plan) => plan.projection(),
+            Self::Interrupted(plan) => &plan.motion,
+        }
+    }
+    pub fn stage_into(
+        self,
+        runtime: Option<&Runtime>,
+        store: &Store,
+        facts: &impl JourneyFacts,
+        now: SimTime,
+        batch: &mut Batch,
+    ) -> Result<MotionFinalization, Error> {
+        match self {
+            Self::Continue(plan) => plan.stage_into(runtime, store, facts, now, batch),
+            Self::Interrupted(plan) => {
+                if plan.carrying != runtime.is_some()
+                    || facts.readiness(plan.request.actor).as_ref() != Some(&plan.readiness)
+                    || !matches!(
+                        prepare_continued_journey(store, plan.request, facts, runtime, now),
+                        Err(Error::Unavailable)
+                    )
+                {
+                    return Err(Error::Unavailable);
+                }
+                let fallback = Runtime::new(Rules::default())?;
+                plan.motion
+                    .stage_into(runtime.unwrap_or(&fallback), store, facts, now, batch)
+            }
+        }
+    }
 }
 pub fn prepare_continued_journey(
     store: &Store,

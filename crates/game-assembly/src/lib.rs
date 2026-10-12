@@ -1346,30 +1346,7 @@ impl Simulation {
                         })
                         .ok_or(Error::Overflow)?;
                 }
-                Due::Arrive(id) => {
-                    let p = &self.host.state.people[self.person_index[id]];
-                    if let Some(to) = game_transport::route_steps(&self.host.storage, p.id).first()
-                    {
-                        let Location::InTransit { to: from, .. } = *game_spatial::location(
-                            &self.host.storage,
-                            game_ecs::StableId((p.id).0),
-                        )
-                        .expect("location exists") else {
-                            return Err(Error::InvalidSave("arrival outside transit".into()));
-                        };
-                        let duration = self
-                            .host
-                            .state
-                            .areas
-                            .iter()
-                            .find(|a| a.id == from)
-                            .and_then(|a| a.links.iter().find(|l| l.destination == *to))
-                            .ok_or(Error::NoRoute)?
-                            .duration
-                            .0;
-                        next.0.checked_add(duration).ok_or(Error::Overflow)?;
-                    }
-                }
+                Due::Arrive(id) => self.transport_preflight_arrival(*id, next)?,
                 _ => {}
             }
         }
@@ -1701,23 +1678,9 @@ impl Simulation {
             let fallback = self.transport_default_runtime();
             let owner = self.host.state.transport.as_ref().unwrap_or(&fallback);
             let plan = owner.prepare_arrivals(&self.host.storage, &arrivals, next)?;
-            let arrived = plan
-                .effects()
-                .iter()
-                .filter_map(|effect| match effect {
-                    game_transport::MotionEffect::Arrived { actor, area } => Some((*actor, *area)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+            let continuations = plan.continuations(&self.host.storage);
             self.apply_motion(crate::transport_motion::MotionPlan::Direct(plan))?;
-            for (actor, area) in arrived {
-                if let Some(destination) = game_transport::route_steps(&self.host.storage, actor)
-                    .first()
-                    .copied()
-                {
-                    continued_journeys.push((actor, area, destination));
-                }
-            }
+            continued_journeys.extend(continuations);
         }
         for event in due {
             match event {
@@ -1856,16 +1819,13 @@ impl Simulation {
         self.reconcile_transport();
         // A closing arrival cannot grant another leg before death, exhaustion,
         // or incapacity at that same timestamp has been committed.
-        for (actor, origin, destination) in continued_journeys {
-            match self.prepare_transport_continuation(actor, origin, destination) {
-                Ok(plan) => self.apply_motion(plan)?,
-                Err(Error::Unavailable) => {
-                    game_transport::replace_route(&mut self.host.storage, actor, Vec::new())
-                        .expect("guarded route failure");
-                    self.emit(EventKind::Interrupted { actor });
-                }
-                Err(error) => return Err(error),
-            }
+        for request in continued_journeys {
+            let plan = self.prepare_transport_continuation(
+                request.actor,
+                request.origin,
+                request.destination,
+            )?;
+            self.apply_motion(plan)?;
         }
         self.reconcile_missions()?;
         self.reconcile_armies()?;
@@ -2045,45 +2005,25 @@ impl Simulation {
                 })
                 .collect()
         });
-        let mut transport_bodies = transport::ReceivedTransportBodies {
-            actual: self.transport_body_lookup(),
-            received: BTreeMap::new(),
-        };
+        let mut transport_bodies = game_transport::IncomingCargo::new(
+            &self.host.storage,
+            self.transport_body_lookup(),
+            self.host.state.transport.as_ref(),
+        );
         game_cargo::prepare_transfers(
             &self.host.storage,
             opening,
             requests,
             free.as_ref(),
             |intent| {
-                let Some(_) = &self.host.state.transport else {
-                    return true;
-                };
-                if game_transport::groups(&self.host.storage).next().is_none() {
-                    return true;
-                }
-                let InventoryLocation::Carried(holder) =
-                    game_cargo::inventory(&self.host.storage, intent.destination)
-                        .expect("inventory exists")
-                        .location
-                else {
-                    return true;
-                };
-                if !game_transport::transfer_capacity(
-                    &self.host.storage,
-                    &transport_bodies,
-                    holder,
-                    intent.quantity,
-                )
-                .unwrap_or(false)
+                let holder = match game_cargo::inventory(&self.host.storage, intent.destination)
+                    .expect("inventory exists")
+                    .location
                 {
-                    return false;
-                }
-                let received = transport_bodies.received.entry(holder).or_default();
-                let Some(quantity) = received.0.checked_add(intent.quantity.0) else {
-                    return false;
+                    InventoryLocation::Carried(holder) => Some(holder),
+                    _ => None,
                 };
-                *received = Quantity(quantity);
-                true
+                transport_bodies.admit(holder, intent.quantity)
             },
         )
     }

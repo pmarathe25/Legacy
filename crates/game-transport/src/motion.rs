@@ -64,6 +64,29 @@ impl PreparedMotion {
     pub fn effects(&self) -> &[MotionEffect] {
         self.transport.result()
     }
+    pub fn continuations(&self, store: &Store) -> Vec<ContinuedJourney> {
+        self.effects()
+            .iter()
+            .filter_map(|effect| {
+                let MotionEffect::Arrived { actor, area } = *effect else {
+                    return None;
+                };
+                let destination = self.transport.routes.edits.get(&actor).map_or_else(
+                    || route_steps(store, actor).first().copied(),
+                    |(_, after)| {
+                        after
+                            .as_ref()
+                            .and_then(|route| route.steps.first().copied())
+                    },
+                )?;
+                Some(ContinuedJourney {
+                    actor,
+                    origin: area,
+                    destination,
+                })
+            })
+            .collect()
+    }
     /// Factual projected row for receiving owners to prepare their own reactions.
     pub fn projected_location<'a>(
         &'a self,
@@ -211,10 +234,24 @@ pub struct MotionFinalization {
     expected_lifts: BTreeSet<StableId>,
     reserved_routes: BTreeSet<StableId>,
     reserved_locations: BTreeSet<StableId>,
+    preserves_locations: bool,
     route_replacements: BTreeSet<PersonId>,
     batch_key: game_ecs::BatchKey,
 }
 impl MotionFinalization {
+    /// A review phase can retain shared local candidate identities only when
+    /// its entire final Location footprint consists of this owner's no-ops.
+    pub fn validate_preserving_locations(&self, batch: &Batch) -> Result<(), Error> {
+        self.validate_footprint(batch)?;
+        if !self.preserves_locations
+            || batch
+                .edited_ids::<Location>()
+                .any(|id| !self.reserved_locations.contains(&id))
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
     /// Call after every participant has staged and before the host admits or
     /// publishes the batch. Extra carrying edges need their own explicit plan
     /// in the envelope; a foreign component touch never authorizes an edge.
@@ -310,6 +347,33 @@ pub fn location_from_position(position: Position) -> Location {
     }
 }
 impl Runtime {
+    pub fn birth_response(
+        &self,
+        store: &Store,
+        child: PersonId,
+        gestator: PersonId,
+        now: SimTime,
+        bodies: &impl BodyFacts,
+    ) -> Option<PreparedMotion> {
+        self.prepare_birth_motion(store, child, gestator, now, bodies)
+            .ok()
+    }
+    pub fn confinement_release_response(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        now: SimTime,
+    ) -> Option<PreparedMotion> {
+        self.prepare_confinement_release(store, actor, now).ok()
+    }
+    pub fn reconciliation_response(
+        &self,
+        store: &Store,
+        now: SimTime,
+        facts: &impl ReconciliationFacts,
+    ) -> Option<PreparedReconciliation> {
+        self.prepare_reconciliation(store, now, facts).ok()
+    }
     pub fn prepare_stop(
         &self,
         store: &Store,
@@ -452,6 +516,7 @@ impl Runtime {
         } else {
             self.prepare_stop(store, actor, now)?
         };
+        motion.replace_route(store, actor, None);
         let mut canceled = self.prepare_cancel_lifts(store, &[actor]);
         canceled.at = Some(now);
         let mut envelope = MotionBatch::new(self, now);
@@ -882,6 +947,12 @@ impl MotionBatch {
             .keys()
             .map(|id| StableId(id.0))
             .collect();
+        let preserves_locations = self
+            .motion
+            .locations
+            .edits
+            .values()
+            .all(|(before, after)| before == after);
         let PreparedMotion {
             mut transport,
             locations,
@@ -897,6 +968,7 @@ impl MotionBatch {
             expected_lifts,
             reserved_routes,
             reserved_locations,
+            preserves_locations,
             route_replacements,
             batch_key: batch.key(),
         })
@@ -1254,6 +1326,19 @@ pub struct PreparedLiftMotion {
     motion: PreparedMotion,
     passenger: PersonId,
     escaping: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiftClosingReaction {
+    Cancel(PersonId),
+}
+/// Closing support failures cancel the pending physical lift. Preparation and
+/// admission failures preserve their original meaning; no owner state is
+/// published by this policy function.
+pub fn lift_closing_reaction(
+    actor: PersonId,
+    outcome: Result<(), Error>,
+) -> Option<LiftClosingReaction> {
+    outcome.err().map(|_| LiftClosingReaction::Cancel(actor))
 }
 impl PreparedLiftMotion {
     pub fn effects(&self) -> &[MotionEffect] {
@@ -1678,7 +1763,54 @@ pub struct AcceptCarryRequest {
     pub passenger: PersonId,
     pub bearers: Vec<PersonId>,
 }
+#[derive(Clone, Copy)]
+pub enum OfferedSupport {
+    Single {
+        bearer: PersonId,
+        passenger: PersonId,
+    },
+    Joined {
+        passenger: PersonId,
+    },
+}
 impl Runtime {
+    /// A physical offer remains available when voluntary support is not yet
+    /// authorized or cannot carry the load. Only other errors end the command.
+    pub fn prepare_automatic_lift(
+        &self,
+        store: &Store,
+        offered: OfferedSupport,
+        now: SimTime,
+        facts: &impl LiftRequestFacts,
+    ) -> Result<Option<PreparedLiftStart>, Error> {
+        let (passenger, bearers) = match offered {
+            OfferedSupport::Single { bearer, passenger } => (passenger, BTreeSet::from([bearer])),
+            OfferedSupport::Joined { passenger } => {
+                (passenger, self.join_bearers(store, facts, passenger, now))
+            }
+        };
+        let input = facts.permission(passenger).ok_or(Error::Unavailable)?;
+        if Permission::from_facts(&bearers, false, &input)
+            .authority()
+            .is_err()
+        {
+            return Ok(None);
+        }
+        match self.prepare_lift_request(
+            store,
+            LiftRequest {
+                passenger,
+                bearers,
+                accepted: false,
+            },
+            now,
+            facts,
+        ) {
+            Ok(plan) => Ok(Some(plan)),
+            Err(Error::Unavailable) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
     pub fn prepare_accept_request(
         &self,
         store: &Store,

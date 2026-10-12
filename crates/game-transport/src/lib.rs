@@ -526,6 +526,11 @@ pub struct Body {
 pub trait BodyFacts {
     fn body(&self, actor: PersonId) -> Option<Body>;
 }
+impl<F: BodyFacts + ?Sized> BodyFacts for &F {
+    fn body(&self, actor: PersonId) -> Option<Body> {
+        F::body(*self, actor)
+    }
+}
 impl BodyFacts for BTreeMap<PersonId, Body> {
     fn body(&self, actor: PersonId) -> Option<Body> {
         self.get(&actor).cloned()
@@ -754,3 +759,11 @@ pub use policy::{GrowingBodyFacts, carrier_family};
 
 mod physical_facts;
 pub use physical_facts::*;
+
+mod plans;
+pub use plans::*;
+
+mod presentation;
+
+mod incoming;
+pub use incoming::IncomingCargo;

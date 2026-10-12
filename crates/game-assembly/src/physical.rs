@@ -1743,8 +1743,6 @@ impl Simulation {
                 game_workshop::remove_job(&mut self.host.storage, actor)
                     .map(|_| ())
                     .expect("actor exists");
-                game_transport::replace_route(&mut self.host.storage, actor, Vec::new())
-                    .expect("actor route");
                 for due in self.host.state.due.values_mut() {
                     due.retain(|d| !matches!(d, Due::Arrive(id) | Due::Age(id) if *id == actor));
                 }
