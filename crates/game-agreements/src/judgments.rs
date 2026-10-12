@@ -289,7 +289,6 @@ pub struct LocalExchangeFacts<'a> {
     pub stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
     /// Sorted by stable site ID, preserving personal work-site order.
     pub sites: &'a [KnownSiteRight],
-    pub custodians: &'a BTreeMap<InventoryId, PersonId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExchangeProposal {
@@ -298,19 +297,19 @@ pub struct ExchangeProposal {
     /// The caller publishes this only after the proposal succeeds.
     pub next_search: SimTime,
 }
-impl State {
+impl Ledger<'_> {
     pub fn local_exchange(
         &self,
         now: SimTime,
         facts: LocalExchangeFacts<'_>,
-        owner_area: impl Fn(PersonId) -> Option<AreaId>,
+        presence: &impl Presence,
     ) -> Option<ExchangeProposal> {
         if !facts.autonomous
             || self
-                .next_search
+                .next_search()
                 .get(&facts.actor)
                 .is_some_and(|at| *at > now)
-            || self.knowledge.get(&facts.actor).is_some_and(|known| {
+            || self.knowledge().get(&facts.actor).is_some_and(|known| {
                 known.values().any(|offer| {
                     offer.parties.contains(&facts.actor)
                         && matches!(
@@ -338,10 +337,10 @@ impl State {
                 && stock.good == Good::Food
                 && stock.quantity.0 >= 1_000
                 && !stock.accessible
-                && facts.custodians.contains_key(&stock.inventory)
+                && game_property::inventory_custodian(self.store, stock.inventory).is_some()
         })?;
-        let owner = facts.custodians[&food.inventory];
-        if owner_area(owner) != Some(area) {
+        let owner = game_property::inventory_custodian(self.store, food.inventory)?;
+        if contact_area(presence, owner) != Some(area) {
             return None;
         }
         let site = facts
@@ -377,3 +376,26 @@ impl State {
 }
 #[cfg(test)]
 mod tests;
+/// Only these personal estimates and speaker facts can affect the judgment.
+pub fn share_estimate_requests(
+    terms: &[AgreementTerm],
+) -> impl Iterator<Item = (SiteId, u64, u64)> + '_ {
+    terms.iter().filter_map(|term| match *term {
+        AgreementTerm::OutputShare {
+            site,
+            numerator,
+            denominator,
+            ..
+        } => Some((site, numerator, denominator)),
+        _ => None,
+    })
+}
+pub fn speaker_fact_requests(actor: PersonId, terms: &[AgreementTerm]) -> BTreeSet<PersonId> {
+    terms
+        .iter()
+        .filter(|term| !matches!(term, AgreementTerm::Access { .. }))
+        .map(AgreementTerm::parties)
+        .filter(|[debtor, creditor]| *debtor != actor && *creditor == actor)
+        .map(|[speaker, _]| speaker)
+        .collect()
+}

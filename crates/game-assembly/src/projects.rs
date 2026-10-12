@@ -12,18 +12,13 @@ impl Simulation {
             version: 1,
             debug_fixture: true,
         };
-        sim.host.state.agreements = Some(agreements::World {
-            ledger: game_agreements::State {
-                agreements: BTreeMap::new(),
-                obligations: BTreeMap::new(),
-                amendments: BTreeMap::new(),
-                last_event: sim.host.next_event() - 1,
-                next_search: BTreeMap::new(),
-                pending_work: BTreeMap::new(),
-                knowledge: BTreeMap::new(),
-                last_observation_event: sim.host.next_event() - 1,
-            },
-            custodians: BTreeMap::new(),
+        let __custody: BTreeMap<InventoryId, PersonId> = BTreeMap::new();
+        for (id, owner) in __custody {
+            game_property::declare_custody(&mut sim.host.storage, id, owner)?;
+        }
+        sim.host.state.agreements = Some(game_agreements::Runtime {
+            last_event: sim.host.next_event() - 1,
+            last_observation_event: sim.host.next_event() - 1,
         });
         sim.host.state.projects = Some(Runtime {
             rules: Rules::default(),
@@ -77,13 +72,8 @@ impl Simulation {
                 Quantity(capacity),
                 access,
             )?;
-            sim.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(id, custodian);
+            game_property::declare_custody(&mut sim.host.storage, id, custodian)
+                .expect("declared custody");
         }
         sim.debug_add_inventory(
             Good::Timber,
@@ -251,12 +241,12 @@ impl Simulation {
         game_cargo::inventory_mut(&mut sim.host.storage, timber)
             .unwrap()
             .access = BTreeSet::from([financier]);
-        let custodians = &mut sim.host.state.agreements.as_mut().unwrap().custodians;
+
         for inventory in [materials, tool, output, provisions] {
-            custodians.insert(inventory, sponsor);
+            game_property::declare_custody(&mut sim.host.storage, inventory, sponsor)?;
         }
         for inventory in [timber, payment, own_output] {
-            custodians.insert(inventory, financier);
+            game_property::declare_custody(&mut sim.host.storage, inventory, financier)?;
         }
         sim.debug_set_personality(
             sponsor,
@@ -384,7 +374,7 @@ impl Simulation {
             knows_project: project.is_some_and(|id| self.project_is_known(actor, id)),
         }
     }
-    fn construction_facts(
+    pub(crate) fn construction_facts(
         &self,
         actor: PersonId,
         project: ProjectId,
@@ -531,7 +521,7 @@ impl Simulation {
                     .state
                     .agreements
                     .as_ref()
-                    .and_then(|w| w.agreements.get(agreement))
+                    .and_then(|_| game_agreements::agreement(&self.host.storage, *(agreement)))
                     .ok_or(Error::Unavailable)?;
                 self.host.state.projects.as_ref().unwrap().prepare_support(
                     &self.host.storage,
@@ -565,7 +555,7 @@ impl Simulation {
                     .state
                     .agreements
                     .as_ref()
-                    .and_then(|w| w.agreements.get(agreement))
+                    .and_then(|_| game_agreements::agreement(&self.host.storage, *(agreement)))
                     .ok_or(Error::Unavailable)?;
                 let known = game_projects::knowledge(&self.host.storage, actor)
                     .map(|row| &row.enterprises)
@@ -1033,7 +1023,8 @@ impl Simulation {
                 .map(|(id, enterprise)| {
                     let books = enterprise.beneficiaries.contains(&actor)
                         || enterprise.operating_agreements.iter().any(|id| {
-                            self.host.state.agreements.as_ref().unwrap().agreements[id]
+                            game_agreements::agreement(&self.host.storage, *id)
+                                .unwrap()
                                 .parties
                                 .contains(&actor)
                         });
@@ -1063,13 +1054,18 @@ impl Simulation {
         }
     }
     fn enterprise_accounts(&self, enterprise: &Enterprise) -> Option<EnterpriseAccountView> {
-        let agreements = self.host.state.agreements.as_ref()?;
+        self.host.state.agreements.as_ref()?;
         let obligations = enterprise
             .operating_agreements
             .iter()
-            .flat_map(|id| agreements.agreements[id].obligations.iter())
+            .flat_map(|id| {
+                game_agreements::agreement(&self.host.storage, *id)
+                    .unwrap()
+                    .obligations
+                    .iter()
+            })
             .map(|id| {
-                let obligation = &agreements.obligations[id];
+                let obligation = game_agreements::obligation(&self.host.storage, *id).unwrap();
                 let delivery_good = match obligation.term {
                     AgreementTerm::Delivery { source, .. } => Some(
                         game_cargo::inventory(&self.host.storage, source)
@@ -1259,7 +1255,9 @@ impl Simulation {
                     .is_some_and(|t| *t > self.host.clock().time)
                 || plan.support.iter().any(|id| {
                     matches!(
-                        self.host.state.agreements.as_ref().unwrap().agreements[id].status,
+                        game_agreements::agreement(&self.host.storage, *id)
+                            .unwrap()
+                            .status,
                         AgreementStatus::Proposed
                             | AgreementStatus::Active
                             | AgreementStatus::Breached
@@ -1293,14 +1291,7 @@ impl Simulation {
                         && f.inventory != plan.materials
                 })
                 .find_map(|f| {
-                    self.host
-                        .state
-                        .agreements
-                        .as_ref()
-                        .unwrap()
-                        .custodians
-                        .get(&f.inventory)
-                        .copied()
+                    game_property::inventory_custodian(&self.host.storage, f.inventory)
                         .filter(|p| *p != actor && self.project_area(*p) == Some(plan.area))
                         .map(|p| (p, f.inventory))
                 });
@@ -1314,14 +1305,8 @@ impl Simulation {
                     f.good == Good::Food && f.area == plan.area && f.inventory != plan.output
                 })
                 .find(|f| {
-                    self.host
-                        .state
-                        .agreements
-                        .as_ref()
-                        .unwrap()
-                        .custodians
-                        .get(&f.inventory)
-                        == Some(&supporter)
+                    game_property::inventory_custodian(&self.host.storage, f.inventory)
+                        == Some(supporter)
                 })
                 .map(|f| f.inventory);
             let Some(destination) = destination else {
@@ -1354,14 +1339,8 @@ impl Simulation {
                     procedure: None,
                 },
             )?;
-            let agreement = self
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements
-                .values()
+            let agreement = game_agreements::agreements(&self.host.storage)
+                .map(|(_, row)| row)
                 .find(|a| a.id.0 >= before && a.proposer == actor)
                 .unwrap()
                 .id;
@@ -1392,7 +1371,9 @@ impl Simulation {
                 matches!(plan.kind, ProjectKind::Workshop { .. })
                     && plan.support.iter().all(|id| {
                         matches!(
-                            self.host.state.agreements.as_ref().unwrap().agreements[id].status,
+                            game_agreements::agreement(&self.host.storage, *id)
+                                .unwrap()
+                                .status,
                             AgreementStatus::Fulfilled
                                 | AgreementStatus::Rejected
                                 | AgreementStatus::Withdrawn
@@ -1424,15 +1405,8 @@ impl Simulation {
                 .knowledge
                 .values()
                 .map(|known| {
-                    let custodian = self
-                        .host
-                        .state
-                        .agreements
-                        .as_ref()
-                        .unwrap()
-                        .custodians
-                        .get(&known.inventory)
-                        .copied();
+                    let custodian =
+                        game_property::inventory_custodian(&self.host.storage, known.inventory);
                     game_projects::RememberedFinancingStock {
                         known,
                         custodian,
@@ -1448,15 +1422,7 @@ impl Simulation {
                         InventoryLocation::Area(area) => Some(area),
                         _ => None,
                     },
-                    custodian: self
-                        .host
-                        .state
-                        .agreements
-                        .as_ref()
-                        .unwrap()
-                        .custodians
-                        .get(&inventory)
-                        .copied(),
+                    custodian: game_property::inventory_custodian(&self.host.storage, inventory),
                 })
                 .collect::<Vec<_>>();
             let game_projects::FundingChoice::Available(funding) = plan
@@ -1500,14 +1466,8 @@ impl Simulation {
                     procedure: None,
                 },
             )?;
-            let agreement = self
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements
-                .values()
+            let agreement = game_agreements::agreements(&self.host.storage)
+                .map(|(_, row)| row)
                 .find(|agreement| agreement.id.0 >= before && agreement.proposer == actor)
                 .unwrap()
                 .id;
@@ -1751,15 +1711,8 @@ impl Simulation {
             fact.area == area
                 && game_cargo::inventory(&self.host.storage, fact.inventory)
                     .is_some_and(|stock| stock.location == InventoryLocation::Area(area))
-                && self
-                    .host
-                    .state
-                    .agreements
-                    .as_ref()
-                    .unwrap()
-                    .custodians
-                    .get(&fact.inventory)
-                    == Some(&actor)
+                && game_property::inventory_custodian(&self.host.storage, fact.inventory)
+                    == Some(actor)
         };
         let Some(materials) = mind
             .knowledge
@@ -1837,15 +1790,7 @@ impl Simulation {
                         }
                     },
                 ),
-                custodian: self
-                    .host
-                    .state
-                    .agreements
-                    .as_ref()
-                    .unwrap()
-                    .custodians
-                    .get(&known.inventory)
-                    .copied(),
+                custodian: game_property::inventory_custodian(&self.host.storage, known.inventory),
             })
             .collect::<Vec<_>>();
         opportunities.extend(
@@ -1896,7 +1841,7 @@ impl Simulation {
         struct Knowledge<'a> {
             stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
             work_access: bool,
-            custodians: &'a BTreeMap<InventoryId, PersonId>,
+            store: &'a game_ecs::Store,
         }
         impl game_projects::FinancingKnowledge for Knowledge<'_> {
             fn stocks(&self) -> impl Iterator<Item = &StockKnowledge> {
@@ -1906,7 +1851,7 @@ impl Simulation {
                 self.stocks.get(&id)
             }
             fn custodian(&self, id: InventoryId) -> Option<PersonId> {
-                self.custodians.get(&id).copied()
+                game_property::inventory_custodian(self.store, id)
             }
             fn has_work_access(&self) -> bool {
                 self.work_access
@@ -1927,7 +1872,7 @@ impl Simulation {
             &Knowledge {
                 stocks: &mind.knowledge,
                 work_access: mind.sites.values().any(|site| site.access),
-                custodians: &self.host.state.agreements.as_ref().unwrap().custodians,
+                store: &self.host.storage,
             },
         )
     }
@@ -1976,7 +1921,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         .map(|person| (person.id, person))
         .collect::<BTreeMap<_, _>>();
     state.state.physical.as_ref().ok_or_else(fail)?;
-    let agreements = state.state.agreements.as_ref().ok_or_else(fail)?;
+    state.state.agreements.as_ref().ok_or_else(fail)?;
     if state.state.decisions.is_none()
         || world.last_event >= state.next_event
         || game_projects::knowledges(state.components).any(|(actor, row)| {
@@ -2006,9 +1951,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 .chain(plan.contributions.keys())
                 .any(|actor| !people.contains_key(actor))
             || plan.support.iter().any(|id| {
-                agreements
-                    .agreements
-                    .get(id)
+                game_agreements::agreement(state.components, *id)
                     .is_none_or(|agreement| !agreement.parties.contains(&plan.sponsor))
             })
         {
@@ -2132,9 +2075,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
             }
             if produced != enterprise.produced
                 || enterprise.operating_agreements.iter().any(|id| {
-                    agreements
-                        .agreements
-                        .get(id)
+                    game_agreements::agreement(state.components, *id)
                         .is_none_or(|a| !a.parties.contains(&enterprise.sponsor))
                 })
             {
@@ -2156,9 +2097,7 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
                 .keys()
                 .any(|actor| !people.contains_key(actor))
             || enterprise.operating_agreements.iter().any(|id| {
-                agreements
-                    .agreements
-                    .get(id)
+                game_agreements::agreement(state.components, *id)
                     .is_none_or(|agreement| !agreement.parties.contains(&enterprise.sponsor))
             })
         {
@@ -2499,25 +2438,10 @@ mod farm_tests {
         ensure_unfunded_proposal(&mut sim, farmer, true);
         let saved = sim.save().unwrap();
         let mut representable = Simulation::load(&saved, Execution::default()).unwrap();
-        let agreements_before = representable
-            .host
-            .state
-            .agreements
-            .as_ref()
-            .unwrap()
-            .agreements
-            .len();
+        let agreements_before = game_agreements::agreements(&representable.host.storage).count();
         representable.seek_farm_support().unwrap();
         assert!(
-            representable
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements
-                .len()
-                > agreements_before
+            game_agreements::agreements(&representable.host.storage).count() > agreements_before
         );
 
         let environment = sim.host.state.environment.as_ref().unwrap();
@@ -2557,25 +2481,10 @@ mod farm_tests {
         ensure_unfunded_proposal(&mut sim, sponsor, false);
         let saved = sim.save().unwrap();
         let mut representable = Simulation::load(&saved, Execution::default()).unwrap();
-        let agreements_before = representable
-            .host
-            .state
-            .agreements
-            .as_ref()
-            .unwrap()
-            .agreements
-            .len();
+        let agreements_before = game_agreements::agreements(&representable.host.storage).count();
         representable.seek_workshop_support().unwrap();
         assert!(
-            representable
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements
-                .len()
-                > agreements_before
+            game_agreements::agreements(&representable.host.storage).count() > agreements_before
         );
 
         sim.host.state.physical.as_mut().unwrap().rules.loading_time = SimDuration(u64::MAX / 10);
@@ -2628,10 +2537,11 @@ mod farm_tests {
                 .custodian,
             Some(farmer)
         );
-        let contract = &sim.host.state.agreements.as_ref().unwrap().agreements
-            [project.support.iter().next().unwrap()];
+        let contract =
+            &game_agreements::agreement(&sim.host.storage, *project.support.iter().next().unwrap())
+                .unwrap();
         assert_eq!(contract.accepted, contract.parties);
-        let obligations = &sim.host.state.agreements.as_ref().unwrap().obligations;
+        let obligations = game_agreements::obligations(&sim.host.storage).collect::<BTreeMap<_,_>>();
         assert!(contract.obligations.iter().any(|id| matches!(
             obligations[id].term,
             AgreementTerm::Delivery { .. }
@@ -2669,13 +2579,8 @@ mod farm_tests {
             Quantity(0)
         );
         assert!(
-            sim.host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements
-                .values()
+            game_agreements::agreements(&sim.host.storage)
+                .map(|(_, row)| row)
                 .any(|a| a.proposer == farmer && a.status == AgreementStatus::Rejected)
         );
     }
@@ -2783,39 +2688,44 @@ mod farm_tests {
             },
         )
         .unwrap();
-        let agreement = *sim
-            .host
-            .state
-            .agreements
-            .as_ref()
-            .unwrap()
-            .agreements
-            .keys()
+        let agreement = game_agreements::agreements(&sim.host.storage)
+            .map(|(id, _)| id)
             .last()
             .unwrap();
         sim.debug_agreement_action(creditor, AgreementAction::Accept { agreement })
             .unwrap();
-        let obligation =
-            sim.host.state.agreements.as_ref().unwrap().agreements[&agreement].obligations[0];
+        let obligation = game_agreements::agreement(&sim.host.storage, agreement)
+            .unwrap()
+            .obligations[0];
         for _ in 0..3 {
             sim.debug_actor_command(debtor, Command::Work { site })
                 .unwrap();
             sim.advance(SimDuration(120_000)).unwrap();
         }
         assert_eq!(
-            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].accrued,
+            game_agreements::obligation(&sim.host.storage, obligation)
+                .unwrap()
+                .accrued,
             1
         );
         assert_eq!(
-            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].share_remainder,
+            game_agreements::obligation(&sim.host.storage, obligation)
+                .unwrap()
+                .share_remainder,
             0
         );
         sim.advance(SimDuration(480_000)).unwrap();
         assert_eq!(
-            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
+            game_agreements::obligation(&sim.host.storage, obligation)
+                .unwrap()
+                .performed,
             0
         );
-        assert!(sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].defaulted);
+        assert!(
+            game_agreements::obligation(&sim.host.storage, obligation)
+                .unwrap()
+                .defaulted
+        );
         assert!(
             sim.agreement_accepts_delivery(debtor, destination, Quantity(1)),
             "share delivery permission"
@@ -2840,7 +2750,9 @@ mod farm_tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
+            game_agreements::obligation(&sim.host.storage, obligation)
+                .unwrap()
+                .performed,
             0
         );
         sim.debug_actor_command(
@@ -2854,11 +2766,15 @@ mod farm_tests {
         .unwrap();
         sim.advance(MINUTE).unwrap();
         assert_eq!(
-            sim.host.state.agreements.as_ref().unwrap().obligations[&obligation].performed,
+            game_agreements::obligation(&sim.host.storage, obligation)
+                .unwrap()
+                .performed,
             1
         );
         assert_eq!(
-            sim.host.state.agreements.as_ref().unwrap().agreements[&agreement].status,
+            game_agreements::agreement(&sim.host.storage, agreement)
+                .unwrap()
+                .status,
             AgreementStatus::Fulfilled
         );
         assert_eq!(

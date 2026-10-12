@@ -9,7 +9,7 @@ pub use game_society::institutions::{Institution, RuleProposal, Runtime};
 
 struct InstitutionalVotingKnowledge<'a> {
     stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
-    custodians: &'a BTreeMap<InventoryId, PersonId>,
+    store: &'a game_ecs::Store,
     relationships: &'a BTreeMap<PersonId, decisions::Relationship>,
 }
 impl game_society::voting::VotingKnowledge for InstitutionalVotingKnowledge<'_> {
@@ -17,7 +17,7 @@ impl game_society::voting::VotingKnowledge for InstitutionalVotingKnowledge<'_> 
         self.stocks.get(&id)
     }
     fn custodian(&self, id: InventoryId) -> Option<PersonId> {
-        self.custodians.get(&id).copied()
+        game_property::inventory_custodian(self.store, id)
     }
     fn trust(&self, id: PersonId) -> i32 {
         self.relationships.get(&id).map_or(0, |row| row.trust)
@@ -44,13 +44,8 @@ impl Simulation {
             game_cargo::inventory_mut(&mut sim.host.storage, id)
                 .unwrap()
                 .access = BTreeSet::from([owner]);
-            sim.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(id, owner);
+            game_property::declare_custody(&mut sim.host.storage, id, owner)
+                .expect("declared custody");
         }
         sim.debug_set_personality(
             owner,
@@ -252,7 +247,8 @@ impl Simulation {
             let receipt = match event.event {
                 EventKind::ObligationPerformed {
                     obligation, actor, ..
-                } => match self.host.state.agreements.as_ref().unwrap().obligations[&obligation]
+                } => match game_agreements::obligation(&self.host.storage, obligation)
+                    .unwrap()
                     .term
                 {
                     AgreementTerm::Labor { site, .. } => Some(CaseReceipt::Labor { actor, site }),
@@ -269,8 +265,9 @@ impl Simulation {
                     _ => None,
                 },
                 EventKind::ObligationDefaulted { obligation } => {
-                    let term =
-                        &self.host.state.agreements.as_ref().unwrap().obligations[&obligation].term;
+                    let term = &game_agreements::obligation(&self.host.storage, obligation)
+                        .unwrap()
+                        .term;
                     (matches!(
                         term,
                         AgreementTerm::Labor { .. } | AgreementTerm::Delivery { .. }
@@ -292,15 +289,8 @@ impl Simulation {
                     site,
                     output,
                     ..
-                } if self
-                    .host
-                    .state
-                    .agreements
-                    .as_ref()
-                    .unwrap()
-                    .custodians
-                    .get(&output)
-                    .is_some_and(|owner| *owner != actor) =>
+                } if game_property::inventory_custodian(&self.host.storage, output)
+                    .is_some_and(|owner| owner != actor) =>
                 {
                     Some(CaseReceipt::Production { actor, site })
                 }
@@ -468,13 +458,9 @@ impl Simulation {
                             *id,
                             StockReference {
                                 area: self.inventory_area(stock),
-                                custodian: self
-                                    .host
-                                    .state
-                                    .agreements
-                                    .as_ref()
-                                    .and_then(|world| world.custodians.get(id))
-                                    .copied(),
+                                custodian: self.host.state.agreements.as_ref().and_then(|_| {
+                                    game_property::inventory_custodian(&self.host.storage, *id)
+                                }),
                                 good: stock.good,
                                 capacity: stock.capacity,
                             },
@@ -642,12 +628,7 @@ impl Simulation {
             None
         } else {
             Some(
-                self.host
-                    .state
-                    .agreements
-                    .as_ref()
-                    .ok_or(Error::Unavailable)?
-                    .ledger
+                game_agreements::Ledger::new(&self.host.storage)
                     .prepare_institutional_duties(&duties, self.host.clock().time)?,
             )
         };
@@ -672,15 +653,18 @@ impl Simulation {
         let effects = plan.effects.clone();
         let next_id = plan.next_id;
         if let Some(funding) = &funding {
-            funding.check(&self.host.state.agreements.as_ref().unwrap().ledger)?;
+            funding.check(&game_agreements::Ledger::new(&self.host.storage))?;
         }
-        plan.commit(
+        let mut batch = game_ecs::Batch::new();
+        plan.stage_into(
             self.host.state.institutions.as_ref().unwrap(),
-            &mut self.host.storage,
+            &self.host.storage,
+            &mut batch,
         )?;
         if let Some(funding) = funding {
-            funding.commit(&mut self.host.state.agreements.as_mut().unwrap().ledger)?;
+            funding.stage(&mut batch);
         }
+        self.host.storage.apply_batch(batch)?;
         self.host.allocate_ids(
             (next_id)
                 .checked_sub(self.host.next_id())
@@ -750,23 +734,16 @@ impl Simulation {
         let agreement = AgreementId(self.host.next_id());
         let obligation = ObligationId(self.host.next_id().checked_add(1).ok_or(Error::Overflow)?);
         let next_id = self.host.next_id().checked_add(2).ok_or(Error::Overflow)?;
-        let plan = self
-            .host
-            .state
-            .agreements
-            .as_ref()
-            .ok_or(Error::Unavailable)?
-            .ledger
-            .prepare_institutional_duties(
-                &[game_agreements::InstitutionDuty {
-                    institution,
-                    agreement,
-                    obligation,
-                    term,
-                }],
-                self.host.clock().time,
-            )?;
-        plan.commit(&mut self.host.state.agreements.as_mut().unwrap().ledger)?;
+        let plan = game_agreements::Ledger::new(&self.host.storage).prepare_institutional_duties(
+            &[game_agreements::InstitutionDuty {
+                institution,
+                agreement,
+                obligation,
+                term,
+            }],
+            self.host.clock().time,
+        )?;
+        plan.commit(&mut self.host.storage)?;
         self.host.allocate_ids(
             (next_id)
                 .checked_sub(self.host.next_id())
@@ -947,7 +924,7 @@ impl Simulation {
                 obligation, actor, ..
             } => {
                 let obligation =
-                    &self.host.state.agreements.as_ref().unwrap().obligations[&obligation];
+                    &game_agreements::obligation(&self.host.storage, obligation).unwrap();
                 Some(SocialReceipt::Performed {
                     actor,
                     counterpart: obligation.term.parties()[1],
@@ -957,7 +934,7 @@ impl Simulation {
             }
             EventKind::ObligationDefaulted { obligation } => {
                 let obligation =
-                    &self.host.state.agreements.as_ref().unwrap().obligations[&obligation];
+                    &game_agreements::obligation(&self.host.storage, obligation).unwrap();
                 let asset = match target(&obligation.term)? {
                     CooperationTarget::Labor { asset, .. }
                     | CooperationTarget::Delivery { asset } => asset,
@@ -981,15 +958,7 @@ impl Simulation {
                     actor,
                     site: site.id,
                     asset: asset(output, Some(site.area)),
-                    custodian: self
-                        .host
-                        .state
-                        .agreements
-                        .as_ref()
-                        .unwrap()
-                        .custodians
-                        .get(&output)
-                        .copied(),
+                    custodian: game_property::inventory_custodian(&self.host.storage, output),
                 })
             }
             EventKind::Ate { actor, source, .. } => Some(SocialReceipt::Ate { actor, source }),
@@ -1089,7 +1058,6 @@ impl Simulation {
                 &self.host.storage,
                 subject,
                 &mind.knowledge,
-                &self.host.state.agreements.as_ref().unwrap().custodians,
                 self.time(),
             ));
         }
@@ -1105,13 +1073,7 @@ impl Simulation {
             .expect("institutional actor has a mind");
         InstitutionalVotingKnowledge {
             stocks: &mind.knowledge,
-            custodians: &self
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .expect("agreements are installed")
-                .custodians,
+            store: &self.host.storage,
             relationships: &mind.relationships,
         }
     }
@@ -1263,10 +1225,7 @@ impl Simulation {
         use game_society::deliberation::{DutyWorker, LivelihoodSite};
         let world = self.host.state.institutions.as_ref().unwrap();
         let people = world
-            .duty_workers(
-                &self.host.storage,
-                &self.host.state.agreements.as_ref().unwrap().ledger,
-            )
+            .duty_workers(&self.host.storage)
             .expect("known duty ledger");
         let site_sets = people
             .iter()
@@ -1318,11 +1277,7 @@ impl Simulation {
             })
             .collect::<Vec<_>>();
         let intentions = world
-            .duty_work_intentions(
-                &self.host.storage,
-                &self.host.state.agreements.as_ref().unwrap().ledger,
-                &workers,
-            )
+            .duty_work_intentions(&self.host.storage, &workers)
             .expect("known duty ledger");
         for intent in intentions {
             let _ = self.debug_actor_command(intent.actor, Command::Work { site: intent.site });
@@ -1455,7 +1410,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     if s.state.physical.is_none() || s.state.decisions.is_none() {
         return Err(fail());
     }
-    let agreements = s.state.agreements.as_ref().ok_or_else(fail)?;
+    s.state.agreements.as_ref().ok_or_else(fail)?;
     let request = runtime.validation_references(s.components);
     let people = s.state.people.iter().map(|p| p.id).collect::<BTreeSet<_>>();
     let areas = s.state.areas.iter().map(|a| a.id).collect::<BTreeSet<_>>();
@@ -1493,7 +1448,6 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
             next_event: s.next_event,
             areas: &areas,
             references: &references,
-            agreements: &agreements.ledger,
         },
     )
 }
@@ -1543,8 +1497,8 @@ mod closing_resource_tests {
                 quantity: Quantity(1),
                 deadline: SimTime(1),
             };
-            let world = sim.host.state.agreements.as_mut().unwrap();
-            world.agreements.insert(
+            game_agreements::insert_agreement(
+                &mut sim.host.storage,
                 agreement,
                 game_agreements::Agreement {
                     id: agreement,
@@ -1558,8 +1512,10 @@ mod closing_resource_tests {
                     proposed_at: SimTime(0),
                     revision: 0,
                 },
-            );
-            world.obligations.insert(
+            )
+            .unwrap();
+            game_agreements::insert_obligation(
+                &mut sim.host.storage,
                 obligation,
                 game_agreements::Obligation {
                     id: obligation,
@@ -1572,7 +1528,8 @@ mod closing_resource_tests {
                     defaulted: false,
                     cargo: BTreeMap::new(),
                 },
-            );
+            )
+            .unwrap();
         }
         {
             let mut authored: serde_json::Value =
@@ -1667,13 +1624,8 @@ mod closing_resource_tests {
         assert_eq!(sim.host.next_id(), u64::MAX);
         assert_eq!(game_society::cases(&sim.host.storage).count(), 1000);
         assert!(
-            sim.host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .obligations
-                .values()
+            game_agreements::obligations(&sim.host.storage)
+                .map(|(_, row)| row)
                 .all(|obligation| obligation.defaulted)
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();

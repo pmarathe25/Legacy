@@ -56,3 +56,18 @@ pub fn remove_mind<A: Component>(
     }
     store.remove(StableId(actor.0))
 }
+
+/// The character reacts to newly learned failures according to their own honesty.
+pub fn learn_defaults<A: Component>(store: &mut Store, observer: PersonId, debtors: &[PersonId]) {
+    let Some(mind) = mind_mut::<A>(store, observer) else {
+        return;
+    };
+    for debtor in debtors {
+        let loss = i32::from(mind.personality.honesty) / 100;
+        let relationship = mind.relationships.entry(*debtor).or_insert(Relationship {
+            trust: 0,
+            affection: 0,
+        });
+        relationship.trust = (relationship.trust - loss).max(-1_000);
+    }
+}

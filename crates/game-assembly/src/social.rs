@@ -2103,7 +2103,7 @@ mod generations {
         );
         // Each new adult obtains chosen access through an actual local promise,
         // rather than inheriting the parents' title or old people's permissions.
-        let grantor = sim.host.state.agreements.as_ref().unwrap().custodians[&food];
+        let grantor = game_property::inventory_custodian(&sim.host.storage, food).unwrap();
         for child in &children {
             sim.debug_actor_command(grantor, Command::Cancel).unwrap();
             sim.debug_actor_command(*child, Command::Cancel).unwrap();
@@ -2121,14 +2121,8 @@ mod generations {
                 },
             )
             .unwrap();
-            let agreement = *sim
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements
-                .keys()
+            let agreement = game_agreements::agreements(&sim.host.storage)
+                .map(|(id, _)| id)
                 .last()
                 .unwrap();
             sim.debug_agreement_action(*child, AgreementAction::Accept { agreement })

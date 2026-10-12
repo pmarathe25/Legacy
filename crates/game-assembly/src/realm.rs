@@ -140,13 +140,8 @@ impl Simulation {
             BTreeSet::from([b]),
         )?;
         for (id, holder) in [(food_a, a), (timber_a, a), (food_b, b), (timber_b, b)] {
-            sim.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(id, holder);
+            game_property::declare_custody(&mut sim.host.storage, id, holder)
+                .expect("declared custody");
         }
         for (area, holder, voter, stores, name) in [
             (
@@ -917,14 +912,8 @@ impl Simulation {
                             procedure: None,
                         },
                     )?;
-                    let id = self
-                        .host
-                        .state
-                        .agreements
-                        .as_ref()
-                        .unwrap()
-                        .agreements
-                        .values()
+                    let id = game_agreements::agreements(&self.host.storage)
+                        .map(|(_, row)| row)
                         .find(|a| a.id.0 >= before && a.proposer == actor)
                         .ok_or(Error::Unavailable)?
                         .id;
@@ -1184,9 +1173,12 @@ impl Simulation {
             let term = &r.proposal.terms[usize::from(key.index)];
             let receipt = match (&pending.owner, term) {
                 (PendingOwner::Agreement(id), Term::Delivery { term, .. }) => {
-                    let a = &self.host.state.agreements.as_ref().unwrap().agreements[id];
+                    let a = &game_agreements::agreement(&self.host.storage, *id).unwrap();
                     if let Some(obligation) = a.obligations.iter().find(|o| {
-                        self.host.state.agreements.as_ref().unwrap().obligations[o].term == *term
+                        game_agreements::obligation(&self.host.storage, **o)
+                            .unwrap()
+                            .term
+                            == *term
                     }) {
                         Some(WorkReceipt::DeliveryOpened {
                             agreement: *id,
@@ -1272,7 +1264,7 @@ impl Simulation {
                     obligation: Some(id),
                     ..
                 } => {
-                    let o = &self.host.state.agreements.as_ref().unwrap().obligations[&id];
+                    let o = &game_agreements::obligation(&self.host.storage, id).unwrap();
                     Some(OutcomeReceipt::Delivery {
                         obligation: id,
                         performed: Quantity(o.performed.min(o.amount())),
@@ -1698,7 +1690,7 @@ impl Simulation {
         world.rules.validate()?;
         let bad = || Error::InvalidSave("invalid realm communication or owner references".into());
         self.host.state.institutions.as_ref().ok_or_else(bad)?;
-        let agreements = self.host.state.agreements.as_ref().ok_or_else(bad)?;
+        self.host.state.agreements.as_ref().ok_or_else(bad)?;
         let refs = game_realm::References {
             people: self.person_index.keys().copied().collect(),
             areas: self.host.state.areas.iter().map(|a| a.id).collect(),
@@ -1708,8 +1700,12 @@ impl Simulation {
             inventories: game_cargo::inventories(&self.host.storage)
                 .map(|(id, _)| id)
                 .collect(),
-            agreements: agreements.agreements.keys().copied().collect(),
-            obligations: agreements.obligations.keys().copied().collect(),
+            agreements: game_agreements::agreements(&self.host.storage)
+                .map(|(id, _)| id)
+                .collect(),
+            obligations: game_agreements::obligations(&self.host.storage)
+                .map(|(id, _)| id)
+                .collect(),
             proposals: game_society::proposals(&self.host.storage)
                 .map(|(id, _)| id)
                 .collect(),
@@ -1772,9 +1768,7 @@ impl Simulation {
             }
             match (&pending.owner, r.proposal.terms.get(usize::from(key.index))) {
                 (PendingOwner::Agreement(id), Some(Term::Delivery { term, .. })) => {
-                    if agreements
-                        .agreements
-                        .get(id)
+                    if game_agreements::agreement(&self.host.storage,*id)
                         .is_none_or(|a| !a.terms.contains(term))
                     {
                         return Err(bad());

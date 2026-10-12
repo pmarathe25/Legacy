@@ -151,12 +151,8 @@ fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_deli
     let obligation = &sim.agreement_view(ruler(&sim))[0].obligations[0];
     assert_eq!(obligation.performed, 1_000);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::obligation(sim.canonical_state().components, obligation.id)
             .unwrap()
-            .obligations[&obligation.id]
             .cargo[&carrier],
         1_000
     );
@@ -350,12 +346,8 @@ fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade(
         AgreementStatus::Active
     );
     assert!(matches!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, id)
             .unwrap()
-            .agreements[&id]
             .status,
         AgreementStatus::Rejected | AgreementStatus::Withdrawn
     ));
@@ -371,12 +363,8 @@ fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade(
     let useful = propose(&mut sim, vec![term], None);
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, useful)
             .unwrap()
-            .agreements[&useful]
             .status,
         AgreementStatus::Active
     );
@@ -487,12 +475,8 @@ fn competing_deliveries_do_not_double_credit_and_consumed_cargo_remains_owed() {
     sim.advance(MINUTE).unwrap();
     let id = sim.agreement_view(actor)[1].obligations[0].id;
     assert!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::obligation(sim.canonical_state().components, id)
             .unwrap()
-            .obligations[&id]
             .cargo
             .is_empty()
     );

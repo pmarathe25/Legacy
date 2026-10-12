@@ -444,3 +444,104 @@ fn supplied_target_reports_validate_context_and_change_only_native_roster_contac
     );
     assert_eq!(w, before);
 }
+#[test]
+fn rejected_native_compensation_cannot_accept_recruitment_or_publish_service_metadata() {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<game_agreements::Agreement>(
+            "agreements/agreement",
+            game_agreements::Agreement::validate,
+        )
+        .unwrap();
+    schema
+        .register::<game_agreements::Obligation>("agreements/obligation", |_| {
+            Err(Error::Unavailable)
+        })
+        .unwrap();
+    schema
+        .register::<game_agreements::Amendment>(
+            "agreements/amendment",
+            game_agreements::Amendment::validate,
+        )
+        .unwrap();
+    schema
+        .register::<game_agreements::Knowledge>(
+            "agreements/knowledge",
+            game_agreements::Knowledge::validate,
+        )
+        .unwrap();
+    schema
+        .register::<game_agreements::Requests>("agreements/requests", |_| Ok(()))
+        .unwrap();
+    schema
+        .register::<game_agreements::PendingWork>("agreements/pending_work", |_| Ok(()))
+        .unwrap();
+    schema
+        .register::<game_agreements::PendingReport>(
+            "agreements/report",
+            game_agreements::PendingReport::validate,
+        )
+        .unwrap();
+    let mut w = state();
+    w.store = game_ecs::Store::with_schema(schema);
+    let f = facts();
+    let mut p = proposal();
+    p.compensation.insert(A, vec![payment()]);
+    start(&mut w, p, &f);
+    let mission = w
+        .prepare_command(
+            &w.store,
+            A,
+            &MissionAction::Accept { recruitment: OFFER },
+            &f,
+            &MissionIds {
+                backing: Some(AgreementId(30)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let consent = mission.consent.as_ref().unwrap();
+    let agreement = game_agreements::Ledger::new(&w.store)
+        .prepare_service_commitment(
+            &game_agreements::HeardServiceConsent {
+                recruitment: consent.recruitment,
+                sponsor: consent.sponsor,
+                recruit: consent.recruit,
+                offered_terms: recruitment(&w.store, OFFER).unwrap().compensation.clone(),
+                accepted_terms: consent.terms.clone(),
+                unanswered_counteroffer: false,
+            },
+            &game_agreements::TransitionFacts {
+                actor_available: true,
+                present: BTreeSet::from([SP, A]),
+                assets: f.assets.terms.clone(),
+            },
+            &game_agreements::TransitionIds {
+                agreement: Some(AgreementId(30)),
+                obligations: vec![ObligationId(31)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let before = w.store.clone();
+    let metadata = w.runtime.clone();
+    let mut batch = Batch::new();
+    agreement
+        .check(&game_agreements::Ledger::new(&w.store))
+        .unwrap();
+    agreement.stage(&mut batch);
+    let _finish = mission
+        .stage_into(&w.runtime, &w.store, &mut batch)
+        .unwrap();
+    assert_eq!(w.store.apply_batch(batch), Err(Error::Unavailable));
+    assert_eq!(w.store, before);
+    assert_eq!(w.runtime, metadata);
+    assert_eq!(recruitment(&w.store, OFFER).unwrap().agreement, None);
+    assert_eq!(
+        crate::mission(&w.store, ID).unwrap().members[&A].status,
+        CompanionStatus::Offered
+    );
+    assert!(game_agreements::agreement(&w.store, AgreementId(30)).is_none());
+    assert!(!w.store.contains(StableId(31)));
+}

@@ -24,18 +24,13 @@ impl Simulation {
                 )
             })
             .collect();
-        sim.host.state.agreements = Some(agreements::World {
-            ledger: game_agreements::State {
-                knowledge: BTreeMap::new(),
-                last_observation_event: sim.host.next_event() - 1,
-                agreements: BTreeMap::new(),
-                obligations: BTreeMap::new(),
-                amendments: BTreeMap::new(),
-                last_event: sim.host.next_event() - 1,
-                next_search: BTreeMap::new(),
-                pending_work: BTreeMap::new(),
-            },
-            custodians,
+        let __custody: BTreeMap<InventoryId, PersonId> = custodians;
+        for (id, owner) in __custody {
+            game_property::declare_custody(&mut sim.host.storage, id, owner)?;
+        }
+        sim.host.state.agreements = Some(game_agreements::Runtime {
+            last_event: sim.host.next_event() - 1,
+            last_observation_event: sim.host.next_event() - 1,
         });
         let custodian = sim.host.state.people[3].id;
         let food = game_cargo::inventories(&sim.host.storage)
@@ -49,13 +44,8 @@ impl Simulation {
         game_cargo::inventory_mut(&mut sim.host.storage, food)
             .unwrap()
             .access = BTreeSet::from([custodian]);
-        sim.host
-            .state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .custodians
-            .insert(food, custodian);
+        game_property::declare_custody(&mut sim.host.storage, food, custodian)
+            .expect("declared custody");
         let attitudes: BTreeMap<PersonId, Attitude> = sim
             .host
             .state
@@ -146,14 +136,9 @@ impl Simulation {
         let stock = game_cargo::inventory(&self.host.storage, inventory)?;
         match stock.location {
             InventoryLocation::Carried(actor) => Some(actor),
-            InventoryLocation::Area(_) => self
-                .host
-                .state
-                .agreements
-                .as_ref()?
-                .custodians
-                .get(&inventory)
-                .copied(),
+            InventoryLocation::Area(_) => {
+                game_property::inventory_custodian(&self.host.storage, inventory)
+            }
         }
     }
     fn property_present(&self, area: AreaId) -> Vec<PersonId> {

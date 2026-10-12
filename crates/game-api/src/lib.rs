@@ -326,8 +326,6 @@ pub enum Activity {
         completes: SimTime,
     },
     ReportAgreement {
-        recipient: PersonId,
-        snapshot: Box<AgreementView>,
         completes: SimTime,
     },
     WritingMemory {

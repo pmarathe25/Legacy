@@ -85,18 +85,13 @@ impl Simulation {
                 )
             })
             .collect();
-        sim.host.state.agreements = Some(agreements::World {
-            ledger: game_agreements::State {
-                knowledge: BTreeMap::new(),
-                last_observation_event: sim.host.next_event() - 1,
-                agreements: BTreeMap::new(),
-                obligations: BTreeMap::new(),
-                amendments: BTreeMap::new(),
-                last_event: sim.host.next_event() - 1,
-                next_search: BTreeMap::new(),
-                pending_work: BTreeMap::new(),
-            },
-            custodians,
+        let __custody: BTreeMap<InventoryId, PersonId> = custodians;
+        for (id, owner) in __custody {
+            game_property::declare_custody(&mut sim.host.storage, id, owner)?;
+        }
+        sim.host.state.agreements = Some(game_agreements::Runtime {
+            last_event: sim.host.next_event() - 1,
+            last_observation_event: sim.host.next_event() - 1,
         });
         sim.host.state.missions = Some(Runtime {
             last_event: sim.host.next_event() - 1,
@@ -279,15 +274,7 @@ impl Simulation {
             .map(|consent| self.prepare_service_agreement(consent))
             .transpose()?;
         if let Some((plan, after)) = &backing {
-            plan.check(
-                &self
-                    .host
-                    .state
-                    .agreements
-                    .as_ref()
-                    .ok_or(Error::Unavailable)?
-                    .ledger,
-            )?;
+            plan.check(&game_agreements::Ledger::new(&self.host.storage))?;
             after
                 .checked_sub(self.host.next_id())
                 .ok_or(Error::Overflow)?;
@@ -303,18 +290,22 @@ impl Simulation {
         let events = prepared.events.clone();
         let notices = prepared.notices.clone();
         let created = prepared.created_missions().collect::<Vec<_>>();
-        // Both owner plans have passed all guards and effect preflights before
-        // either authoritative record set changes. No whole-world rollback.
-        prepared.commit(
-            self.host.state.missions.as_mut().unwrap(),
-            &mut self.host.storage,
+        let mut batch = game_ecs::Batch::new();
+        if let Some((plan, after)) = &backing {
+            self.stage_prepared_agreement(plan, *after, &mut batch)?;
+        }
+        let finish = prepared.stage_into(
+            self.host.state.missions.as_ref().unwrap(),
+            &self.host.storage,
+            &mut batch,
         )?;
+        self.host.storage.apply_batch(batch)?;
+        finish.finish(self.host.state.missions.as_mut().unwrap());
         if let Some((plan, after)) = backing {
-            self.apply_prepared_agreement(actor, plan, after)?;
+            self.publish_prepared_agreement(actor, plan, after)?;
         } else {
             self.host.allocate_ids(
-                (next)
-                    .checked_sub(self.host.next_id())
+                next.checked_sub(self.host.next_id())
                     .ok_or(Error::Overflow)?,
             )?;
         }
@@ -1545,13 +1536,7 @@ impl game_missions::ValidationFacts for MissionValidationFacts<'_> {
         game_cargo::inventory(self.state.components, id)
     }
     fn agreement_parties(&self, id: AgreementId) -> Option<&BTreeSet<PersonId>> {
-        self.state
-            .state
-            .agreements
-            .as_ref()?
-            .agreements
-            .get(&id)
-            .map(|a| &a.parties)
+        game_agreements::agreement(self.state.components, id).map(|row| &row.parties)
     }
     fn talk_deadline(&self, actor: PersonId) -> Option<SimTime> {
         match self.state.components.activity(actor) {
@@ -2391,10 +2376,12 @@ mod tests {
                 .status,
             CompanionStatus::Accepted
         );
-        let obligations = &sim.host.state.agreements.as_ref().unwrap().obligations;
+        let obligations = game_agreements::obligations(&sim.host.storage)
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
         assert!(
             obligations
-                .values()
+                .iter()
                 .any(|obligation| obligation.performed == 0)
         );
     }
@@ -2977,29 +2964,24 @@ mod tests {
         let mut sim = Simulation::lineage_fixture(29, Execution::default()).unwrap();
         let prototype = fixture();
         sim.host.state.missions = prototype.host.state.missions;
-        sim.host.state.agreements = Some(agreements::World {
-            ledger: game_agreements::State {
-                agreements: BTreeMap::new(),
-                obligations: BTreeMap::new(),
-                amendments: BTreeMap::new(),
-                last_event: sim.host.next_event() - 1,
-                next_search: BTreeMap::new(),
-                pending_work: BTreeMap::new(),
-                knowledge: BTreeMap::new(),
-                last_observation_event: sim.host.next_event() - 1,
-            },
-            custodians: game_cargo::inventories(&sim.host.storage)
-                .map(|(_, row)| row)
-                .map(|i| {
-                    (
-                        i.id,
-                        match i.location {
-                            InventoryLocation::Carried(p) => p,
-                            InventoryLocation::Area(_) => sim.host.state.ruler,
-                        },
-                    )
-                })
-                .collect(),
+        let __custody: BTreeMap<InventoryId, PersonId> = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
+            .map(|i| {
+                (
+                    i.id,
+                    match i.location {
+                        InventoryLocation::Carried(p) => p,
+                        InventoryLocation::Area(_) => sim.host.state.ruler,
+                    },
+                )
+            })
+            .collect();
+        for (id, owner) in __custody {
+            game_property::declare_custody(&mut sim.host.storage, id, owner).unwrap();
+        }
+        sim.host.state.agreements = Some(game_agreements::Runtime {
+            last_event: sim.host.next_event() - 1,
+            last_observation_event: sim.host.next_event() - 1,
         });
         let guardian = sim.host.state.people[1].id;
         let forest = sim.host.state.areas[2].id;

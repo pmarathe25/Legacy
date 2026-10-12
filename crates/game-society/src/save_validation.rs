@@ -1,7 +1,6 @@
 //! Reference validation belongs to Society; foreign owners supply raw identity facts.
 use crate::institutions::*;
 use crate::storage::*;
-use game_agreements::State as Agreements;
 use game_core::*;
 use game_ecs::Store;
 use std::collections::BTreeSet;
@@ -11,7 +10,6 @@ pub struct ValidationFacts<'a> {
     pub next_event: u64,
     pub areas: &'a BTreeSet<AreaId>,
     pub references: &'a ReferenceFacts,
-    pub agreements: &'a Agreements,
 }
 fn fail() -> Error {
     Error::InvalidSave("invalid institution state".into())
@@ -182,12 +180,12 @@ impl Runtime {
                     concept(store, id).is_none()
                         || actors.iter().any(|(actor, id)| {
                             !refs.people.contains(actor)
-                                || !f.agreements.agreements.contains_key(id)
+                                || !game_agreements::agreement(store, *id).is_some()
                         })
                 })
                 || i.funding
                     .iter()
-                    .any(|id| !f.agreements.agreements.contains_key(id))
+                    .any(|id| !game_agreements::agreement(store, *id).is_some())
             {
                 return Err(fail());
             }
@@ -209,7 +207,7 @@ impl Runtime {
                 return Err(fail());
             }
             for (term, id) in c.contributions.iter().zip(&i.funding) {
-                if f.agreements.agreements[id].terms != vec![term.clone()] {
+                if game_agreements::agreement(store, *id).unwrap().terms != vec![term.clone()] {
                     return Err(fail());
                 }
             }

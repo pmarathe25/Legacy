@@ -6,7 +6,13 @@ license.workspace = true
 
 [dependencies]
 game-core.workspace = true
+game-ecs.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-logistics.workspace = true
+game-transport.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-characters.workspace = true
 serde_json.workspace = true

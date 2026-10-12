@@ -325,8 +325,7 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
         BTreeMap::from([(PersonId(1), AgreementId(40))]),
     );
     seed_institution(&mut store, institution);
-    let mut ledger = game_agreements::State::default();
-    ledger
+    game_agreements::Ledger::new(&store)
         .prepare_institutional_duties(
             &[game_agreements::InstitutionDuty {
                 institution: InstitutionId(10),
@@ -343,7 +342,7 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
             SimTime(0),
         )
         .unwrap()
-        .commit(&mut ledger)
+        .commit(&mut store)
         .unwrap();
     let sites = [LivelihoodSite {
         site: SiteId(20),
@@ -361,9 +360,7 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
         sites: &sites,
     };
     assert_eq!(
-        state
-            .duty_work_intentions(&store, &ledger, &[worker])
-            .unwrap(),
+        state.duty_work_intentions(&store, &[worker]).unwrap(),
         vec![DutyWork {
             actor: PersonId(1),
             site: SiteId(20)
@@ -381,7 +378,7 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
     };
     assert!(
         state
-            .duty_work_intentions(&store, &ledger, &[unwilling])
+            .duty_work_intentions(&store, &[unwilling])
             .unwrap()
             .is_empty()
     );
@@ -397,7 +394,7 @@ fn declared_duty_uses_physiological_budget_and_individual_willingness_without_du
     };
     assert!(
         state
-            .duty_work_intentions(&store, &ledger, &[exhausted])
+            .duty_work_intentions(&store, &[exhausted])
             .unwrap()
             .is_empty()
     );

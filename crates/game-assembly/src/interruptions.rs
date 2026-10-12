@@ -323,6 +323,7 @@ pub(crate) struct PreparedInterruptions {
     ecology: Option<game_ecology::PreparedGatheringCancellation>,
     projects: Option<game_projects::PreparedChange>,
     missions: Option<game_missions::PreparedTalkCancellations>,
+    agreements: Option<game_agreements::PreparedReportCancellations>,
     memory: Option<game_invocation::PreparedMemoryEnding>,
 }
 impl Simulation {
@@ -365,6 +366,10 @@ impl Simulation {
             .development
             .as_ref()
             .map(|w| w.prepare_interruptions(&self.host.storage, &requests));
+        let agreements = Some(game_agreements::prepare_cancel_reports(
+            &self.host.storage,
+            &actors,
+        ));
         let missions = self
             .host
             .state
@@ -424,6 +429,7 @@ impl Simulation {
                 .filter(|_| preserve != ActivityOwner::Transport)
                 .map(|runtime| runtime.prepare_cancel_lifts(&self.host.storage, &actors)),
             missions,
+            agreements,
             projects: self
                 .host
                 .state
@@ -482,7 +488,14 @@ impl PreparedInterruptions {
         final_activities: &BTreeMap<PersonId, Activity>,
         memory_replacement: Option<&game_invocation::MemoryReplacement>,
     ) -> Result<InterruptionFinalization, Error> {
-        self.stage_into_with_replacements(sim, batch, final_activities, memory_replacement, None)
+        self.stage_into_with_replacements(
+            sim,
+            batch,
+            final_activities,
+            memory_replacement,
+            None,
+            None,
+        )
     }
     pub(crate) fn stage_into_with_mission_replacement(
         self,
@@ -491,7 +504,30 @@ impl PreparedInterruptions {
         final_activities: &BTreeMap<PersonId, Activity>,
         replacement: &game_missions::TalkReplacement,
     ) -> Result<InterruptionFinalization, Error> {
-        self.stage_into_with_replacements(sim, batch, final_activities, None, Some(replacement))
+        self.stage_into_with_replacements(
+            sim,
+            batch,
+            final_activities,
+            None,
+            Some(replacement),
+            None,
+        )
+    }
+    pub(crate) fn stage_into_with_agreement_replacement(
+        self,
+        sim: &Simulation,
+        batch: &mut Batch,
+        final_activities: &BTreeMap<PersonId, Activity>,
+        replacement: &game_agreements::ReportReplacement,
+    ) -> Result<InterruptionFinalization, Error> {
+        self.stage_into_with_replacements(
+            sim,
+            batch,
+            final_activities,
+            None,
+            None,
+            Some(replacement),
+        )
     }
     fn stage_into_with_replacements(
         self,
@@ -500,6 +536,7 @@ impl PreparedInterruptions {
         final_activities: &BTreeMap<PersonId, Activity>,
         memory_replacement: Option<&game_invocation::MemoryReplacement>,
         mission_replacement: Option<&game_missions::TalkReplacement>,
+        agreement_replacement: Option<&game_agreements::ReportReplacement>,
     ) -> Result<InterruptionFinalization, Error> {
         if self.now != sim.host.clock().time {
             return Err(Error::Unavailable);
@@ -630,6 +667,10 @@ impl PreparedInterruptions {
                 )
             })
             .transpose()?;
+        let agreements = self
+            .agreements
+            .map(|change| change.stage_into_composed(store, batch, agreement_replacement))
+            .transpose()?;
         if let Some(change) = self.missions {
             change.stage_into_composed(store, batch, mission_replacement)?;
         }
@@ -639,6 +680,7 @@ impl PreparedInterruptions {
             property,
             projects,
             transport,
+            agreements,
         })
     }
 }
@@ -647,8 +689,16 @@ pub(crate) struct InterruptionFinalization {
     transport: Option<game_transport::TransportFinalization<Vec<game_transport::Lift>>>,
     property: Option<game_property::CancellationFinalization>,
     projects: Option<game_projects::ProjectFinalization>,
+    agreements: Option<game_agreements::ReportBatchGuard>,
 }
 impl InterruptionFinalization {
+    pub(crate) fn validate_batch(&self, batch: &Batch) -> Result<(), Error> {
+        if let Some(guard) = &self.agreements {
+            guard.validate(batch)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn finish_actor(&mut self, sim: &mut Simulation, actor: PersonId) {
         let Some(step) = self.steps.remove(&actor) else {
             return;

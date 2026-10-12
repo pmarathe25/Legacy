@@ -172,7 +172,7 @@ impl Simulation {
                 .state
                 .agreements
                 .as_ref()
-                .and_then(|world| world.agreements.get(agreement))
+                .and_then(|_| game_agreements::agreement(&self.host.storage, *(agreement)))
                 .map_or_else(Vec::new, |agreement| {
                     agreement
                         .accepted
@@ -185,7 +185,7 @@ impl Simulation {
                 .state
                 .agreements
                 .as_ref()
-                .and_then(|world| world.amendments.get(amendment))
+                .and_then(|_| game_agreements::amendment(&self.host.storage, *(amendment)))
                 .map_or_else(Vec::new, |amendment| {
                     vec![(amendment.proposer, Skill::Negotiation)]
                 }),
@@ -692,15 +692,9 @@ mod tests {
             },
         )
         .unwrap();
-        let agreement = *sim
-            .host
-            .state
-            .agreements
-            .as_ref()
-            .unwrap()
-            .agreements
-            .keys()
-            .next_back()
+        let agreement = game_agreements::agreements(&sim.host.storage)
+            .map(|(id, _)| id)
+            .last()
             .unwrap();
         assert_eq!(
             sim.host.state.skills.as_ref().unwrap().practice(

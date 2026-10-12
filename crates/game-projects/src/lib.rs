@@ -128,3 +128,9 @@ impl Runtime {
 
 #[cfg(test)]
 mod component_tests;
+
+/// The first stable farm record supplies the authored seed and food endpoints.
+pub fn site_output(store:&game_ecs::Store,site:game_core::SiteId,good:game_core::Good)->Option<game_core::InventoryId>{
+    projects(store).map(|(_,row)|row).find(|row|matches!(row.kind,ProjectKind::Farm{plot,..} if plot==site))
+        .and_then(|row|match good{game_core::Good::Food=>Some(row.output),game_core::Good::Seed=>Some(row.input),_=>None})
+}

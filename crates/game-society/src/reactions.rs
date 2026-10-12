@@ -273,7 +273,6 @@ impl Runtime {
         store: &Store,
         subject: SubjectFacts,
         known: &BTreeMap<InventoryId, StockKnowledge>,
-        custodians: &BTreeMap<InventoryId, PersonId>,
         at: SimTime,
     ) -> Vec<CaseReaction> {
         let Some(area) = subject.area else {
@@ -300,7 +299,7 @@ impl Runtime {
             })
             .take(8)
             .filter_map(|stock| {
-                let owner = *custodians.get(&stock.inventory)?;
+                let owner = game_property::inventory_custodian(store, stock.inventory)?;
                 if crate::storage::exclusions(store, subject.actor)
                     .and_then(|rows| rows.stores.get(&stock.inventory))
                     .and_then(|id| crate::storage::case(store, id))

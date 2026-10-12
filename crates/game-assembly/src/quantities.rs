@@ -58,46 +58,14 @@ impl Simulation {
                 }
             }
         }
-        if let Some(world) = &self.host.state.agreements {
-            for agreement in world
-                .knowledge
-                .get(&actor)
-                .into_iter()
-                .flat_map(|known| known.values())
-            {
-                for obligation in &agreement.obligations {
-                    let relevant = match &obligation.term {
-                        AgreementTerm::Delivery {
-                            debtor,
-                            source: promised_source,
-                            destination: target,
-                            ..
-                        } => {
-                            *debtor == actor
-                                && destination.is_none_or(|id| id == *target)
-                                && source.is_some_and(|id| {
-                                    id == *promised_source || obligation.cargo.contains_key(&id)
-                                })
-                        }
-                        AgreementTerm::OutputShare {
-                            debtor,
-                            good: promised_good,
-                            destination: target,
-                            ..
-                        } => {
-                            *debtor == actor
-                                && *promised_good == good
-                                && destination.is_none_or(|id| id == *target)
-                        }
-                        _ => false,
-                    };
-                    if relevant {
-                        add(Quantity(
-                            obligation.amount().saturating_sub(obligation.performed),
-                        ));
-                    }
-                }
-            }
+        for quantity in game_agreements::known_delivery_amounts(
+            &self.host.storage,
+            actor,
+            good,
+            source,
+            destination,
+        ) {
+            add(quantity);
         }
         if let Some(request) = self
             .host
@@ -275,13 +243,8 @@ mod tests {
                 BTreeSet::from([recipient]),
             )
             .unwrap();
-        sim.host
-            .state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .custodians
-            .insert(destination, recipient);
+        game_property::declare_custody(&mut sim.host.storage, destination, recipient)
+            .expect("declared custody");
         sim.debug_agreement_action(
             actor,
             AgreementAction::Propose {

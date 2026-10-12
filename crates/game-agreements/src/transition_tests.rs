@@ -23,12 +23,12 @@ fn institutional_duty() -> InstitutionDuty {
 #[test]
 fn institution_declared_duties_record_debt_without_performing_or_granting_it() {
     let duty = institutional_duty();
-    let mut state = State::default();
-    let plan = state
+    let mut state = fixture();
+    let plan = Ledger::new(&state)
         .prepare_institutional_duties(std::slice::from_ref(&duty), SimTime(20))
         .unwrap();
     assert!(plan.permissions.is_empty());
-    assert!(state.agreements.is_empty());
+    assert!(agreements(&state).next().is_none());
     assert_eq!(
         plan.events,
         vec![TransitionEvent::Activated {
@@ -36,25 +36,40 @@ fn institution_declared_duties_record_debt_without_performing_or_granting_it() {
         }]
     );
     plan.commit(&mut state).unwrap();
-    assert_eq!(state.agreements[&duty.agreement].proposed_at, SimTime(20));
-    assert_eq!(state.obligations[&duty.obligation].performed, 0);
-    assert!(state.obligations[&duty.obligation].cargo.is_empty());
+    assert_eq!(
+        crate::agreement(&state, duty.agreement)
+            .unwrap()
+            .proposed_at,
+        SimTime(20)
+    );
+    assert_eq!(
+        crate::obligation(&state, duty.obligation)
+            .unwrap()
+            .performed,
+        0
+    );
+    assert!(
+        crate::obligation(&state, duty.obligation)
+            .unwrap()
+            .cargo
+            .is_empty()
+    );
 }
 
 #[test]
 fn invalid_declared_duty_batch_cannot_partially_install_other_duties() {
     let duty = institutional_duty();
-    let state = State::default();
+    let state = fixture();
     let duplicate = InstitutionDuty {
         obligation: ObligationId(12),
         ..duty.clone()
     };
     assert!(
-        state
+        Ledger::new(&state)
             .prepare_institutional_duties(&[duty.clone(), duplicate], SimTime(20))
             .is_err()
     );
-    assert_eq!(state, State::default());
+    assert_eq!(state, fixture());
     for invalid in [
         InstitutionDuty {
             institution: InstitutionId(0),
@@ -70,7 +85,7 @@ fn invalid_declared_duty_batch_cannot_partially_install_other_duties() {
         },
     ] {
         assert!(
-            state
+            Ledger::new(&state)
                 .prepare_institutional_duties(&[invalid], SimTime(20))
                 .is_err()
         );
@@ -80,8 +95,8 @@ fn invalid_declared_duty_batch_cannot_partially_install_other_duties() {
 #[test]
 fn a_stale_declared_duty_installation_preserves_the_current_ledger() {
     let duty = institutional_duty();
-    let mut state = State::default();
-    let first = state
+    let mut state = fixture();
+    let first = Ledger::new(&state)
         .prepare_institutional_duties(std::slice::from_ref(&duty), SimTime(20))
         .unwrap();
     let stale = first.clone();
@@ -137,20 +152,20 @@ fn procedure(threshold: usize) -> AmendmentProcedure {
     }
 }
 fn perform(
-    state: &mut State,
+    state: &mut Store,
     actor: PersonId,
     action: AgreementAction,
     facts: &TransitionFacts,
     ids: TransitionIds,
 ) -> PreparedTransition {
-    let plan = state
+    let plan = Ledger::new(state)
         .prepare_transition(actor, &action, facts, &ids)
         .unwrap();
     plan.clone().commit(state).unwrap();
     plan
 }
 fn initial(
-    state: &mut State,
+    state: &mut Store,
     terms: Vec<AgreementTerm>,
     procedure: Option<AmendmentProcedure>,
     facts: &TransitionFacts,
@@ -170,8 +185,8 @@ fn initial(
         },
     );
 }
-fn activate(state: &mut State, facts: &TransitionFacts) -> PreparedTransition {
-    let count = state
+fn activate(state: &mut Store, facts: &TransitionFacts) -> PreparedTransition {
+    let count = Ledger::new(state)
         .allocation_needs(&AgreementAction::Accept {
             agreement: AGREEMENT,
         })
@@ -191,7 +206,7 @@ fn activate(state: &mut State, facts: &TransitionFacts) -> PreparedTransition {
     )
 }
 fn amend(
-    state: &mut State,
+    state: &mut Store,
     id: u64,
     replacements: BTreeMap<u16, AgreementTerm>,
     facts: &TransitionFacts,
@@ -211,7 +226,7 @@ fn amend(
     );
 }
 fn vote(
-    state: &mut State,
+    state: &mut Store,
     actor: PersonId,
     id: u64,
     support: bool,
@@ -231,7 +246,7 @@ fn vote(
 
 #[test]
 fn voluntary_signatures_create_owed_duties_and_permission_effects_only() {
-    let mut state = State::default();
+    let mut state = fixture();
     let facts = facts();
     initial(
         &mut state,
@@ -255,13 +270,34 @@ fn voluntary_signatures_create_owed_duties_and_permission_effects_only() {
         None,
         &facts,
     );
-    assert!(state.obligations.is_empty());
-    assert_eq!(state.agreements[&AGREEMENT].accepted, BTreeSet::from([A]));
+    assert!(obligations(&state).next().is_none());
+    assert_eq!(
+        crate::agreement(&state, AGREEMENT).unwrap().accepted,
+        BTreeSet::from([A])
+    );
     let plan = activate(&mut state, &facts);
-    assert_eq!(state.agreements[&AGREEMENT].status, AgreementStatus::Active);
-    assert_eq!(state.obligations[&ObligationId(2)].performed, 0);
-    assert_eq!(state.obligations[&ObligationId(3)].performed, 0);
-    assert_eq!(state.obligations[&ObligationId(4)].performed, 1);
+    assert_eq!(
+        crate::agreement(&state, AGREEMENT).unwrap().status,
+        AgreementStatus::Active
+    );
+    assert_eq!(
+        crate::obligation(&state, ObligationId(2))
+            .unwrap()
+            .performed,
+        0
+    );
+    assert_eq!(
+        crate::obligation(&state, ObligationId(3))
+            .unwrap()
+            .performed,
+        0
+    );
+    assert_eq!(
+        crate::obligation(&state, ObligationId(4))
+            .unwrap()
+            .performed,
+        1
+    );
     assert_eq!(
         plan.permissions,
         vec![PermissionEffect {
@@ -282,7 +318,7 @@ fn voluntary_signatures_create_owed_duties_and_permission_effects_only() {
 
 #[test]
 fn contact_custody_and_rejection_are_real_gates_and_invalid_changes_are_inert() {
-    let mut state = State::default();
+    let mut state = fixture();
     let mut facts = facts();
     let propose = AgreementAction::Propose {
         parties: BTreeSet::from([A, B]),
@@ -300,7 +336,7 @@ fn contact_custody_and_rejection_are_real_gates_and_invalid_changes_are_inert() 
     };
     facts.present.remove(&B);
     assert_eq!(
-        state
+        Ledger::new(&state)
             .prepare_transition(A, &propose, &facts, &ids)
             .unwrap_err(),
         Error::Unavailable
@@ -308,12 +344,12 @@ fn contact_custody_and_rejection_are_real_gates_and_invalid_changes_are_inert() 
     facts.present.insert(B);
     facts.assets.grants.clear();
     assert_eq!(
-        state
+        Ledger::new(&state)
             .prepare_transition(A, &propose, &facts, &ids)
             .unwrap_err(),
         Error::Unavailable
     );
-    assert_eq!(state, State::default());
+    assert_eq!(state, fixture());
     facts
         .assets
         .grants
@@ -321,7 +357,7 @@ fn contact_custody_and_rejection_are_real_gates_and_invalid_changes_are_inert() 
     perform(&mut state, A, propose, &facts, ids);
     let before = state.clone();
     assert_eq!(
-        state
+        Ledger::new(&state)
             .prepare_transition(
                 C,
                 &AgreementAction::Accept {
@@ -347,14 +383,14 @@ fn contact_custody_and_rejection_are_real_gates_and_invalid_changes_are_inert() 
         TransitionIds::default(),
     );
     assert_eq!(
-        state.agreements[&AGREEMENT].status,
+        crate::agreement(&state, AGREEMENT).unwrap().status,
         AgreementStatus::Rejected
     );
-    assert!(state.obligations.is_empty());
+    assert!(obligations(&state).next().is_none());
 }
 #[test]
 fn counteroffer_withdraws_old_offer_without_accepting_the_replacement() {
-    let mut state = State::default();
+    let mut state = fixture();
     let facts = facts();
     initial(&mut state, vec![labor(A, 100, 1000)], None, &facts);
     let plan = perform(
@@ -372,18 +408,18 @@ fn counteroffer_withdraws_old_offer_without_accepting_the_replacement() {
         },
     );
     assert_eq!(
-        state.agreements[&AGREEMENT].status,
+        crate::agreement(&state, AGREEMENT).unwrap().status,
         AgreementStatus::Withdrawn
     );
     assert_eq!(
-        state.agreements[&AgreementId(9)].accepted,
+        crate::agreement(&state, AgreementId(9)).unwrap().accepted,
         BTreeSet::from([B])
     );
     assert_eq!(
-        state.agreements[&AgreementId(9)].status,
+        crate::agreement(&state, AgreementId(9)).unwrap().status,
         AgreementStatus::Proposed
     );
-    assert!(state.obligations.is_empty());
+    assert!(obligations(&state).next().is_none());
     assert_eq!(
         plan.notices.iter().map(|n| n.agreement).collect::<Vec<_>>(),
         vec![AgreementId(9), AGREEMENT]
@@ -392,7 +428,7 @@ fn counteroffer_withdraws_old_offer_without_accepting_the_replacement() {
 
 #[test]
 fn chosen_quorum_and_term_approvers_determine_changes_and_invalidate_stale_proposals() {
-    let mut state = State::default();
+    let mut state = fixture();
     let facts = facts();
     let mut rule = procedure(1);
     rule.term_approvers.insert(0, BTreeSet::from([B]));
@@ -412,10 +448,10 @@ fn chosen_quorum_and_term_approvers_determine_changes_and_invalidate_stale_propo
     );
     vote(&mut state, A, 10, true, &facts);
     assert_eq!(
-        state.amendments[&AmendmentId(10)].status,
+        amendment(&state, AmendmentId(10)).unwrap().status,
         AmendmentStatus::Proposed
     );
-    let stale = state
+    let stale = Ledger::new(&state)
         .prepare_transition(
             B,
             &AgreementAction::Vote {
@@ -427,10 +463,13 @@ fn chosen_quorum_and_term_approvers_determine_changes_and_invalidate_stale_propo
         )
         .unwrap();
     vote(&mut state, B, 10, true, &facts);
-    assert_eq!(state.agreements[&AGREEMENT].revision, 1);
-    assert_eq!(state.obligations[&ObligationId(2)].amount(), 200);
+    assert_eq!(crate::agreement(&state, AGREEMENT).unwrap().revision, 1);
     assert_eq!(
-        state.amendments[&AmendmentId(11)].status,
+        crate::obligation(&state, ObligationId(2)).unwrap().amount(),
+        200
+    );
+    assert_eq!(
+        amendment(&state, AmendmentId(11)).unwrap().status,
         AmendmentStatus::Rejected
     );
     let before = state.clone();
@@ -441,11 +480,11 @@ fn chosen_quorum_and_term_approvers_determine_changes_and_invalidate_stale_propo
 #[test]
 fn no_universal_forgiveness_or_increase_consent_rule_is_invented() {
     let facts = facts();
-    let mut state = State::default();
+    let mut state = fixture();
     initial(&mut state, vec![labor(A, 100, 1000)], None, &facts);
     activate(&mut state, &facts);
     assert_eq!(
-        state
+        Ledger::new(&state)
             .prepare_transition(
                 B,
                 &AgreementAction::Amend {
@@ -461,7 +500,7 @@ fn no_universal_forgiveness_or_increase_consent_rule_is_invented() {
             .unwrap_err(),
         Error::Unavailable
     );
-    let mut chosen = State::default();
+    let mut chosen = fixture();
     let mut rule = procedure(1);
     rule.approvers = BTreeSet::from([B]);
     initial(&mut chosen, vec![labor(A, 100, 1000)], Some(rule), &facts);
@@ -473,13 +512,18 @@ fn no_universal_forgiveness_or_increase_consent_rule_is_invented() {
         &facts,
     );
     vote(&mut chosen, B, 10, true, &facts);
-    assert_eq!(chosen.obligations[&ObligationId(2)].amount(), 200); // A chose this original procedure.
+    assert_eq!(
+        crate::obligation(&chosen, ObligationId(2))
+            .unwrap()
+            .amount(),
+        200
+    ); // A chose this original procedure.
 }
 
 #[test]
 fn negative_votes_reject_when_named_procedure_can_no_longer_pass() {
     let facts = facts();
-    let mut state = State::default();
+    let mut state = fixture();
     initial(
         &mut state,
         vec![labor(A, 100, 1000)],
@@ -495,15 +539,15 @@ fn negative_votes_reject_when_named_procedure_can_no_longer_pass() {
     );
     vote(&mut state, B, 10, false, &facts);
     assert_eq!(
-        state.amendments[&AmendmentId(10)].status,
+        amendment(&state, AmendmentId(10)).unwrap().status,
         AmendmentStatus::Rejected
     );
-    assert_eq!(state.agreements[&AGREEMENT].revision, 0);
+    assert_eq!(crate::agreement(&state, AGREEMENT).unwrap().revision, 0);
 }
 
 #[test]
 fn actual_work_survives_same_duty_amendment_and_changed_duty_defaults_without_free_credit() {
-    let mut state = State::default();
+    let mut state = fixture();
     let mut facts = facts();
     initial(
         &mut state,
@@ -512,7 +556,7 @@ fn actual_work_survives_same_duty_amendment_and_changed_duty_defaults_without_fr
         &facts,
     );
     activate(&mut state, &facts);
-    state
+    Ledger::new(&state)
         .prepare_labor(
             SimTime(0),
             SimTime(30),
@@ -532,8 +576,13 @@ fn actual_work_survives_same_duty_amendment_and_changed_duty_defaults_without_fr
         &facts,
     );
     let plan = vote(&mut state, A, 10, true, &facts);
-    assert_eq!(state.obligations[&ObligationId(2)].performed, 30);
-    assert!(state.pending_work.is_empty());
+    assert_eq!(
+        crate::obligation(&state, ObligationId(2))
+            .unwrap()
+            .performed,
+        30
+    );
+    assert!(pending_works(&state).next().is_none());
     assert_eq!(
         plan.events[0],
         TransitionEvent::Performed {
@@ -542,7 +591,7 @@ fn actual_work_survives_same_duty_amendment_and_changed_duty_defaults_without_fr
             quantity: Quantity(30)
         }
     );
-    state
+    Ledger::new(&state)
         .prepare_labor(
             SimTime(30),
             SimTime(50),
@@ -570,17 +619,26 @@ fn actual_work_survives_same_duty_amendment_and_changed_duty_defaults_without_fr
             quantity: Quantity(20)
         }
     );
-    assert_eq!(state.obligations[&ObligationId(2)].performed, 0);
-    assert!(state.obligations[&ObligationId(2)].defaulted);
     assert_eq!(
-        state.agreements[&AGREEMENT].status,
+        crate::obligation(&state, ObligationId(2))
+            .unwrap()
+            .performed,
+        0
+    );
+    assert!(
+        crate::obligation(&state, ObligationId(2))
+            .unwrap()
+            .defaulted
+    );
+    assert_eq!(
+        crate::agreement(&state, AGREEMENT).unwrap().status,
         AgreementStatus::Breached
     );
 }
 
 #[test]
 fn prepared_vote_cannot_overwrite_actual_performance_and_pending_credit() {
-    let mut state = State::default();
+    let mut state = fixture();
     let facts = facts();
     initial(
         &mut state,
@@ -595,7 +653,7 @@ fn prepared_vote_cannot_overwrite_actual_performance_and_pending_credit() {
         BTreeMap::from([(0, labor(A, 200, 1000))]),
         &facts,
     );
-    let plan = state
+    let plan = Ledger::new(&state)
         .prepare_transition(
             A,
             &AgreementAction::Vote {
@@ -606,7 +664,7 @@ fn prepared_vote_cannot_overwrite_actual_performance_and_pending_credit() {
             &TransitionIds::default(),
         )
         .unwrap();
-    state
+    Ledger::new(&state)
         .prepare_labor(
             SimTime(0),
             SimTime(10),
@@ -625,7 +683,7 @@ fn prepared_vote_cannot_overwrite_actual_performance_and_pending_credit() {
 
 #[test]
 fn amendment_keeps_actual_fractional_output_debt_when_future_share_changes() {
-    let mut state = State::default();
+    let mut state = fixture();
     let mut facts = facts();
     facts
         .assets
@@ -644,7 +702,7 @@ fn amendment_keeps_actual_fractional_output_debt_when_future_share_changes() {
     };
     initial(&mut state, vec![share(3)], Some(procedure(1)), &facts);
     activate(&mut state, &facts);
-    state
+    Ledger::new(&state)
         .prepare_production(ProductionFact {
             actor: A,
             site: SITE,
@@ -657,15 +715,19 @@ fn amendment_keeps_actual_fractional_output_debt_when_future_share_changes() {
         .unwrap();
     assert_eq!(
         (
-            state.obligations[&ObligationId(2)].share_remainder,
-            state.obligations[&ObligationId(2)].share_scale
+            crate::obligation(&state, ObligationId(2))
+                .unwrap()
+                .share_remainder,
+            crate::obligation(&state, ObligationId(2))
+                .unwrap()
+                .share_scale
         ),
         (1, 3)
     );
     facts.assets.now = SimTime(10);
     amend(&mut state, 10, BTreeMap::from([(0, share(2))]), &facts);
     vote(&mut state, A, 10, true, &facts);
-    state
+    Ledger::new(&state)
         .prepare_production(ProductionFact {
             actor: A,
             site: SITE,
@@ -676,7 +738,7 @@ fn amendment_keeps_actual_fractional_output_debt_when_future_share_changes() {
         .unwrap()
         .commit(&mut state)
         .unwrap();
-    let owed = &state.obligations[&ObligationId(2)];
+    let owed = &crate::obligation(&state, ObligationId(2)).unwrap();
     assert_eq!(
         (owed.accrued, owed.share_remainder, owed.share_scale),
         (1, 1, 3)
@@ -686,7 +748,7 @@ fn amendment_keeps_actual_fractional_output_debt_when_future_share_changes() {
 
 #[test]
 fn prepared_adoption_rejects_a_later_concurrent_proposal_without_partial_changes() {
-    let mut state = State::default();
+    let mut state = fixture();
     let facts = facts();
     initial(
         &mut state,
@@ -701,7 +763,7 @@ fn prepared_adoption_rejects_a_later_concurrent_proposal_without_partial_changes
         BTreeMap::from([(0, labor(A, 200, 1000))]),
         &facts,
     );
-    let prepared = state
+    let prepared = Ledger::new(&state)
         .prepare_transition(
             A,
             &AgreementAction::Vote {
@@ -725,7 +787,7 @@ fn prepared_adoption_rejects_a_later_concurrent_proposal_without_partial_changes
 
 #[test]
 fn service_commitment_needs_exact_heard_terms_and_resolved_counteroffer() {
-    let state = State::default();
+    let state = fixture();
     let facts = facts();
     let consent = HeardServiceConsent {
         recruitment: RecruitmentId(400),
@@ -741,7 +803,7 @@ fn service_commitment_needs_exact_heard_terms_and_resolved_counteroffer() {
         ..Default::default()
     };
     assert!(
-        state
+        Ledger::new(&state)
             .prepare_service_commitment(
                 &HeardServiceConsent {
                     unanswered_counteroffer: true,
@@ -753,7 +815,7 @@ fn service_commitment_needs_exact_heard_terms_and_resolved_counteroffer() {
             .is_err()
     );
     assert!(
-        state
+        Ledger::new(&state)
             .prepare_service_commitment(
                 &HeardServiceConsent {
                     accepted_terms: vec![labor(A, 200, 1000)],
@@ -767,11 +829,11 @@ fn service_commitment_needs_exact_heard_terms_and_resolved_counteroffer() {
     let mut missing = facts.clone();
     missing.present.remove(&B);
     assert!(
-        state
+        Ledger::new(&state)
             .prepare_service_commitment(&consent, &missing, &ids)
             .is_err()
     );
-    let plan = state
+    let plan = Ledger::new(&state)
         .prepare_service_commitment(&consent, &facts, &ids)
         .unwrap();
     assert_eq!(
@@ -789,8 +851,13 @@ fn service_commitment_needs_exact_heard_terms_and_resolved_counteroffer() {
     let mut after = state;
     plan.commit(&mut after).unwrap();
     assert_eq!(
-        after.agreements[&AGREEMENT].accepted,
+        crate::agreement(&after, AGREEMENT).unwrap().accepted,
         BTreeSet::from([A, B])
     );
-    assert_eq!(after.obligations[&ObligationId(2)].performed, 0);
+    assert_eq!(
+        crate::obligation(&after, ObligationId(2))
+            .unwrap()
+            .performed,
+        0
+    );
 }

@@ -123,6 +123,7 @@ impl Activity {
     }
 }
 pub fn register_components(schema: &mut Schema) -> Result<(), Error> {
+    register_custody(schema)?;
     schema.register::<Claim>("property/claim", Claim::validate)?;
     schema.register::<Incident>("property/incident", Incident::validate)?;
     schema.register::<Provenance>("property/provenance", Provenance::validate)?;

@@ -828,9 +828,16 @@ impl Simulation {
                         beneficiary: id,
                         subject: Some(Subject::Project(*project)),
                     };
-                    if let Some(obligation)=self.host.state.agreements.as_ref().and_then(|world|world.knowledge.get(&id)).into_iter().flat_map(|known|known.values()).flat_map(|agreement|agreement.obligations.iter()).find(|obligation|matches!(obligation.term,AgreementTerm::ConstructionLabor {debtor,project:target,..} if debtor==id&&target==*project)&&obligation.performed<obligation.term.amount()) {
-                            motives.push(Motive::Fulfil {commitment:CommitmentRef::Obligation(obligation.id)});key=IntentionKey::Commitment(CommitmentRef::Obligation(obligation.id));
-                        }
+                    if let Some(obligation) = game_agreements::known_construction_obligation(
+                        &self.host.storage,
+                        id,
+                        *project,
+                    ) {
+                        motives.push(Motive::Fulfil {
+                            commitment: CommitmentRef::Obligation(obligation),
+                        });
+                        key = IntentionKey::Commitment(CommitmentRef::Obligation(obligation));
+                    }
                 }
                 add(action, key, motives, None);
             }

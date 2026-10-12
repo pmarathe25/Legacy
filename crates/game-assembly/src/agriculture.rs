@@ -356,7 +356,7 @@ impl Simulation {
         }
         Ok(())
     }
-    fn cultivation_facts(
+    pub(crate) fn cultivation_facts(
         &self,
         actor: PersonId,
         field: SiteId,
@@ -459,15 +459,7 @@ impl Simulation {
         let (land, crop, soil, rules) = world.field_bundle(&self.host.storage, field)?;
         game_agriculture::prepare_begin(land, crop, soil, rules, operation, facts)
     }
-    pub(crate) fn cultivation_possible(
-        &self,
-        actor: PersonId,
-        field: SiteId,
-        operation: FarmOperation,
-    ) -> bool {
-        self.prepare_cultivation_start(actor, field, operation, None)
-            .is_ok()
-    }
+
     pub(crate) fn start_cultivation(
         &mut self,
         actor: PersonId,
@@ -654,27 +646,20 @@ impl Simulation {
     }
 
     pub(crate) fn available_cultivation(&self, actor: PersonId) -> Vec<Command> {
-        let Some(world) = &self.host.state.agriculture else {
+        let Some(runtime) = &self.host.state.agriculture else {
             return Vec::new();
         };
-        world
+        let facts = runtime
             .fields(&self.host.storage)
-            .map(|(id, _)| id)
-            .flat_map(|field| {
-                [
-                    FarmOperation::Prepare,
-                    FarmOperation::Plant,
-                    FarmOperation::Tend,
-                    FarmOperation::Irrigate,
-                    FarmOperation::Harvest,
-                    FarmOperation::Fallow,
-                ]
-                .into_iter()
-                .filter_map(move |operation| {
-                    self.cultivation_possible(actor, field, operation)
-                        .then_some(Command::Cultivate { field, operation })
-                })
+            .filter_map(|(id, _)| {
+                self.cultivation_facts(actor, id, None)
+                    .ok()
+                    .map(|facts| (id, facts))
             })
+            .collect();
+        game_agriculture::available_operations(runtime, &self.host.storage, &facts)
+            .into_iter()
+            .map(|(field, operation)| Command::Cultivate { field, operation })
             .collect()
     }
 

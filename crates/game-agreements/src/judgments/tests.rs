@@ -250,7 +250,6 @@ fn acceptance_counteroffer_and_rejection_thresholds_preserve_consent() {
 fn exchange<'a>(
     stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
     sites: &'a [KnownSiteRight],
-    custodians: &'a BTreeMap<InventoryId, PersonId>,
 ) -> LocalExchangeFacts<'a> {
     LocalExchangeFacts {
         actor: PersonId(1),
@@ -259,13 +258,11 @@ fn exchange<'a>(
         hunger: 180_000,
         stocks,
         sites,
-        custodians,
     }
 }
 #[test]
 fn local_exchange_keeps_stable_choice_and_does_not_publish_its_cooldown() {
-    let state = State::default();
-    let before = state.clone();
+    let mut state = fixture();
     let mut stocks = BTreeMap::from([
         (InventoryId(10), stock(10, 1, 1_000, false)),
         (InventoryId(20), stock(20, 1, 5_000, false)),
@@ -282,14 +279,13 @@ fn local_exchange_keeps_stable_choice_and_does_not_publish_its_cooldown() {
             accessible: true,
         },
     ];
-    let custodians = BTreeMap::from([
-        (InventoryId(10), PersonId(2)),
-        (InventoryId(20), PersonId(3)),
-    ]);
-    let proposal = state
-        .local_exchange(SimTime(0), exchange(&stocks, &sites, &custodians), |_| {
-            Some(AreaId(1))
-        })
+    for (id, owner) in [(10, 2), (20, 3)] {
+        state.ensure(StableId(id)).unwrap();
+        game_property::declare_custody(&mut state, InventoryId(id), PersonId(owner)).unwrap();
+    }
+    let before = state.clone();
+    let proposal = Ledger::new(&state)
+        .local_exchange(SimTime(0), exchange(&stocks, &sites), &Places(AreaId(1)))
         .unwrap();
     assert_eq!(proposal.next_search, SimTime(300_000));
     assert_eq!(state, before);
@@ -312,27 +308,27 @@ fn local_exchange_keeps_stable_choice_and_does_not_publish_its_cooldown() {
     ));
     stocks.insert(InventoryId(5), stock(5, 9, 10_000, true));
     assert_eq!(
-        state.local_exchange(
+        Ledger::new(&state).local_exchange(
             SimTime(0),
-            exchange(&stocks, &sites, &custodians),
-            |_| Some(AreaId(1))
+            exchange(&stocks, &sites),
+            &Places(AreaId(1))
         ),
         Some(proposal)
     );
     assert_eq!(
-        state.local_exchange(
+        Ledger::new(&state).local_exchange(
             SimTime(0),
-            exchange(&stocks, &sites, &custodians),
-            |_| Some(AreaId(2))
+            exchange(&stocks, &sites),
+            &Places(AreaId(2))
         ),
         None
     );
     stocks.insert(InventoryId(5), stock(5, 1, 1_000, true));
     assert_eq!(
-        state.local_exchange(
+        Ledger::new(&state).local_exchange(
             SimTime(0),
-            exchange(&stocks, &sites, &custodians),
-            |_| Some(AreaId(1))
+            exchange(&stocks, &sites),
+            &Places(AreaId(1))
         ),
         None
     );
@@ -359,33 +355,37 @@ fn deadlines_cooldowns_and_numeric_overflow_are_explicit() {
         area: AreaId(1),
         accessible: true,
     }];
-    let custodians = BTreeMap::from([(InventoryId(10), PersonId(2))]);
-    let mut state = State::default();
-    state.next_search.insert(PersonId(1), SimTime(1));
+    let mut state = fixture();
+    state.ensure(StableId(10)).unwrap();
+    game_property::declare_custody(&mut state, InventoryId(10), PersonId(2)).unwrap();
+    insert_requests(
+        &mut state,
+        PersonId(1),
+        Requests {
+            next_search: SimTime(1),
+        },
+    )
+    .unwrap();
     assert_eq!(
-        state.local_exchange(
+        Ledger::new(&state).local_exchange(
             SimTime(0),
-            exchange(&stocks, &sites, &custodians),
-            |_| Some(AreaId(1))
+            exchange(&stocks, &sites),
+            &Places(AreaId(1))
         ),
         None
     );
     assert!(
-        state
-            .local_exchange(
-                SimTime(1),
-                exchange(&stocks, &sites, &custodians),
-                |_| Some(AreaId(1))
-            )
+        Ledger::new(&state)
+            .local_exchange(SimTime(1), exchange(&stocks, &sites), &Places(AreaId(1)))
             .is_some()
     );
-    state.next_search.clear();
+    state.remove::<Requests>(StableId(1)).unwrap();
     let before = state.clone();
     assert_eq!(
-        state.local_exchange(
+        Ledger::new(&state).local_exchange(
             SimTime(u64::MAX - 100),
-            exchange(&stocks, &sites, &custodians),
-            |_| Some(AreaId(1))
+            exchange(&stocks, &sites),
+            &Places(AreaId(1))
         ),
         None
     );
@@ -420,4 +420,17 @@ fn amendments_only_expose_unanswered_current_changes_to_chosen_approvers() {
     assert_eq!(pending_amendments(PersonId(1), &offer).count(), 0);
     offer.amendments[0].replacements = BTreeMap::from([(2, delivery(1, 2, 240_000))]);
     assert!(amended_terms(&offer, &offer.amendments[0]).is_err());
+}
+
+struct Places(AreaId);
+impl Presence for Places {
+    fn contact(&self, _: PersonId) -> Option<ContactFacts> {
+        Some(ContactFacts {
+            alive: true,
+            health: 1,
+            independent: true,
+            in_combat: false,
+            area: Some(self.0),
+        })
+    }
 }

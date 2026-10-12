@@ -415,18 +415,13 @@ impl Simulation {
                 )
             })
             .collect();
-        self.host.state.agreements = Some(agreements::World {
-            ledger: game_agreements::State {
-                agreements: BTreeMap::new(),
-                obligations: BTreeMap::new(),
-                amendments: BTreeMap::new(),
-                last_event: self.host.next_event() - 1,
-                next_search: BTreeMap::new(),
-                pending_work: BTreeMap::new(),
-                knowledge: BTreeMap::new(),
-                last_observation_event: self.host.next_event() - 1,
-            },
-            custodians,
+        let __custody: BTreeMap<InventoryId, PersonId> = custodians;
+        for (id, owner) in __custody {
+            game_property::declare_custody(&mut self.host.storage, id, owner)?;
+        }
+        self.host.state.agreements = Some(game_agreements::Runtime {
+            last_event: self.host.next_event() - 1,
+            last_observation_event: self.host.next_event() - 1,
         });
         let mut property_rows = game_ecs::Batch::new();
         for person in &people {
@@ -586,13 +581,8 @@ impl Simulation {
             initial_materials.capacity,
             residents.clone(),
         )?;
-        self.host
-            .state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .custodians
-            .insert(materials, ruler);
+        game_property::declare_custody(&mut self.host.storage, materials, ruler)
+            .expect("declared custody");
         let project = ProjectId(self.host.allocate_id()?.0);
         let enterprise = EnterpriseId(self.host.allocate_id()?.0);
         let rules = self.host.state.projects.as_ref().unwrap().rules.clone();
@@ -958,13 +948,8 @@ impl Simulation {
             Quantity(100_000),
             BTreeSet::from([ruler, steward]),
         )?;
-        self.host
-            .state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .custodians
-            .insert(fund, steward);
+        game_property::declare_custody(&mut self.host.storage, fund, steward)
+            .expect("declared custody");
         self.update_property_events()?;
         let founders = BTreeSet::from([
             ruler,
@@ -1401,13 +1386,8 @@ impl Simulation {
                 quantity,
                 BTreeSet::from([custodian]),
             )?;
-            self.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(source, custodian);
+            game_property::declare_custody(&mut self.host.storage, source, custodian)
+                .expect("declared custody");
             let built_at = SimTime(self.host.clock().time.0.saturating_sub(2 * 86_400_000));
             let shelter = self.seed_shelter(
                 area,
@@ -1612,17 +1592,13 @@ mod tests {
             established.host.state.ruler
         );
         assert!(founder_office.funding.iter().all(|id| {
-            founder.host.state.agreements.as_ref().unwrap().agreements[id].status
+            game_agreements::agreement(&founder.host.storage, *id)
+                .unwrap()
+                .status
                 == AgreementStatus::Fulfilled
         }));
         assert!(ruler_office.funding.iter().all(|id| {
-            established
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements[id]
+            game_agreements::agreement(&established.host.storage,*id).unwrap()
                 .status
                 == AgreementStatus::Fulfilled
         }));

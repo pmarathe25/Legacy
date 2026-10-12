@@ -1,7 +1,10 @@
 //! Agreements describe promises and chosen procedures, never physical transfers.
 use game_core::*;
+use game_ecs::{Batch, StableId, Store};
+mod storage;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+pub use storage::*;
 mod transitions;
 pub use transitions::*;
 
@@ -271,19 +274,6 @@ pub struct Amendment {
     pub status: AmendmentStatus,
     pub base_revision: u64,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct State {
-    pub agreements: BTreeMap<AgreementId, Agreement>,
-    pub obligations: BTreeMap<ObligationId, Obligation>,
-    pub amendments: BTreeMap<AmendmentId, Amendment>,
-    pub last_event: u64,
-    pub next_search: BTreeMap<PersonId, SimTime>,
-    pub pending_work: BTreeMap<ObligationId, u64>,
-    #[serde(default)]
-    pub knowledge: BTreeMap<PersonId, BTreeMap<AgreementId, AgreementView>>,
-    #[serde(default)]
-    pub last_observation_event: u64,
-}
 
 fn gcd(mut a: u64, mut b: u64) -> u64 {
     while b != 0 {
@@ -384,13 +374,13 @@ pub struct PreparedLabor {
     read_obligations: BTreeMap<ObligationId, Obligation>,
     pub credits: Vec<WorkCredit>,
 }
-impl State {
+impl Ledger<'_> {
     pub fn status_for(&self, id: AgreementId, now: SimTime) -> Result<AgreementStatus, Error> {
-        let agreement = self.agreements.get(&id).ok_or(Error::Unavailable)?;
+        let agreement = self.agreements().get(&id).ok_or(Error::Unavailable)?;
         let obligations = agreement
             .obligations
             .iter()
-            .map(|id| self.obligations.get(id).ok_or(Error::Unavailable))
+            .map(|id| self.obligations().get(id).ok_or(Error::Unavailable))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(
             if obligations
@@ -404,11 +394,6 @@ impl State {
                 AgreementStatus::Active
             },
         )
-    }
-    pub fn refresh_status(&mut self, id: AgreementId, now: SimTime) -> Result<(), Error> {
-        let status = self.status_for(id, now)?;
-        self.agreements.get_mut(&id).unwrap().status = status;
-        Ok(())
     }
     pub fn prepare_labor(
         &self,
@@ -439,7 +424,7 @@ impl State {
         };
         for assignment in assignments {
             let mut remaining = elapsed;
-            for old in self.obligations.values() {
+            for old in self.obligations().values() {
                 let requested = match old.term {
                     AgreementTerm::Labor {
                         debtor,
@@ -474,12 +459,12 @@ impl State {
                 if credit == 0 {
                     continue;
                 }
-                if !self.agreements.contains_key(&old.agreement) {
+                if !self.agreements().contains_key(&old.agreement) {
                     return Err(Error::Unavailable);
                 }
                 let mut new = old.clone();
                 new.performed = new.performed.checked_add(credit).ok_or(Error::Overflow)?;
-                let pending = self.pending_work.get(&old.id).copied().unwrap_or(0);
+                let pending = self.pending_work().get(&old.id).copied().unwrap_or(0);
                 plan.pending.insert(
                     old.id,
                     (pending, pending.checked_add(credit).ok_or(Error::Overflow)?),
@@ -507,11 +492,14 @@ impl State {
             .map(|c| c.agreement)
             .collect::<BTreeSet<_>>()
         {
-            let agreement = self.agreements.get(&id).ok_or(Error::Unavailable)?;
+            let agreement = self.agreements().get(&id).ok_or(Error::Unavailable)?;
             let mut fulfilled = true;
             let mut breached = false;
             for obligation in &agreement.obligations {
-                let before = self.obligations.get(obligation).ok_or(Error::Unavailable)?;
+                let before = self
+                    .obligations()
+                    .get(obligation)
+                    .ok_or(Error::Unavailable)?;
                 plan.read_obligations.insert(*obligation, before.clone());
                 let after = overrides.get(obligation).copied().unwrap_or(before);
                 fulfilled &= after.performed >= after.amount() && stream_ended(&after.term, to);
@@ -534,40 +522,44 @@ impl State {
 }
 impl PreparedLabor {
     /// Reject a stale plan before changing any owned ledger record.
-    pub fn commit(self, state: &mut State) -> Result<(), Error> {
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+        let state = Ledger::new(store);
         if self
             .agreements_before
             .iter()
-            .any(|(id, old)| state.agreements.get(id) != Some(old))
+            .any(|(id, old)| state.agreements().get(id) != Some(old))
             || self
                 .read_obligations
                 .iter()
-                .any(|(id, old)| state.obligations.get(id) != Some(old))
+                .any(|(id, old)| state.obligations().get(id) != Some(old))
             || self
                 .patches
                 .iter()
-                .any(|p| state.obligations.get(&p.before.id) != Some(&p.before))
+                .any(|p| state.obligations().get(&p.before.id) != Some(&p.before))
             || self
                 .pending
                 .iter()
-                .any(|(id, (old, _))| state.pending_work.get(id).copied().unwrap_or(0) != *old)
+                .any(|(id, (old, _))| state.pending_work().get(id).copied().unwrap_or(0) != *old)
             || self
                 .statuses
                 .keys()
-                .any(|id| !state.agreements.contains_key(id))
+                .any(|id| !state.agreements().contains_key(id))
         {
             return Err(Error::Unavailable);
         }
+        let mut batch = Batch::new();
         for patch in self.patches {
-            state.obligations.insert(patch.after.id, patch.after);
+            batch.insert(StableId(patch.after.id.0), patch.after);
         }
-        for (id, (_, new)) in self.pending {
-            state.pending_work.insert(id, new);
+        for (id, (_, millis)) in self.pending {
+            batch.insert(StableId(id.0), PendingWork { millis });
         }
         for (id, status) in self.statuses {
-            state.agreements.get_mut(&id).unwrap().status = status;
+            let mut after = agreement(store, id).unwrap().clone();
+            after.status = status;
+            batch.insert(StableId(id.0), after);
         }
-        Ok(())
+        store.apply_batch(batch)
     }
 }
 
@@ -706,14 +698,18 @@ pub struct PreparedActivation {
     obligations: Vec<Obligation>,
     pub permissions: Vec<PermissionEffect>,
 }
-impl State {
+impl Ledger<'_> {
     pub fn prepare_activation(
         &self,
         id: AgreementId,
         obligations: &[ObligationId],
         context: &TermsContext,
     ) -> Result<PreparedActivation, Error> {
-        let before = self.agreements.get(&id).ok_or(Error::Unavailable)?.clone();
+        let before = self
+            .agreements()
+            .get(&id)
+            .ok_or(Error::Unavailable)?
+            .clone();
         if before.status != AgreementStatus::Proposed
             || before.accepted != before.parties
             || !before.obligations.is_empty()
@@ -721,7 +717,7 @@ impl State {
             || obligations.iter().copied().collect::<BTreeSet<_>>().len() != obligations.len()
             || obligations
                 .iter()
-                .any(|id| self.obligations.contains_key(id))
+                .any(|id| self.obligations().contains_key(id))
         {
             return Err(Error::Unavailable);
         }
@@ -791,28 +787,29 @@ fn activation_for(
 impl PreparedActivation {
     /// The coordinator must first validate/apply every permission effect in the
     /// same transaction. This commits only economic records, never asset access.
-    pub fn commit(self, state: &mut State) -> Result<(), Error> {
-        if state.agreements.get(&self.before.id) != Some(&self.before)
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+        if agreement(store, self.before.id) != Some(&self.before)
             || self
                 .obligations
                 .iter()
-                .any(|o| state.obligations.contains_key(&o.id))
+                .any(|o| store.contains(StableId(o.id.0)))
         {
             return Err(Error::Unavailable);
         }
-        for obligation in self.obligations {
-            state.obligations.insert(obligation.id, obligation);
+        let mut batch = Batch::new();
+        for row in self.obligations {
+            batch.insert(StableId(row.id.0), row);
         }
-        state.agreements.insert(self.after.id, self.after);
-        Ok(())
+        batch.insert(StableId(self.after.id.0), self.after);
+        store.apply_batch(batch)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn ledger(terms: Vec<AgreementTerm>) -> State {
-        let mut state = State::default();
+    fn ledger(terms: Vec<AgreementTerm>) -> Store {
+        let mut state = fixture();
         let id = AgreementId(1);
         let parties = BTreeSet::from([PersonId(11), PersonId(12)]);
         let obligations = terms
@@ -820,7 +817,8 @@ mod tests {
             .enumerate()
             .map(|(i, term)| {
                 let id = ObligationId(i as u64 + 2);
-                state.obligations.insert(
+                insert_obligation(
+                    &mut state,
                     id,
                     Obligation {
                         id,
@@ -833,11 +831,13 @@ mod tests {
                         defaulted: false,
                         cargo: BTreeMap::new(),
                     },
-                );
+                )
+                .unwrap();
                 id
             })
             .collect();
-        state.agreements.insert(
+        insert_agreement(
+            &mut state,
             id,
             Agreement {
                 id,
@@ -851,7 +851,8 @@ mod tests {
                 proposed_at: SimTime(0),
                 revision: 0,
             },
-        );
+        )
+        .unwrap();
         state
     }
     fn work(millis: u64) -> AgreementTerm {
@@ -890,20 +891,30 @@ mod tests {
             target: WorkTarget::Site(SiteId(20)),
         };
         let mut whole = state.clone();
-        let plan = whole
+        let plan = Ledger::new(&whole)
             .prepare_labor(SimTime(0), SimTime(120_000), &[assignment])
             .unwrap();
         assert_eq!(plan.credits.iter().map(|c| c.millis).sum::<u64>(), 120_000);
         plan.commit(&mut whole).unwrap();
-        assert_eq!(whole.obligations[&ObligationId(2)].performed, 90_000);
-        assert_eq!(whole.obligations[&ObligationId(3)].performed, 30_000);
+        assert_eq!(
+            crate::obligation(&whole, ObligationId(2))
+                .unwrap()
+                .performed,
+            90_000
+        );
+        assert_eq!(
+            crate::obligation(&whole, ObligationId(3))
+                .unwrap()
+                .performed,
+            30_000
+        );
         let mut split = state;
-        split
+        Ledger::new(&split)
             .prepare_labor(SimTime(0), SimTime(33_001), &[assignment])
             .unwrap()
             .commit(&mut split)
             .unwrap();
-        split
+        Ledger::new(&split)
             .prepare_labor(SimTime(33_001), SimTime(120_000), &[assignment])
             .unwrap()
             .commit(&mut split)
@@ -918,7 +929,7 @@ mod tests {
             target: WorkTarget::Site(SiteId(20)),
         };
         assert_eq!(
-            state.prepare_labor(
+            Ledger::new(&state).prepare_labor(
                 SimTime(0),
                 SimTime(60_000),
                 &[
@@ -931,12 +942,10 @@ mod tests {
             ),
             Err(Error::Unavailable)
         );
-        let plan = state
+        let plan = Ledger::new(&state)
             .prepare_labor(SimTime(0), SimTime(60_000), &[assignment])
             .unwrap();
-        state
-            .obligations
-            .get_mut(&ObligationId(3))
+        obligation_mut(&mut state, ObligationId(3))
             .unwrap()
             .performed = 1;
         let before = state.clone();
@@ -952,8 +961,10 @@ mod tests {
             allowed: true,
         };
         let mut state = ledger(vec![term]);
-        state.obligations.clear();
-        let agreement = state.agreements.get_mut(&AgreementId(1)).unwrap();
+        for id in obligations(&state).map(|(id, _)| id).collect::<Vec<_>>() {
+            state.remove::<Obligation>(StableId(id.0)).unwrap();
+        }
+        let agreement = agreement_mut(&mut state, AgreementId(1)).unwrap();
         agreement.obligations.clear();
         agreement.status = AgreementStatus::Proposed;
         let mut context = TermsContext {
@@ -964,7 +975,7 @@ mod tests {
             .grants
             .insert((PermissionAsset::Inventory(InventoryId(21)), PersonId(11)));
         let before = state.clone();
-        let prepared = state
+        let prepared = Ledger::new(&state)
             .prepare_activation(AgreementId(1), &[ObligationId(31)], &context)
             .unwrap();
         assert_eq!(state, before);
@@ -979,10 +990,15 @@ mod tests {
         );
         prepared.commit(&mut state).unwrap();
         assert_eq!(
-            state.agreements[&AgreementId(1)].status,
+            crate::agreement(&state, AgreementId(1)).unwrap().status,
             AgreementStatus::Fulfilled
         );
-        assert_eq!(state.obligations[&ObligationId(31)].performed, 1);
+        assert_eq!(
+            crate::obligation(&state, ObligationId(31))
+                .unwrap()
+                .performed,
+            1
+        );
     }
 }
 
@@ -1005,13 +1021,13 @@ pub struct PreparedProduction {
     patches: Vec<ObligationPatch>,
     pub credits: Vec<ShareCredit>,
 }
-impl State {
+impl Ledger<'_> {
     pub fn prepare_production(&self, fact: ProductionFact) -> Result<PreparedProduction, Error> {
         let mut plan = PreparedProduction {
             patches: Vec::new(),
             credits: Vec::new(),
         };
-        for old in self.obligations.values() {
+        for old in self.obligations().values() {
             if let AgreementTerm::OutputShare {
                 site,
                 good,
@@ -1053,7 +1069,7 @@ impl State {
         Ok(plan)
     }
     pub fn defaults_due(&self, now: SimTime) -> Vec<ObligationId> {
-        self.obligations
+        self.obligations()
             .values()
             .filter(|o| {
                 !o.defaulted
@@ -1063,35 +1079,21 @@ impl State {
             .map(|o| o.id)
             .collect()
     }
-    pub fn mark_default(&mut self, id: ObligationId, now: SimTime) -> Result<bool, Error> {
-        let obligation = self.obligations.get(&id).ok_or(Error::Unavailable)?;
-        if obligation.defaulted
-            || obligation.performed >= obligation.amount()
-            || !obligation.term.deadline().is_some_and(|d| d <= now)
-        {
-            return Ok(false);
-        }
-        let agreement = obligation.agreement;
-        // Check every referenced record before changing this obligation.
-        self.status_for(agreement, now)?;
-        self.obligations.get_mut(&id).unwrap().defaulted = true;
-        self.refresh_status(agreement, now)?;
-        Ok(true)
-    }
 }
 impl PreparedProduction {
-    pub fn commit(self, state: &mut State) -> Result<(), Error> {
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
         if self
             .patches
             .iter()
-            .any(|p| state.obligations.get(&p.before.id) != Some(&p.before))
+            .any(|p| obligation(store, p.before.id) != Some(&p.before))
         {
             return Err(Error::Unavailable);
         }
+        let mut batch = Batch::new();
         for patch in self.patches {
-            state.obligations.insert(patch.after.id, patch.after);
+            batch.insert(StableId(patch.after.id.0), patch.after);
         }
-        Ok(())
+        store.apply_batch(batch)
     }
 }
 
@@ -1116,8 +1118,9 @@ mod obligation_tests {
             ends_at: SimTime(90_000),
         };
         let parties = BTreeSet::from([actor, creditor]);
-        let mut state = State::default();
-        state.agreements.insert(
+        let mut state = fixture();
+        insert_agreement(
+            &mut state,
             id,
             Agreement {
                 id,
@@ -1131,8 +1134,10 @@ mod obligation_tests {
                 proposed_at: SimTime(0),
                 revision: 0,
             },
-        );
-        state.obligations.insert(
+        )
+        .unwrap();
+        insert_obligation(
+            &mut state,
             obligation,
             Obligation {
                 id: obligation,
@@ -1145,9 +1150,10 @@ mod obligation_tests {
                 defaulted: false,
                 cargo: BTreeMap::new(),
             },
-        );
+        )
+        .unwrap();
         for time in [10_000, 20_000, 30_000] {
-            let plan = state
+            let plan = Ledger::new(&state)
                 .prepare_production(ProductionFact {
                     actor,
                     site: SiteId(5),
@@ -1158,9 +1164,9 @@ mod obligation_tests {
                 .unwrap();
             plan.commit(&mut state).unwrap();
         }
-        assert_eq!(state.obligations[&obligation].amount(), 1);
-        assert_eq!(state.obligations[&obligation].performed, 0);
-        let ended = state
+        assert_eq!(crate::obligation(&state, obligation).unwrap().amount(), 1);
+        assert_eq!(crate::obligation(&state, obligation).unwrap().performed, 0);
+        let ended = Ledger::new(&state)
             .prepare_production(ProductionFact {
                 actor,
                 site: SiteId(5),
@@ -1171,13 +1177,23 @@ mod obligation_tests {
             .unwrap();
         assert!(ended.credits.is_empty());
         ended.commit(&mut state).unwrap();
-        assert_eq!(state.defaults_due(SimTime(120_000)), vec![obligation]);
-        state.mark_default(obligation, SimTime(120_000)).unwrap();
-        assert_eq!(state.agreements[&id].status, AgreementStatus::Breached);
-        assert_eq!(state.obligations[&obligation].amount(), 1);
-        assert_eq!(state.obligations[&obligation].performed, 0);
-        let saved = serde_json::to_vec(&state).unwrap();
-        let restored: State = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(
+            Ledger::new(&state).defaults_due(SimTime(120_000)),
+            vec![obligation]
+        );
+        mark_default(&mut state, obligation, SimTime(120_000)).unwrap();
+        assert_eq!(
+            crate::agreement(&state, id).unwrap().status,
+            AgreementStatus::Breached
+        );
+        assert_eq!(crate::obligation(&state, obligation).unwrap().amount(), 1);
+        assert_eq!(crate::obligation(&state, obligation).unwrap().performed, 0);
+        let saved = serde_json::to_vec(&state.snapshot().unwrap()).unwrap();
+        let restored = Store::restore(
+            state.schema().clone(),
+            serde_json::from_slice(&saved).unwrap(),
+        )
+        .unwrap();
         assert_eq!(state, restored);
     }
 }
@@ -1190,3 +1206,35 @@ pub use resources::*;
 
 mod judgments;
 pub use judgments::*;
+
+mod knowledge;
+pub use knowledge::*;
+
+mod receipts;
+pub use receipts::*;
+
+mod communications;
+pub use communications::*;
+mod availability;
+pub use availability::*;
+
+#[cfg(test)]
+fn fixture() -> Store {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_cargo::register_components(&mut schema).unwrap();
+    game_property::register_components(&mut schema).unwrap();
+    Store::with_schema(schema)
+}
+
+mod choices;
+pub use choices::*;
+
+mod validation;
+pub use validation::*;
+
+#[cfg(test)]
+mod native_flow_tests;
+
+mod queries;
+pub use queries::*;

@@ -83,15 +83,9 @@ fn propose(
         },
     )
     .unwrap();
-    let id = *sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .agreements
-        .keys()
-        .next_back()
+    let id = game_agreements::agreements(sim.canonical_state().components)
+        .map(|(id, _)| id)
+        .last()
         .unwrap();
     sim.debug_agreement_action(debtor, AgreementAction::Accept { agreement: id })
         .unwrap();
@@ -241,12 +235,8 @@ fn witnessing_one_obligation_does_not_refresh_another_remote_obligation() {
     assert_eq!(view.obligations[1].performed, 0);
     assert_eq!(view.status, AgreementStatus::Active);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::obligation(sim.canonical_state().components, view.obligations[1].id)
             .unwrap()
-            .obligations[&view.obligations[1].id]
             .performed,
         1_000
     );
@@ -385,15 +375,9 @@ fn chosen_amendment_procedures_can_forgive_to_zero_but_initial_zero_terms_are_in
         },
     )
     .unwrap();
-    let amendment = *sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .amendments
-        .keys()
-        .next_back()
+    let amendment = game_agreements::amendments(sim.canonical_state().components)
+        .map(|(id, _)| id)
+        .last()
         .unwrap();
     sim.debug_agreement_action(
         creditor,
@@ -474,15 +458,9 @@ fn stale_report_and_its_saved_snapshot_cannot_undo_a_later_known_amendment() {
         },
     )
     .unwrap();
-    let amendment = *sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .amendments
-        .keys()
-        .next_back()
+    let amendment = game_agreements::amendments(sim.canonical_state().components)
+        .map(|(id, _)| id)
+        .last()
         .unwrap();
     sim.debug_agreement_action(
         creditor,
@@ -502,8 +480,8 @@ fn stale_report_and_its_saved_snapshot_cannot_undo_a_later_known_amendment() {
     )
     .unwrap();
     let mut invalid: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-    support::component(&mut invalid, "coordination/activity", debtor)["ReportAgreement"]["snapshot"]
-        ["source"] = serde_json::json!({"Recorded": 999});
+    support::component(&mut invalid, "agreements/report", debtor)["snapshot"]["source"] =
+        serde_json::json!({"Recorded": 999});
     assert!(
         Simulation::load(&serde_json::to_vec(&invalid).unwrap(), Execution::default()).is_err()
     );

@@ -250,14 +250,8 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
             },
         },
     );
-    let agreement = *sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .agreements
-        .keys()
+    let agreement = game_agreements::agreements(sim.canonical_state().components)
+        .map(|(id, _)| id)
         .last()
         .unwrap();
     sim.debug_actor_command(
@@ -412,22 +406,13 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
     assert_eq!(r.backed[&0].progress, Progress::Fulfilled);
     assert_eq!(r.backed[&1].performed, Quantity(0));
     assert_ne!(r.status(), Status::Fulfilled);
-    let debtor = sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
+    let debtor = game_agreements::agreement(sim.canonical_state().components, agreement)
         .unwrap()
-        .agreements[&agreement]
         .obligations
         .iter()
         .find(|o| {
-            sim.canonical_state()
-                .state
-                .agreements
-                .as_ref()
+            game_agreements::obligation(sim.canonical_state().components, **o)
                 .unwrap()
-                .obligations[o]
                 .term
                 .parties()[0]
                 == c.mayor
@@ -435,13 +420,8 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
         .copied()
         .unwrap();
     travel(&mut sim, ruler, AreaId(1));
-    let due = sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
+    let due = game_agreements::obligation(sim.canonical_state().components, debtor)
         .unwrap()
-        .obligations[&debtor]
         .term
         .deadline()
         .unwrap();
@@ -474,21 +454,13 @@ fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered()
         Progress::Defaulted
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::obligation(sim.canonical_state().components, debtor)
             .unwrap()
-            .obligations[&debtor]
             .defaulted
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::obligation(sim.canonical_state().components, debtor)
             .unwrap()
-            .obligations[&debtor]
             .performed,
         0
     );
@@ -635,22 +607,14 @@ fn institutional_ratification_does_not_accept_personal_terms_and_a_real_refusal_
         _ => panic!("expected the actual proposed agreement"),
     };
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, agreement)
             .unwrap()
-            .agreements[&agreement]
             .status,
         AgreementStatus::Proposed
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, agreement)
             .unwrap()
-            .agreements[&agreement]
             .obligations
             .is_empty()
     );

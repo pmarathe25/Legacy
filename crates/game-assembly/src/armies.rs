@@ -211,29 +211,24 @@ impl Simulation {
             encounters: BTreeMap::new(),
             captivity: BTreeMap::new(),
         });
-        sim.host.state.agreements = Some(agreements::World {
-            ledger: game_agreements::State {
-                knowledge: BTreeMap::new(),
-                last_observation_event: sim.host.next_event() - 1,
-                agreements: BTreeMap::new(),
-                obligations: BTreeMap::new(),
-                amendments: BTreeMap::new(),
-                last_event: sim.host.next_event() - 1,
-                next_search: BTreeMap::new(),
-                pending_work: BTreeMap::new(),
-            },
-            custodians: game_cargo::inventories(&sim.host.storage)
-                .map(|(_, row)| row)
-                .map(|i| {
-                    (
-                        i.id,
-                        match i.location {
-                            InventoryLocation::Carried(p) => p,
-                            InventoryLocation::Area(_) => sim.host.state.ruler,
-                        },
-                    )
-                })
-                .collect(),
+        let __custody: BTreeMap<InventoryId, PersonId> = game_cargo::inventories(&sim.host.storage)
+            .map(|(_, row)| row)
+            .map(|i| {
+                (
+                    i.id,
+                    match i.location {
+                        InventoryLocation::Carried(p) => p,
+                        InventoryLocation::Area(_) => sim.host.state.ruler,
+                    },
+                )
+            })
+            .collect();
+        for (id, owner) in __custody {
+            game_property::declare_custody(&mut sim.host.storage, id, owner)?;
+        }
+        sim.host.state.agreements = Some(game_agreements::Runtime {
+            last_event: sim.host.next_event() - 1,
+            last_observation_event: sim.host.next_event() - 1,
         });
         sim.host.state.missions = Some(missions::Runtime {
             last_event: sim.host.next_event() - 1,
@@ -1799,7 +1794,7 @@ fn validate_army_mission_snapshot(s: &CanonicalState, v: &MissionView) -> Result
                 s.state
                     .agreements
                     .as_ref()
-                    .is_none_or(|a| !a.agreements.contains_key(&id))
+                    .is_none_or(|_| game_agreements::agreement(s.components, id).is_none())
             })
             || r.compensation.iter().any(|t| {
                 t.parties().iter().any(|p| !people.contains(p))

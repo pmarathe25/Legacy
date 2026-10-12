@@ -733,3 +733,81 @@ mod free_port_tests;
 
 mod cancellation;
 pub use cancellation::PreparedCultivationCancellation;
+
+/// Apply already accepted site permissions through their physical owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedSiteAccess {
+    before: BTreeMap<SiteId, Field>,
+    after: BTreeMap<SiteId, Field>,
+}
+impl Runtime {
+    pub fn prepare_site_access(
+        &self,
+        store: &game_ecs::Store,
+        changes: &[(SiteId, PersonId, PersonId, bool)],
+    ) -> Result<PreparedSiteAccess, Error> {
+        let mut before = BTreeMap::new();
+        let mut after: BTreeMap<SiteId, Field> = BTreeMap::new();
+        for (id, grantor, grantee, allowed) in changes {
+            let original = self.field(store, *id).ok_or(Error::Unavailable)?;
+            if original.custodian != Some(*grantor) || grantee.0 == 0 {
+                return Err(Error::Unavailable);
+            }
+            before.entry(*id).or_insert_with(|| original.clone());
+            let row = after.entry(*id).or_insert_with(|| original.clone());
+            if *allowed {
+                row.access.insert(*grantee);
+            } else {
+                row.access.remove(grantee);
+            }
+        }
+        Ok(PreparedSiteAccess { before, after })
+    }
+}
+impl PreparedSiteAccess {
+    pub fn check(&self, runtime: &Runtime, store: &game_ecs::Store) -> Result<(), Error> {
+        if self
+            .before
+            .iter()
+            .any(|(id, row)| runtime.field(store, *id) != Some(row))
+        {
+            return Err(Error::Unavailable);
+        }
+        Ok(())
+    }
+    pub fn stage(&self, batch: &mut game_ecs::Batch) {
+        for (id, row) in &self.after {
+            batch.insert(game_ecs::StableId(id.0), row.clone());
+        }
+    }
+}
+/// Existing physical facts are projected once per field. This owner admits all
+/// operations in authored operation order without letting a caller select them.
+pub fn available_operations(
+    runtime: &Runtime,
+    store: &game_ecs::Store,
+    facts: &BTreeMap<SiteId, BeginFacts>,
+) -> Vec<(SiteId, FarmOperation)> {
+    runtime
+        .fields(store)
+        .map(|(id, _)| id)
+        .flat_map(|field| {
+            [
+                FarmOperation::Prepare,
+                FarmOperation::Plant,
+                FarmOperation::Tend,
+                FarmOperation::Irrigate,
+                FarmOperation::Harvest,
+                FarmOperation::Fallow,
+            ]
+            .into_iter()
+            .filter_map(move |operation| {
+                let fact = facts.get(&field)?;
+                let (land, crop, soil, rules) = runtime.field_bundle(store, field).ok()?;
+                prepare_begin(land, crop, soil, rules, operation, *fact)
+                    .is_ok()
+                    .then_some((field, operation))
+            })
+        })
+        .collect()
+}

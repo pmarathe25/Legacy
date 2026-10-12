@@ -44,7 +44,7 @@ pub struct InstitutionDuty {
     pub term: AgreementTerm,
 }
 
-impl State {
+impl Ledger<'_> {
     pub fn prepare_institutional_duties(
         &self,
         duties: &[InstitutionDuty],
@@ -150,7 +150,7 @@ pub struct PreparedTransition {
     pub notices: Vec<TransitionNotice>,
 }
 impl PreparedTransition {
-    pub fn check(&self, state: &State) -> Result<(), Error> {
+    pub fn check(&self, state: &Ledger<'_>) -> Result<(), Error> {
         let fresh = self
             .agreements
             .iter()
@@ -171,7 +171,7 @@ impl PreparedTransition {
         if self
             .flushed_work_ids
             .as_ref()
-            .is_some_and(|ids| state.pending_work.keys().copied().collect::<BTreeSet<_>>() != *ids)
+            .is_some_and(|ids| state.pending_work().keys().collect::<BTreeSet<_>>() != *ids)
             || self
                 .revision_peers
                 .as_ref()
@@ -182,19 +182,19 @@ impl PreparedTransition {
             || self
                 .agreements
                 .iter()
-                .any(|p| state.agreements.get(&p.id) != p.before.as_ref())
+                .any(|p| state.agreements().get(&p.id) != p.before.as_ref())
             || self
                 .amendments
                 .iter()
-                .any(|p| state.amendments.get(&p.id) != p.before.as_ref())
+                .any(|p| state.amendments().get(&p.id) != p.before.as_ref())
             || self
                 .obligations
                 .iter()
-                .any(|p| state.obligations.get(&p.id) != p.before.as_ref())
+                .any(|p| state.obligations().get(&p.id) != p.before.as_ref())
             || self
                 .pending
                 .iter()
-                .any(|(id, value)| state.pending_work.get(id) != Some(value))
+                .any(|(id, value)| state.pending_work().get(id) != Some(value))
         {
             return Err(Error::Unavailable);
         }
@@ -202,39 +202,45 @@ impl PreparedTransition {
     }
     /// The coordinator first checks this patch and preflights every actual
     /// permission/event/ID effect. This operation owns only agreement records.
-    pub fn commit(self, state: &mut State) -> Result<(), Error> {
-        self.check(state)?;
-        for p in self.agreements {
-            state.agreements.insert(p.id, p.after);
-        }
-        for p in self.amendments {
-            state.amendments.insert(p.id, p.after);
-        }
-        for p in self.obligations {
-            state.obligations.insert(p.id, p.after);
-        }
-        for (id, _) in self.pending {
-            state.pending_work.remove(&id);
-        }
-        Ok(())
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+        self.check(&Ledger::new(store))?;
+        let mut batch = Batch::new();
+        self.stage(&mut batch);
+        store.apply_batch(batch)
     }
-    fn agreement(&mut self, state: &State, after: Agreement) {
+    /// The caller retains the opening checks and applies this exact sparse patch
+    /// together with the receiving asset owners' prepared effects.
+    pub fn stage(&self, batch: &mut Batch) {
+        for p in &self.agreements {
+            batch.insert(StableId(p.id.0), p.after.clone());
+        }
+        for p in &self.amendments {
+            batch.insert(StableId(p.id.0), p.after.clone());
+        }
+        for p in &self.obligations {
+            batch.insert(StableId(p.id.0), p.after.clone());
+        }
+        for (id, _) in &self.pending {
+            batch.remove::<PendingWork>(StableId(id.0));
+        }
+    }
+    fn agreement(&mut self, state: &Ledger<'_>, after: Agreement) {
         self.agreements.push(Patch {
             id: after.id,
-            before: state.agreements.get(&after.id).cloned(),
+            before: state.agreements().get(&after.id).cloned(),
             after,
         });
     }
-    fn amendment(&mut self, state: &State, after: Amendment) {
+    fn amendment(&mut self, state: &Ledger<'_>, after: Amendment) {
         self.amendments.push(Patch {
             id: after.id,
-            before: state.amendments.get(&after.id).cloned(),
+            before: state.amendments().get(&after.id).cloned(),
             after,
         });
     }
 }
 
-impl State {
+impl Ledger<'_> {
     pub fn transition_requirements(
         &self,
         action: &AgreementAction,
@@ -254,7 +260,7 @@ impl State {
                     return Err(Error::Unavailable);
                 }
                 (
-                    self.agreements
+                    self.agreements()
                         .get(agreement)
                         .ok_or(Error::Unavailable)?
                         .parties
@@ -263,7 +269,7 @@ impl State {
                 )
             }
             AgreementAction::Accept { agreement } => {
-                let a = self.agreements.get(agreement).ok_or(Error::Unavailable)?;
+                let a = self.agreements().get(agreement).ok_or(Error::Unavailable)?;
                 (BTreeSet::from([a.proposer]), a.terms.clone())
             }
             AgreementAction::Amend { replacements, .. } => {
@@ -273,7 +279,7 @@ impl State {
                 (BTreeSet::new(), replacements.values().cloned().collect())
             }
             AgreementAction::Vote { amendment, .. } => {
-                let m = self.amendments.get(amendment).ok_or(Error::Unavailable)?;
+                let m = self.amendments().get(amendment).ok_or(Error::Unavailable)?;
                 (
                     BTreeSet::from([m.proposer]),
                     m.replacements.values().cloned().collect(),
@@ -298,7 +304,7 @@ impl State {
             }
             AgreementAction::Amend { .. } => needs.amendment = true,
             AgreementAction::Accept { agreement } => {
-                let a = self.agreements.get(agreement).ok_or(Error::Unavailable)?;
+                let a = self.agreements().get(agreement).ok_or(Error::Unavailable)?;
                 if a.accepted.len() + 1 == a.parties.len() {
                     needs.obligations = a.terms.len();
                 }
@@ -363,7 +369,7 @@ impl State {
                 terms,
                 procedure,
             } => {
-                let old = self.agreements.get(agreement).ok_or(Error::Unavailable)?;
+                let old = self.agreements().get(agreement).ok_or(Error::Unavailable)?;
                 if old.status != AgreementStatus::Proposed
                     || !old.parties.contains(&actor)
                     || old.proposer == actor
@@ -389,7 +395,7 @@ impl State {
                 });
             }
             AgreementAction::Accept { agreement } => {
-                let a = self.agreements.get(agreement).ok_or(Error::Unavailable)?;
+                let a = self.agreements().get(agreement).ok_or(Error::Unavailable)?;
                 if a.status != AgreementStatus::Proposed
                     || !a.parties.contains(&actor)
                     || a.accepted.contains(&actor)
@@ -422,7 +428,7 @@ impl State {
                 });
             }
             AgreementAction::Reject { agreement } | AgreementAction::Withdraw { agreement } => {
-                let a = self.agreements.get(agreement).ok_or(Error::Unavailable)?;
+                let a = self.agreements().get(agreement).ok_or(Error::Unavailable)?;
                 let withdrawal = matches!(action, AgreementAction::Withdraw { .. });
                 if a.status != AgreementStatus::Proposed
                     || (withdrawal && a.proposer != actor)
@@ -450,7 +456,7 @@ impl State {
                 agreement,
                 replacements,
             } => {
-                let a = self.agreements.get(agreement).ok_or(Error::Unavailable)?;
+                let a = self.agreements().get(agreement).ok_or(Error::Unavailable)?;
                 let procedure = a.procedure.as_ref().ok_or(Error::Unavailable)?;
                 if !matches!(
                     a.status,
@@ -492,9 +498,9 @@ impl State {
                 });
             }
             AgreementAction::Vote { amendment, support } => {
-                let before = self.amendments.get(amendment).ok_or(Error::Unavailable)?;
+                let before = self.amendments().get(amendment).ok_or(Error::Unavailable)?;
                 let a = self
-                    .agreements
+                    .agreements()
                     .get(&before.agreement)
                     .ok_or(Error::Unavailable)?;
                 let procedure = a.procedure.as_ref().ok_or(Error::Unavailable)?;
@@ -600,7 +606,7 @@ fn proposal(
     });
 }
 fn resolve_vote(
-    state: &State,
+    state: &Ledger<'_>,
     a: &Agreement,
     p: &AmendmentProcedure,
     m: &mut Amendment,
@@ -648,13 +654,13 @@ fn resolve_vote(
     }
     // Flush logically observed prior work before an adopted amendment changes
     // the identity of a duty. No promised signature creates performance credit.
-    plan.flushed_work_ids = Some(state.pending_work.keys().copied().collect());
+    plan.flushed_work_ids = Some(state.pending_work().keys().collect());
     plan.revision_peers = Some((a.id, a.revision, amendment_peers(state, a.id, a.revision)));
-    for (id, quantity) in &state.pending_work {
-        let o = state.obligations.get(id).ok_or(Error::Unavailable)?;
-        plan.pending.push((*id, *quantity));
+    for (id, quantity) in state.pending_work().iter() {
+        let o = state.obligations().get(&id).ok_or(Error::Unavailable)?;
+        plan.pending.push((id, *quantity));
         plan.events.push(TransitionEvent::Performed {
-            obligation: *id,
+            obligation: id,
             actor: o.term.parties()[0],
             quantity: Quantity(*quantity),
         });
@@ -665,7 +671,7 @@ fn resolve_vote(
         .iter()
         .map(|id| {
             state
-                .obligations
+                .obligations()
                 .get(id)
                 .cloned()
                 .map(|o| (*id, o))
@@ -712,7 +718,7 @@ fn resolve_vote(
         after.terms[usize::from(*index)] = term.clone();
         plan.obligations.push(Patch {
             id,
-            before: state.obligations.get(&id).cloned(),
+            before: state.obligations().get(&id).cloned(),
             after: o.clone(),
         });
     }
@@ -722,14 +728,18 @@ fn resolve_vote(
         if !plan.obligations.iter().any(|p| p.id == *id) {
             plan.obligations.push(Patch {
                 id: *id,
-                before: state.obligations.get(id).cloned(),
+                before: state.obligations().get(id).cloned(),
                 after: o.clone(),
             });
         }
     }
     for (id, _) in &plan.pending {
         if !plan.obligations.iter().any(|patch| patch.id == *id) {
-            let before = state.obligations.get(id).ok_or(Error::Unavailable)?.clone();
+            let before = state
+                .obligations()
+                .get(id)
+                .ok_or(Error::Unavailable)?
+                .clone();
             plan.obligations.push(Patch {
                 id: *id,
                 before: Some(before.clone()),
@@ -750,7 +760,7 @@ fn resolve_vote(
     };
     plan.agreement(state, after);
     m.status = AmendmentStatus::Adopted;
-    for other in state.amendments.values().filter(|other| {
+    for other in state.amendments().values().filter(|other| {
         other.id != m.id
             && other.agreement == a.id
             && other.status == AmendmentStatus::Proposed
@@ -825,15 +835,17 @@ pub fn same_duty(a: &AgreementTerm, b: &AgreementTerm) -> bool {
     }
 }
 
-fn id_exists(state: &State, id: u64) -> bool {
-    state.agreements.contains_key(&AgreementId(id))
-        || state.amendments.contains_key(&AmendmentId(id))
-        || state.obligations.contains_key(&ObligationId(id))
+fn id_exists(state: &Ledger<'_>, id: u64) -> bool {
+    state.store.contains(StableId(id))
 }
 
-fn amendment_peers(state: &State, agreement: AgreementId, revision: u64) -> BTreeSet<AmendmentId> {
+fn amendment_peers(
+    state: &Ledger<'_>,
+    agreement: AgreementId,
+    revision: u64,
+) -> BTreeSet<AmendmentId> {
     state
-        .amendments
+        .amendments()
         .values()
         .filter(|m| {
             m.agreement == agreement
@@ -856,7 +868,7 @@ pub struct HeardServiceConsent {
     pub accepted_terms: Vec<AgreementTerm>,
     pub unanswered_counteroffer: bool,
 }
-impl State {
+impl Ledger<'_> {
     pub fn prepare_service_commitment(
         &self,
         consent: &HeardServiceConsent,

@@ -359,21 +359,7 @@ impl Simulation {
         actor: PersonId,
         delivery: &Delivery,
     ) -> BTreeMap<InventoryId, Quantity> {
-        let Some(source) = delivery.requirement.source else {
-            return BTreeMap::new();
-        };
-        let mut attributed = BTreeMap::<InventoryId, Quantity>::new();
-        for obligation in self.host.state.agreements.as_ref().into_iter().flat_map(|world| world.obligations.values()).filter(|obligation| {
-            matches!(obligation.term, AgreementTerm::Delivery { debtor, source: from, destination: to, .. }
-                if debtor == actor && from == source && matches!(delivery.destination, Destination::Inventory(target) if target == to))
-                && obligation.performed < obligation.amount()
-        }) {
-            for (id, quantity) in &obligation.cargo {
-                let total = attributed.entry(*id).or_insert(Quantity(0));
-                total.0 = total.0.saturating_add(*quantity);
-            }
-        }
-        attributed
+        game_agreements::delivery_cargo(&self.host.storage, actor, delivery)
     }
     fn delivery_cargo(
         &self,
@@ -1475,13 +1461,8 @@ mod tests {
                     BTreeSet::from([custodian]),
                 )
                 .unwrap();
-            sim.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(source, custodian);
+            game_property::declare_custody(&mut sim.host.storage, source, custodian)
+                .expect("declared custody");
         }
         let mind =
             game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, actor)

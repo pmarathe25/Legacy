@@ -247,12 +247,7 @@ fn competing_claims_and_recognition_do_not_grant_custody_or_access() {
         2
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
-            .unwrap()
-            .custodians[&origin],
+        game_property::inventory_custodian(sim.canonical_state().components, origin).unwrap(),
         owner
     );
     assert!(

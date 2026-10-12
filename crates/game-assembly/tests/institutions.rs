@@ -181,12 +181,8 @@ fn people_construct_and_adopt_rules_from_exclusion_then_do_real_work() {
         .flat_map(|actors| actors.values().copied())
         .collect();
     assert!(duties.iter().any(|id| {
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, *id)
             .unwrap()
-            .agreements[id]
             .status
             == AgreementStatus::Fulfilled
     }));
@@ -327,12 +323,8 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
         Quantity(0)
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, agreement)
             .unwrap()
-            .agreements[&agreement]
             .status,
         AgreementStatus::Active
     );
@@ -365,12 +357,8 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
         Quantity(2_000)
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, agreement)
             .unwrap()
-            .agreements[&agreement]
             .status,
         AgreementStatus::Fulfilled
     );

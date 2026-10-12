@@ -146,15 +146,9 @@ impl Simulation {
                     procedure: None,
                 },
             )?;
-            let agreement = *sim
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .unwrap()
-                .agreements
-                .keys()
-                .next_back()
+            let agreement = game_agreements::agreements(&sim.host.storage)
+                .map(|(id, _)| id)
+                .last()
                 .unwrap();
             sim.debug_agreement_action(creditor, AgreementAction::Accept { agreement })?;
         }
@@ -180,13 +174,8 @@ impl Simulation {
         let healer = settlement.residents[6];
         let lots:Vec<_>=game_cargo::inventories(&self.host.storage).map(|(_, row)| row).filter(|stock|matches!(stock.location,InventoryLocation::Area(area) if [settlement.center,settlement.fields,settlement.wood].contains(&area))).map(|stock|stock.id).collect();
         for id in &lots {
-            self.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(*id, steward);
+            game_property::declare_custody(&mut self.host.storage, *id, steward)
+                .expect("declared custody");
         }
         for actor in &settlement.residents {
             if game_projects::knowledge(&self.host.storage, *actor).is_none() {
@@ -217,13 +206,8 @@ impl Simulation {
         let herbs = settlement.stocks["herbs"];
         let water = settlement.stocks["drinking-water"];
         for id in [herbs, water] {
-            self.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(id, healer);
+            game_property::declare_custody(&mut self.host.storage, id, healer)
+                .expect("declared custody");
         }
         self.collected_water_quality(
             water,

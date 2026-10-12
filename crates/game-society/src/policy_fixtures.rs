@@ -33,6 +33,8 @@ pub fn voter(knowledge: &Knowledge) -> VoterFacts<'_> {
 pub fn world() -> (Runtime, game_ecs::Store) {
     let mut schema = game_ecs::Schema::new();
     crate::storage::register_components(&mut schema).unwrap();
+    game_agreements::register_components(&mut schema).unwrap();
+    game_property::register_components(&mut schema).unwrap();
     (Runtime::default(), game_ecs::Store::with_schema(schema))
 }
 pub fn seed_institution(store: &mut game_ecs::Store, mut row: Institution) {

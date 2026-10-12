@@ -32,13 +32,8 @@ fn quiet(sim: &mut Simulation) {
 }
 fn maker_assets(sim: &Simulation) -> (InventoryId, InventoryId, InventoryId) {
     let maker = actor(sim, 3);
-    let custodians = &sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .custodians;
+    let custodians = &game_property::custody_rows(sim.canonical_state().components).map(|(id,row)|(id,row.custodian))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let owned = |stock: &&game_assembly::Inventory| {
         stock.location == InventoryLocation::Area(AreaId(1))
             && custodians.get(&stock.id) == Some(&maker)
@@ -171,21 +166,14 @@ fn autonomous_citizen_negotiates_real_financing_builds_and_repays_from_actual_pr
         workshop.inputs.get(&Good::Timber).copied().unwrap_or(0),
         2 * workshop.produced.get(&Good::Tool).copied().unwrap_or(0)
     );
-    let funding = &sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .agreements[plan.support.iter().next().unwrap()];
+    let funding = &game_agreements::agreement(
+        sim.canonical_state().components,
+        *plan.support.iter().next().unwrap(),
+    )
+    .unwrap();
     assert_eq!(funding.status, AgreementStatus::Fulfilled);
-    let obligations = &sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .obligations;
+    let obligations = &game_agreements::obligations(sim.canonical_state().components)
+        .collect::<std::collections::BTreeMap<_, _>>();
     assert!(funding.obligations.iter().any(|id| matches!(
         obligations[id].term,
         AgreementTerm::Delivery {
@@ -323,15 +311,8 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
         .find(|stock| {
             stock.good == Good::Food
                 && stock.location == InventoryLocation::Area(AreaId(1))
-                && sim
-                    .canonical_state()
-                    .state
-                    .agreements
-                    .as_ref()
-                    .unwrap()
-                    .custodians
-                    .get(&stock.id)
-                    == Some(&maker)
+                && game_property::inventory_custodian(sim.canonical_state().components, stock.id)
+                    == Some(maker)
         })
         .unwrap()
         .id;
@@ -494,15 +475,8 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
         .find(|stock| {
             stock.good == Good::Food
                 && stock.location == InventoryLocation::Area(AreaId(1))
-                && sim
-                    .canonical_state()
-                    .state
-                    .agreements
-                    .as_ref()
-                    .unwrap()
-                    .custodians
-                    .get(&stock.id)
-                    == Some(&maker)
+                && game_property::inventory_custodian(sim.canonical_state().components, stock.id)
+                    == Some(maker)
         })
         .unwrap()
         .id;
@@ -601,12 +575,8 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
     );
     assert!(account.defaults >= 1);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::agreement(sim.canonical_state().components, agreement)
             .unwrap()
-            .agreements[&agreement]
             .status,
         AgreementStatus::Breached
     );
@@ -625,13 +595,8 @@ fn cautious_financier_refuses_startup_risk_without_any_stock_transfer() {
         .collect::<std::collections::BTreeMap<_, _>>();
     sim.advance(SimDuration(200_000)).unwrap();
     assert!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
-            .unwrap()
-            .agreements
-            .values()
+        game_agreements::agreements(sim.canonical_state().components)
+            .map(|(_, row)| row)
             .any(|agreement| agreement.status == AgreementStatus::Rejected)
     );
     assert_eq!(

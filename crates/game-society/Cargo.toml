@@ -8,6 +8,7 @@ license.workspace = true
 game-core.workspace = true
 game-ecs.workspace = true
 game-agreements.workspace = true
+game-property.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

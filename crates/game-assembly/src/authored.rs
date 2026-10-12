@@ -162,11 +162,12 @@ impl Simulation {
                 let value = definition
                     .custodian
                     .resolve(&settlement.residents, holder)?;
-                let custody = &mut self.host.state.agreements.as_mut().unwrap().custodians;
-                if let Some(value) = value {
-                    custody.insert(id, value);
+                if let Some(owner) = value {
+                    game_property::declare_custody(&mut self.host.storage, id, owner)?;
                 } else {
-                    custody.remove(&id);
+                    self.host
+                        .storage
+                        .remove::<game_property::InventoryCustody>(game_ecs::StableId(id.0))?;
                 }
             }
         }

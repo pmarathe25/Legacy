@@ -190,13 +190,8 @@ impl Simulation {
             (binding, officer),
             (tool, officer),
         ] {
-            sim.host
-                .state
-                .agreements
-                .as_mut()
-                .unwrap()
-                .custodians
-                .insert(source, custodian);
+            game_property::declare_custody(&mut sim.host.storage, source, custodian)
+                .expect("declared custody");
         }
         let forest_store = sim.debug_add_inventory(
             Good::Food,
@@ -205,13 +200,8 @@ impl Simulation {
             Quantity(10_000),
             BTreeSet::from([filer]),
         )?;
-        sim.host
-            .state
-            .agreements
-            .as_mut()
-            .unwrap()
-            .custodians
-            .insert(forest_store, filer);
+        game_property::declare_custody(&mut sim.host.storage, forest_store, filer)
+            .expect("declared custody");
         sim.debug_set_property_attitude(
             filer,
             property::Attitude {
@@ -1014,14 +1004,7 @@ impl Simulation {
                 if *comply {
                     if let EnforcementRemedy::Settlement { terms } = &judgment.remedy {
                         if let Some(old) = self.existing_settlement_debt(&actual) {
-                            let debt = self
-                                .host
-                                .state
-                                .agreements
-                                .as_ref()
-                                .unwrap()
-                                .obligations
-                                .get(&old)
+                            let debt = game_agreements::obligation(&self.host.storage, old)
                                 .ok_or(Error::Unavailable)?;
                             settlement = Some(debt.agreement);
                         } else {
@@ -1038,14 +1021,8 @@ impl Simulation {
                                     procedure: None,
                                 },
                             )?;
-                            settlement = self
-                                .host
-                                .state
-                                .agreements
-                                .as_ref()
-                                .unwrap()
-                                .agreements
-                                .values()
+                            settlement = game_agreements::agreements(&self.host.storage)
+                                .map(|(_, row)| row)
                                 .find(|a| a.id.0 >= next && a.proposer == actor)
                                 .map(|a| a.id);
                         }
@@ -1724,7 +1701,7 @@ impl Simulation {
                         .state
                         .agreements
                         .as_ref()
-                        .and_then(|w| w.obligations.get(&old))
+                        .and_then(|_| game_agreements::obligation(&self.host.storage, old))
                         .filter(|o| o.performed >= o.amount())
                         .map(|_| EnforcementStatus::Completed)
                 } else {
@@ -1732,7 +1709,7 @@ impl Simulation {
                         .state
                         .agreements
                         .as_ref()
-                        .and_then(|w| w.agreements.get(&agreement))
+                        .and_then(|_| game_agreements::agreement(&self.host.storage, agreement))
                         .and_then(|a| match a.status {
                             AgreementStatus::Fulfilled => Some(EnforcementStatus::Completed),
                             AgreementStatus::Rejected | AgreementStatus::Withdrawn => {
@@ -2272,8 +2249,11 @@ impl Simulation {
                     EnforcementEvidence::Incident(incident)
                         if incident.outcome == IncidentOutcome::Taken
                             && policy.remedies.contains(&RemedyKind::Settlement)
-                            && self.host.state.agreements.as_ref().is_some_and(|w| {
-                                w.custodians.get(&incident.source) == Some(&case.filer)
+                            && self.host.state.agreements.as_ref().is_some_and(|_| {
+                                game_property::inventory_custodian(
+                                    &self.host.storage,
+                                    incident.source,
+                                ) == Some(case.filer)
                             }) =>
                     {
                         Some(EnforcementRemedy::Settlement {
@@ -2384,7 +2364,7 @@ impl Simulation {
             match e {
             EnforcementEvidence::Incident(i)=>self.host.state.property.as_ref().is_some_and(|_|game_property::incident(&self.host.storage,i.id).is_some()) && people.contains(&i.actor) && game_cargo::inventory(&self.host.storage, i.source).is_some() && game_cargo::inventory(&self.host.storage, i.destination).is_some() && area(i.area) && i.started_at<=i.changed_at && i.changed_at<=i.learned_at && i.learned_at<=self.host.clock().time && i.quantity.0>0,
             EnforcementEvidence::Assault(a)=>people.contains(&a.attacker) && people.contains(&a.target) && area(a.area) && a.observed_at<=self.host.clock().time && self.host.events().iter().any(|e|EventId(e.sequence)==a.event && e.at==a.observed_at && matches!(e.event,EventKind::Struck {actor,target,damage,..} if actor==a.attacker && target==a.target && damage==a.damage)),
-            EnforcementEvidence::Default(o)=>self.host.state.agreements.as_ref().is_some_and(|w|w.obligations.contains_key(&o.id)) && o.defaulted && o.performed<o.amount() && o.observed_at<=o.learned_at && o.learned_at<=self.host.clock().time && o.term.parties().iter().all(|p|people.contains(p)),
+            EnforcementEvidence::Default(o)=>game_agreements::obligation(&self.host.storage,o.id).is_some() && o.defaulted && o.performed<o.amount() && o.observed_at<=o.learned_at && o.learned_at<=self.host.clock().time && o.term.parties().iter().all(|p|people.contains(p)),
             EnforcementEvidence::Social(c)=>game_society::case(&self.host.storage,c.id)==Some(c),
         }
         };
@@ -2471,7 +2451,7 @@ impl Simulation {
                     .state
                     .agreements
                     .as_ref()
-                    .is_none_or(|w| !w.agreements.contains_key(&id))
+                    .is_none_or(|_| game_agreements::agreement(&self.host.storage, id).is_none())
             }) {
                 return Err(bad());
             }

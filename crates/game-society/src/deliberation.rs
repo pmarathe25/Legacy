@@ -460,11 +460,7 @@ pub struct DutyWork {
     pub site: SiteId,
 }
 impl Runtime {
-    pub fn duty_workers(
-        &self,
-        store: &Store,
-        ledger: &game_agreements::State,
-    ) -> Result<BTreeSet<PersonId>, Error> {
+    pub fn duty_workers(&self, store: &Store) -> Result<BTreeSet<PersonId>, Error> {
         let agreements = crate::storage::institutions(store)
             .map(|(_, row)| row)
             .filter(|institution| institution.status == InstitutionStatus::Active)
@@ -477,10 +473,12 @@ impl Runtime {
             .collect::<BTreeSet<_>>();
         let mut people = BTreeSet::new();
         for id in agreements {
-            let agreement = ledger.agreements.get(&id).ok_or(Error::Unavailable)?;
+            let agreement = game_agreements::agreement(store, id).ok_or(Error::Unavailable)?;
             for id in &agreement.obligations {
                 if let game_agreements::AgreementTerm::Labor { debtor, .. } =
-                    ledger.obligations.get(id).ok_or(Error::Unavailable)?.term
+                    game_agreements::obligation(store, *id)
+                        .ok_or(Error::Unavailable)?
+                        .term
                 {
                     people.insert(debtor);
                 }
@@ -491,7 +489,6 @@ impl Runtime {
     pub fn duty_work_intentions(
         &self,
         store: &Store,
-        ledger: &game_agreements::State,
         workers: &[DutyWorker<'_>],
     ) -> Result<Vec<DutyWork>, Error> {
         let mut by_actor = BTreeMap::new();
@@ -512,12 +509,11 @@ impl Runtime {
             .collect::<BTreeSet<_>>();
         let mut intentions = BTreeMap::new();
         for agreement in agreements {
-            let agreement = ledger
-                .agreements
-                .get(&agreement)
-                .ok_or(Error::Unavailable)?;
+            let agreement =
+                game_agreements::agreement(store, agreement).ok_or(Error::Unavailable)?;
             for id in &agreement.obligations {
-                let obligation = ledger.obligations.get(id).ok_or(Error::Unavailable)?;
+                let obligation =
+                    game_agreements::obligation(store, *id).ok_or(Error::Unavailable)?;
                 let game_agreements::AgreementTerm::Labor {
                     debtor,
                     site,

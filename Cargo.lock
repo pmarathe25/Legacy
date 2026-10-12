@@ -420,7 +420,13 @@ dependencies = [
 name = "game-agreements"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
+ "game-characters",
  "game-core",
+ "game-ecs",
+ "game-logistics",
+ "game-property",
+ "game-transport",
  "serde",
  "serde_json",
 ]
@@ -800,6 +806,7 @@ dependencies = [
  "game-agreements",
  "game-core",
  "game-ecs",
+ "game-property",
  "serde",
  "serde_json",
 ]

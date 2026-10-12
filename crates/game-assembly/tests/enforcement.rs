@@ -301,14 +301,8 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
         },
     )
     .unwrap();
-    let agreement = *sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
-        .unwrap()
-        .agreements
-        .keys()
+    let agreement = game_agreements::agreements(sim.canonical_state().components)
+        .map(|(id, _)| id)
         .last()
         .unwrap();
     sim.debug_actor_command(
@@ -319,13 +313,8 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
     )
     .unwrap();
     sim.advance(MINUTE).unwrap();
-    let obligation = sim
-        .canonical_state()
-        .state
-        .agreements
-        .as_ref()
+    let obligation = game_agreements::agreement(sim.canonical_state().components, agreement)
         .unwrap()
-        .agreements[&agreement]
         .obligations[0];
     sim.debug_enforcement_action(
         filer,
@@ -374,22 +363,14 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
         assets
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::obligation(sim.canonical_state().components, obligation)
             .unwrap()
-            .obligations[&obligation]
             .performed,
         0
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .agreements
-            .as_ref()
+        game_agreements::obligation(sim.canonical_state().components, obligation)
             .unwrap()
-            .obligations[&obligation]
             .defaulted
     );
     sim.submit(Submission {

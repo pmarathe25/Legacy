@@ -29,7 +29,7 @@ impl ClosingReceiptDemand {
             .ok_or(Error::Overflow)
     }
 }
-impl State {
+impl Ledger<'_> {
     /// Includes current pending work and unreconciled physical receipts supplied
     /// by the coordinator along with the next interval's possible operations.
     pub fn closing_receipt_demand(
@@ -39,8 +39,8 @@ impl State {
         work: &[WorkAssignment],
     ) -> Result<ClosingReceiptDemand, Error> {
         let mut demand = ClosingReceiptDemand::default();
-        let mut labor = self.pending_work.keys().copied().collect::<BTreeSet<_>>();
-        for obligation in self.obligations.values() {
+        let mut labor = self.pending_work().keys().collect::<BTreeSet<_>>();
+        for obligation in self.obligations().values() {
             let outstanding = obligation.performed < obligation.amount();
             let future_share=receipts.iter().any(|receipt|matches!((receipt,&obligation.term),
                 (ClosingReceipt::Production{site,good,..},AgreementTerm::OutputShare{site:owed,good:kind,..}) if site==owed && good==kind));
@@ -156,9 +156,10 @@ mod tests {
     use super::*;
     #[test]
     fn closing_demand_scales_with_owed_receipts_not_population_or_institution_count() {
-        let mut state = State::default();
+        let mut state = fixture();
         for id in 1..=1000 {
-            state.obligations.insert(
+            insert_obligation(
+                &mut state,
                 ObligationId(id),
                 Obligation {
                     id: ObligationId(id),
@@ -178,23 +179,24 @@ mod tests {
                     defaulted: false,
                     cargo: BTreeMap::new(),
                 },
-            );
+            )
+            .unwrap();
         }
         assert_eq!(
-            state
+            Ledger::new(&state)
                 .closing_receipt_demand(SimTime(0), &[], &[])
                 .unwrap()
                 .defaults,
             0
         );
         assert_eq!(
-            state
+            Ledger::new(&state)
                 .closing_receipt_demand(SimTime(1), &[], &[])
                 .unwrap()
                 .defaults,
             1000
         );
-        let demand = state
+        let demand = Ledger::new(&state)
             .closing_receipt_demand(
                 SimTime(1),
                 &[ClosingReceipt::Transfer {
@@ -210,8 +212,9 @@ mod tests {
     }
     #[test]
     fn staged_receipts_and_pending_work_are_bounded_without_duplicate_flushes() {
-        let mut state = State::default();
-        state.obligations.insert(
+        let mut state = fixture();
+        insert_obligation(
+            &mut state,
             ObligationId(1),
             Obligation {
                 id: ObligationId(1),
@@ -231,7 +234,8 @@ mod tests {
                 defaulted: false,
                 cargo: BTreeMap::new(),
             },
-        );
+        )
+        .unwrap();
         let staged = [
             ClosingReceipt::Transfer {
                 actor: PersonId(1),
@@ -245,7 +249,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            state
+            Ledger::new(&state)
                 .closing_receipt_demand(SimTime(1), &staged, &[])
                 .unwrap()
                 .performed,
@@ -257,13 +261,14 @@ mod tests {
             destination: InventoryId(4),
         }];
         assert_eq!(
-            state
+            Ledger::new(&state)
                 .closing_receipt_demand(SimTime(1), &unmarked, &[])
                 .unwrap()
                 .performed,
             0
         );
-        state.obligations.insert(
+        insert_obligation(
+            &mut state,
             ObligationId(2),
             Obligation {
                 id: ObligationId(2),
@@ -282,18 +287,93 @@ mod tests {
                 defaulted: false,
                 cargo: BTreeMap::new(),
             },
-        );
-        state.pending_work.insert(ObligationId(2), 50);
+        )
+        .unwrap();
+        state
+            .insert_or_spawn(StableId((ObligationId(2)).0), PendingWork { millis: 50 })
+            .unwrap();
         let assignment = WorkAssignment {
             actor: PersonId(1),
             target: WorkTarget::Site(SiteId(6)),
         };
         assert_eq!(
-            state
+            Ledger::new(&state)
                 .closing_receipt_demand(SimTime(1), &[], &[assignment, assignment])
                 .unwrap()
                 .performed,
             1
+        );
+    }
+}
+/// Raw physical state for a potential closing work interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClosingWorkFact {
+    pub actor: PersonId,
+    pub alive: bool,
+    pub health: u64,
+    pub target: Option<WorkTarget>,
+}
+pub fn closing_work_assignments(
+    now: SimTime,
+    at: SimTime,
+    facts: &[ClosingWorkFact],
+) -> Vec<WorkAssignment> {
+    facts
+        .iter()
+        .filter(|fact| at > now && fact.alive && fact.health > 0)
+        .filter_map(|fact| {
+            fact.target.map(|target| WorkAssignment {
+                actor: fact.actor,
+                target,
+            })
+        })
+        .collect()
+}
+pub fn transition_event_reserve(store: &Store, allocated: u64) -> Result<u64, Error> {
+    allocated
+        .checked_add(pending_works(store).count() as u64)
+        .and_then(|count| count.checked_add(2))
+        .ok_or(Error::Overflow)
+}
+#[cfg(test)]
+mod closing_work_tests {
+    use super::*;
+    #[test]
+    fn only_actual_eligible_future_work_reserves_an_exclusive_interval() {
+        let site = Some(WorkTarget::Site(SiteId(20)));
+        let facts = [
+            ClosingWorkFact {
+                actor: PersonId(1),
+                alive: true,
+                health: 1,
+                target: site,
+            },
+            ClosingWorkFact {
+                actor: PersonId(2),
+                alive: false,
+                health: 1,
+                target: site,
+            },
+            ClosingWorkFact {
+                actor: PersonId(3),
+                alive: true,
+                health: 0,
+                target: site,
+            },
+            ClosingWorkFact {
+                actor: PersonId(4),
+                alive: true,
+                health: 1,
+                target: None,
+            },
+        ];
+        assert!(closing_work_assignments(SimTime(1), SimTime(1), &facts).is_empty());
+        assert_eq!(
+            closing_work_assignments(SimTime(1), SimTime(2), &facts),
+            vec![WorkAssignment {
+                actor: PersonId(1),
+                target: WorkTarget::Site(SiteId(20))
+            }]
         );
     }
 }

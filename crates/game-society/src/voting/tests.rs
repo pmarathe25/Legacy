@@ -30,6 +30,8 @@ fn voter(knowledge: &Knowledge) -> VoterFacts<'_> {
 fn world() -> (Runtime, Store) {
     let mut schema = game_ecs::Schema::new();
     crate::register_components(&mut schema).unwrap();
+    game_agreements::register_components(&mut schema).unwrap();
+    game_property::register_components(&mut schema).unwrap();
     (Runtime::default(), Store::with_schema(schema))
 }
 fn seed_institution(store: &mut Store, mut row: Institution) {
@@ -434,8 +436,7 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
     else {
         panic!("labor rule creates a duty")
     };
-    let mut agreements = game_agreements::State::default();
-    agreements
+    game_agreements::Ledger::new(&store)
         .prepare_institutional_duties(
             &[game_agreements::InstitutionDuty {
                 institution,
@@ -446,12 +447,12 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
             SimTime(0),
         )
         .unwrap()
-        .commit(&mut agreements)
+        .commit(&mut store)
         .unwrap();
     society
         .register_duty(&mut store, &intent, AgreementId(40))
         .unwrap();
-    agreements
+    game_agreements::Ledger::new(&store)
         .prepare_labor(
             SimTime(0),
             SimTime(60_000),
@@ -461,9 +462,14 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
             }],
         )
         .unwrap()
-        .commit(&mut agreements)
+        .commit(&mut store)
         .unwrap();
-    assert_eq!(agreements.obligations[&ObligationId(41)].performed, 60_000);
+    assert_eq!(
+        game_agreements::obligation(&store, ObligationId(41))
+            .unwrap()
+            .performed,
+        60_000
+    );
     society
         .remember_case(
             &mut store,

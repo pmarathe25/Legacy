@@ -14,6 +14,8 @@ fn society_uses_native_rows_and_sparse_learning_preserves_unrelated_foreign_data
     }
     let mut schema = game_ecs::Schema::new();
     register_components(&mut schema).unwrap();
+    game_agreements::register_components(&mut schema).unwrap();
+    game_property::register_components(&mut schema).unwrap();
     schema
         .register::<Foreign>("test/foreign", |_| Ok(()))
         .unwrap();
@@ -118,29 +120,35 @@ fn contextual_validation_checks_real_rows_and_retains_historical_replaced_concep
         );
     let references = refs();
     let areas = BTreeSet::from([AreaId(3)]);
-    let mut agreements = game_agreements::State::default();
-    agreements.agreements.insert(
+    game_agreements::insert_agreement(
+        &mut store,
         AgreementId(40),
         game_agreements::Agreement {
             id: AgreementId(40),
             proposer: PersonId(1),
             parties: BTreeSet::from([PersonId(1), PersonId(2)]),
-            accepted: BTreeSet::new(),
-            terms: vec![],
+            accepted: BTreeSet::from([PersonId(1)]),
+            terms: vec![game_agreements::AgreementTerm::Labor {
+                debtor: PersonId(1),
+                creditor: PersonId(2),
+                site: SiteId(20),
+                millis: 60_000,
+                deadline: SimTime(180_000),
+            }],
             procedure: None,
             obligations: vec![],
             status: game_agreements::AgreementStatus::Proposed,
             proposed_at: SimTime(0),
             revision: 0,
         },
-    );
+    )
+    .unwrap();
     let facts = crate::save_validation::ValidationFacts {
         at: SimTime(10),
         next_id: 2000,
         next_event: 1,
         areas: &areas,
         references: &references,
-        agreements: &agreements,
     };
     runtime.validate(&store, &facts).unwrap();
     insert_hearing(&mut store, CaseId(999), Hearing { shared: true }).unwrap();

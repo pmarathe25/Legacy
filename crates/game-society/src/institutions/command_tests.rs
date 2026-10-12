@@ -820,3 +820,126 @@ fn an_adopted_deposition_changes_only_the_named_office_and_actual_voter_support(
         };
     }
 }
+#[test]
+fn rejected_native_funding_cannot_publish_the_institutions_accepted_charter() {
+    let (world, opening, refs, alive) = setup();
+    let mut schema = game_ecs::Schema::new();
+    crate::register_components(&mut schema).unwrap();
+    schema
+        .register::<game_agreements::Agreement>(
+            "agreements/agreement",
+            game_agreements::Agreement::validate,
+        )
+        .unwrap();
+    schema
+        .register::<game_agreements::Obligation>("agreements/obligation", |_| {
+            Err(Error::Unavailable)
+        })
+        .unwrap();
+    schema
+        .register::<game_agreements::Amendment>(
+            "agreements/amendment",
+            game_agreements::Amendment::validate,
+        )
+        .unwrap();
+    schema
+        .register::<game_agreements::Knowledge>(
+            "agreements/knowledge",
+            game_agreements::Knowledge::validate,
+        )
+        .unwrap();
+    schema
+        .register::<game_agreements::Requests>("agreements/requests", |_| Ok(()))
+        .unwrap();
+    schema
+        .register::<game_agreements::PendingWork>("agreements/pending_work", |_| Ok(()))
+        .unwrap();
+    schema
+        .register::<game_agreements::PendingReport>(
+            "agreements/report",
+            game_agreements::PendingReport::validate,
+        )
+        .unwrap();
+    let mut snapshot = opening.snapshot().unwrap();
+    for key in schema.keys() {
+        snapshot.columns.entry(key.into()).or_default();
+    }
+    let mut store = Store::restore(schema, snapshot).unwrap();
+    prepare(
+        &world,
+        &store,
+        &refs,
+        &alive,
+        1,
+        InstitutionAction::Found {
+            charter: charter(),
+            origin: None,
+        },
+        100,
+    )
+    .unwrap()
+    .commit(&world, &mut store)
+    .unwrap();
+    let command = prepare(
+        &world,
+        &store,
+        &refs,
+        &alive,
+        2,
+        InstitutionAction::Join {
+            institution: InstitutionId(100),
+        },
+        102,
+    )
+    .unwrap();
+    let duties = command
+        .effects
+        .iter()
+        .filter_map(|effect| {
+            if let CommandEffect::Funding {
+                institution,
+                agreement,
+                obligation,
+                term,
+            } = effect
+            {
+                Some(game_agreements::InstitutionDuty {
+                    institution: *institution,
+                    agreement: *agreement,
+                    obligation: *obligation,
+                    term: term.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let funding = game_agreements::Ledger::new(&store)
+        .prepare_institutional_duties(&duties, SimTime(1))
+        .unwrap();
+    let before = store.clone();
+    let runtime_before = world.clone();
+    let mut batch = game_ecs::Batch::new();
+    funding
+        .check(&game_agreements::Ledger::new(&store))
+        .unwrap();
+    command.stage_into(&world, &store, &mut batch).unwrap();
+    funding.stage(&mut batch);
+    assert_eq!(store.apply_batch(batch), Err(Error::Unavailable));
+    assert_eq!(store, before);
+    assert_eq!(world, runtime_before);
+    assert_eq!(
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .status,
+        InstitutionStatus::Proposed
+    );
+    assert!(
+        crate::storage::institution(&store, InstitutionId(100))
+            .unwrap()
+            .funding
+            .is_empty()
+    );
+    assert!(game_agreements::agreement(&store, AgreementId(102)).is_none());
+    assert!(!store.contains(game_ecs::StableId(103)));
+}

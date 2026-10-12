@@ -149,7 +149,7 @@ pub struct AssemblyState {
     pub environment: Option<environment::Runtime>,
     pub agriculture: Option<game_agriculture::Runtime>,
     #[serde(default)]
-    pub agreements: Option<agreements::World>,
+    pub agreements: Option<game_agreements::Runtime>,
     #[serde(default)]
     pub lineage: Option<lineage::World>,
     #[serde(default)]

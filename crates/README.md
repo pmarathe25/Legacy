@@ -44,6 +44,7 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 
 | Consumer | Providers | Shared interface |
 | --- | --- | --- |
+| `game-agreements` | `game-ecs`, `game-cargo`, `game-property`, `game-logistics`, `game-transport` | Native promises, personal knowledge, work and reports; conserved receipt credit and owner-planned fulfillment |
 | `game-agriculture` | `game-ecs`, `game-land`; `game-content` (optional) | Field, crop, soil and cultivation joins; crop-definition loading |
 | `game-armies` | `game-missions` | Objectives for autonomous leaders |
 | `game-cargo` | `game-ecs` | Inventory components, conserved loading and transfer effects, and typed stock access |
@@ -63,17 +64,17 @@ Every domain crate depends on `game-core` for shared IDs, time, quantities, and 
 | `game-transport` | `game-ecs` | Native carrying groups, lift offers and jobs, approaches, paused routes and dated support knowledge; guarded sparse changes |
 | `game-property` | `game-ecs` | Native claims, incidents, stock provenance, personal attitudes, dated knowledge, actions and request deadlines; guarded sparse changes |
 | `game-realm` | `game-agreements`, `game-missions` | Diplomatic terms and objectives |
-| `game-society` | `game-agreements`, `game-ecs` | Obligations and disputes |
+| `game-society` | `game-agreements`, `game-ecs`, `game-property` | Native obligations and physical custody for institutional duties, exclusions and disputes |
 | `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
 | `game-workshop` | `game-ecs`, `game-cargo`, `game-skills`, `game-content` | Native sites and jobs; saved recipe definitions, material inputs and outputs, work rates and craft practice effects |
 
-`game-agreements` and `game-logistics` have no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
+`game-logistics` has no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
 
 ## Components and systems
 
 **Storage boundary:** `game-ecs` hides the chosen ECS engine. Feature data uses ordinary Rust types, stable game IDs, registered save schemas, and typed joins. Native entity handles, engine derives, and query internals remain in its private adapter. `game-sim` retains logical scheduling and per-simulation bounded execution.
 
-**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Inventories and property provenance, claims and incidents, personal property knowledge and actions, invocation costs, warnings, archives, records and memory actions, agriculture, physiology bodies and development, lives and pregnancies, genomes and inheritance, personal minds and temperament, health state, personal skills, workshop sites and jobs, shared locations, local weather, natural deposits, and plots use this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
+**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Inventories, physical inventory custody, agreement records, personal agreement knowledge, owed work and frozen reports, property provenance, claims and incidents, personal property knowledge and actions, invocation costs, warnings, archives, records and memory actions, agriculture, physiology bodies and development, lives and pregnancies, genomes and inheritance, personal minds and temperament, health state, personal skills, workshop sites and jobs, shared locations, local weather, natural deposits, and plots use this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
 
 **Behavior boundary:** Assembly registers systems and binds application inputs and outputs. A feature owns how it chooses targets, interprets facts, validates actions, progresses work, and reacts to events. A direct dependency between features is appropriate when one consumes a small public interface from another. For example, trait providers implement genetics' inheritance contract; workshop uses Cargo's inventory effects and Skills' practice effects. Historical content likewise enters Characters through its `MemoryLearner` trait: the receiving owner retains newer knowledge, current access rights, and learned routes. These interactions do not need assembly-owned rules. Factual ports may expose bodily state or remembered relations, but their adapters must not hide selection or scoring policy.
 

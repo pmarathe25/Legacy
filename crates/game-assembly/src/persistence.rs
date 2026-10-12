@@ -1,6 +1,6 @@
 use crate::*;
 
-const SAVE_VERSION: u32 = 47;
+const SAVE_VERSION: u32 = 48;
 #[derive(Deserialize)]
 struct SaveHeader {
     version: u32,
@@ -338,19 +338,24 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.agreements {
-        for id in world
-            .agreements
-            .keys()
-            .map(|id| id.0)
-            .chain(world.obligations.keys().map(|id| id.0))
-            .chain(world.amendments.keys().map(|id| id.0))
-        {
-            if id == 0 || id >= s.next_id || !ids.insert(id) {
-                return Err(fail());
-            }
+    for id in game_agreements::agreements(s.components)
+        .map(|(id, _)| id.0)
+        .chain(game_agreements::obligations(s.components).map(|(id, _)| id.0))
+        .chain(game_agreements::amendments(s.components).map(|(id, _)| id.0))
+    {
+        if id == 0 || id >= s.next_id || !ids.insert(id) {
+            return Err(fail());
         }
     }
+    game_property::validate_custody(
+        s.components,
+        game_property::CustodyContext {
+            inventories: &game_cargo::inventories(s.components)
+                .map(|(id, _)| id)
+                .collect(),
+            people: &s.state.people.iter().map(|row| row.id).collect(),
+        },
+    )?;
     if let Some(world) = &s.state.agriculture {
         for id in world.fields(s.components).map(|(id, _)| id) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
@@ -915,11 +920,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 obligation, actor, ..
             } => {
                 if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .agreements
-                        .as_ref()
-                        .is_some_and(|w| w.obligations.contains_key(&obligation))
+                    || !s.state.agreements.as_ref().is_some_and(|_| {
+                        game_agreements::obligation(s.components, obligation).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -1053,11 +1056,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&sender)
                     || !people.contains_key(&recipient)
-                    || !s
-                        .state
-                        .agreements
-                        .as_ref()
-                        .is_some_and(|w| w.agreements.contains_key(&agreement))
+                    || !s.state.agreements.as_ref().is_some_and(|_| {
+                        game_agreements::agreement(s.components, agreement).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -1436,11 +1437,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .projects
                         .as_ref()
                         .is_some_and(|_| game_projects::project(s.components, project).is_some())
-                    || !s
-                        .state
-                        .agreements
-                        .as_ref()
-                        .is_some_and(|w| w.agreements.contains_key(&agreement))
+                    || !s.state.agreements.as_ref().is_some_and(|_| {
+                        game_agreements::agreement(s.components, agreement).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -1694,11 +1693,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 proposer,
             } => {
                 if !people.contains_key(&proposer)
-                    || !s
-                        .state
-                        .agreements
-                        .as_ref()
-                        .is_some_and(|w| w.agreements.contains_key(&agreement))
+                    || !s.state.agreements.as_ref().is_some_and(|_| {
+                        game_agreements::agreement(s.components, agreement).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -1709,7 +1706,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .agreements
                     .as_ref()
-                    .is_some_and(|w| w.agreements.contains_key(&agreement))
+                    .is_some_and(|_| game_agreements::agreement(s.components, agreement).is_some())
                 {
                     return Err(fail());
                 }
@@ -1718,12 +1715,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 agreement,
                 amendment,
             } => {
-                if !s.state.agreements.as_ref().is_some_and(|w| {
-                    w.agreements.contains_key(&agreement)
-                        && w.amendments
-                            .get(&amendment)
-                            .is_some_and(|a| a.agreement == agreement)
-                }) {
+                if !game_agreements::agreement(s.components, agreement).is_some()
+                    || !game_agreements::amendment(s.components, amendment)
+                        .is_some_and(|row| row.agreement == agreement)
+                {
                     return Err(fail());
                 }
             }
@@ -1734,22 +1729,17 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || quantity.0 == 0
-                    || !s
-                        .state
-                        .agreements
-                        .as_ref()
-                        .is_some_and(|w| w.obligations.contains_key(&obligation))
+                    || !s.state.agreements.as_ref().is_some_and(|_| {
+                        game_agreements::obligation(s.components, obligation).is_some()
+                    })
                 {
                     return Err(fail());
                 }
             }
             EventKind::ObligationDefaulted { obligation } => {
-                if !s
-                    .state
-                    .agreements
-                    .as_ref()
-                    .is_some_and(|w| w.obligations.contains_key(&obligation))
-                {
+                if !s.state.agreements.as_ref().is_some_and(|_| {
+                    game_agreements::obligation(s.components, obligation).is_some()
+                }) {
                     return Err(fail());
                 }
             }
@@ -1852,11 +1842,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             if let Some(plan) = &mind.plan {
                 use game_characters::decisions::{CommitmentRef, IntentionKey, Motive, Subject};
                 let commitment_exists = |commitment: CommitmentRef| match commitment {
-                    CommitmentRef::Obligation(id) => s
-                        .state
-                        .agreements
-                        .as_ref()
-                        .is_some_and(|w| w.obligations.contains_key(&id)),
+                    CommitmentRef::Obligation(id) => {
+                        s.state.agreements.as_ref().is_some_and(|_| {
+                            game_agreements::obligation(s.components, id).is_some()
+                        })
+                    }
                     CommitmentRef::Project(id) => s
                         .state
                         .projects
@@ -2247,9 +2237,6 @@ fn validate_physical(
             return Err(fail());
         }
         match *activity {
-            Activity::ReportAgreement { recipient, .. } if !people.contains_key(&recipient) => {
-                return Err(fail());
-            }
             Activity::Cultivate {
                 field,
                 operation,

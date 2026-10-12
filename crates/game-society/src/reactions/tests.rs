@@ -13,8 +13,9 @@ fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_with
         hunger: 120_000,
     };
     let known = BTreeMap::from([(InventoryId(4), stock(2_000))]);
-    let owners = BTreeMap::from([(InventoryId(4), PersonId(2))]);
-    let reactions = state.exclusion_reactions(&store, subject, &known, &owners, SimTime(0));
+    store.ensure(game_ecs::StableId(4)).unwrap();
+    game_property::declare_custody(&mut store, InventoryId(4), PersonId(2)).unwrap();
+    let reactions = state.exclusion_reactions(&store, subject, &known, SimTime(0));
     assert_eq!(reactions.len(), 1);
     state
         .commit_case_reaction(
@@ -26,7 +27,7 @@ fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_with
         .unwrap();
     assert!(
         state
-            .exclusion_reactions(&store, subject, &known, &owners, SimTime(60_000))
+            .exclusion_reactions(&store, subject, &known, SimTime(60_000))
             .is_empty()
     );
     assert_eq!(
@@ -38,7 +39,6 @@ fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_with
                     ..subject
                 },
                 &known,
-                &owners,
                 SimTime(60_000)
             )
             .len(),
@@ -48,7 +48,7 @@ fn need_bands_and_known_food_exclusion_are_personal_bounded_and_not_renewed_with
     available.get_mut(&InventoryId(4)).unwrap().accessible = true;
     assert!(
         state
-            .exclusion_reactions(&store, subject, &available, &owners, SimTime(60_000))
+            .exclusion_reactions(&store, subject, &available, SimTime(60_000))
             .is_empty()
     );
 }
@@ -62,7 +62,6 @@ fn one_real_labor_receipt_and_output_are_not_interpreted_as_two_contributions() 
         inventory: InventoryId(4),
         good: Good::Food,
     };
-    let mut ledger = game_agreements::State::default();
     let term = game_agreements::AgreementTerm::Labor {
         debtor: actor,
         creditor: counterpart,
@@ -70,7 +69,7 @@ fn one_real_labor_receipt_and_output_are_not_interpreted_as_two_contributions() 
         millis: 60_000,
         deadline: SimTime(180_000),
     };
-    ledger
+    game_agreements::Ledger::new(&store)
         .prepare_institutional_duties(
             &[game_agreements::InstitutionDuty {
                 institution: InstitutionId(10),
@@ -81,9 +80,9 @@ fn one_real_labor_receipt_and_output_are_not_interpreted_as_two_contributions() 
             SimTime(0),
         )
         .unwrap()
-        .commit(&mut ledger)
+        .commit(&mut store)
         .unwrap();
-    ledger
+    game_agreements::Ledger::new(&store)
         .prepare_labor(
             SimTime(0),
             SimTime(60_000),
@@ -93,9 +92,14 @@ fn one_real_labor_receipt_and_output_are_not_interpreted_as_two_contributions() 
             }],
         )
         .unwrap()
-        .commit(&mut ledger)
+        .commit(&mut store)
         .unwrap();
-    assert_eq!(ledger.obligations[&ObligationId(41)].performed, 60_000);
+    assert_eq!(
+        game_agreements::obligation(&store, ObligationId(41))
+            .unwrap()
+            .performed,
+        60_000
+    );
     let receipts = [
         SocialReceipt::Produced {
             actor,
