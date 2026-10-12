@@ -59,6 +59,11 @@ pub struct HealerReviewFacts {
     pub capable: bool,
     pub busy: bool,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct HealerQualifications {
+    pub is_ruler: bool,
+    pub medicine: u16,
+}
 pub struct CareReviewFacts<'a> {
     pub healer: HealerReviewFacts,
     pub body: WorkNeeds,
@@ -122,9 +127,19 @@ impl Runtime {
     pub fn review_healers(
         &self,
         actors: impl Iterator<Item = PersonId>,
-        mut facts: impl FnMut(PersonId) -> HealerReviewFacts,
+        mut qualifications: impl FnMut(PersonId) -> HealerQualifications,
+        mut capable: impl FnMut(PersonId) -> bool,
+        mut busy: impl FnMut(PersonId) -> bool,
     ) -> Vec<PersonId> {
-        actors.filter(|actor| facts(*actor).eligible()).collect()
+        actors
+            .filter(|actor| {
+                let qualifications = qualifications(*actor);
+                !qualifications.is_ruler
+                    && qualifications.medicine > 0
+                    && capable(*actor)
+                    && !busy(*actor)
+            })
+            .collect()
     }
 
     pub fn remembered_patients(

@@ -1908,12 +1908,12 @@ impl Simulation {
         }
         let healers = self.host.state.health.as_ref().unwrap().review_healers(
             self.host.state.people.iter().map(|person| person.id),
-            |actor| game_health::HealerReviewFacts {
+            |actor| game_health::HealerQualifications {
                 is_ruler: actor == self.host.state.ruler,
                 medicine: self.medical_level(actor),
-                capable: self.health_area(actor, true).is_ok(),
-                busy: self.health_actor_busy(actor),
             },
+            |actor| self.health_area(actor, true).is_ok(),
+            |actor| self.health_actor_busy(actor),
         );
         for caregiver in healers {
             let mind = &game_characters::decisions::mind::<game_api::Command>(

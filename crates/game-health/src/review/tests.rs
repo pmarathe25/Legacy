@@ -172,13 +172,26 @@ fn treatments_and_healer_selection_preserve_native_order_and_individual_availabi
             }
         )]
     );
-    let healers = owner.review_healers((1..=5).map(PersonId), |actor| HealerReviewFacts {
-        is_ruler: actor == PersonId(1),
-        medicine: if actor == PersonId(2) { 0 } else { 1 },
-        capable: actor != PersonId(3),
-        busy: actor == PersonId(4),
-    });
+    let mut presence_reads = Vec::new();
+    let mut busy_reads = Vec::new();
+    let healers = owner.review_healers(
+        (1..=5).map(PersonId),
+        |actor| HealerQualifications {
+            is_ruler: actor == PersonId(1),
+            medicine: if actor == PersonId(2) { 0 } else { 1 },
+        },
+        |actor| {
+            presence_reads.push(actor);
+            actor != PersonId(3)
+        },
+        |actor| {
+            busy_reads.push(actor);
+            actor == PersonId(4)
+        },
+    );
     assert_eq!(healers, vec![PersonId(5)]);
+    assert_eq!(presence_reads, vec![PersonId(3), PersonId(4), PersonId(5)]);
+    assert_eq!(busy_reads, vec![PersonId(4), PersonId(5)]);
     assert!(!offer(&store, PersonId(3), PersonId(4)).unwrap().accepted);
 }
 
