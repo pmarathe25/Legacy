@@ -38,6 +38,30 @@ impl game_transport::BodyFacts for ReceivedTransportBodies<'_> {
     }
 }
 
+struct RescueMemoryAdapter<'a> {
+    signals: Option<&'a BTreeMap<PersonId, game_characters::decisions::ChildSignal>>,
+    stocks: Option<&'a BTreeMap<InventoryId, StockKnowledge>>,
+    carried: Option<&'a [InventoryId]>,
+}
+impl game_lineage::RescueMemory for RescueMemoryAdapter<'_> {
+    fn signal(&self, child: PersonId) -> Option<game_lineage::RememberedRescueSignal<'_>> {
+        self.signals?
+            .get(&child)
+            .map(|signal| game_lineage::RememberedRescueSignal {
+                location: &signal.location,
+                preference: signal.preference,
+                urgency: signal.urgency,
+                observed_at: signal.observed_at,
+            })
+    }
+    fn stocks(&self) -> impl Iterator<Item = &StockKnowledge> {
+        self.stocks.into_iter().flat_map(|stocks| stocks.values())
+    }
+    fn carried(&self, inventory: InventoryId) -> bool {
+        self.carried.is_some_and(|ids| ids.contains(&inventory))
+    }
+}
+
 impl Simulation {
     pub fn initialize_transport(&mut self, rules: Rules) -> Result<(), Error> {
         if self.host.state.transport.is_some() || self.host.state.physical.is_none() {
@@ -258,42 +282,18 @@ impl Simulation {
         ))
     }
     pub(crate) fn transport_can_depart(&self, actor: PersonId) -> bool {
-        let Some(runtime) = &self.host.state.transport else {
-            return true;
-        };
-        if game_transport::group(&self.host.storage, actor).is_some()
-            || runtime.busy(&self.host.storage, actor)
-        {
-            return false;
-        }
-        let facts = self.transport_body_lookup();
-        if !game_transport::BodyFacts::body(&facts, actor)
-            .is_some_and(|body| body.can_walk && body.cargo <= body.capacity)
-        {
-            return false;
-        }
-        let Ok(plan) = runtime.component_plan(&self.host.storage, &facts, actor) else {
-            return false;
-        };
-        let linked = runtime.component(&self.host.storage, actor);
-        plan.unable.is_disjoint(&linked) && plan.overloaded.is_disjoint(&linked)
+        self.host.state.transport.as_ref().is_none_or(|runtime| {
+            runtime.can_depart(&self.host.storage, &self.transport_body_lookup(), actor)
+        })
     }
     pub(crate) fn transport_body_load(&self, actor: PersonId) -> Quantity {
-        let Some(runtime) = &self.host.state.transport else {
-            return Quantity(0);
-        };
-        let Ok(plan) =
-            runtime.component_plan(&self.host.storage, &self.transport_body_lookup(), actor)
-        else {
-            return Quantity(0);
-        };
-        Quantity(
-            plan.shares
-                .iter()
-                .filter(|((_, bearer), _)| *bearer == actor)
-                .map(|(_, amount)| amount.0)
-                .sum(),
-        )
+        self.host
+            .state
+            .transport
+            .as_ref()
+            .map_or(Quantity(0), |runtime| {
+                runtime.body_load(&self.host.storage, &self.transport_body_lookup(), actor)
+            })
     }
     pub(crate) fn transport_transfer_capacity(&self, actor: PersonId, amount: u64) -> bool {
         if self.host.state.transport.is_none() {
@@ -652,103 +652,57 @@ impl Simulation {
             .clear();
         self.reconcile_transport();
     }
-    /// A guardian has physically reached the sensed body. This choice uses
-    /// local body/support facts and the guardian's own ability to help.
     pub(crate) fn transport_guardian_rescue(
         &self,
         guardian: PersonId,
         target: PersonId,
     ) -> Option<Command> {
-        let world = self.host.state.transport.as_ref()?;
-        if !self.transport_same_place(guardian, target)
-            || self.transport_is_moving(guardian)
-            || world.busy(&self.host.storage, guardian)
-        {
-            return None;
-        }
-        self.host.state.physical.as_ref()?;
+        let transport = self.host.state.transport.as_ref()?;
+        let physical = self.host.state.physical.as_ref()?;
         let body = game_physiology::body(&self.host.storage, guardian)?;
-        let activity = self.host.storage.activity(guardian)?;
-        if !matches!(activity, Activity::Idle | Activity::Rest) || self.combat_restricts(guardian) {
-            return None;
-        }
-        if matches!(
-            self.resolved_location(guardian),
-            Location::StoppedOnRoad { .. }
-        ) {
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
-                &self.host.storage,
-                guardian,
-            )
-            .unwrap();
-            if let Some(signal) = mind.child_signals.get(&target).filter(|s| {
-                s.location == self.resolved_location(guardian)
-                    && s.observed_at == self.host.clock().time
-            }) {
-                if signal.urgency > 0 {
-                    let size = self.host.state.physical.as_ref()?.rules.meal_size;
-                    if let Some(source) = mind.knowledge.values().find(|f| {
-                        f.good == Good::Food
-                            && f.accessible
-                            && f.quantity >= size
-                            && self
-                                .inventory_index
-                                .get(&InventoryLocation::Carried(guardian))
-                                .is_some_and(|ids| ids.contains(&f.inventory))
-                    }) {
-                        return Some(Command::Care {
-                            child: target,
-                            source: source.inventory,
-                        });
-                    }
-                }
-                if signal.preference == Some(ChildhoodInterest::Company) {
-                    return Some(Command::Comfort { child: target });
-                }
-            }
-            if body.vitals.fatigue >= self.body_rules(guardian).fatigue_limit {
-                return Some(Command::Rest);
-            }
-            if game_transport::group(&self.host.storage, target)
-                .is_some_and(|g| g.bearers.contains(&guardian))
-                && self.transport_can_depart(guardian)
-            {
-                return Some(Command::Transport {
-                    action: Action::Resume,
-                });
-            }
-        }
-        if !self.independent(target)
-            || game_physiology::body(&self.host.storage, target)
-                .unwrap()
+        let location = self.resolved_location(guardian);
+        let mind = game_characters::decisions::mind::<Command>(&self.host.storage, guardian);
+        let memory = RescueMemoryAdapter {
+            signals: mind.map(|mind| &mind.child_signals),
+            stocks: mind.map(|mind| &mind.knowledge),
+            carried: self
+                .inventory_index
+                .get(&InventoryLocation::Carried(guardian))
+                .map(Vec::as_slice),
+        };
+        let facts = game_lineage::GuardianRescueFacts {
+            now: self.host.clock().time,
+            guardian_location: &location,
+            co_present: self.transport_same_place(guardian, target),
+            moving: self.transport_is_moving(guardian),
+            idle_or_resting: matches!(
+                self.host.storage.activity(guardian)?,
+                Activity::Idle | Activity::Rest
+            ),
+            combat_restricted: self.combat_restricts(guardian),
+            fatigue: body.vitals.fatigue,
+            fatigue_limit: self.body_rules(guardian).fatigue_limit,
+            meal_size: physical.rules.meal_size,
+            target_independent: self.independent(target),
+            target_health: game_physiology::body(&self.host.storage, target)?
                 .vitals
-                .health
-                == 0
-        {
-            let bodies = self.transport_body_lookup();
-            let needs_support =
-                game_transport::group(&self.host.storage, target).is_none_or(|group| {
-                    group.bearers.iter().any(|id| {
-                        !game_transport::BodyFacts::body(&bodies, *id)
-                            .is_some_and(|body| body.can_hold)
-                    }) || world
-                        .component_plan(&self.host.storage, &bodies, target)
-                        .is_ok_and(|plan| plan.overloaded.contains(&target))
-                });
-            if needs_support
-                && game_transport::BodyFacts::body(&bodies, guardian)
-                    .is_some_and(|body| body.can_bear)
-            {
-                return Some(Command::Transport {
-                    action: if game_transport::group(&self.host.storage, target).is_some() {
-                        Action::JoinCarry { passenger: target }
-                    } else {
-                        Action::OfferCarry { passenger: target }
-                    },
-                });
-            }
-        }
-        None
+                .health,
+        };
+        game_lineage::guardian_rescue(
+            &self.host.storage,
+            transport,
+            guardian,
+            target,
+            facts,
+            &memory,
+            &self.transport_body_lookup(),
+        )
+        .map(|intent| match intent {
+            game_lineage::RescueIntent::Care { child, source } => Command::Care { child, source },
+            game_lineage::RescueIntent::Comfort { child } => Command::Comfort { child },
+            game_lineage::RescueIntent::Rest => Command::Rest,
+            game_lineage::RescueIntent::Transport(action) => Command::Transport { action },
+        })
     }
     pub(crate) fn reconcile_transport(&mut self) {
         let owner_now = self.host.clock().time;
@@ -901,13 +855,10 @@ impl Simulation {
                 &self.transport_body_lookup(),
             )?;
         let lift = prepared.result().clone();
-        let mut actors = lift.bearers.iter().copied().collect::<Vec<_>>();
-        if !matches!(
+        let actors = lift.participants(matches!(
             self.host.storage.activity(passenger),
             Some(Activity::Escape { .. })
-        ) {
-            actors.push(passenger);
-        }
+        ));
         let interruptions =
             self.prepare_interruptions(&actors, commands::ActivityOwner::Transport)?;
         self.host
@@ -971,13 +922,10 @@ impl Simulation {
             return;
         };
         let group = prepared.result().clone();
-        let mut actors = group.bearers.iter().copied().collect::<Vec<_>>();
-        if !matches!(
+        let actors = lift.participants(matches!(
             self.host.storage.activity(group.passenger),
             Some(Activity::Escape { .. })
-        ) {
-            actors.push(group.passenger);
-        }
+        ));
         let operation = (|| -> Result<_, Error> {
             let interruptions =
                 self.prepare_interruptions(&actors, commands::ActivityOwner::Transport)?;
@@ -1271,26 +1219,12 @@ impl Simulation {
                     &self.transport_body_lookup(),
                 )?;
                 self.apply_transport_change(change)?;
-                let mut bearers: BTreeSet<_> =
-                    game_transport::offer_inbox(&self.host.storage, *passenger)
-                        .unwrap()
-                        .by_bearer
-                        .values()
-                        .filter(|o| o.expires > owner_now)
-                        .map(|o| o.bearer)
-                        .collect();
-                if let Some(existing) = game_transport::group(&self.host.storage, *passenger) {
-                    bearers.extend(
-                        existing
-                            .bearers
-                            .iter()
-                            .filter(|id| {
-                                game_transport::BodyFacts::body(&self.transport_body_lookup(), **id)
-                                    .is_some_and(|body| body.can_hold)
-                            })
-                            .copied(),
-                    );
-                }
+                let bearers = self.host.state.transport.as_ref().unwrap().join_bearers(
+                    &self.host.storage,
+                    &self.transport_body_lookup(),
+                    *passenger,
+                    owner_now,
+                );
                 if self
                     .carry_permission(*passenger, &bearers, false)
                     .authority()
@@ -1642,6 +1576,20 @@ impl Simulation {
         }
         Ok(())
     }
+    fn transport_local_bodies(
+        &self,
+        actor: PersonId,
+        reader: &impl game_transport::BodyFacts,
+    ) -> Option<BTreeMap<PersonId, Body>> {
+        let position = self.transport_position(actor)?;
+        self.host
+            .state
+            .people
+            .iter()
+            .filter(|person| self.transport_position(person.id) == Some(position))
+            .map(|person| Some((person.id, reader.body(person.id)?)))
+            .collect()
+    }
     pub(crate) fn available_transport_commands(&self, actor: PersonId) -> Vec<Command> {
         let Some(world) = &self.host.state.transport else {
             return Vec::new();
@@ -1661,7 +1609,7 @@ impl Simulation {
                     ),
                     position: self.transport_position(actor),
                 },
-                || self.transport_bodies().ok(),
+                || self.transport_local_bodies(actor, &self.transport_body_lookup()),
                 |passenger| self.transport_is_moving(passenger),
                 || self.transport_can_depart(actor),
             )
@@ -1918,6 +1866,105 @@ mod connected_tests {
             }
         ));
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn local_action_facts_skip_remote_bodies_and_preserve_exact_road_candidates() {
+        let mut sim = Simulation::transport_fixture(61, Execution::default()).unwrap();
+        let actor = sim.host.state.ruler;
+        let nearby = sim.host.state.people[7].id;
+        let reversed = sim.host.state.people[8].id;
+        let farther = sim.host.state.people[9].id;
+        let road = RoadPosition {
+            from: AreaId(1),
+            to: AreaId(3),
+            progress: SimDuration(90_000),
+            duration: SimDuration(180_000),
+        };
+        for person in &sim.host.state.people {
+            *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId(person.id.0))
+                .unwrap() = Location::AtArea(AreaId(3));
+        }
+        for (person, point) in [
+            (actor, road),
+            (nearby, road),
+            (
+                reversed,
+                RoadPosition {
+                    from: road.to,
+                    to: road.from,
+                    ..road
+                },
+            ),
+            (
+                farther,
+                RoadPosition {
+                    progress: SimDuration(90_001),
+                    ..road
+                },
+            ),
+        ] {
+            *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId(person.0))
+                .unwrap() = position_location(Position::Road(point));
+        }
+        struct Counted<'a> {
+            bodies: &'a BTreeMap<PersonId, Body>,
+            reads: std::cell::RefCell<Vec<PersonId>>,
+        }
+        impl game_transport::BodyFacts for Counted<'_> {
+            fn body(&self, actor: PersonId) -> Option<Body> {
+                self.reads.borrow_mut().push(actor);
+                self.bodies.get(&actor).cloned()
+            }
+        }
+        let full = sim.transport_bodies().unwrap();
+        let reader = Counted {
+            bodies: &full,
+            reads: std::cell::RefCell::new(Vec::new()),
+        };
+        let local = sim.transport_local_bodies(actor, &reader).unwrap();
+        assert_eq!(reader.reads.borrow().len(), 2);
+        assert_eq!(
+            reader
+                .reads
+                .borrow()
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([actor, nearby])
+        );
+        assert_eq!(
+            local.keys().copied().collect::<Vec<_>>(),
+            vec![actor, nearby]
+        );
+        assert!(sim.transport_same_place(actor, reversed));
+        let facts = game_transport::AvailableActionFacts {
+            independent: true,
+            combat_restricted: false,
+            moving: false,
+            stopped_on_road: false,
+            position: sim.transport_position(actor),
+        };
+        let runtime = sim.host.state.transport.as_ref().unwrap();
+        let before = runtime.available_actions(
+            &sim.host.storage,
+            actor,
+            sim.host.clock().time,
+            facts,
+            || Some(full),
+            |_| false,
+            || false,
+        );
+        let after = runtime.available_actions(
+            &sim.host.storage,
+            actor,
+            sim.host.clock().time,
+            facts,
+            || Some(local),
+            |_| false,
+            || false,
+        );
+        assert_eq!(before, after);
+        assert_eq!(after, vec![Action::OfferCarry { passenger: nearby }]);
     }
     fn quiet(sim: &mut Simulation) {
         let citizens: Vec<_> = sim

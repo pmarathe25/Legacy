@@ -7,3 +7,5 @@ Body, contact, consent, and road facts remain explicit inputs. `BodyFacts` suppl
 Prepared operations capture touched rows, relevant connected group/lift membership, body facts, rules, and any response-journal input. Time-sensitive plans also capture their preparation time. `stage_into` appends typed edits to a caller's batch. Apply that batch once before consuming `TransportFinalization::finish` in the same serialized transition. Standalone `commit` performs that sequence. Failed admission publishes neither row changes nor journal responses.
 
 `validate_runtime` checks owned relationships against one supplied factual body catalog and clock. `validate_absent` rejects native transport rows when a composition has no Transport runtime.
+
+Departure admission, carried load, joining-bearer selection, and lift participant order are owner entrypoints. Physical facts remain lazy and requested by ID.

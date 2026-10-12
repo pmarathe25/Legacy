@@ -670,7 +670,9 @@ name = "game-lineage"
 version = "0.1.0"
 dependencies = [
  "game-core",
+ "game-ecs",
  "game-logistics",
+ "game-transport",
  "serde",
  "serde_json",
 ]

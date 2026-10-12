@@ -16,3 +16,6 @@ mod delivery_tests;
 
 mod service;
 pub use service::*;
+
+mod rescue;
+pub use rescue::*;
