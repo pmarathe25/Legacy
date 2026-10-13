@@ -79,7 +79,7 @@ fn food(sim: &Simulation) -> InventoryId {
 #[test]
 fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
     let mut sim = sim(4);
-    let initial = sim.canonical_state().state.people.len();
+    let initial = sim.canonical_state().people().count();
     sim.advance(MINUTE).unwrap();
     let p = game_lifecycle::all_pregnancies(sim.canonical_state().components)
         .map(|(_, row)| row)
@@ -91,7 +91,7 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
             completes: SimTime(120_000)
         }
     );
-    assert_eq!(sim.canonical_state().state.people.len(), initial);
+    assert_eq!(sim.canonical_state().people().count(), initial);
     sim.advance(MINUTE).unwrap();
     assert!(matches!(
         game_lifecycle::all_pregnancies(sim.canonical_state().components)
@@ -104,24 +104,16 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
         }
     ));
     sim.advance(SimDuration(179_999)).unwrap();
-    assert_eq!(sim.canonical_state().state.people.len(), initial);
+    assert_eq!(sim.canonical_state().people().count(), initial);
     sim.advance(SimDuration(1)).unwrap();
-    assert_eq!(sim.canonical_state().state.people.len(), initial + 1);
+    assert_eq!(sim.canonical_state().people().count(), initial + 1);
     let child = first_child(&sim);
     let life = &game_lifecycle::life(sim.canonical_state().components, child).expect("life exists");
     assert_eq!(life.born, SimTime(300_000));
     assert_eq!(life.stage, LifeStage::Infant);
     assert_eq!(life.parents.len(), 2);
     assert!(life.caregivers.is_empty());
-    assert_eq!(
-        sim.canonical_state()
-            .state
-            .people
-            .last()
-            .unwrap()
-            .work_units,
-        0
-    );
+    assert_eq!(sim.canonical_state().people().last().unwrap().work_units, 0);
     assert!(
         game_characters::decisions::mind::<game_api::Command>(
             sim.canonical_state().components,
@@ -131,7 +123,7 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
         .values
         .is_empty()
     );
-    let inventory = sim.canonical_state().state.people.last().unwrap().inventory;
+    let inventory = sim.canonical_state().people().last().unwrap().inventory;
     assert_eq!(
         game_cargo::inventory(sim.canonical_state().components, inventory)
             .expect("stock exists")
@@ -150,7 +142,7 @@ fn two_autonomous_adults_choose_a_timed_conception_and_a_real_birth() {
 fn a_player_request_cannot_supply_the_other_adults_consent() {
     let mut sim = sim(1);
     let ruler = sim.canonical_state().state.ruler;
-    let partner = sim.canonical_state().state.people[3].id;
+    let partner = sim.canonical_state().person_at(3).id;
     sim.debug_set_personality(partner, Personality::restful(), Aspiration::Comfort)
         .unwrap();
     let allocator = sim.canonical_state().next_id;
@@ -170,19 +162,13 @@ fn a_player_request_cannot_supply_the_other_adults_consent() {
             actor: ruler,
             partner
         }));
-    let people: Vec<_> = sim
-        .canonical_state()
-        .state
-        .people
-        .iter()
-        .map(|p| p.id)
-        .collect();
+    let people: Vec<_> = sim.canonical_state().people().map(|p| p.id).collect();
     for id in people {
         sim.debug_set_personality(id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     sim.advance(SimDuration(600_000)).unwrap();
-    assert_eq!(sim.canonical_state().state.people.len(), 15);
+    assert_eq!(sim.canonical_state().people().count(), 15);
     assert!(
         game_lifecycle::all_pregnancies(sim.canonical_state().components)
             .next()
@@ -219,7 +205,7 @@ fn interrupting_conception_cancels_both_primary_actions_and_creates_no_child() {
             .unwrap();
     }
     sim.advance(SimDuration(400_000)).unwrap();
-    assert_eq!(sim.canonical_state().state.people.len(), 15);
+    assert_eq!(sim.canonical_state().people().count(), 15);
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
 }
 
@@ -254,8 +240,8 @@ fn a_broken_relationship_does_not_undo_gestation_but_gestator_death_does() {
     after_death.debug_injure(p.gestator, 180_000).unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
     after_death.advance(SimDuration(180_000)).unwrap();
-    assert_eq!(sim.canonical_state().state.people.len(), 16);
-    assert_eq!(after_death.canonical_state().state.people.len(), 15);
+    assert_eq!(sim.canonical_state().people().count(), 16);
+    assert_eq!(after_death.canonical_state().people().count(), 15);
     assert_eq!(
         game_lifecycle::pregnancy(after_death.canonical_state().components, p.id)
             .expect("pregnancy exists")
@@ -270,7 +256,7 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
     let mut sim = sim(4);
     sim.advance(SimDuration(300_000)).unwrap();
     let child = first_child(&sim);
-    let caregiver = sim.canonical_state().state.people[5].id;
+    let caregiver = sim.canonical_state().person_at(5).id;
     let source = food(&sim);
     let before = game_cargo::inventory(sim.canonical_state().components, source)
         .expect("stock exists")
@@ -278,7 +264,7 @@ fn someone_other_than_a_parent_can_choose_care_and_food_is_actually_consumed() {
         .0;
     sim.debug_actor_command(caregiver, Command::Care { child, source })
         .unwrap();
-    let second = sim.canonical_state().state.people[6].id;
+    let second = sim.canonical_state().person_at(6).id;
     assert_eq!(
         sim.debug_actor_command(second, Command::Care { child, source }),
         Err(Error::Unavailable)
@@ -453,9 +439,7 @@ fn mortals_age_and_die_without_deleting_goods_while_guardians_remain() {
     );
     for guardian in sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .filter(|p| p.role == Role::Guardian)
     {
         assert!(
@@ -468,7 +452,7 @@ fn mortals_age_and_die_without_deleting_goods_while_guardians_remain() {
     assert!(
         game_cargo::inventory(
             sim.canonical_state().components,
-            sim.canonical_state().state.people[0].inventory,
+            sim.canonical_state().person_at(0).inventory,
         )
         .is_some()
     );
@@ -480,7 +464,7 @@ fn a_motivated_nonparent_responds_to_observed_distress_without_player_orders() {
     let mut sim = sim(4);
     sim.advance(SimDuration(300_000)).unwrap();
     let child = first_child(&sim);
-    let caregiver = sim.canonical_state().state.people[5].id;
+    let caregiver = sim.canonical_state().person_at(5).id;
     let mut personality = Personality::restful();
     personality.empathy = 1_000;
     sim.debug_set_personality(caregiver, personality, Aspiration::SupportOthers)
@@ -523,9 +507,7 @@ fn saving_mid_conception_and_gestation_preserves_continuation_and_new_ids() {
     let mut ids = std::collections::BTreeSet::new();
     for id in original
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .map(|p| p.id.0)
         .chain(
             game_cargo::inventories(original.canonical_state().components)

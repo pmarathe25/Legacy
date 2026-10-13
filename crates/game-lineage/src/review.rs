@@ -2,18 +2,33 @@
 use crate::{Assignment, Guardian, GuardianGoal, GuardianRequest};
 use game_core::{Location, PersonId, SimTime, SiteId};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardianActivity {
+    Idle,
+    Rest,
+    Work(SiteId),
+    Other,
+}
+impl GuardianActivity {
+    pub(crate) fn can_rest(self) -> bool {
+        matches!(self, Self::Idle | Self::Work(_))
+    }
+    pub(crate) fn can_reconsider(self) -> bool {
+        matches!(self, Self::Idle | Self::Rest | Self::Work(_))
+    }
+}
+
 /// Current physical facts, rather than a coordinator-selected guardian goal.
 #[derive(Clone, Copy, Debug)]
 pub struct ReviewFacts<'a> {
     pub now: SimTime,
     pub location: &'a Location,
-    pub active_work: Option<SiteId>,
+    pub activity: GuardianActivity,
     pub confined: bool,
     pub incapacitated: bool,
     pub combat_restricted: bool,
     pub in_combat: bool,
     pub serving_objective: bool,
-    pub can_rest: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +40,34 @@ pub enum ReviewStep {
     FinishAssignment,
     Assist(PersonId),
     Wait { rest: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryAttempt {
+    NotAttempted,
+    Occupied,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewDisposition {
+    AttemptDelivery,
+    ContinueReview,
+    Complete,
+}
+
+/// An escape opportunity precedes an accepted delivery. A delivery that
+/// occupies its guardian precedes reconsideration of other lineage duties.
+pub fn review_disposition(escape_available: bool, delivery: DeliveryAttempt) -> ReviewDisposition {
+    if escape_available {
+        ReviewDisposition::ContinueReview
+    } else {
+        match delivery {
+            DeliveryAttempt::NotAttempted => ReviewDisposition::AttemptDelivery,
+            DeliveryAttempt::Occupied => ReviewDisposition::Complete,
+            DeliveryAttempt::Unavailable => ReviewDisposition::ContinueReview,
+        }
+    }
 }
 
 impl ReviewStep {
@@ -66,7 +109,7 @@ pub fn assignment_pending(assignment: Option<&Assignment>, facts: ReviewFacts<'_
             matches!(facts.location, Location::InTransit { .. })
                 || matches!(facts.location, Location::AtArea(area) if *area != destination)
         }
-        GuardianRequest::Work { site } => facts.active_work == Some(site),
+        GuardianRequest::Work { site } => facts.activity == GuardianActivity::Work(site),
         GuardianRequest::Rest => facts.now <= assignment.accepted_at,
         GuardianRequest::Supply { .. } => false,
     })
@@ -93,7 +136,7 @@ pub fn review_priority(
         ReviewStep::Assist(target)
     } else {
         ReviewStep::Wait {
-            rest: facts.can_rest,
+            rest: facts.activity.can_rest(),
         }
     }
 }

@@ -127,3 +127,52 @@ fn prepared_learning_preserves_current_priority_and_unrelated_mind_updates() {
         assert!(prepare_memory_route::<u8>(&store, actor, origin, destination, duration).is_err());
     }
 }
+
+#[test]
+fn route_learning_is_canonical_in_the_source_batch_and_rejects_late_replacement() {
+    let actor = PersonId(10);
+    let mut schema = game_ecs::Schema::new();
+    crate::decisions::register_minds::<u8>(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    crate::decisions::insert_mind(&mut store, actor, mind()).unwrap();
+    let plan =
+        prepare_memory_route::<u8>(&store, actor, AreaId(1), AreaId(2), SimDuration(300)).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let receipt = plan.stage_into::<u8>(&store, &mut batch).unwrap();
+    assert!(
+        crate::decisions::mind::<u8>(&store, actor)
+            .unwrap()
+            .routes
+            .is_empty()
+    );
+    assert_eq!(
+        batch
+            .projected::<Mind<u8>>(&store, game_ecs::StableId(actor.0))
+            .unwrap()
+            .unwrap()
+            .routes[&AreaId(1)][&AreaId(2)],
+        SimDuration(300)
+    );
+    receipt.validate_batch::<u8>(&store, &batch).unwrap();
+    batch.insert(game_ecs::StableId(actor.0), mind());
+    assert_eq!(
+        receipt.validate_batch::<u8>(&store, &batch),
+        Err(game_core::Error::Unavailable)
+    );
+    assert!(
+        crate::decisions::mind::<u8>(&store, actor)
+            .unwrap()
+            .routes
+            .is_empty()
+    );
+    let plan =
+        prepare_memory_route::<u8>(&store, actor, AreaId(1), AreaId(2), SimDuration(300)).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let receipt = plan.stage_into::<u8>(&store, &mut batch).unwrap();
+    receipt.validate_batch::<u8>(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        crate::decisions::mind::<u8>(&store, actor).unwrap().routes[&AreaId(1)][&AreaId(2)],
+        SimDuration(300)
+    );
+}

@@ -307,3 +307,107 @@ mod tests {
         }
     }
 }
+
+/// Access reports update remembered rights only when the inventory was already
+/// known. The report does not fabricate a stock, quantity, or relationship.
+pub fn prepare_permission_memory<A: Component>(
+    store: &Store,
+    recipient: PersonId,
+    inventory: InventoryId,
+    allowed: bool,
+    sender: PersonId,
+    now: SimTime,
+) -> Result<PreparedStockReports<A>, Error> {
+    prepare_permission_memories::<A>(store, recipient, &[(inventory, allowed, sender)], now)
+}
+pub fn prepare_permission_memories<A: Component>(
+    store: &Store,
+    recipient: PersonId,
+    reports: &[(InventoryId, bool, PersonId)],
+    now: SimTime,
+) -> Result<PreparedStockReports<A>, Error> {
+    let before = stocks(store, recipient)
+        .cloned()
+        .ok_or(Error::Unavailable)?;
+    let mut after = before.clone();
+    for (inventory, allowed, sender) in reports {
+        if let Some(fact) = after.known.get_mut(inventory) {
+            fact.accessible = *allowed;
+            fact.learned_at = now;
+            fact.source = KnowledgeSource::Reported(*sender);
+        }
+    }
+    after.validate()?;
+    Ok(PreparedStockReports {
+        marker: std::marker::PhantomData,
+        actor: recipient,
+        before,
+        after,
+    })
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    #[test]
+    fn permission_reports_change_only_existing_memories_and_stage_once_per_recipient() {
+        let mut schema = game_ecs::Schema::new();
+        register_minds::<u8>(&mut schema).unwrap();
+        let mut store = Store::with_schema(schema);
+        insert_mind(&mut store, PersonId(1), crate::planning::tests::mind()).unwrap();
+        let fact = StockKnowledge {
+            inventory: InventoryId(10),
+            area: AreaId(1),
+            good: Good::Food,
+            quantity: Quantity(1000),
+            accessible: false,
+            observed_at: SimTime(100),
+            learned_at: SimTime(100),
+            source: KnowledgeSource::Observed(PersonId(1)),
+        };
+        stocks_mut(&mut store, PersonId(1))
+            .unwrap()
+            .known
+            .insert(fact.inventory, fact.clone());
+        let prepared = prepare_permission_memories::<u8>(
+            &store,
+            PersonId(1),
+            &[
+                (InventoryId(10), true, PersonId(2)),
+                (InventoryId(11), true, PersonId(2)),
+            ],
+            SimTime(200),
+        )
+        .unwrap();
+        let mut batch = Batch::new();
+        let guard = prepared.stage_into(&store, &mut batch).unwrap();
+        guard.validate(&batch).unwrap();
+        store.apply_batch(batch).unwrap();
+        let stocks = stocks(&store, PersonId(1)).unwrap();
+        assert_eq!(stocks.known.len(), 1);
+        let received = &stocks.known[&InventoryId(10)];
+        assert!(received.accessible);
+        assert_eq!(received.quantity, fact.quantity);
+        assert_eq!(received.observed_at, fact.observed_at);
+        assert_eq!(received.learned_at, SimTime(200));
+        assert_eq!(received.source, KnowledgeSource::Reported(PersonId(2)));
+        let prepared = prepare_permission_memory::<u8>(
+            &store,
+            PersonId(1),
+            InventoryId(10),
+            false,
+            PersonId(2),
+            SimTime(201),
+        )
+        .unwrap();
+        stocks_mut(&mut store, PersonId(1))
+            .unwrap()
+            .known
+            .get_mut(&InventoryId(10))
+            .unwrap()
+            .quantity = Quantity(999);
+        let before = store.clone();
+        assert!(prepared.stage_into(&store, &mut Batch::new()).is_err());
+        assert_eq!(store, before);
+    }
+}

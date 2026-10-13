@@ -2,10 +2,14 @@
 //! Trait owners supply locus definitions and interpret raw allele values.
 use game_core::{Error, PersonId, PregnancyId, SimTime};
 use game_ecs::{Batch, StableId, Store};
+mod references;
 mod storage;
+pub use references::{PregnancyReference, TransmissionStage};
+mod transmission;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub use storage::*;
+pub use transmission::{PreparedBirth, PreparedConception, StagedBirth, StagedConception};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -653,49 +657,8 @@ impl Runtime {
         parents: [PersonId; 2],
         now: SimTime,
     ) -> Result<(), Error> {
-        if let Some(existing) = inheritance(store, pregnancy) {
-            return if existing.parents == parents && existing.conceived_at == now {
-                Ok(())
-            } else {
-                Err(Error::SequenceConflict)
-            };
-        }
-        if parents[0] == parents[1] {
-            return Err(Error::Unavailable);
-        }
-        person_genome(store, parents[0]).ok_or(Error::Unavailable)?;
-        person_genome(store, parents[1]).ok_or(Error::Unavailable)?;
-        let a = self.gamete(store, seed, pregnancy, 0, parents[0])?;
-        let b = self.gamete(store, seed, pregnancy, 1, parents[1])?;
-        if a.mutations
-            .iter()
-            .any(|(id, variant)| b.mutations.get(id).is_some_and(|other| other != variant))
-        {
-            return Err(configuration("genetic variant identity collision"));
-        }
-        let genome = Genome {
-            chromosomes: a
-                .chromosomes
-                .into_iter()
-                .zip(b.chromosomes)
-                .map(|(a, b)| ChromosomePair { homologs: [a, b] })
-                .collect(),
-        };
-        insert_inheritance(
-            store,
-            pregnancy,
-            Inheritance {
-                parents,
-                conceived_at: now,
-                genome: Some(genome),
-                transmissions: [a.transmissions, b.transmissions],
-                born: None,
-                ended_at: None,
-            },
-        )?;
-        self.variants.extend(a.mutations);
-        self.variants.extend(b.mutations);
-        Ok(())
+        self.prepare_conception(store, seed, pregnancy, parents, now)?
+            .commit(self, store)
     }
     pub fn born(
         &mut self,
@@ -704,33 +667,8 @@ impl Runtime {
         child: PersonId,
         now: SimTime,
     ) -> Result<(), Error> {
-        if child.0 == pregnancy.0 {
-            return Err(Error::Unavailable);
-        }
-        let record = inheritance(store, pregnancy).ok_or(Error::Unavailable)?;
-        if record.born == Some(child) {
-            return Ok(());
-        }
-        if record.born.is_some()
-            || record.ended_at.is_some()
-            || person_genome(store, child).is_some()
-            || record.parents.contains(&child)
-            || now < record.conceived_at
-        {
-            return Err(Error::Unavailable);
-        }
-        let genome = record.genome.clone().ok_or(Error::Unavailable)?;
-        if !self.genome_valid(&genome) {
-            return Err(configuration("malformed inherited genome"));
-        }
-        let mut record = record.clone();
-        record.genome = None;
-        record.born = Some(child);
-        let mut batch = Batch::new();
-        batch.insert(StableId(child.0), PersonGenome { genome });
-        batch.insert(StableId(pregnancy.0), record);
-        store.apply_batch(batch)?;
-        Ok(())
+        self.prepare_birth(store, pregnancy, child, now)?
+            .commit(self, store)
     }
     pub fn end_pregnancy(&self, store: &mut Store, pregnancy: PregnancyId, now: SimTime) {
         self.prepare_end_pregnancy(store, pregnancy, now)

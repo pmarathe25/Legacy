@@ -53,7 +53,7 @@ fn reachable_food_requires_consumption_while_guardians_have_no_hunger_need() {
     }
     assert_eq!(food_total(&sim), before - 20_000);
     assert!(sim.observe().physical.unwrap().vitals.alive);
-    let guardian = sim.canonical_state().state.people[1].id;
+    let guardian = sim.canonical_state().person_at(1).id;
     sim.debug_actor_command(guardian, Command::Eat { source })
         .unwrap();
     sim.advance(MINUTE).unwrap();
@@ -148,7 +148,7 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
     let mut sim = sim(4);
     let ruler = actor(&sim);
     let source = food(&sim);
-    let carried = sim.canonical_state().state.people[0].inventory;
+    let carried = sim.canonical_state().person_at(0).inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -238,7 +238,7 @@ fn load_travel_unload_is_physical_and_cancellation_keeps_cargo() {
         Quantity(2_000)
     );
     assert_eq!(food_total(&sim), before);
-    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().person_at(0).work_units, 0);
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
             .0,
         output + 1_000
     );
-    assert_eq!(sim.canonical_state().state.people[0].work_units, 1_000);
+    assert_eq!(sim.canonical_state().person_at(0).work_units, 1_000);
     command(&mut sim, Command::Work { site: site.id }).unwrap();
     command(&mut sim, Command::Cancel).unwrap();
     assert_eq!(
@@ -314,7 +314,7 @@ fn production_consumes_inputs_once_and_interruption_preserves_progress() {
 fn spoilage_invalidates_loading_without_duplicating_reserved_food() {
     let mut sim = sim(1);
     let source = food(&sim);
-    let carried = sim.canonical_state().state.people[0].inventory;
+    let carried = sim.canonical_state().person_at(0).inventory;
     command(
         &mut sim,
         Command::Load {
@@ -351,7 +351,7 @@ fn spoilage_invalidates_loading_without_duplicating_reserved_food() {
 #[test]
 fn guardian_injury_recovers_and_mortal_rest_preserves_chunking() {
     let mut reference = sim(1);
-    let guardian = reference.canonical_state().state.people[1].id;
+    let guardian = reference.canonical_state().person_at(1).id;
     let ruler = actor(&reference);
     reference.debug_injure(guardian, 180_000).unwrap();
     reference.debug_injure(ruler, 100_000).unwrap();
@@ -382,7 +382,7 @@ fn guardian_injury_recovers_and_mortal_rest_preserves_chunking() {
 fn timed_actions_reservations_and_partial_work_survive_saving() {
     let mut sim = sim(1);
     let source = food(&sim);
-    let carried = sim.canonical_state().state.people[0].inventory;
+    let carried = sim.canonical_state().person_at(0).inventory;
     command(
         &mut sim,
         Command::Load {
@@ -422,7 +422,7 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
     let mut sim = sim(4);
     let ruler = actor(&sim);
     let source = food(&sim);
-    let carried = sim.canonical_state().state.people[0].inventory;
+    let carried = sim.canonical_state().person_at(0).inventory;
     let timber_source = game_cargo::inventories(sim.canonical_state().components)
         .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Timber && i.location == InventoryLocation::Area(AreaId(1)))
@@ -466,7 +466,7 @@ fn all_carried_stacks_share_one_capacity_during_contested_commit() {
 #[test]
 fn recovery_events_and_fatigue_interruptions_have_exact_chunk_independent_times() {
     let mut sim = sim(1);
-    let guardian = sim.canonical_state().state.people[1].id;
+    let guardian = sim.canonical_state().person_at(1).id;
     sim.debug_injure(guardian, 123_456).unwrap();
     let mut split = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     sim.advance(SimDuration(180_000)).unwrap();
@@ -494,7 +494,7 @@ fn existing_physical_completion_and_debug_transfer_cannot_consume_the_same_units
             BTreeSet::from([ruler]),
         )
         .unwrap();
-    let carried = sim.canonical_state().state.people[0].inventory;
+    let carried = sim.canonical_state().person_at(0).inventory;
     command(&mut sim, Command::Eat { source }).unwrap();
     sim.debug_schedule_transfers(
         SimTime(60_000),
@@ -600,12 +600,12 @@ fn death_at_an_intermediate_arrival_does_not_publish_a_phantom_next_leg() {
     assert_eq!(
         *game_spatial::location(
             state.components,
-            game_ecs::StableId((state.state.people[0].id).0)
+            game_ecs::StableId((state.person_at(0).id).0)
         )
         .expect("location exists"),
         Location::AtArea(AreaId(1))
     );
-    assert!(game_transport::route_steps(state.components, state.state.people[0].id).is_empty());
+    assert!(game_transport::route_steps(state.components, state.person_at(0).id).is_empty());
     assert!(
         !state.events.iter().any(|event| event.at == SimTime(240_000)
             && matches!(event.event, EventKind::Departed { actor, .. } if actor == ruler))
@@ -620,7 +620,7 @@ fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
     assert_eq!(
         *game_spatial::location(
             sim.canonical_state().components,
-            game_ecs::StableId((sim.canonical_state().state.people[0].id).0)
+            game_ecs::StableId((sim.canonical_state().person_at(0).id).0)
         )
         .expect("location exists"),
         Location::AtArea(AreaId(1))
@@ -628,7 +628,7 @@ fn exhaustion_at_an_intermediate_arrival_requires_rest_before_another_leg() {
     assert!(
         game_transport::route_steps(
             sim.canonical_state().components,
-            sim.canonical_state().state.people[0].id
+            sim.canonical_state().person_at(0).id
         )
         .is_empty()
     );

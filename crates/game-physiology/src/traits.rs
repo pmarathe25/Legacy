@@ -181,6 +181,16 @@ pub struct Phenotype {
     pub metabolism_milli: u16,
     pub cold_tolerance_centi: i16,
 }
+impl Default for Phenotype {
+    fn default() -> Self {
+        Self {
+            strength_milli: 1_000,
+            max_health_milli: 1_000,
+            metabolism_milli: 1_000,
+            cold_tolerance_centi: 0,
+        }
+    }
+}
 
 /// Preserve the proportion of existing injury, including its fixed-point
 /// remainder, when the body's maximum health changes. Death remains death.
@@ -303,17 +313,12 @@ impl Runtime {
         let d = development(store, person).ok_or(Error::Unavailable)?;
         self.phenotype_for(d, score)
     }
-    fn phenotype_for(
+    pub(crate) fn phenotype_for(
         &self,
         d: &Development,
         mut score: impl FnMut(&str) -> Result<i32, Error>,
     ) -> Result<Phenotype, Error> {
-        let mut result = Phenotype {
-            strength_milli: 1_000,
-            max_health_milli: 1_000,
-            metabolism_milli: 1_000,
-            cold_tolerance_centi: 0,
-        };
+        let mut result = Phenotype::default();
         for t in &self.definitions.traits {
             let score = score(&t.inheritance.locus)?;
             if !(0..=1_000).contains(&score) {
@@ -427,6 +432,84 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "genetics")]
+    #[test]
+    fn initial_expression_admits_founder_body_and_development_together() {
+        struct Source;
+        impl game_genetics::AlleleSource for Source {
+            fn alleles_named(&self, _: PersonId, _: &str) -> Result<[i32; 2], Error> {
+                Ok([500, 500])
+            }
+        }
+        for reject in [false, true] {
+            let mut schema = Schema::new();
+            register_components(&mut schema).unwrap();
+            let validator: fn(&crate::Body) -> Result<(), Error> = if reject {
+                |body| {
+                    body.validate()?;
+                    if body.vitals.health < 100 {
+                        Err(Error::Unavailable)
+                    } else {
+                        Ok(())
+                    }
+                }
+            } else {
+                crate::Body::validate
+            };
+            schema
+                .register::<crate::Body>("physiology/body", validator)
+                .unwrap();
+            let mut store = Store::with_schema(schema);
+            crate::insert_body(
+                &mut store,
+                PersonId(1),
+                crate::Body {
+                    vitals: game_core::Vitals {
+                        hunger: 7,
+                        fatigue: 11,
+                        health: 100,
+                        alive: true,
+                    },
+                    fatigue_remainder: 23,
+                    health_remainder: 29,
+                },
+            )
+            .unwrap();
+            let mut definitions = definitions();
+            let mut constitution = definitions.traits[0].clone();
+            constitution.kind = PhysicalTrait::Constitution;
+            constitution.inheritance.locus = "body.health".into();
+            constitution.inheritance.position = 1;
+            definitions.traits.push(constitution);
+            let runtime = Runtime::new(definitions, SimTime(0)).unwrap();
+            let development = Development {
+                maturity_milli: 0,
+                physical_training_milli: 0,
+            };
+            let before = store.snapshot().unwrap();
+            let plan = runtime
+                .prepare_founder_expression(&store, PersonId(1), &development, &Source)
+                .unwrap();
+            assert_eq!(store.snapshot().unwrap(), before);
+            let mut batch = game_ecs::Batch::new();
+            let guard = plan.stage_into(&runtime, &store, &mut batch).unwrap();
+            guard.validate(&store, &batch).unwrap();
+            let result = store.apply_batch(batch);
+            if reject {
+                assert_eq!(result, Err(Error::Unavailable));
+                assert_eq!(store.snapshot().unwrap(), before);
+            } else {
+                result.unwrap();
+                assert_eq!(crate::body(&store, PersonId(1)).unwrap().vitals.health, 80);
+                assert_eq!(crate::body(&store, PersonId(1)).unwrap().vitals.hunger, 7);
+                assert_eq!(
+                    crate::body(&store, PersonId(1)).unwrap().health_remainder,
+                    23
+                );
+                assert_eq!(super::development(&store, PersonId(1)), Some(&development));
+            }
+        }
+    }
     fn store() -> Store {
         let mut schema = Schema::new();
         register_components(&mut schema).unwrap();
@@ -975,3 +1058,83 @@ impl PreparedRefresh {
 
 #[cfg(all(test, feature = "genetics"))]
 mod system_tests;
+
+#[cfg(feature = "genetics")]
+impl Runtime {
+    /// The owner selects all development records and interprets maturity and acquired skill facts.
+    pub fn prepare_refresh_from_facts(
+        &self,
+        store: &Store,
+        now: SimTime,
+        source: &impl game_genetics::AlleleSource,
+        mut facts: impl FnMut(PersonId) -> Result<(u16, Vec<(Skill, u16)>), Error>,
+    ) -> Result<Option<PreparedRefresh>, Error> {
+        if !self.refresh_due(now) {
+            return Ok(None);
+        }
+        let mut actors: Vec<_> = all_developments(store).map(|(actor, _)| actor).collect();
+        actors.sort_unstable();
+        let developments = actors
+            .into_iter()
+            .map(|actor| {
+                let (maturity, levels) = facts(actor)?;
+                self.development_from_facts(maturity, &levels)
+                    .map(|development| (actor, development))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.prepare_refresh(store, now, &developments, source)
+    }
+    pub fn validate_references(
+        &self,
+        store: &Store,
+        people: &BTreeSet<PersonId>,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<(), Error> {
+        let fail = || Error::InvalidSave("inconsistent physical trait references".into());
+        if all_developments(store)
+            .map(|(actor, _)| actor)
+            .collect::<BTreeSet<_>>()
+            != *people
+        {
+            return Err(fail());
+        }
+        for actor in people {
+            self.phenotype_from_genes(store, *actor, source)
+                .map_err(|_| fail())?;
+        }
+        Ok(())
+    }
+}
+
+impl Runtime {
+    pub fn register_newborn(&self, store: &mut Store, actor: PersonId) -> Result<(), Error> {
+        self.register(
+            store,
+            actor,
+            Development {
+                maturity_milli: 0,
+                physical_training_milli: 0,
+            },
+        )
+    }
+}
+
+#[cfg(feature = "genetics")]
+impl Runtime {
+    pub(crate) fn newborn_phenotype(
+        &self,
+        actor: PersonId,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<Phenotype, Error> {
+        self.phenotype_for(
+            &Development {
+                maturity_milli: 0,
+                physical_training_milli: 0,
+            },
+            |locus| {
+                let [first, second] = source.alleles_named(actor, locus)?;
+                Ok(((i64::from(first) + i64::from(second)) / 2) as i32)
+            },
+        )
+    }
+}

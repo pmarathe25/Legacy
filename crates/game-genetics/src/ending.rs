@@ -1,29 +1,36 @@
 //! Lifecycle interruption ends this owner's frozen transmission record only.
 use crate::*;
-use game_ecs::{Batch, StableId, Store};
+use game_ecs::{Batch, ReadFootprint, ReadGuard, ReadSet, StableId, Store};
 #[derive(Clone, Debug)]
 pub struct PreparedPregnancyEnd {
     pregnancy: PregnancyId,
-    before: Option<Inheritance>,
+    reads: ReadSet,
     after: Option<Inheritance>,
 }
 impl PreparedPregnancyEnd {
     pub fn validate(&self, store: &Store) -> Result<(), Error> {
-        if inheritance(store, self.pregnancy) != self.before.as_ref() {
-            return Err(Error::Unavailable);
-        }
-        Ok(())
+        self.reads.validate(store)
     }
     pub fn stage_into(self, store: &Store, batch: &mut Batch) -> Result<(), Error> {
+        self.stage_guarded_into(store, batch).map(|_| ())
+    }
+    pub fn stage_guarded_into(self, store: &Store, batch: &mut Batch) -> Result<ReadGuard, Error> {
         self.validate(store)?;
+        let mut writes = ReadFootprint::new();
         if let Some(after) = self.after {
-            batch.insert(StableId(self.pregnancy.0), after);
+            let id = StableId(self.pregnancy.0);
+            if batch.touches::<Inheritance>(id) {
+                return Err(Error::Unavailable);
+            }
+            batch.insert(id, after);
+            writes.protect::<Inheritance>(id);
         }
-        Ok(())
+        self.reads.bind(store, batch, &writes)
     }
     pub fn commit(self, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        self.stage_into(store, &mut batch)?;
+        let guard = self.stage_guarded_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)
     }
 }
@@ -34,7 +41,10 @@ impl Runtime {
         pregnancy: PregnancyId,
         now: SimTime,
     ) -> PreparedPregnancyEnd {
-        let before = inheritance(store, pregnancy).cloned();
+        let mut reads = ReadSet::new();
+        let before = reads
+            .read::<Inheritance>(store, StableId(pregnancy.0))
+            .cloned();
         let after = before
             .as_ref()
             .filter(|row| row.born.is_none() && row.ended_at.is_none() && now >= row.conceived_at)
@@ -45,7 +55,7 @@ impl Runtime {
             });
         PreparedPregnancyEnd {
             pregnancy,
-            before,
+            reads,
             after,
         }
     }
@@ -117,5 +127,20 @@ mod tests {
             .commit(&mut store)
             .unwrap();
         assert_eq!(store.snapshot().unwrap(), before);
+    }
+    #[test]
+    fn interruption_guard_rejects_overwritten_inheritance_before_publication() {
+        let (runtime, store) = setup();
+        let prepared = runtime.prepare_end_pregnancy(&store, PregnancyId(3), SimTime(2));
+        let mut batch = Batch::new();
+        let guard = prepared.stage_guarded_into(&store, &mut batch).unwrap();
+        guard.validate(&store, &batch).unwrap();
+        assert!(guard.validate(&store, &Batch::new()).is_err());
+        batch.insert(
+            StableId(3),
+            inheritance(&store, PregnancyId(3)).unwrap().clone(),
+        );
+        assert!(guard.validate(&store, &batch).is_err());
+        assert_eq!(inheritance(&store, PregnancyId(3)).unwrap().ended_at, None);
     }
 }

@@ -1,9 +1,13 @@
 //! Temperament predisposition and experience. Genes are optional raw evidence;
 //! acquired offsets and the interpretation of that evidence belong to characters.
 use game_core::{Error, PersonId};
+#[cfg(feature = "genetics")]
+use game_ecs::{Batch, ReadFootprint, ReadGuard, ReadSet};
 use game_ecs::{Schema, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod newborn;
+pub use newborn::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -704,6 +708,7 @@ struct TemperamentRow {
 pub struct PreparedTemperament<A> {
     definitions: Definitions,
     rows: Vec<TemperamentRow>,
+    factual_reads: ReadSet,
     action: std::marker::PhantomData<fn() -> A>,
 }
 
@@ -767,6 +772,7 @@ impl Runtime {
         Ok(PreparedTemperament {
             definitions: self.definitions.clone(),
             rows,
+            factual_reads: ReadSet::new(),
             action: std::marker::PhantomData,
         })
     }
@@ -824,6 +830,10 @@ impl Runtime {
 
 #[cfg(feature = "genetics")]
 impl<A: game_ecs::Component> PreparedTemperament<A> {
+    pub fn with_factual_reads(mut self, reads: ReadSet) -> Self {
+        self.factual_reads.extend(reads);
+        self
+    }
     pub fn affected(&self) -> impl Iterator<Item = PersonId> + '_ {
         self.rows.iter().map(|row| row.actor)
     }
@@ -836,6 +846,7 @@ impl<A: game_ecs::Component> PreparedTemperament<A> {
         if runtime.definitions != self.definitions {
             return Err(Error::Unavailable);
         }
+        self.factual_reads.validate(store)?;
         for row in &self.rows {
             if person_temperament(store, row.actor) != Some(&row.before) {
                 return Err(Error::Unavailable);
@@ -873,9 +884,8 @@ impl<A: game_ecs::Component> PreparedTemperament<A> {
         }
         Ok(())
     }
-    /// Trait rows receive full registered schema admission. Personality is an
-    /// owner-controlled field commit: intrinsic mind/candidate invariants are
-    /// preflighted, and other mind fields are preserved rather than cloned.
+    /// Native trait and Mind rows receive their registered schema admission
+    /// together; no field update bypasses the component validators.
     pub fn commit(
         self,
         runtime: &Runtime,
@@ -893,27 +903,141 @@ impl<A: game_ecs::Component> PreparedTemperament<A> {
                 (self.read)(self.store, actor, locus)
             }
         }
-        self.validate(
+        let mut batch = Batch::new();
+        let staged = self.stage_into(
             runtime,
             store,
+            &mut batch,
             &Source {
                 store,
                 read: &read_alleles,
             },
         )?;
-        let mut batch = game_ecs::Batch::new();
+        staged.validate(
+            runtime,
+            store,
+            &batch,
+            &Source {
+                store,
+                read: &read_alleles,
+            },
+        )?;
+        store.apply_batch(batch)
+    }
+    /// Fold expressed temperament into an opaque receiving Mind builder before
+    /// any Mind write is staged. Existing prepared fields retain their values.
+    pub fn fold_minds(
+        self,
+        store: &Store,
+        mut minds: crate::receivers::PreparedMindEffects<A>,
+    ) -> Result<PreparedTemperamentMind<A>, Error> {
         for row in &self.rows {
+            let Some(next) = &row.next_personality else {
+                continue;
+            };
+            let mut personality = minds
+                .projected_mind(row.actor)
+                .or_else(|| crate::decisions::mind::<A>(store, row.actor))
+                .ok_or(Error::Unavailable)?
+                .personality
+                .clone();
+            Temperament::from(next).apply_to(&mut personality);
+            minds.set_personality(store, row.actor, personality)?;
+        }
+        Ok(PreparedTemperamentMind {
+            traits: self,
+            minds,
+        })
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<StagedTemperament<A>, Error> {
+        self.fold_minds(store, crate::receivers::PreparedMindEffects::default())?
+            .stage_into(runtime, store, batch, source)
+    }
+}
+
+#[cfg(feature = "genetics")]
+pub struct PreparedTemperamentMind<A> {
+    traits: PreparedTemperament<A>,
+    minds: crate::receivers::PreparedMindEffects<A>,
+}
+#[cfg(feature = "genetics")]
+pub struct StagedTemperament<A> {
+    definitions: Definitions,
+    alleles: Vec<(PersonId, Vec<[i32; 2]>)>,
+    guards: [ReadGuard; 2],
+    action: std::marker::PhantomData<fn() -> A>,
+}
+#[cfg(feature = "genetics")]
+impl<A: game_ecs::Component> PreparedTemperamentMind<A> {
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<StagedTemperament<A>, Error> {
+        self.traits.validate(runtime, store, source)?;
+        let mut reads = self.traits.factual_reads;
+        let mut admitted = ReadFootprint::new();
+        for row in &self.traits.rows {
+            let id = StableId(row.actor.0);
+            reads.expect_row::<PersonTemperament>(id, Some(row.before.clone()));
+            if row.personality.is_none() {
+                reads.expect_row::<crate::decisions::Mind<A>>(id, None);
+            }
             if row.write_trait {
-                batch.insert(StableId(row.actor.0), row.after.clone());
+                if batch.touches::<PersonTemperament>(id) {
+                    return Err(Error::Unavailable);
+                }
+                batch.insert(id, row.after.clone());
+                admitted.protect::<PersonTemperament>(id);
             }
         }
-        store.apply_batch(batch)?;
-        for row in self.rows {
-            if let Some(personality) = row.next_personality {
-                crate::decisions::mind_mut::<A>(store, row.actor)
-                    .expect("preflighted personal mind exists")
-                    .personality = personality;
+        let trait_guard = reads.bind(store, batch, &admitted)?;
+        let mind_guard = self.minds.stage_into(store, batch)?;
+        Ok(StagedTemperament {
+            definitions: self.traits.definitions,
+            alleles: self
+                .traits
+                .rows
+                .into_iter()
+                .map(|row| (row.actor, row.alleles))
+                .collect(),
+            guards: [trait_guard, mind_guard],
+            action: std::marker::PhantomData,
+        })
+    }
+}
+#[cfg(feature = "genetics")]
+impl<A: game_ecs::Component> StagedTemperament<A> {
+    pub fn row_guards(&self) -> &[ReadGuard; 2] {
+        &self.guards
+    }
+    pub fn validate(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &Batch,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<(), Error> {
+        if self.definitions != runtime.definitions {
+            return Err(Error::Unavailable);
+        }
+        for (actor, alleles) in &self.alleles {
+            for (definition, expected) in self.definitions.traits.iter().zip(alleles) {
+                if source.alleles_named(*actor, &definition.inheritance.locus)? != *expected {
+                    return Err(Error::Unavailable);
+                }
             }
+        }
+        for guard in &self.guards {
+            guard.validate(store, batch)?;
         }
         Ok(())
     }
@@ -921,3 +1045,205 @@ impl<A: game_ecs::Component> PreparedTemperament<A> {
 
 #[cfg(all(test, feature = "genetics"))]
 mod system_tests;
+
+/// Typed lived events; Characters owns their interpretation as authored learning.
+#[derive(Clone, Copy, Debug)]
+pub enum ExperienceEvent {
+    Care {
+        caregiver: PersonId,
+        child: PersonId,
+    },
+    Company {
+        first: PersonId,
+        second: PersonId,
+    },
+    Practice {
+        actor: PersonId,
+    },
+    Guidance {
+        teacher: PersonId,
+        student: PersonId,
+    },
+    Harm {
+        target: PersonId,
+    },
+}
+impl ExperienceEvent {
+    #[cfg(feature = "genetics")]
+    fn experiences(self) -> Vec<(PersonId, &'static str)> {
+        match self {
+            Self::Care { caregiver, child } => {
+                vec![(caregiver, "gave_care"), (child, "received_care")]
+            }
+            Self::Company { first, second } => vec![(first, "company"), (second, "company")],
+            Self::Practice { actor } => vec![(actor, "practice")],
+            Self::Guidance { teacher, student } => {
+                vec![(teacher, "guidance"), (student, "guidance")]
+            }
+            Self::Harm { target } => vec![(target, "experienced_harm")],
+        }
+    }
+}
+impl Runtime {
+    pub fn register_newborn_mind<A: game_ecs::Component>(
+        &self,
+        store: &mut Store,
+        child: PersonId,
+    ) -> Result<crate::decisions::Personality, Error> {
+        let personality = self.definitions.newborn_personality.clone();
+        let mind_before = crate::decisions::mind::<A>(store, child).cloned();
+        let mut batch = game_ecs::Batch::new();
+        if person_temperament(store, child).is_some() {
+            return Err(Error::Unavailable);
+        }
+        batch.insert(
+            StableId(child.0),
+            PersonTemperament {
+                baseline: Temperament::from(&personality),
+                learned_offsets: [0; 4],
+            },
+        );
+        if let Some(mut mind) = mind_before {
+            mind.personality = personality.clone();
+            batch.insert(StableId(child.0), mind);
+        }
+        store.apply_batch(batch)?;
+        Ok(personality)
+    }
+    #[cfg(feature = "genetics")]
+    pub fn prepare_event<A: game_ecs::Component>(
+        &self,
+        store: &Store,
+        event: ExperienceEvent,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<PreparedTemperament<A>, Error> {
+        self.prepare_learning(store, &event.experiences(), source)
+    }
+    #[cfg(feature = "genetics")]
+    pub fn prepare_events<A: game_ecs::Component>(
+        &self,
+        store: &Store,
+        events: &[ExperienceEvent],
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<PreparedTemperament<A>, Error> {
+        let experiences: Vec<_> = events
+            .iter()
+            .flat_map(|event| event.experiences())
+            .collect();
+        self.prepare_learning(store, &experiences, source)
+    }
+    #[cfg(feature = "genetics")]
+    pub fn validate_references(
+        &self,
+        store: &Store,
+        people: &BTreeSet<PersonId>,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<(), Error> {
+        self.validate(store)?;
+        if all_person_temperaments(store)
+            .map(|(actor, _)| actor)
+            .collect::<BTreeSet<_>>()
+            != *people
+        {
+            return Err(Error::InvalidSave(
+                "temperament membership differs from people".into(),
+            ));
+        }
+        for actor in people {
+            self.express_from_genes(store, *actor, source)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "genetics")]
+pub struct PreparedFounderTemperament<A> {
+    definitions: Definitions,
+    actor: PersonId,
+    record: PersonTemperament,
+    alleles: Vec<[i32; 2]>,
+    reads: ReadSet,
+    minds: crate::receivers::PreparedMindEffects<A>,
+}
+#[cfg(feature = "genetics")]
+impl Runtime {
+    /// Founder baselines come from their authored native personality. Expression
+    /// and the initial substrate receive one registered component admission.
+    pub fn prepare_founder_expression<A: game_ecs::Component>(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<PreparedFounderTemperament<A>, Error> {
+        self.definitions.validate()?;
+        let mut reads = ReadSet::new();
+        let id = StableId(actor.0);
+        if reads.read::<PersonTemperament>(store, id).is_some() {
+            return Err(Error::Unavailable);
+        }
+        let mind = crate::decisions::mind::<A>(store, actor).ok_or(Error::Unavailable)?;
+        mind.validate()?;
+        let record = PersonTemperament {
+            baseline: Temperament::from(&mind.personality),
+            learned_offsets: [0; 4],
+        };
+        let alleles = self
+            .definitions
+            .traits
+            .iter()
+            .map(|definition| source.alleles_named(actor, &definition.inheritance.locus))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut pairs = alleles.iter();
+        let expression = self.express_record(&record, |_| {
+            let [first, second] = *pairs.next().ok_or(Error::Unavailable)?;
+            Ok(((i64::from(first) + i64::from(second)) / 2) as i32)
+        })?;
+        let mut personality = mind.personality.clone();
+        expression.apply_to(&mut personality);
+        let mut minds = crate::receivers::PreparedMindEffects::default();
+        minds.set_personality(store, actor, personality)?;
+        Ok(PreparedFounderTemperament {
+            definitions: self.definitions.clone(),
+            actor,
+            record,
+            alleles,
+            reads,
+            minds,
+        })
+    }
+}
+#[cfg(feature = "genetics")]
+impl<A: game_ecs::Component> PreparedFounderTemperament<A> {
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<StagedTemperament<A>, Error> {
+        if self.definitions != runtime.definitions {
+            return Err(Error::Unavailable);
+        }
+        for (definition, expected) in self.definitions.traits.iter().zip(&self.alleles) {
+            if source.alleles_named(self.actor, &definition.inheritance.locus)? != *expected {
+                return Err(Error::Unavailable);
+            }
+        }
+        self.reads.validate(store)?;
+        let id = StableId(self.actor.0);
+        if batch.touches::<PersonTemperament>(id) {
+            return Err(Error::Unavailable);
+        }
+        let mut admitted = ReadFootprint::new();
+        admitted.protect::<PersonTemperament>(id);
+        batch.insert(id, self.record);
+        let traits = self.reads.bind(store, batch, &admitted)?;
+        let minds = self.minds.stage_into(store, batch)?;
+        Ok(StagedTemperament {
+            definitions: self.definitions,
+            alleles: vec![(self.actor, self.alleles)],
+            guards: [traits, minds],
+            action: std::marker::PhantomData,
+        })
+    }
+}

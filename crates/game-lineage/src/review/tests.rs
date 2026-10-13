@@ -6,13 +6,12 @@ fn facts(location: &Location) -> ReviewFacts<'_> {
     ReviewFacts {
         now: SimTime(10),
         location,
-        active_work: None,
+        activity: GuardianActivity::Idle,
         confined: false,
         incapacitated: false,
         combat_restricted: false,
         in_combat: false,
         serving_objective: false,
-        can_rest: true,
     }
 }
 
@@ -46,6 +45,32 @@ fn confinement_and_recovery_override_competing_guardian_duties() {
         review_priority(None, false, true, facts(&location)),
         ReviewStep::Escape
     );
+}
+
+#[test]
+fn escape_precedes_delivery_and_occupied_delivery_precedes_assistance() {
+    assert_eq!(
+        review_disposition(false, DeliveryAttempt::NotAttempted),
+        ReviewDisposition::AttemptDelivery
+    );
+    assert_eq!(
+        review_disposition(false, DeliveryAttempt::Occupied),
+        ReviewDisposition::Complete
+    );
+    assert_eq!(
+        review_disposition(false, DeliveryAttempt::Unavailable),
+        ReviewDisposition::ContinueReview
+    );
+    for delivery in [
+        DeliveryAttempt::NotAttempted,
+        DeliveryAttempt::Occupied,
+        DeliveryAttempt::Unavailable,
+    ] {
+        assert_eq!(
+            review_disposition(true, delivery),
+            ReviewDisposition::ContinueReview
+        );
+    }
 }
 
 #[test]
@@ -108,7 +133,7 @@ fn assignment_completion_uses_physical_position_work_and_acceptance_time() {
     assert!(assignment_pending(
         Some(&assignment(GuardianRequest::Work { site: SiteId(3) })),
         ReviewFacts {
-            active_work: Some(SiteId(3)),
+            activity: GuardianActivity::Work(SiteId(3)),
             ..facts(&location)
         }
     ));

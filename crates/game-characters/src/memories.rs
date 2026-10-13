@@ -204,8 +204,7 @@ impl PreparedMemoryLearning {
         }
         Ok(())
     }
-    /// Stock learning publishes a native row; route learning remains a guarded
-    /// field effect owned by the receiving character.
+    /// Both receiving rows are staged before the source transaction publishes.
     pub fn stage_into<A: game_ecs::Component>(
         self,
         store: &game_ecs::Store,
@@ -225,20 +224,40 @@ impl PreparedMemoryLearning {
             row.known.insert(after.inventory, after.clone());
             batch.insert(game_ecs::StableId(self.actor.0), row);
         }
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        if let MemoryLearningPatch::Route {
+            origin,
+            destination,
+            duration,
+            ..
+        } = self.patch
+        {
+            let id = game_ecs::StableId(self.actor.0);
+            let mut mind = reads
+                .read::<Mind<A>>(store, id)
+                .cloned()
+                .ok_or(game_core::Error::Unavailable)?;
+            mind.learn_memory_route(origin, destination, duration);
+            batch.insert(id, mind);
+            admitted.protect::<Mind<A>>(id);
+        }
         let finalization = MemoryLearningFinalization {
             key: batch.key(),
             learning: self,
             stock,
+            reads: reads.bind(store, batch, &admitted)?,
         };
         finalization.validate_batch::<A>(store, batch)?;
         Ok(finalization)
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct MemoryLearningFinalization {
     key: game_ecs::BatchKey,
     learning: PreparedMemoryLearning,
     stock: bool,
+    reads: game_ecs::ReadGuard,
 }
 impl MemoryLearningFinalization {
     pub fn validate_batch<A: game_ecs::Component>(
@@ -247,29 +266,19 @@ impl MemoryLearningFinalization {
         batch: &game_ecs::Batch,
     ) -> Result<(), game_core::Error> {
         self.learning.validate::<A>(store)?;
+        self.reads.validate(store, batch)?;
         let ids = batch
             .edited_ids::<crate::decisions::Stocks>()
             .filter(|id| id.0 == self.learning.actor.0)
             .collect::<Vec<_>>();
         if self.key != batch.key()
-            || batch.touches::<Mind<A>>(game_ecs::StableId(self.learning.actor.0))
+            || self.stock && batch.touches::<Mind<A>>(game_ecs::StableId(self.learning.actor.0))
             || self.stock && ids != vec![game_ecs::StableId(self.learning.actor.0)]
         {
             return Err(game_core::Error::Unavailable);
         }
         Ok(())
     }
-    pub fn finish<A: game_ecs::Component>(self, store: &mut game_ecs::Store) {
-        if let MemoryLearningPatch::Route {
-            origin,
-            destination,
-            duration,
-            ..
-        } = self.learning.patch
-        {
-            crate::decisions::mind_mut::<A>(store, self.learning.actor)
-                .expect("validated learning recipient")
-                .learn_memory_route(origin, destination, duration);
-        }
-    }
+    /// Receiving canonical rows already belong to the admitted source batch.
+    pub fn finish<A: game_ecs::Component>(self, _store: &mut game_ecs::Store) {}
 }

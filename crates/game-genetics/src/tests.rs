@@ -976,3 +976,205 @@ fn birth_requires_distinct_child_and_pregnancy_entities_before_any_write() {
         Err(Error::InvalidSave(_))
     ));
 }
+
+#[test]
+fn prepared_transmission_rejects_stale_rows_and_configuration_without_publication() {
+    let (mut runtime, mut store) = parents(Rules {
+        mutation_chance: 10_000,
+        crossover_chance: 1_000,
+    });
+    let conception = runtime
+        .prepare_conception(
+            &store,
+            8,
+            PregnancyId(3),
+            [PersonId(1), PersonId(2)],
+            SimTime(1),
+        )
+        .unwrap();
+    let before = (runtime.clone(), store.snapshot().unwrap());
+    let mut changed = runtime.clone();
+    changed.rules.mutation_chance = 0;
+    assert!(conception.clone().commit(&mut changed, &mut store).is_err());
+    assert_eq!(store.snapshot().unwrap(), before.1);
+    runtime
+        .set_alleles(
+            &mut store,
+            PersonId(1),
+            &LocusId("opaque.alpha".into()),
+            [0, 0],
+        )
+        .unwrap();
+    let changed_store = store.snapshot().unwrap();
+    assert!(conception.commit(&mut runtime, &mut store).is_err());
+    assert_eq!(store.snapshot().unwrap(), changed_store);
+    runtime
+        .conceive(
+            &mut store,
+            8,
+            PregnancyId(3),
+            [PersonId(1), PersonId(2)],
+            SimTime(1),
+        )
+        .unwrap();
+    let birth = runtime
+        .prepare_birth(&store, PregnancyId(3), PersonId(4), SimTime(2))
+        .unwrap();
+    let inherited = birth.genome().unwrap().clone();
+    runtime.end_pregnancy(&mut store, PregnancyId(3), SimTime(2));
+    let before = store.snapshot().unwrap();
+    assert!(birth.commit(&runtime, &mut store).is_err());
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(person_genome(&store, PersonId(4)).is_none());
+    assert_eq!(
+        inheritance(&store, PregnancyId(3)).unwrap().genome.as_ref(),
+        Some(&inherited.genome)
+    );
+}
+
+#[test]
+fn staged_transmission_rejects_batch_retargeting_and_failed_foreign_writes() {
+    let (mut runtime, mut store) = parents(Rules {
+        mutation_chance: 10_000,
+        crossover_chance: 1_000,
+    });
+    let prepared = runtime
+        .prepare_conception(
+            &store,
+            8,
+            PregnancyId(3),
+            [PersonId(1), PersonId(2)],
+            SimTime(1),
+        )
+        .unwrap();
+    let before = (runtime.clone(), store.snapshot().unwrap());
+    let mut batch = Batch::new();
+    let staged = prepared.stage_into(&runtime, &store, &mut batch).unwrap();
+    assert!(staged.validate(&runtime, &store, &Batch::new()).is_err());
+    let row = inheritance(&store, PregnancyId(3)).cloned();
+    assert!(row.is_none());
+    batch.remove::<PersonGenome>(StableId(0));
+    assert!(store.apply_batch(batch).is_err());
+    assert_eq!((runtime.clone(), store.snapshot().unwrap()), before);
+    runtime
+        .conceive(
+            &mut store,
+            8,
+            PregnancyId(3),
+            [PersonId(1), PersonId(2)],
+            SimTime(1),
+        )
+        .unwrap();
+    let birth = runtime
+        .prepare_birth(&store, PregnancyId(3), PersonId(4), SimTime(2))
+        .unwrap();
+    let mut batch = Batch::new();
+    let staged = birth.stage_into(&runtime, &store, &mut batch).unwrap();
+    batch.insert(
+        StableId(4),
+        person_genome(&store, PersonId(1)).unwrap().clone(),
+    );
+    assert!(staged.validate(&runtime, &store, &batch).is_err());
+    assert!(person_genome(&store, PersonId(4)).is_none());
+}
+
+#[test]
+fn independent_prepared_conceptions_can_publish_in_either_order() {
+    let (original, original_store) = parents(Rules {
+        mutation_chance: 10_000,
+        crossover_chance: 1_000,
+    });
+    let a = original
+        .prepare_conception(
+            &original_store,
+            8,
+            PregnancyId(3),
+            [PersonId(1), PersonId(2)],
+            SimTime(1),
+        )
+        .unwrap();
+    let b = original
+        .prepare_conception(
+            &original_store,
+            8,
+            PregnancyId(4),
+            [PersonId(1), PersonId(2)],
+            SimTime(1),
+        )
+        .unwrap();
+    let mut forward = (original.clone(), original_store.clone());
+    let mut backward = (original, original_store);
+    a.clone().commit(&mut forward.0, &mut forward.1).unwrap();
+    b.clone().commit(&mut forward.0, &mut forward.1).unwrap();
+    b.commit(&mut backward.0, &mut backward.1).unwrap();
+    a.commit(&mut backward.0, &mut backward.1).unwrap();
+    assert_eq!(forward, backward);
+}
+
+#[test]
+fn genetics_validates_foreign_relationship_facts_without_foreign_components() {
+    let (mut runtime, mut store) = parents(Rules::default());
+    let parents = [PersonId(1), PersonId(2)];
+    let reference = PregnancyReference {
+        pregnancy: PregnancyId(3),
+        parents,
+        stage: TransmissionStage::Pending,
+    };
+    runtime
+        .validate_references(&store, parents, definitions(), [reference])
+        .unwrap();
+    runtime
+        .conceive(&mut store, 8, PregnancyId(3), parents, SimTime(1))
+        .unwrap();
+    assert!(
+        runtime
+            .validate_references(&store, parents, definitions(), [reference])
+            .is_err()
+    );
+    let reference = PregnancyReference {
+        stage: TransmissionStage::Frozen,
+        ..reference
+    };
+    runtime
+        .validate_references(&store, parents, definitions(), [reference])
+        .unwrap();
+    assert!(
+        runtime
+            .validate_references(&store, parents, definitions(), [])
+            .is_err()
+    );
+    assert!(
+        runtime
+            .validate_references(&store, [PersonId(1)], definitions(), [reference])
+            .is_err()
+    );
+    assert!(
+        runtime
+            .validate_references(&store, parents, Vec::new(), [reference])
+            .is_err()
+    );
+    let reversed = PregnancyReference {
+        parents: [PersonId(2), PersonId(1)],
+        ..reference
+    };
+    assert!(
+        runtime
+            .validate_references(&store, parents, definitions(), [reversed])
+            .is_err()
+    );
+    runtime
+        .born(&mut store, PregnancyId(3), PersonId(4), SimTime(2))
+        .unwrap();
+    let reference = PregnancyReference {
+        stage: TransmissionStage::Born(PersonId(4)),
+        ..reference
+    };
+    runtime
+        .validate_references(
+            &store,
+            [PersonId(1), PersonId(2), PersonId(4)],
+            definitions(),
+            [reference],
+        )
+        .unwrap();
+}

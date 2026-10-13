@@ -120,3 +120,31 @@ mod tests {
         }
     }
 }
+
+/// Foreign owners supply separate physical readiness facts. Receiving Characters
+/// determines whether the custodian has agency to oppose unauthorized use.
+#[derive(Clone, Copy, Debug)]
+pub struct OppositionFacts {
+    pub manual: bool,
+    pub co_present: bool,
+    pub restricted: bool,
+    pub combat_available: bool,
+    pub user_can_fight: bool,
+    pub custodian_can_fight: bool,
+}
+pub fn unauthorized_use_reaction(
+    personality: &Personality,
+    facts: OppositionFacts,
+) -> UnauthorizedUseResponse {
+    unauthorized_use_response(
+        personality,
+        ResponseFacts {
+            autonomous: !facts.manual,
+            capable: facts.co_present
+                && !facts.restricted
+                && facts.combat_available
+                && facts.user_can_fight
+                && facts.custodian_can_fight,
+        },
+    )
+}

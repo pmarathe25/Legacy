@@ -932,7 +932,11 @@ impl<A: Clone> Mind<A> {
         let retry = if accepted {
             self.retry_after
         } else {
-            SimTime(now.0.checked_add(120_000).ok_or(Error::Overflow)?)
+            SimTime(
+                now.0
+                    .checked_add(crate::orchestration::FAILED_RETRY_INTERVAL.0)
+                    .ok_or(Error::Overflow)?,
+            )
         };
         if !accepted {
             explanation.blocker = Some("physical attempt failed".into());
@@ -1070,9 +1074,9 @@ pub fn known_path(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    pub(super) fn mind() -> Mind<u8> {
+    pub(crate) fn mind() -> Mind<u8> {
         Mind {
             interests: BTreeMap::new(),
             routes: BTreeMap::new(),
@@ -1300,7 +1304,7 @@ mod tests {
         assert!(m.plan.is_none());
         assert_eq!(m.goal, Goal::Rest);
     }
-    pub(super) fn facts() -> PersonalFacts {
+    pub(crate) fn facts() -> PersonalFacts {
         PersonalFacts {
             actor: PersonId(1),
             now: SimTime(100),
@@ -1853,11 +1857,15 @@ mod social_choice_tests {
     use crate::social::{
         ChoiceFacts, Development, InstructionTopic, Offer, SocialAction, SocialTopic, Temperament,
     };
-    fn social(mind: &Mind<u8>) -> crate::social::World {
-        crate::social::World {
-            development: BTreeMap::from([(
-                PersonId(1),
-                Development::baseline(
+    fn social(mind: &Mind<u8>) -> (crate::social::World, game_ecs::Store) {
+        let mut schema = game_ecs::Schema::new();
+        crate::social::register_components(&mut schema).unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
+        crate::social::insert_personal(
+            &mut store,
+            PersonId(1),
+            crate::social::Personal {
+                development: Development::baseline(
                     Temperament {
                         discipline: 900,
                         ambition: 900,
@@ -1868,9 +1876,11 @@ mod social_choice_tests {
                     mind.dream,
                 )
                 .unwrap(),
-            )]),
-            ..Default::default()
-        }
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        (crate::social::World::default(), store)
     }
     fn contacts() -> ChoiceFacts {
         ChoiceFacts {
@@ -1890,18 +1900,19 @@ mod social_choice_tests {
     fn social_planning_owns_family_approaches_without_assuming_recipient_consent() {
         let mut mind = mind();
         mind.dream = Aspiration::Parenthood;
-        let mut world = social(&mind);
+        let (world, mut store) = social(&mind);
         let mut contact = contacts();
         assert_eq!(
-            world.choose_personal(&mind, &contact),
+            world.choose_personal(&store, &mind, &contact),
             Some(SocialAction::Talk {
                 partner: PersonId(2),
                 topic: SocialTopic::Companionship
             })
         );
-        world
+        crate::social::personal_mut(&mut store, PersonId(1))
+            .unwrap()
             .companionship
-            .insert(crate::social::pair(PersonId(1), PersonId(2)));
+            .insert(PersonId(2));
         mind.relationships.insert(
             PersonId(2),
             Relationship {
@@ -1910,37 +1921,44 @@ mod social_choice_tests {
             },
         );
         assert_eq!(
-            world.choose_personal(&mind, &contact),
+            world.choose_personal(&store, &mind, &contact),
             Some(SocialAction::Talk {
                 partner: PersonId(2),
                 topic: SocialTopic::FamilyPlans
             })
         );
-        assert!(world.family_intent.is_empty());
-        world
+        assert!(
+            crate::social::personal(&store, PersonId(1))
+                .unwrap()
+                .family_intent
+                .is_empty()
+        );
+        crate::social::personal_mut(&mut store, PersonId(1))
+            .unwrap()
             .approaches
-            .insert(PersonId(1), BTreeMap::from([(PersonId(2), SimTime(1))]));
+            .insert(PersonId(2), SimTime(1));
         assert_eq!(
-            world.choose_personal(&mind, &contact),
+            world.choose_personal(&store, &mind, &contact),
             Some(SocialAction::Talk {
                 partner: PersonId(3),
                 topic: SocialTopic::Companionship
             })
         );
         contact.autonomous = false;
-        assert!(world.choose_personal(&mind, &contact).is_none());
+        assert!(world.choose_personal(&store, &mind, &contact).is_none());
     }
     #[test]
     fn teaching_requires_received_offer_and_current_opportunity_and_choice_waits() {
         let mind = mind();
-        let mut world = social(&mind);
+        let (world, mut store) = social(&mind);
         let mut contact = contacts();
         contact.companionship_partner = None;
         contact.available_teachers.insert(PersonId(2));
-        assert!(world.choose_personal(&mind, &contact).is_none());
-        world.offers.insert(
-            PersonId(1),
-            BTreeMap::from([(
+        assert!(world.choose_personal(&store, &mind, &contact).is_none());
+        crate::social::personal_mut(&mut store, PersonId(1))
+            .unwrap()
+            .offers
+            .insert(
                 PersonId(2),
                 Offer {
                     teacher: PersonId(2),
@@ -1948,41 +1966,43 @@ mod social_choice_tests {
                     area: AreaId(1),
                     heard_at: SimTime(0),
                 },
-            )]),
-        );
+            );
         assert_eq!(
-            world.choose_personal(&mind, &contact),
+            world.choose_personal(&store, &mind, &contact),
             Some(SocialAction::Learn {
                 teacher: PersonId(2),
                 topic: InstructionTopic::Routes
             })
         );
         contact.available_teachers.clear();
-        assert!(world.choose_personal(&mind, &contact).is_none());
+        assert!(world.choose_personal(&store, &mind, &contact).is_none());
         contact.can_practice_craft = true;
         assert_eq!(
-            world.choose_personal(&mind, &contact),
+            world.choose_personal(&store, &mind, &contact),
             Some(SocialAction::Practice {
                 skill: Skill::Craft
             })
         );
         world
-            .finish_personal_choice(contact.actor, contact.now)
+            .finish_personal_choice(&mut store, contact.actor, contact.now)
             .unwrap();
-        assert!(world.choose_personal(&mind, &contact).is_none());
-        let before = world.clone();
+        assert!(world.choose_personal(&store, &mind, &contact).is_none());
+        let before = (world.clone(), store.clone());
         assert_eq!(
-            world.finish_personal_choice(contact.actor, SimTime(u64::MAX)),
+            world.finish_personal_choice(&mut store, contact.actor, SimTime(u64::MAX)),
             Err(Error::Overflow)
         );
-        assert_eq!(world, before);
+        assert_eq!((world, store), before);
     }
     #[test]
     fn aspiration_updates_from_learned_evidence_only_when_person_has_physical_agency() {
         let mut mind = mind();
         mind.dream = Aspiration::Comfort;
-        let world = social(&mind);
-        let mut learned = world.development[&PersonId(1)].clone();
+        let (_world, store) = social(&mind);
+        let mut learned = crate::social::personal(&store, PersonId(1))
+            .unwrap()
+            .development
+            .clone();
         learned.observe(Aspiration::SupportOthers, 10_000, "chosen caregiving");
         let f = facts();
         mind.develop_aspiration(&learned, Control::Manual, true, &f.vitals, 50);
@@ -1991,5 +2011,31 @@ mod social_choice_tests {
         assert_eq!(mind.dream, Aspiration::Comfort);
         mind.develop_aspiration(&learned, Control::Autonomous, true, &f.vitals, 50);
         assert_eq!(mind.dream, Aspiration::SupportOthers);
+    }
+}
+
+impl<A> Mind<A> {
+    /// Authored baseline before an actor has acquired local information or plans.
+    pub fn new(personality: Personality, dream: Aspiration) -> Result<Self, Error> {
+        if !personality.valid() {
+            return Err(Error::InvalidConfiguration(
+                "invalid personal disposition".into(),
+            ));
+        }
+        Ok(Self {
+            interests: BTreeMap::new(),
+            routes: BTreeMap::new(),
+            last_failure: None,
+            child_signals: BTreeMap::new(),
+            personality,
+            dream,
+            sites: BTreeMap::new(),
+            relationships: BTreeMap::new(),
+            values: BTreeMap::new(),
+            goal: Goal::Rest,
+            plan: None,
+            explanation: explanation(Goal::Rest, 0, 0, 0),
+            retry_after: SimTime(0),
+        })
     }
 }

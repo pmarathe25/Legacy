@@ -142,9 +142,7 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
         .collect::<std::collections::BTreeMap<_, _>>();
     let work = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == ruler)
         .unwrap()
         .work_units;
@@ -158,9 +156,7 @@ fn growth_unlocks_movement_and_play_without_adult_production() {
     assert_eq!(
         work,
         sim.canonical_state()
-            .state
-            .people
-            .iter()
+            .people()
             .find(|p| p.id == ruler)
             .unwrap()
             .work_units
@@ -281,9 +277,7 @@ fn a_signal_does_not_compel_care_and_unknown_places_stay_out_of_normal_views() {
     assert!(sim.observe().known_areas.iter().all(|a| a.id != unknown));
     let citizens: Vec<_> = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .filter(|p| p.id != sim.observe().ruler)
         .map(|p| p.id)
         .collect();

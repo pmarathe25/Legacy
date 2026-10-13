@@ -64,7 +64,7 @@ pub struct ActualBirth {
     pub location: Location,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Binding {
+pub(crate) struct Binding {
     pub lineage: World,
     pub predecessor: PersonId,
     pub successor: PersonId,
@@ -175,7 +175,7 @@ pub fn guardian_constraint(
         None
     }
 }
-pub fn observe_death(
+pub(crate) fn observe_death(
     before: &World,
     current_alive: bool,
     now: SimTime,
@@ -227,7 +227,7 @@ pub fn first_eligible_birth(
         .min_by_key(|birth| (birth.born, birth.person))
         .map(|birth| birth.person)
 }
-pub fn bind_actual_birth(
+pub(crate) fn bind_actual_birth(
     before: &World,
     births: &[ActualBirth],
     now: SimTime,

@@ -15,4 +15,7 @@ game-ecs.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-conflict.workspace = true
+game-skills.workspace = true
+game-spatial.workspace = true
 serde_json.workspace = true

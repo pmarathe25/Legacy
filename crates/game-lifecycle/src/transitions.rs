@@ -78,7 +78,9 @@ enum ReadGuard {
         before: Vec<Pregnancy>,
     },
 }
-fn active_pregnancies(store: &Store, gestator: PersonId) -> Vec<Pregnancy> {
+/// Current chosen conception or gestation rows for this gestator, in stable ID
+/// order. Completed historical pregnancies do not expand a factual scene.
+pub fn active_pregnancies(store: &Store, gestator: PersonId) -> Vec<Pregnancy> {
     let mut rows: Vec<_> = all_pregnancies(store)
         .filter(|(_, pregnancy)| {
             pregnancy.gestator == gestator
@@ -94,16 +96,65 @@ fn active_pregnancies(store: &Store, gestator: PersonId) -> Vec<Pregnancy> {
 }
 #[derive(Clone, Debug)]
 pub struct PreparedLifecycle {
+    factual_reads: game_ecs::ReadSet,
     rules: Rules,
     guards: Vec<ReadGuard>,
     edits: Vec<Edit>,
     effects: Vec<Effect>,
 }
 impl PreparedLifecycle {
+    /// A later interruption observes this owner-prepared final pregnancy row.
+    /// Only a previously conceiving row changed to gestation or an ending is
+    /// protected from a second conception cancellation in the same batch.
+    pub fn is_completed_pregnancy(&self, id: PregnancyId) -> bool {
+        self.edits.iter().any(|edit| matches!(edit,
+            Edit::Pregnancy { before: Some(before), after }
+            if before.id == id
+                && matches!(before.state, PregnancyState::Conceiving { .. })
+                && matches!(after.state, PregnancyState::Gestating { .. } | PregnancyState::Ended)
+        ))
+    }
+    pub fn with_factual_reads(mut self, reads: game_ecs::ReadSet) -> Self {
+        self.factual_reads.extend(reads);
+        self
+    }
+    /// Receive an owner's interpreted reproductive role into the unpublished Life.
+    pub fn receive_reproduction(mut self, role: Reproduction) -> Result<Self, Error> {
+        let [Effect::Born { child, .. }] = self.effects.as_slice() else {
+            return Err(Error::Unavailable);
+        };
+        let child = *child;
+        let Some(Edit::Life {
+            before: None,
+            after,
+        }) = self
+            .edits
+            .iter_mut()
+            .find(|edit| matches!(edit, Edit::Life { after, .. } if after.id == child))
+        else {
+            return Err(Error::Unavailable);
+        };
+        after.reproduction = role;
+        after.validate()?;
+        Ok(self)
+    }
+    pub fn newborn_life(&self) -> Option<&Life> {
+        let [Effect::Born { child, .. }] = self.effects.as_slice() else {
+            return None;
+        };
+        self.edits.iter().find_map(|edit| match edit {
+            Edit::Life {
+                before: None,
+                after,
+            } if after.id == *child => Some(after),
+            _ => None,
+        })
+    }
     pub fn effects(&self) -> &[Effect] {
         &self.effects
     }
     pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
+        self.factual_reads.validate(store)?;
         if runtime.rules != self.rules {
             return Err(Error::Unavailable);
         }
@@ -136,29 +187,71 @@ impl PreparedLifecycle {
         store: &Store,
         batch: &mut Batch,
     ) -> Result<LifecycleFinalization, Error> {
+        self.stage_into_with_factual_writes(runtime, store, batch, game_ecs::ReadFootprint::new())
+    }
+    /// Freeze deliberately changed foreign facts after their owning receivers
+    /// have staged. Their independent guards remain with the publication host.
+    pub fn stage_into_with_factual_writes(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+        factual_writes: game_ecs::ReadFootprint,
+    ) -> Result<LifecycleFinalization, Error> {
         self.validate(runtime, store)?;
+        let mut reads = self.factual_reads;
+        for guard in &self.guards {
+            match guard {
+                ReadGuard::Life { actor, before } => {
+                    reads.expect_row(StableId(actor.0), before.clone())
+                }
+                ReadGuard::Pregnancy { id, before } => {
+                    reads.expect_row(StableId(id.0), before.clone())
+                }
+                ReadGuard::ActivePregnancies { gestator, .. } => {
+                    let gestator = *gestator;
+                    reads.membership::<Pregnancy>(store, move |_, row| {
+                        row.gestator == gestator
+                            && matches!(
+                                row.state,
+                                PregnancyState::Conceiving { .. }
+                                    | PregnancyState::Gestating { .. }
+                            )
+                    });
+                }
+            }
+        }
+        let mut admitted = factual_writes;
         for edit in self.edits {
             match edit {
-                Edit::Pregnancy { after, .. } => {
+                Edit::Pregnancy { before, after } => {
+                    reads.expect_row(StableId(after.id.0), before);
+                    admitted.protect::<Pregnancy>(StableId(after.id.0));
                     batch.insert(StableId(after.id.0), after);
                 }
-                Edit::Life { after, .. } => {
+                Edit::Life { before, after } => {
+                    reads.expect_row(StableId(after.id.0), before);
+                    admitted.protect::<Life>(StableId(after.id.0));
                     batch.insert(StableId(after.id.0), after);
                 }
             }
         }
+        let guard = reads.bind(store, batch, &admitted)?;
         Ok(LifecycleFinalization {
             effects: self.effects,
+            guard,
         })
     }
     pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<Vec<Effect>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, &mut batch)?;
+        finish.validate(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish())
     }
     fn noop(rules: &Rules) -> Self {
         Self {
+            factual_reads: game_ecs::ReadSet::new(),
             rules: rules.clone(),
             guards: Vec::new(),
             edits: Vec::new(),
@@ -167,9 +260,13 @@ impl PreparedLifecycle {
     }
 }
 pub struct LifecycleFinalization {
+    guard: game_ecs::ReadGuard,
     effects: Vec<Effect>,
 }
 impl LifecycleFinalization {
+    pub fn validate(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.guard.validate(store, batch)
+    }
     pub fn finish(self) -> Vec<Effect> {
         self.effects
     }
@@ -180,6 +277,27 @@ pub struct InterruptionRequest {
     pub died: bool,
     pub affected: Vec<PregnancyId>,
 }
+impl InterruptionRequest {
+    /// A successfully completed attempt is not an interrupted pregnancy.
+    pub fn for_attempt(
+        actor: PersonId,
+        pregnancy: Option<PregnancyId>,
+        completed: Option<&PreparedLifecycle>,
+    ) -> Self {
+        let affected = pregnancy
+            .filter(|pregnancy| {
+                !completed.is_some_and(|plan| plan.is_completed_pregnancy(*pregnancy))
+            })
+            .into_iter()
+            .collect();
+        Self {
+            actor,
+            died: false,
+            affected,
+        }
+    }
+}
+
 pub struct PreparedLifecycleInterruptions {
     change: PreparedLifecycle,
     groups: Vec<(PersonId, Vec<Effect>)>,
@@ -199,21 +317,41 @@ impl PreparedLifecycleInterruptions {
         store: &Store,
         batch: &mut Batch,
     ) -> Result<LifecycleInterruptionFinalization, Error> {
-        self.change.stage_into(runtime, store, batch)?;
+        let change = self.change.stage_into(runtime, store, batch)?;
         Ok(LifecycleInterruptionFinalization {
+            change,
             groups: self.groups,
         })
     }
 }
 pub struct LifecycleInterruptionFinalization {
+    change: LifecycleFinalization,
     groups: Vec<(PersonId, Vec<Effect>)>,
 }
 impl LifecycleInterruptionFinalization {
+    pub fn validate(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.change.validate(store, batch)
+    }
     pub fn finish(self) -> Vec<(PersonId, Vec<Effect>)> {
         self.groups
     }
 }
 impl Runtime {
+    /// Mortality ends chosen gestation. A current conception is separately
+    /// cancelled by the ordinary activity interruption receiver.
+    pub fn prepare_gestation_death(&self, store: &Store, actor: PersonId) -> PreparedLifecycle {
+        let selected = active_pregnancies(store, actor)
+            .into_iter()
+            .filter(|pregnancy| matches!(pregnancy.state, PregnancyState::Gestating { .. }))
+            .map(|pregnancy| pregnancy.id);
+        let mut reads = game_ecs::ReadSet::new();
+        reads.membership::<Pregnancy>(store, move |_, pregnancy| {
+            pregnancy.gestator == actor
+                && matches!(pregnancy.state, PregnancyState::Gestating { .. })
+        });
+        self.prepare_interruption(store, actor, true, selected)
+            .with_factual_reads(reads)
+    }
     pub fn prepare_interruptions(
         &self,
         store: &Store,
@@ -358,6 +496,7 @@ impl Runtime {
         ];
         if !consent.initiator || !consent.partner {
             return Ok(PreparedLifecycle {
+                factual_reads: game_ecs::ReadSet::new(),
                 rules: self.rules.clone(),
                 guards,
                 edits: Vec::new(),
@@ -386,6 +525,7 @@ impl Runtime {
             state: PregnancyState::Conceiving { completes },
         };
         Ok(PreparedLifecycle {
+            factual_reads: game_ecs::ReadSet::new(),
             rules: self.rules.clone(),
             guards,
             edits: vec![Edit::Pregnancy {
@@ -445,6 +585,7 @@ impl Runtime {
             })
         };
         Ok(PreparedLifecycle {
+            factual_reads: game_ecs::ReadSet::new(),
             rules: self.rules.clone(),
             guards: pair
                 .into_iter()
@@ -521,6 +662,7 @@ impl Runtime {
         let effect = self.evaluate_age(store, actor, now, lifespan_loss, true)?;
         if effect.died {
             return Ok(PreparedLifecycle {
+                factual_reads: game_ecs::ReadSet::new(),
                 rules: self.rules.clone(),
                 guards,
                 edits: Vec::new(),
@@ -530,6 +672,7 @@ impl Runtime {
         let mut after = life.clone();
         after.stage = effect.stage;
         Ok(PreparedLifecycle {
+            factual_reads: game_ecs::ReadSet::new(),
             rules: self.rules.clone(),
             guards,
             edits: vec![Edit::Life {
@@ -575,6 +718,7 @@ impl Runtime {
         if !gestator.alive {
             after.state = PregnancyState::Ended;
             return Ok(PreparedLifecycle {
+                factual_reads: game_ecs::ReadSet::new(),
                 rules: self.rules.clone(),
                 guards,
                 edits: vec![Edit::Pregnancy {
@@ -612,6 +756,7 @@ impl Runtime {
         };
         after.state = PregnancyState::Born(child);
         Ok(PreparedLifecycle {
+            factual_reads: game_ecs::ReadSet::new(),
             rules: self.rules.clone(),
             guards,
             edits: vec![

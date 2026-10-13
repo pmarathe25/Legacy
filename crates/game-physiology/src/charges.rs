@@ -99,3 +99,60 @@ impl PreparedSurvival {
         Ok(self.alive())
     }
 }
+
+/// Prepared immediate relief from an actual food consumption.
+pub struct PreparedMealRelief {
+    actor: PersonId,
+    after: Body,
+    reads: game_ecs::ReadSet,
+}
+pub fn prepare_meal_relief(
+    store: &Store,
+    actor: PersonId,
+    relief: u64,
+) -> Result<PreparedMealRelief, Error> {
+    let mut reads = game_ecs::ReadSet::new();
+    let mut after = reads
+        .read::<Body>(store, StableId(actor.0))
+        .ok_or(Error::Unavailable)?
+        .clone();
+    after.vitals.hunger = after.vitals.hunger.saturating_sub(relief);
+    after.validate()?;
+    Ok(PreparedMealRelief {
+        actor,
+        after,
+        reads,
+    })
+}
+impl PreparedMealRelief {
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.reads.validate(store)?;
+        let id = StableId(self.actor.0);
+        if batch.touches::<Body>(id) {
+            return Err(Error::Unavailable);
+        }
+        batch.insert(id, self.after);
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<Body>(id);
+        self.reads.bind(store, batch, &admitted)
+    }
+}
+pub fn exertion_available(body: &Body, fatigue_limit: u64) -> bool {
+    body.vitals.fatigue < fatigue_limit
+}
+
+pub fn prepare_nourishment(
+    store: &Store,
+    actor: PersonId,
+    good: game_core::Good,
+    rules: &crate::Rules,
+) -> Result<Option<PreparedMealRelief>, Error> {
+    match good {
+        game_core::Good::Food => prepare_meal_relief(store, actor, rules.meal_relief).map(Some),
+        _ => Ok(None),
+    }
+}

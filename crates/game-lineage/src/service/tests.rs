@@ -30,8 +30,6 @@ fn world() -> World {
                 knows_invocation: true,
             },
         )]),
-        rules: MentorshipRules::default(),
-        invocation_learning: BTreeMap::new(),
     }
 }
 fn facts() -> GuardianServiceFacts {

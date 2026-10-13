@@ -293,3 +293,239 @@ mod tests {
         assert!(serde_json::from_value::<Definition>(value).is_err());
     }
 }
+
+#[cfg(feature = "genetics")]
+pub struct PreparedReproduction {
+    definition: Definition,
+    actor: game_core::PersonId,
+    alleles: [i32; 2],
+    before: crate::Life,
+    after: crate::Life,
+}
+#[cfg(feature = "genetics")]
+impl Definition {
+    /// Receive inherited alleles through the lifecycle owner rather than editing Life externally.
+    pub fn prepare_reproduction(
+        &self,
+        store: &game_ecs::Store,
+        actor: game_core::PersonId,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<PreparedReproduction, Error> {
+        self.validate()?;
+        let before = crate::life(store, actor).ok_or(Error::Unavailable)?.clone();
+        let alleles = source.alleles_named(actor, &self.inheritance.locus)?;
+        let mut after = before.clone();
+        after.reproduction = self.interpret(alleles)?;
+        after.validate()?;
+        Ok(PreparedReproduction {
+            definition: self.clone(),
+            actor,
+            alleles,
+            before,
+            after,
+        })
+    }
+    pub fn validate_lives(
+        &self,
+        store: &game_ecs::Store,
+        source: &impl game_genetics::AlleleSource,
+    ) -> Result<(), Error> {
+        self.validate()
+            .map_err(|_| Error::InvalidSave("invalid reproductive heredity".into()))?;
+        for (actor, life) in crate::all_lives(store) {
+            let interpreted = self
+                .interpret_genes(actor, source)
+                .map_err(|_| Error::InvalidSave("invalid reproductive alleles".into()))?;
+            if life.reproduction != Reproduction::Neither && interpreted != life.reproduction {
+                return Err(Error::InvalidSave(
+                    "reproductive role differs from inheritance".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+#[cfg(feature = "genetics")]
+impl PreparedReproduction {
+    pub fn stage_into(
+        self,
+        definition: &Definition,
+        store: &game_ecs::Store,
+        source: &impl game_genetics::AlleleSource,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        if definition != &self.definition
+            || source.alleles_named(self.actor, &definition.inheritance.locus)? != self.alleles
+        {
+            return Err(Error::Unavailable);
+        }
+        let mut reads = game_ecs::ReadSet::new();
+        reads.expect_row(game_ecs::StableId(self.actor.0), Some(self.before));
+        reads.validate(store)?;
+        batch.insert(game_ecs::StableId(self.actor.0), self.after);
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<crate::Life>(game_ecs::StableId(self.actor.0));
+        reads.bind(store, batch, &admitted)
+    }
+    pub fn commit(
+        self,
+        definition: &Definition,
+        store: &mut game_ecs::Store,
+        read_alleles: impl Fn(&game_ecs::Store, game_core::PersonId, &str) -> Result<[i32; 2], Error>,
+    ) -> Result<(), Error> {
+        struct Source<'a, F> {
+            store: &'a game_ecs::Store,
+            read: &'a F,
+        }
+        impl<F: Fn(&game_ecs::Store, game_core::PersonId, &str) -> Result<[i32; 2], Error>>
+            game_genetics::AlleleSource for Source<'_, F>
+        {
+            fn alleles_named(
+                &self,
+                actor: game_core::PersonId,
+                locus: &str,
+            ) -> Result<[i32; 2], Error> {
+                (self.read)(self.store, actor, locus)
+            }
+        }
+        let mut batch = game_ecs::Batch::new();
+        let guard = self.stage_into(
+            definition,
+            store,
+            &Source {
+                store,
+                read: &read_alleles,
+            },
+            &mut batch,
+        )?;
+        guard.validate(store, &batch)?;
+        store.apply_batch(batch)
+    }
+}
+
+#[cfg(all(test, feature = "genetics"))]
+mod receiving_tests {
+    use super::*;
+    use game_core::{LifeStage, PersonId, PregnancyId, SimDuration, SimTime};
+    use game_genetics::HeritableCharacteristic;
+    fn definition() -> Definition {
+        Definition {
+            inheritance: GeneBinding {
+                locus: "role".into(),
+                chromosome: "pair".into(),
+                position: 0,
+                min: 0,
+                max: 1,
+                initial_alleles: vec![0, 1],
+                mutation_step: 0,
+                mutable: false,
+            },
+            roles: vec![
+                RoleDefinition {
+                    alleles: [0, 0],
+                    reproduction: Reproduction::Gestates,
+                },
+                RoleDefinition {
+                    alleles: [0, 1],
+                    reproduction: Reproduction::SuppliesSeed,
+                },
+                RoleDefinition {
+                    alleles: [1, 1],
+                    reproduction: Reproduction::SuppliesSeed,
+                },
+            ],
+        }
+    }
+    fn life(id: PersonId) -> crate::Life {
+        crate::Life {
+            id,
+            born: SimTime(0),
+            initial_age: SimDuration(0),
+            stage: LifeStage::Infant,
+            reproduction: Reproduction::Gestates,
+            parents: vec![],
+            caregivers: BTreeSet::new(),
+            preference: None,
+        }
+    }
+    #[test]
+    fn unpublished_birth_genome_and_receiving_reproductive_role_commit_together_without_assembly() {
+        let definition = definition();
+        let mut schema = game_ecs::Schema::new();
+        crate::register_components(&mut schema).unwrap();
+        game_genetics::register_components(&mut schema).unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
+        let mut genes = game_genetics::Runtime::new(
+            game_genetics::Rules {
+                mutation_chance: 0,
+                crossover_chance: 0,
+            },
+            definition.loci(),
+        )
+        .unwrap();
+        for (actor, value) in [(PersonId(1), 0), (PersonId(2), 1)] {
+            genes.seed_person(&mut store, 7, actor).unwrap();
+            genes
+                .set_alleles(
+                    &mut store,
+                    actor,
+                    &game_genetics::LocusId("role".into()),
+                    [value; 2],
+                )
+                .unwrap();
+        }
+        genes
+            .conceive(
+                &mut store,
+                7,
+                PregnancyId(3),
+                [PersonId(1), PersonId(2)],
+                SimTime(1),
+            )
+            .unwrap();
+        let child = PersonId(4);
+        crate::insert_life(&mut store, life(child)).unwrap();
+        let birth = genes
+            .prepare_birth(&store, PregnancyId(3), child, SimTime(2))
+            .unwrap();
+        let source = genes.genome_source(child, birth.genome().unwrap());
+        let received = definition
+            .prepare_reproduction(&store, child, &source)
+            .unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let mut batch = game_ecs::Batch::new();
+        let role_guard = received
+            .stage_into(&definition, &store, &source, &mut batch)
+            .unwrap();
+        let genes_guard = birth.stage_into(&genes, &store, &mut batch).unwrap();
+        role_guard.validate(&store, &batch).unwrap();
+        genes_guard.validate(&genes, &store, &batch).unwrap();
+        assert_eq!(store.snapshot().unwrap(), snapshot);
+        store.apply_batch(batch).unwrap();
+        assert_eq!(
+            crate::life(&store, child).unwrap().reproduction,
+            Reproduction::SuppliesSeed
+        );
+        assert_eq!(
+            game_genetics::inheritance(&store, PregnancyId(3))
+                .unwrap()
+                .born,
+            Some(child)
+        );
+        definition
+            .validate_lives(&store, &genes.allele_source(&store))
+            .unwrap();
+        let stale = definition
+            .prepare_reproduction(&store, child, &genes.allele_source(&store))
+            .unwrap();
+        crate::life_mut(&mut store, child).unwrap().preference =
+            Some((game_core::ChildhoodInterest::Movement, SimTime(2)));
+        let before = store.snapshot().unwrap();
+        assert_eq!(
+            stale.commit(&definition, &mut store, |store, actor, locus| genes
+                .alleles_named(store, actor, locus)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+}

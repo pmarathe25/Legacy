@@ -469,3 +469,46 @@ fn refresh_collisions_membership_and_overflow_cannot_skip_or_partially_update_pe
     );
     assert_eq!((runtime, store), before);
 }
+
+#[test]
+fn refresh_entry_point_selects_its_population_and_interprets_raw_training_facts() {
+    let (mut runtime, mut store) = fixture();
+    assert!(
+        runtime
+            .prepare_refresh_from_facts(&store, SimTime(0), &Unread, |_| panic!("not due"))
+            .unwrap()
+            .is_none()
+    );
+    let prepared = runtime
+        .prepare_refresh_from_facts(&store, SimTime(10), &Source(1_000), |actor| {
+            assert_eq!(actor, PersonId(1));
+            Ok((1_000, vec![(Skill::Craft, 20), (Skill::Medicine, 1_000)]))
+        })
+        .unwrap()
+        .unwrap();
+    prepared
+        .commit(&mut runtime, &mut store, |_, _, _| Ok([1_000; 2]))
+        .unwrap();
+    assert_eq!(
+        development(&store, PersonId(1))
+            .unwrap()
+            .physical_training_milli,
+        40
+    );
+    runtime
+        .validate_references(&store, &BTreeSet::from([PersonId(1)]), &Source(1_000))
+        .unwrap();
+    assert!(
+        runtime
+            .validate_references(&store, &BTreeSet::new(), &Source(1_000))
+            .is_err()
+    );
+    runtime.register_newborn(&mut store, PersonId(2)).unwrap();
+    assert_eq!(
+        development(&store, PersonId(2)).unwrap(),
+        &Development {
+            maturity_milli: 0,
+            physical_training_milli: 0
+        }
+    );
+}

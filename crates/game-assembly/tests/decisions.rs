@@ -17,13 +17,7 @@ fn sim(workers: usize) -> Simulation {
     .unwrap()
 }
 fn peaceful(sim: &mut Simulation) {
-    let people: Vec<_> = sim
-        .canonical_state()
-        .state
-        .people
-        .iter()
-        .map(|p| p.id)
-        .collect();
+    let people: Vec<_> = sim.canonical_state().people().map(|p| p.id).collect();
     for id in people {
         sim.debug_set_personality(id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
@@ -34,8 +28,8 @@ fn peaceful(sim: &mut Simulation) {
 fn personality_changes_autonomous_choices_with_the_same_physical_opportunities() {
     let mut sim = sim(4);
     peaceful(&mut sim);
-    let worker = sim.canonical_state().state.people[3].id;
-    let resting = sim.canonical_state().state.people[4].id;
+    let worker = sim.canonical_state().person_at(3).id;
+    let resting = sim.canonical_state().person_at(4).id;
     sim.debug_set_personality(worker, Personality::industrious(), Aspiration::Independence)
         .unwrap();
     sim.advance(MINUTE).unwrap();
@@ -67,14 +61,14 @@ fn personality_changes_autonomous_choices_with_the_same_physical_opportunities()
             .iter()
             .any(|e| matches!(e.event, EventKind::Produced { actor, .. } if actor == worker))
     );
-    assert!(sim.canonical_state().state.people[3].work_units > 0);
+    assert!(sim.canonical_state().person_at(3).work_units > 0);
 }
 
 #[test]
 fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
     let mut reference = sim(1);
     peaceful(&mut reference);
-    let actor = reference.canonical_state().state.people[3].id;
+    let actor = reference.canonical_state().person_at(3).id;
     let site = game_workshop::sites(reference.canonical_state().components)
         .map(|(_, site)| site)
         .find(|s| s.area == AreaId(1))
@@ -168,7 +162,7 @@ fn meaningful_experience_acquires_a_value_that_changes_a_later_choice() {
 fn distant_facts_require_a_timed_report_and_keep_their_original_age() {
     let mut sim = sim(4);
     peaceful(&mut sim);
-    let sender = sim.canonical_state().state.people[3].id;
+    let sender = sim.canonical_state().person_at(3).id;
     let receiver = sim.canonical_state().state.ruler;
     let remote = sim
         .debug_add_inventory(
@@ -284,7 +278,7 @@ fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() 
     let mut sim = sim(1);
     peaceful(&mut sim);
     let ruler = sim.canonical_state().state.ruler;
-    let receiver = sim.canonical_state().state.people[4].id;
+    let receiver = sim.canonical_state().person_at(4).id;
     let source = game_cargo::inventories(sim.canonical_state().components)
         .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
@@ -330,7 +324,7 @@ fn telling_a_current_local_fact_matches_the_passive_view_even_between_reviews() 
 fn remote_supply(spoils: bool, workers: usize) -> (Simulation, PersonId, InventoryId) {
     let mut sim = sim(workers);
     peaceful(&mut sim);
-    let actor = sim.canonical_state().state.people[3].id;
+    let actor = sim.canonical_state().person_at(3).id;
     let village_food = game_cargo::inventories(sim.canonical_state().components)
         .map(|(_, inventory)| inventory)
         .find(|i| i.good == Good::Food && i.location == InventoryLocation::Area(AreaId(1)))
@@ -381,15 +375,13 @@ fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplie
     sim.advance(SimDuration(300_000)).unwrap();
     let index = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .position(|p| p.id == actor)
         .unwrap();
     assert!(matches!(
         *game_spatial::location(
             sim.canonical_state().components,
-            game_ecs::StableId((sim.canonical_state().state.people[index].id).0)
+            game_ecs::StableId((sim.canonical_state().person_at(index).id).0)
         )
         .expect("location exists"),
         Location::InTransit {
@@ -401,12 +393,12 @@ fn a_citizen_travels_for_known_food_without_creating_work_or_teleporting_supplie
     assert_eq!(
         *game_spatial::location(
             sim.canonical_state().components,
-            game_ecs::StableId((sim.canonical_state().state.people[index].id).0)
+            game_ecs::StableId((sim.canonical_state().person_at(index).id).0)
         )
         .expect("location exists"),
         Location::AtArea(AreaId(3))
     );
-    assert_eq!(sim.canonical_state().state.people[index].work_units, 0);
+    assert_eq!(sim.canonical_state().person_at(index).work_units, 0);
     assert_eq!(
         game_cargo::inventory(sim.canonical_state().components, source)
             .expect("stock exists")
@@ -468,7 +460,7 @@ fn a_saved_plan_cannot_forge_movement_shape_for_a_different_command() {
     let mut simulation = sim(1);
     peaceful(&mut simulation);
     simulation.advance(MINUTE).unwrap();
-    let actor = simulation.canonical_state().state.people[3].id;
+    let actor = simulation.canonical_state().person_at(3).id;
     let bytes = simulation.save().unwrap();
     let mut data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let plan = &mut support::component(&mut data, "characters/mind", actor)["plan"];

@@ -27,8 +27,6 @@ fn initial() -> World {
                 knows_invocation: true,
             },
         )]),
-        rules: MentorshipRules::default(),
-        invocation_learning: BTreeMap::new(),
     }
 }
 fn birth(person: u64, born: u64) -> ActualBirth {
@@ -260,11 +258,16 @@ fn readiness_never_compels_leaving_care_or_overriding_physical_duties() {
     );
 }
 #[test]
-fn current_lineage_state_roundtrips_without_coordinator_or_compatibility_defaults() {
+fn private_succession_projection_retains_a_consistent_waiting_predecessor() {
     let world = observe_death(&initial(), false, SimTime(20), &BTreeMap::new());
-    let json = serde_json::to_vec(&world).unwrap();
-    assert_eq!(serde_json::from_slice::<World>(&json).unwrap(), world);
-    assert!(serde_json::from_str::<World>("{}").is_err());
+    assert_eq!(world.current(), None);
+    assert_eq!(
+        world.waiting,
+        Some(Waiting {
+            predecessor: PersonId(1),
+            died_at: SimTime(20)
+        })
+    );
 }
 
 #[test]

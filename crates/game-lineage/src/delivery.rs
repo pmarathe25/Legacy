@@ -3,6 +3,39 @@ use game_core::*;
 use game_logistics::{Delivery, DeliveryReceipt, Destination, Requirement};
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+impl World {
+    /// Returns a quantity currently attributable to an accepted guardian
+    /// delivery, clipped to the unfulfilled requirement.
+    pub fn requested_delivery_quantity(
+        &self,
+        actor: PersonId,
+        good: Good,
+        source: Option<InventoryId>,
+    ) -> Option<Quantity> {
+        self.guardians
+            .get(&actor)?
+            .requested_delivery_quantity(good, source)
+    }
+}
+impl Guardian {
+    pub fn requested_delivery_quantity(
+        &self,
+        good: Good,
+        source: Option<InventoryId>,
+    ) -> Option<Quantity> {
+        let request = self.requested_delivery.as_ref()?;
+        if request.delivery.requirement.good != good {
+            return None;
+        }
+        let remaining = request.delivery.remaining.0;
+        let quantity = source
+            .and_then(|inventory| request.cargo.get(&inventory).copied())
+            .map_or(remaining, |cargo| cargo.min(remaining));
+        Some(Quantity(quantity))
+    }
+}
+
 /// Body/contact and personal source observations, not an overall permission or
 /// willingness verdict. No remote current balance is provided to the guardian.
 pub struct SupplyFacts {
@@ -11,7 +44,8 @@ pub struct SupplyFacts {
     pub requester_available: bool,
     pub fresh_contact: bool,
     pub guardian_capable: bool,
-    pub guardian_free: bool,
+    pub conversation_available: bool,
+    pub health_busy: bool,
     pub known_source: Option<StockKnowledge>,
     pub source_route_known: bool,
     pub immediate_care: bool,
@@ -50,7 +84,7 @@ impl World {
         if !f.guardian_capable {
             return refuse("My body or confinement prevents this assistance");
         }
-        if !f.guardian_free {
+        if !f.conversation_available || f.health_busy {
             return refuse("I must finish my current physical assistance first");
         }
         let Some(known) = &f.known_source else {

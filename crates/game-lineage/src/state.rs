@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Incarnation {
     pub person: PersonId,
     pub bound_at: SimTime,
@@ -11,6 +12,7 @@ pub struct Incarnation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Waiting {
     pub predecessor: PersonId,
     pub died_at: SimTime,
@@ -26,6 +28,7 @@ pub enum GuardianGoal {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MentorshipRules {
     pub lesson_duration: SimDuration,
     pub lesson_gain: u64,
@@ -42,6 +45,7 @@ impl Default for MentorshipRules {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Assessment {
     pub independence: u64,
     pub competence: u64,
@@ -68,6 +72,7 @@ impl Default for Assessment {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Assignment {
     pub request: GuardianRequest,
     pub accepted_at: SimTime,
@@ -75,6 +80,7 @@ pub struct Assignment {
 
 /// A remembered care intention, rather than knowledge of a distant body's needs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CareProvision {
     pub delivery: game_logistics::Delivery,
     pub observed_at: SimTime,
@@ -83,6 +89,7 @@ pub struct CareProvision {
 /// A personally accepted, source-constrained request. The cargo map contains
 /// provenance tags clipped by actual stock; it is never a spendable inventory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequestedDelivery {
     pub delivery: game_logistics::Delivery,
     pub accepted_at: SimTime,
@@ -91,6 +98,7 @@ pub struct RequestedDelivery {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Guardian {
     pub target: Option<PersonId>,
     /// This connection conveys location only. It grants no stock, permissions,
@@ -106,13 +114,11 @@ pub struct Guardian {
     pub knows_invocation: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PolicyState {
     pub incarnations: Vec<Incarnation>,
     pub waiting: Option<Waiting>,
     pub guardians: BTreeMap<PersonId, Guardian>,
-    pub rules: MentorshipRules,
-    pub invocation_learning: BTreeMap<PersonId, u64>,
 }
 
 impl World {

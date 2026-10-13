@@ -2,7 +2,175 @@
 //! or political office. Guardians sense that person's location and travel normally.
 use crate::*;
 
+pub use game_lineage::Runtime as World;
 pub use game_lineage::*;
+
+struct WitnessInputs {
+    event: game_lineage::WitnessEvent,
+    location: Location,
+    stage: game_core::LifeStage,
+    now: SimTime,
+    observers: Vec<game_lineage::WitnessFacts>,
+}
+
+/// Binding bookkeeping for a selected projection supplied by guarded origins.
+/// Callers retain the originating owner guards through canonical publication.
+pub(crate) struct PreparedLineageWitness<Output = ()> {
+    plan: game_lineage::PreparedLineage<Output>,
+    inputs: Vec<WitnessInputs>,
+    reads: game_ecs::ReadSet,
+    projected_reads: game_ecs::ReadFootprint,
+}
+pub(crate) struct StagedLineageWitness<Output = ()> {
+    plan: game_lineage::StagedLineage<Output>,
+    facts: game_ecs::ReadGuard,
+}
+impl<Output> PreparedLineageWitness<Output> {
+    pub(crate) fn with_death(
+        self,
+        simulation: &Simulation,
+        current_alive: bool,
+        now: SimTime,
+        constraints: &BTreeMap<PersonId, Option<GuardianGoal>>,
+    ) -> Result<PreparedLineageWitness<Succession>, Error> {
+        let runtime = simulation
+            .host
+            .state
+            .lineage
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        let plan = self.plan.with_death(
+            runtime,
+            &simulation.host.storage,
+            current_alive,
+            now,
+            constraints,
+        )?;
+        Ok(PreparedLineageWitness {
+            plan,
+            inputs: self.inputs,
+            reads: self.reads,
+            projected_reads: self.projected_reads,
+        })
+    }
+    pub(crate) fn stage_into(
+        self,
+        simulation: &Simulation,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<StagedLineageWitness<Output>, Error> {
+        let runtime = simulation
+            .host
+            .state
+            .lineage
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        let plan = self
+            .plan
+            .stage_into(runtime, &simulation.host.storage, batch)?;
+        let facts = self
+            .reads
+            .bind(&simulation.host.storage, batch, &self.projected_reads)?;
+        Ok(StagedLineageWitness { plan, facts })
+    }
+}
+impl PreparedLineageWitness {
+    /// Combine this observation with an existing owner-prepared care or lesson
+    /// transition, preserving its result and staging each Lineage row once.
+    pub(crate) fn fold_into<Output>(
+        self,
+        mut plan: game_lineage::PreparedLineage<Output>,
+        simulation: &Simulation,
+    ) -> Result<PreparedLineageWitness<Output>, Error> {
+        let runtime = simulation
+            .host
+            .state
+            .lineage
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        for input in &self.inputs {
+            plan = plan.with_witness(
+                runtime,
+                &simulation.host.storage,
+                input.event,
+                &input.location,
+                input.stage,
+                input.now,
+                input.observers.iter().cloned(),
+            )?;
+        }
+        Ok(PreparedLineageWitness {
+            plan,
+            inputs: self.inputs,
+            reads: self.reads,
+            projected_reads: self.projected_reads,
+        })
+    }
+    /// Preserve receipt order while publishing one final Lineage write set.
+    pub(crate) fn followed_by(
+        mut self,
+        next: Self,
+        simulation: &Simulation,
+    ) -> Result<Self, Error> {
+        let runtime = simulation
+            .host
+            .state
+            .lineage
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        for input in &next.inputs {
+            self.plan = self.plan.with_witness(
+                runtime,
+                &simulation.host.storage,
+                input.event,
+                &input.location,
+                input.stage,
+                input.now,
+                input.observers.iter().cloned(),
+            )?;
+        }
+        self.inputs.extend(next.inputs);
+        self.reads.extend(next.reads);
+        self.projected_reads.extend(next.projected_reads);
+        Ok(self)
+    }
+}
+impl<Output> StagedLineageWitness<Output> {
+    pub(crate) fn validate(
+        &self,
+        simulation: &Simulation,
+        batch: &game_ecs::Batch,
+    ) -> Result<(), Error> {
+        let runtime = simulation
+            .host
+            .state
+            .lineage
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        self.plan
+            .validate(runtime, &simulation.host.storage, batch)?;
+        self.facts.validate(&simulation.host.storage, batch)
+    }
+    pub(crate) fn row_guards(&self) -> [game_ecs::ReadGuard; 2] {
+        [self.plan.guard().clone(), self.facts.clone()]
+    }
+    pub(crate) fn finish(self) -> Output {
+        self.plan.finish()
+    }
+}
+
+fn projected_witness_row<'a, C: game_ecs::Component>(
+    reads: &mut game_ecs::ReadSet,
+    projected_reads: &mut game_ecs::ReadFootprint,
+    store: &'a game_ecs::Store,
+    batch: &'a game_ecs::Batch,
+    id: game_ecs::StableId,
+) -> Result<Option<&'a C>, Error> {
+    reads.read::<C>(store, id);
+    if batch.touches::<C>(id) {
+        projected_reads.protect::<C>(id);
+    }
+    batch.projected::<C>(store, id)
+}
 
 impl Simulation {
     pub fn lineage_fixture(seed: u64, execution: Execution) -> Result<Self, Error> {
@@ -15,20 +183,8 @@ impl Simulation {
         let location = game_spatial::location(&sim.host.storage, game_ecs::StableId((ruler).0))
             .expect("location exists")
             .clone();
-        sim.host.state.lineage = Some(World {
-            rules: MentorshipRules::default(),
-            invocation_learning: BTreeMap::new(),
-            incarnations: vec![Incarnation {
-                person: ruler,
-                bound_at: sim.host.clock().time,
-                died_at: None,
-            }],
-            waiting: None,
-            guardians: sim
-                .host
-                .state
-                .people
-                .iter()
+        let founders: Vec<_> =
+            sim.people()
                 .filter(|p| p.role == Role::Guardian)
                 .map(|p| {
                     (
@@ -49,115 +205,154 @@ impl Simulation {
                         },
                     )
                 })
-                .collect(),
-        });
+                .collect();
+        let history_id = game_ecs::StableId(ruler.0);
+        let bound_at = sim.host.clock().time;
+        sim.host.state.lineage = Some(World::initialize(
+            &mut sim.host.storage,
+            history_id,
+            MentorshipRules::default(),
+            History {
+                incarnations: vec![Incarnation {
+                    person: ruler,
+                    bound_at,
+                    died_at: None,
+                }],
+            },
+            founders,
+        )?);
         Ok(sim)
     }
 
     pub(crate) fn observe_lineage_deaths(&mut self) {
-        let Some(current) = self.host.state.lineage.as_ref().and_then(World::current) else {
+        let Some(world) = self.host.state.lineage.as_ref() else {
             return;
         };
-        if game_physiology::body(&self.host.storage, current)
-            .unwrap()
+        let Some(current) = world.current(&self.host.storage) else {
+            return;
+        };
+        let alive = game_physiology::body(&self.host.storage, current)
+            .expect("incarnation body")
             .vitals
-            .alive
-        {
-            return;
-        }
-        let constraints: BTreeMap<_, _> = self
-            .host
-            .state
-            .lineage
-            .as_ref()
-            .unwrap()
-            .guardians
-            .keys()
-            .map(|id| (*id, self.guardian_constraint(*id)))
+            .alive;
+        let constraints = game_lineage::guardians(&self.host.storage)
+            .map(|(id, _)| (id, self.guardian_constraint(id)))
             .collect();
-        let world = game_lineage::observe_death(
-            self.host.state.lineage.as_ref().unwrap(),
-            false,
-            self.host.clock().time,
-            &constraints,
-        );
-        self.host.state.lineage = Some(world);
-    }
-
-    /// Called only after an actual birth has created the person and body. Birth
-    /// deadlines are processed in persistent pregnancy order, so the first
-    /// simultaneous eligible birth is deterministic across workers and saves.
-    pub(crate) fn record_lineage_birth(&mut self, child: PersonId) {
-        let Some(waiting) = self
-            .host
-            .state
-            .lineage
-            .as_ref()
-            .and_then(|world| world.waiting.clone())
-        else {
-            return;
-        };
-        let Some(life) = self
-            .host
-            .state
-            .development
-            .as_ref()
-            .and_then(|_| game_lifecycle::life(&self.host.storage, child))
-        else {
-            return;
-        };
-        let birth = ActualBirth {
-            person: child,
-            born: life.born,
-            initial_age: life.initial_age,
-            parent_count: life.parents.len(),
-            alive: game_physiology::body(&self.host.storage, child)
-                .unwrap()
-                .vitals
-                .alive,
-            location: game_spatial::location(&self.host.storage, game_ecs::StableId((child).0))
-                .expect("location exists")
-                .clone(),
-        };
-        let constraints = self
-            .host
-            .state
-            .lineage
-            .as_ref()
-            .unwrap()
-            .guardians
-            .keys()
-            .map(|id| (*id, self.guardian_constraint(*id)))
-            .collect();
-        let Some(binding) = game_lineage::bind_actual_birth(
-            self.host.state.lineage.as_ref().unwrap(),
-            &[birth],
-            self.host.clock().time,
-            &constraints,
-        ) else {
-            return;
-        };
-        self.host.state.people[self.person_index[&waiting.predecessor]].role = Role::Citizen;
-        self.host.state.people[self.person_index[&binding.successor]].role = Role::Ruler;
-        self.host.state.ruler = binding.successor;
-        self.host.state.lineage = Some(binding.lineage);
+        let prepared = world
+            .prepare_death(
+                &self.host.storage,
+                alive,
+                self.host.clock().time,
+                &constraints,
+            )
+            .expect("validated lineage death");
+        self.commit_lineage(prepared)
+            .expect("registered lineage death");
     }
 
     pub(crate) fn lineage_handles(&self, person: PersonId) -> bool {
-        self.host
+        self.host.state.lineage.is_some()
+            && game_lineage::guardian(&self.host.storage, person).is_some()
+    }
+    pub(crate) fn commit_lineage<T>(
+        &mut self,
+        prepared: game_lineage::PreparedLineage<T>,
+    ) -> Result<T, Error> {
+        prepared.commit(
+            self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?,
+            &mut self.host.storage,
+        )
+    }
+    fn lineage_factual_reads(&self, actors: &[PersonId]) -> game_ecs::ReadSet {
+        let mut reads = game_ecs::ReadSet::new();
+        for actor in actors {
+            let id = game_ecs::StableId(actor.0);
+            reads.read::<game_physiology::Body>(&self.host.storage, id);
+            reads.read::<game_lifecycle::Life>(&self.host.storage, id);
+            reads.read::<Location>(&self.host.storage, id);
+            reads.read::<game_characters::decisions::Mind<Command>>(&self.host.storage, id);
+            reads.read::<game_characters::decisions::Stocks>(&self.host.storage, id);
+            reads.read::<game_skills::Skills>(&self.host.storage, id);
+        }
+        reads
+    }
+    pub(crate) fn lineage_participant(&self, person: PersonId) -> game_lineage::ParticipantFacts {
+        let body =
+            game_physiology::body(&self.host.storage, person).expect("lineage participant body");
+        game_lineage::ParticipantFacts {
+            person,
+            location: game_spatial::location(&self.host.storage, game_ecs::StableId(person.0))
+                .expect("participant location")
+                .clone(),
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+            idle: matches!(
+                self.host.storage.activity(person),
+                Some(Activity::Idle | Activity::Rest)
+            ),
+            independent: self.independent(person),
+            in_combat: self.in_combat(person),
+            restricted: self.combat_restricts(person),
+            in_care: self.care_index.contains_key(&person),
+        }
+    }
+    fn lineage_teacher(&self, teacher: PersonId, student: PersonId) -> game_lineage::TeacherFacts {
+        let mind = game_characters::decisions::mind::<Command>(&self.host.storage, teacher)
+            .expect("guardian mind");
+        let location = game_spatial::location(&self.host.storage, game_ecs::StableId(student.0))
+            .expect("pupil location");
+        let destinations = self
+            .host
             .state
-            .lineage
-            .as_ref()
-            .is_some_and(|world| world.guardians.contains_key(&person))
+            .areas
+            .iter()
+            .map(|area| {
+                (
+                    area.id,
+                    match location {
+                        Location::AtArea(from) => {
+                            decisions::known_path(&mind.routes, *from, area.id).is_ok()
+                        }
+                        _ => false,
+                    },
+                )
+            })
+            .collect();
+        game_lineage::TeacherFacts {
+            participant: self.lineage_participant(teacher),
+            craft_level: self.own_skill_level(teacher, Skill::Craft),
+            craft_interest: mind
+                .interests
+                .get(&ChildhoodInterest::Craft)
+                .copied()
+                .unwrap_or(0),
+            knows_routes: !mind.routes.is_empty(),
+            signal_urgency: mind
+                .child_signals
+                .get(&student)
+                .map_or(0, |signal| signal.urgency),
+            stocks: game_characters::decisions::stocks(&self.host.storage, teacher)
+                .expect("guardian stocks")
+                .known
+                .values()
+                .cloned()
+                .collect(),
+            destinations,
+            sites: mind
+                .sites
+                .values()
+                .map(|site| game_lineage::SiteObservation {
+                    site: site.site,
+                    area: site.area,
+                    access: site.access,
+                })
+                .collect(),
+        }
     }
 
-    fn guardian_constraint(&self, id: PersonId) -> Option<GuardianGoal> {
+    pub(crate) fn guardian_constraint(&self, id: PersonId) -> Option<GuardianGoal> {
         game_lineage::guardian_constraint(
-            self.host
-                .state
-                .combat
-                .as_ref()
-                .is_some_and(|w| w.captivity.contains_key(&id)),
+            game_conflict::captivity(&self.host.storage, id).is_some(),
             game_physiology::body(&self.host.storage, id)
                 .unwrap()
                 .vitals
@@ -170,104 +365,150 @@ impl Simulation {
     /// Called at the event's physical commit, not from a later query. A guardian
     /// cannot acquire evidence merely because they eventually visit the area.
     pub(crate) fn witness_lineage_event(&mut self, kind: &EventKind) {
-        let owner_now = self.host.clock().time;
-        let Some(current) = self.host.state.lineage.as_ref().and_then(World::current) else {
+        let mut batch = game_ecs::Batch::new();
+        let Some(prepared) = self
+            .prepare_lineage_witness(kind, &batch)
+            .expect("lineage observation facts")
+        else {
             return;
         };
-        let (actor, departure) = match kind {
-            EventKind::Practiced { actor, .. }
-            | EventKind::Ate { actor, .. }
-            | EventKind::Produced { actor, .. }
-            | EventKind::Expressed { actor, .. }
-            | EventKind::Arrived { actor, .. } => (*actor, None),
-            EventKind::Departed { actor, from, .. } => (*actor, Some(*from)),
-            EventKind::Cared { caregiver, .. } => (*caregiver, None),
-            EventKind::LessonCompleted { student, .. } => (*student, None),
-            _ => return,
+        let staged = prepared
+            .stage_into(self, &mut batch)
+            .expect("lineage observation staging");
+        staged
+            .validate(self, &batch)
+            .expect("lineage observation admission");
+        let mut transaction = game_world::Transaction::new(self.host.transaction_opening(), batch);
+        transaction.guards.extend(staged.row_guards());
+        self.host
+            .commit_transaction(transaction)
+            .expect("lineage observation publication");
+        staged.finish();
+    }
+
+    /// Prepare from the guarded origin's final factual rows before publication.
+    /// The origin retains its owner guards; this wrapper binds only the selected
+    /// projected inputs, and captures untouched canonical dependencies normally.
+    pub(crate) fn prepare_lineage_witness(
+        &self,
+        kind: &EventKind,
+        batch: &game_ecs::Batch,
+    ) -> Result<Option<PreparedLineageWitness>, Error> {
+        let Some(world) = self.host.state.lineage.as_ref() else {
+            return Ok(None);
         };
-        if actor != current {
-            return;
-        }
-        let area = departure.or_else(|| {
-            match *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                .expect("location exists")
-            {
-                Location::AtArea(area) => Some(area),
-                Location::InTransit { .. }
-                | Location::StoppedOnRoad { .. }
-                | Location::Carried { .. } => None,
-            }
-        });
-        let Some(area) = area else { return };
-        let observers: Vec<_> = self
-            .host
-            .state
-            .lineage
-            .as_ref()
-            .unwrap()
-            .guardians
-            .keys()
-            .copied()
-            .filter(|id| {
-                *game_spatial::location(&self.host.storage, game_ecs::StableId(id.0))
-                    .expect("location exists")
-                    == Location::AtArea(area)
-                    && game_physiology::body(&self.host.storage, *id)
-                        .unwrap()
-                        .vitals
-                        .health
-                        > 0
+        let Some(current) = batch
+            .projected::<game_lineage::History>(&self.host.storage, world.history)?
+            .and_then(game_lineage::History::current)
+        else {
+            return Ok(None);
+        };
+        use game_lineage::WitnessConduct as W;
+        let (actor, conduct, departure) = match *kind {
+            EventKind::Practiced { actor, gain, .. } => (actor, W::Practice { gain }, None),
+            EventKind::Ate { actor, .. } => (actor, W::Meal, None),
+            EventKind::Produced { actor, .. } => (actor, W::Production, None),
+            EventKind::Departed { actor, from, .. } => (actor, W::Departure, Some(from)),
+            EventKind::Arrived { actor, .. } => (actor, W::Arrival, None),
+            EventKind::Cared { caregiver, .. } => (caregiver, W::Care, None),
+            EventKind::Expressed { actor, .. } => (actor, W::Expression, None),
+            EventKind::LessonCompleted { student, gain, .. } => (student, W::Lesson { gain }, None),
+            _ => return Ok(None),
+        };
+        let mut reads = game_ecs::ReadSet::new();
+        let mut projected_reads = game_ecs::ReadFootprint::new();
+        let current_id = game_ecs::StableId(current.0);
+        let location = projected_witness_row::<Location>(
+            &mut reads,
+            &mut projected_reads,
+            &self.host.storage,
+            batch,
+            current_id,
+        )?
+        .ok_or(Error::Unavailable)?
+        .clone();
+        let stage = projected_witness_row::<game_lifecycle::Life>(
+            &mut reads,
+            &mut projected_reads,
+            &self.host.storage,
+            batch,
+            current_id,
+        )?
+        .ok_or(Error::Unavailable)?
+        .stage;
+        let mut observers = Vec::new();
+        let event = game_lineage::WitnessEvent {
+            actor,
+            conduct,
+            departure,
+        };
+        let observer_ids = world
+            .witness_target(&self.host.storage, event)?
+            .map(|_| {
+                game_lineage::guardians(&self.host.storage)
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>()
             })
-            .collect();
-        for guardian in observers {
-            let known_distress =
-                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)
-                    .expect("mind exists")
+            .unwrap_or_default();
+        for id in observer_ids {
+            let stable_id = game_ecs::StableId(id.0);
+            let mind = projected_witness_row::<game_characters::decisions::Mind<Command>>(
+                &mut reads,
+                &mut projected_reads,
+                &self.host.storage,
+                batch,
+                stable_id,
+            )?
+            .ok_or(Error::Unavailable)?;
+            let location = projected_witness_row::<Location>(
+                &mut reads,
+                &mut projected_reads,
+                &self.host.storage,
+                batch,
+                stable_id,
+            )?
+            .ok_or(Error::Unavailable)?
+            .clone();
+            let body = projected_witness_row::<game_physiology::Body>(
+                &mut reads,
+                &mut projected_reads,
+                &self.host.storage,
+                batch,
+                stable_id,
+            )?
+            .ok_or(Error::Unavailable)?;
+            observers.push(game_lineage::WitnessFacts {
+                actor: id,
+                location,
+                health: body.vitals.health,
+                traits: guardian_traits(&mind.personality),
+                signal_urgency: mind
                     .child_signals
                     .get(&current)
-                    .is_some_and(|signal| signal.urgency > 0);
-            let conduct = match kind {
-                EventKind::Practiced { gain, .. } => Conduct::Practice { gain: *gain },
-                EventKind::Ate { .. } => Conduct::Meal,
-                EventKind::Produced { .. } => Conduct::Production,
-                EventKind::Departed { .. } => Conduct::Departure { known_distress },
-                EventKind::Arrived { .. } => Conduct::Arrival,
-                EventKind::Cared { .. } => Conduct::Care,
-                EventKind::Expressed { .. } => Conduct::Expression,
-                EventKind::LessonCompleted { gain, .. } => Conduct::Lesson { gain: *gain },
-                _ => continue,
-            };
-            let stage = game_lifecycle::life(&self.host.storage, current)
-                .expect("life exists")
-                .stage;
-            let personality =
-                game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)
-                    .expect("mind exists")
-                    .personality
-                    .clone();
-            let assessment = self
-                .host
-                .state
-                .lineage
-                .as_mut()
-                .unwrap()
-                .guardians
-                .get_mut(&guardian)
-                .unwrap()
-                .assessments
-                .entry(current)
-                .or_default();
-            *assessment = game_lineage::observe_conduct(
-                assessment,
-                guardian_traits(&personality),
-                Observation {
-                    conduct,
-                    stage,
-                    at: owner_now,
-                    witnessed: true,
-                },
-            );
+                    .map_or(0, |signal| signal.urgency),
+            });
         }
+        let inputs = WitnessInputs {
+            event,
+            location,
+            stage,
+            now: self.host.clock().time,
+            observers,
+        };
+        let prepared = world.prepare_witness(
+            &self.host.storage,
+            inputs.event,
+            &inputs.location,
+            inputs.stage,
+            inputs.now,
+            inputs.observers.iter().cloned(),
+        )?;
+        Ok(Some(PreparedLineageWitness {
+            plan: prepared,
+            inputs: vec![inputs],
+            reads,
+            projected_reads,
+        }))
     }
 
     pub(crate) fn start_lesson(
@@ -278,387 +519,340 @@ impl Simulation {
     ) -> Result<(), Error> {
         self.host.preflight_records(0, 0, 1)?;
         let world = self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?;
-        if world.current() != Some(student)
-            || !world.guardians.contains_key(&teacher)
-            || student == teacher
-            || !self.independent(student)
-            || self.in_combat(student)
-            || self.in_combat(teacher)
-            || self.combat_restricts(student)
-            || self.combat_restricts(teacher)
-            || self.care_index.contains_key(&student)
-            || self.care_index.contains_key(&teacher)
-        {
-            return Err(Error::Unavailable);
-        }
-        let student_location =
-            game_spatial::location(&self.host.storage, game_ecs::StableId((student).0))
-                .expect("location exists");
-        let teacher_location =
-            game_spatial::location(&self.host.storage, game_ecs::StableId((teacher).0))
-                .expect("location exists");
-        if student_location != teacher_location || !matches!(student_location, Location::AtArea(_))
-        {
-            return Err(Error::Unavailable);
-        }
-        if [student, teacher].into_iter().any(|id| {
-            let body = game_physiology::body(&self.host.storage, id).unwrap();
-            !body.vitals.alive
-                || body.vitals.health == 0
-                || !matches!(
-                    self.host.storage.activity(id).unwrap(),
-                    Activity::Idle | Activity::Rest
-                )
-        }) {
-            return Err(Error::Unavailable);
-        }
-        let teacher_mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, teacher)
-                .expect("mind exists");
-        let knows = match topic {
-            LessonTopic::Invocation => world.guardians[&teacher].knows_invocation,
-            LessonTopic::Craft => {
-                self.own_skill_level(teacher, Skill::Craft) > 0
-                    || teacher_mind
-                        .interests
-                        .get(&ChildhoodInterest::Craft)
-                        .is_some_and(|skill| *skill > 0)
+        let prepared = world.prepare_lesson_start(
+            &self.host.storage,
+            &self.lineage_participant(student),
+            &self.lineage_teacher(teacher, student),
+            topic,
+            self.host.clock().time,
+        )?;
+        match prepared.output().clone() {
+            game_lineage::LessonDecision::Refused(reason) => {
+                self.ensure_event_capacity(1)?;
+                self.commit_lineage(prepared)?;
+                self.emit(EventKind::GuardianRefused {
+                    guardian: teacher,
+                    requester: student,
+                    reason: reason.into(),
+                });
             }
-            LessonTopic::Travel => !teacher_mind.routes.is_empty(),
-        };
-        let unsafe_now = teacher_mind
-            .child_signals
-            .get(&student)
-            .is_some_and(|s| s.urgency >= 20_000);
-        if !knows || unsafe_now {
-            self.ensure_event_capacity(1)?;
-            let reason = if !knows {
-                "I cannot teach knowledge I do not have"
-            } else {
-                "The pupil needs immediate physical care before a lesson"
-            };
-            self.emit(EventKind::GuardianRefused {
-                guardian: teacher,
-                requester: student,
-                reason: reason.into(),
-            });
-            self.host
-                .state
-                .lineage
-                .as_mut()
-                .unwrap()
-                .guardians
-                .get_mut(&teacher)
-                .unwrap()
-                .explanation = reason.into();
-            self.host.bump_revision(1)?;
-            return Ok(());
-        }
-        let completes = SimTime(
-            self.host
-                .clock()
-                .time
-                .0
-                .checked_add(world.rules.lesson_duration.0)
-                .ok_or(Error::Overflow)?,
-        );
-        self.interrupt_actor_activity(student);
-        self.interrupt_actor_activity(teacher);
-        self.host
-            .state
-            .lineage
-            .as_mut()
-            .unwrap()
-            .guardians
-            .get_mut(&teacher)
-            .unwrap()
-            .assignment = None;
-        self.host.state.lineage.as_mut().unwrap().guardians.get_mut(&teacher).unwrap().explanation =
-            "The guided lesson is underway; both pupil and teacher are occupied until it completes or is interrupted".into();
-        for actor in [student, teacher] {
-            *self.host.storage.activity_mut(actor).unwrap() = Activity::Lesson {
+            game_lineage::LessonDecision::Begin {
                 teacher,
                 student,
                 topic,
                 completes,
-            };
-            self.host
-                .state
-                .due
-                .entry(completes)
-                .or_default()
-                .push(Due::Physical(actor));
+            } => {
+                let opening = self.host.transaction_opening();
+                let interruptions = self.prepare_interruptions(
+                    &[student, teacher],
+                    crate::commands::ActivityOwner::Physical,
+                )?;
+                self.host
+                    .preflight_records(0, interruptions.event_count()?, 1)?;
+                let activities = [student, teacher]
+                    .into_iter()
+                    .map(|actor| {
+                        (
+                            actor,
+                            Activity::Lesson {
+                                teacher,
+                                student,
+                                topic,
+                                completes,
+                            },
+                        )
+                    })
+                    .collect();
+                let mut activity_reads = game_ecs::ReadSet::new();
+                let mut admitted = game_ecs::ReadFootprint::new();
+                for actor in [student, teacher] {
+                    let id = game_ecs::StableId(actor.0);
+                    activity_reads.read::<Activity>(&self.host.storage, id);
+                    admitted.protect::<Activity>(id);
+                }
+                let mut batch = game_ecs::Batch::new();
+                let owner = self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?;
+                let lineage = prepared
+                    .with_factual_reads(self.lineage_factual_reads(&[student, teacher]))
+                    .stage_into(owner, &self.host.storage, &mut batch)?;
+                let mut interrupted = interruptions.stage_into(self, &mut batch, &activities)?;
+                let activity_guard = activity_reads.bind(&self.host.storage, &batch, &admitted)?;
+                lineage.validate(owner, &self.host.storage, &batch)?;
+                interrupted.validate_batch(self, &batch)?;
+                let mut transaction = game_world::Transaction::new(opening, batch);
+                transaction.guards = vec![lineage.guard().clone(), activity_guard];
+                transaction.revisions = 1;
+                self.host.commit_transaction(transaction)?;
+                lineage.finish();
+                for actor in [student, teacher] {
+                    interrupted.finish_actor(self, actor);
+                }
+                for actor in [student, teacher] {
+                    self.host
+                        .state
+                        .due
+                        .entry(completes)
+                        .or_default()
+                        .push(Due::Physical(actor));
+                }
+                return Ok(());
+            }
         }
         self.host.bump_revision(1)?;
         Ok(())
     }
 
     pub(crate) fn available_lesson_commands(&self, student: PersonId) -> Vec<Command> {
-        let Some(world) = &self.host.state.lineage else {
+        let Some(world) = self.host.state.lineage.as_ref() else {
             return Vec::new();
         };
-        if world.current() != Some(student)
-            || !self.independent(student)
-            || self.in_combat(student)
-            || self.combat_restricts(student)
-            || self.care_index.contains_key(&student)
-        {
-            return Vec::new();
-        }
-        let body = game_physiology::body(&self.host.storage, student).unwrap();
-        let activity = self.host.storage.activity(student).unwrap();
-        let location = game_spatial::location(&self.host.storage, game_ecs::StableId((student).0))
-            .expect("location exists");
-        if !body.vitals.alive
-            || body.vitals.health == 0
-            || !matches!(*activity, Activity::Idle | Activity::Rest)
-            || !matches!(location, Location::AtArea(_))
-        {
-            return Vec::new();
-        }
-        let mut commands = Vec::new();
-        for (teacher, guard) in &world.guardians {
-            let teacher_activity = self.host.storage.activity(*teacher).unwrap();
-            if game_spatial::location(&self.host.storage, game_ecs::StableId(teacher.0))
-                .expect("location exists")
-                != location
-                || self.in_combat(*teacher)
-                || self.combat_restricts(*teacher)
-                || self.care_index.contains_key(teacher)
-                || !matches!(*teacher_activity, Activity::Idle | Activity::Rest)
-            {
-                continue;
-            }
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
+        let known = game_characters::decisions::stocks(&self.host.storage, student)
+            .expect("pupil stocks")
+            .known
+            .keys()
+            .copied()
+            .collect();
+        let teachers = game_lineage::guardians(&self.host.storage)
+            .map(|(teacher, _)| self.lineage_teacher(teacher, student));
+        world
+            .available_commands(
                 &self.host.storage,
-                *teacher,
+                &self.lineage_participant(student),
+                &known,
+                teachers,
             )
-            .expect("mind exists");
-            let stocks = game_characters::decisions::stocks(&self.host.storage, *teacher)
-                .expect("stock knowledge exists");
-            if !mind
-                .child_signals
-                .get(&student)
-                .is_some_and(|signal| signal.urgency >= 20_000)
-            {
-                for topic in [
-                    LessonTopic::Invocation,
-                    LessonTopic::Craft,
-                    LessonTopic::Travel,
-                ] {
-                    let can_teach = match topic {
-                        LessonTopic::Invocation => guard.knows_invocation,
-                        LessonTopic::Craft => {
-                            self.own_skill_level(*teacher, Skill::Craft) > 0
-                                || mind
-                                    .interests
-                                    .get(&ChildhoodInterest::Craft)
-                                    .is_some_and(|skill| *skill > 0)
-                        }
-                        LessonTopic::Travel => !mind.routes.is_empty(),
-                    };
-                    if can_teach {
-                        commands.push(Command::Learn {
-                            teacher: *teacher,
-                            topic,
-                        });
-                    }
+            .into_iter()
+            .map(|command| match command {
+                game_lineage::AvailableCommand::Learn { teacher, topic } => {
+                    Command::Learn { teacher, topic }
                 }
-            }
-            commands.push(Command::RequestGuardian {
-                guardian: *teacher,
-                request: GuardianRequest::Rest,
-            });
-            for food in stocks.known.values().filter(|k| {
-                k.good == Good::Food
-                    && k.accessible
-                    && k.quantity.0 >= 1_000
-                    && game_characters::decisions::stocks(&self.host.storage, student)
-                        .expect("mind exists")
-                        .known
-                        .contains_key(&k.inventory)
-            }) {
-                commands.push(Command::RequestGuardian {
-                    guardian: *teacher,
-                    request: GuardianRequest::Supply {
-                        good: Good::Food,
-                        source: food.inventory,
-                        quantity: Quantity(1_000),
-                    },
-                });
-            }
-            if guard
-                .assessments
-                .get(&student)
-                .is_some_and(|assessment| assessment.ready)
-            {
-                let Location::AtArea(area) = location else {
-                    unreachable!()
-                };
-                if !mind
-                    .child_signals
-                    .get(&student)
-                    .is_some_and(|signal| signal.urgency > 0)
-                {
-                    for destination in
-                        self.host
-                            .state
-                            .areas
-                            .iter()
-                            .map(|area| area.id)
-                            .filter(|destination| {
-                                destination != area
-                                    && decisions::known_path(&mind.routes, *area, *destination)
-                                        .is_ok()
-                            })
-                    {
-                        commands.push(Command::RequestGuardian {
-                            guardian: *teacher,
-                            request: GuardianRequest::Move { destination },
-                        });
-                    }
+                game_lineage::AvailableCommand::Request { guardian, request } => {
+                    Command::RequestGuardian { guardian, request }
                 }
-                for site in mind
-                    .sites
-                    .values()
-                    .filter(|site| site.area == *area && site.access)
-                {
-                    commands.push(Command::RequestGuardian {
-                        guardian: *teacher,
-                        request: GuardianRequest::Work { site: site.site },
-                    });
-                }
-            }
-        }
-        commands
+            })
+            .collect()
     }
 
     pub(crate) fn interrupt_lesson(&mut self, actor: PersonId) {
-        let Some(Activity::Lesson {
-            teacher, student, ..
-        }) = self.host.storage.activity(actor).cloned()
-        else {
+        fn progress(activity: Option<&Activity>) -> Option<game_lineage::LessonProgress> {
+            let Activity::Lesson {
+                teacher,
+                student,
+                topic,
+                completes,
+            } = activity?
+            else {
+                return None;
+            };
+            Some(game_lineage::LessonProgress {
+                teacher: *teacher,
+                student: *student,
+                topic: *topic,
+                completes: *completes,
+            })
+        }
+        let Some(lesson) = progress(self.host.storage.activity(actor)) else {
             return;
         };
-        for id in [teacher, student] {
-            if let Some(activity) = self.host.storage.activity_mut(id)
-                && matches!(*activity, Activity::Lesson { .. })
-            {
-                *activity = Activity::Idle;
+        let interruption = game_lineage::lesson_interruption(
+            lesson,
+            [lesson.teacher, lesson.student].map(|id| progress(self.host.storage.activity(id))),
+        );
+        let mut batch = game_ecs::Batch::new();
+        for (id, clear) in interruption
+            .participants
+            .into_iter()
+            .zip(interruption.clear)
+        {
+            if clear {
+                batch.insert(game_ecs::StableId(id.0), Activity::Idle);
             }
             for due in self.host.state.due.values_mut() {
                 due.retain(|event| !matches!(event, Due::Physical(person) if *person == id));
             }
         }
+        self.host
+            .storage
+            .apply_batch(batch)
+            .expect("lesson activity cleanup");
         self.host.state.due.retain(|_, events| !events.is_empty());
     }
 
-    pub(crate) fn complete_lesson(&mut self, actor: PersonId) {
+    pub(crate) fn complete_lesson(&mut self, actor: PersonId) -> Result<(), Error> {
         let Activity::Lesson {
             teacher,
             student,
             topic,
             completes,
-        } = *self.host.storage.activity(actor).unwrap()
+        } = *self
+            .host
+            .storage
+            .activity(actor)
+            .ok_or(Error::Unavailable)?
         else {
-            return;
+            return Ok(());
         };
-        let paired = *self.host.storage.activity(teacher).unwrap()
-            == *self.host.storage.activity(student).unwrap();
-        if !paired
-            || completes != self.host.clock().time
-            || *game_spatial::location(&self.host.storage, game_ecs::StableId((teacher).0))
-                .expect("location exists")
-                != *game_spatial::location(&self.host.storage, game_ecs::StableId((student).0))
-                    .expect("location exists")
-            || [teacher, student].into_iter().any(|id| {
-                !game_physiology::body(&self.host.storage, id)
-                    .unwrap()
-                    .vitals
-                    .alive
-            })
-        {
+        let world = self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?;
+        let paired = self.host.storage.activity(teacher) == self.host.storage.activity(student);
+        if !world.lesson_can_finish(
+            game_lineage::LessonProgress {
+                teacher,
+                student,
+                topic,
+                completes,
+            },
+            &self.lineage_participant(teacher),
+            &self.lineage_participant(student),
+            paired,
+            self.host.clock().time,
+        ) {
             self.interrupt_lesson(actor);
-            return;
+            return Ok(());
         }
-        let lesson_gain = self.host.state.lineage.as_ref().unwrap().rules.lesson_gain;
-        let gain =
-            match topic {
-                LessonTopic::Invocation => {
-                    let learning = self
-                        .host
-                        .state
-                        .lineage
-                        .as_mut()
-                        .unwrap()
-                        .invocation_learning
-                        .entry(student)
-                        .or_default();
-                    let gain = lesson_gain.min(1_000 - *learning);
-                    *learning += gain;
-                    gain
-                }
-                LessonTopic::Craft => {
-                    let knowledge = game_characters::decisions::mind::<game_api::Command>(
-                        &self.host.storage,
-                        teacher,
-                    )
-                    .expect("mind exists")
-                    .interests
-                    .get(&ChildhoodInterest::Craft)
-                    .copied()
-                    .unwrap_or(0)
-                    .max(u64::from(self.own_skill_level(teacher, Skill::Craft)) * 10);
-                    let learning = game_characters::decisions::mind_mut::<game_api::Command>(
-                        &mut self.host.storage,
-                        student,
-                    )
-                    .unwrap()
-                    .interests
-                    .entry(ChildhoodInterest::Craft)
-                    .or_default();
-                    let gain = lesson_gain.min(knowledge.saturating_sub(*learning));
-                    *learning += gain;
-                    gain
-                }
-                LessonTopic::Travel => {
-                    let known = game_characters::decisions::mind::<game_api::Command>(
-                        &self.host.storage,
-                        teacher,
-                    )
-                    .expect("mind exists")
-                    .routes
-                    .clone();
-                    let student_routes = &mut game_characters::decisions::mind_mut::<
-                        game_api::Command,
-                    >(&mut self.host.storage, student)
-                    .unwrap()
-                    .routes;
-                    let mut new_links = 0_u64;
-                    for (area, links) in known {
-                        let own = student_routes.entry(area).or_default();
-                        for (destination, duration) in links {
-                            if own.insert(destination, duration).is_none() {
-                                new_links += 1;
-                            }
+        let opening = self.host.transaction_opening();
+        self.host.preflight_records(0, 1, 0)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut writes = game_ecs::ReadFootprint::new();
+        for person in [teacher, student] {
+            let id = game_ecs::StableId(person.0);
+            reads.read::<Activity>(&self.host.storage, id);
+            reads.read::<Location>(&self.host.storage, id);
+            reads.read::<game_physiology::Body>(&self.host.storage, id);
+            reads.read::<game_lifecycle::Life>(&self.host.storage, id);
+            writes.protect::<Activity>(id);
+        }
+        let lesson_gain = world.rules.lesson_gain;
+        let (gain, learning, minds) = match topic {
+            LessonTopic::Invocation => {
+                let learning = world.prepare_learning(&self.host.storage, student, lesson_gain)?;
+                (
+                    *learning.output(),
+                    Some(learning),
+                    game_characters::receivers::PreparedMindEffects::default(),
+                )
+            }
+            LessonTopic::Craft | LessonTopic::Travel => {
+                let knowledge = match topic {
+                    LessonTopic::Craft => {
+                        reads.read::<game_skills::Skills>(
+                            &self.host.storage,
+                            game_ecs::StableId(teacher.0),
+                        );
+                        game_characters::receivers::LessonKnowledge::Craft {
+                            skill_level: self.own_skill_level(teacher, Skill::Craft),
+                            lesson_gain,
                         }
                     }
-                    new_links.min(lesson_gain)
-                }
-            };
-        self.interrupt_lesson(actor);
-        self.emit(EventKind::LessonCompleted {
+                    _ => game_characters::receivers::LessonKnowledge::Travel { lesson_gain },
+                };
+                let learning = game_characters::receivers::prepare_lineage_lesson::<Command>(
+                    &self.host.storage,
+                    teacher,
+                    student,
+                    knowledge,
+                )?;
+                (learning.gain(), None, learning.into_mind_effects())
+            }
+        };
+        let event = EventKind::LessonCompleted {
             teacher,
             student,
             topic,
             gain,
-        });
+        };
+        let mut batch = game_ecs::Batch::new();
+        for person in [teacher, student] {
+            batch.insert(game_ecs::StableId(person.0), Activity::Idle);
+        }
+        let mut guards = vec![reads.bind(&self.host.storage, &batch, &writes)?];
+        let traits =
+            if let Some(prepared) = self.prepare_trait_events(std::slice::from_ref(&event))? {
+                Some(
+                    prepared.fold_minds(&self.host.storage, minds)?.stage_into(
+                        self.host
+                            .state
+                            .temperament
+                            .as_ref()
+                            .ok_or(Error::Unavailable)?,
+                        &self.host.storage,
+                        &mut batch,
+                        &self
+                            .host
+                            .state
+                            .genetics
+                            .as_ref()
+                            .ok_or(Error::Unavailable)?
+                            .allele_source(&self.host.storage),
+                    )?,
+                )
+            } else {
+                guards.push(minds.stage_into(&self.host.storage, &mut batch)?);
+                None
+            };
+        if let Some(traits) = &traits {
+            self.validate_trait_events(traits, &batch)?;
+            guards.extend(traits.row_guards().iter().cloned());
+        }
+        let witness = self.prepare_lineage_witness(&event, &batch)?;
+        enum StagedLesson {
+            Invocation(game_lineage::StagedLineage<u64>),
+            ObservedInvocation(StagedLineageWitness<u64>),
+            Observation(StagedLineageWitness),
+        }
+        let lineage = if let Some(learning) = learning {
+            if let Some(witness) = witness {
+                let staged = witness
+                    .fold_into(learning, self)?
+                    .stage_into(self, &mut batch)?;
+                staged.validate(self, &batch)?;
+                guards.extend(staged.row_guards());
+                Some(StagedLesson::ObservedInvocation(staged))
+            } else {
+                let staged = learning.stage_into(world, &self.host.storage, &mut batch)?;
+                staged.validate(world, &self.host.storage, &batch)?;
+                guards.push(staged.guard().clone());
+                Some(StagedLesson::Invocation(staged))
+            }
+        } else {
+            if let Some(witness) = witness {
+                let staged = witness.stage_into(self, &mut batch)?;
+                staged.validate(self, &batch)?;
+                guards.extend(staged.row_guards());
+                Some(StagedLesson::Observation(staged))
+            } else {
+                None
+            }
+        };
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.guards = guards;
+        transaction.events = vec![event];
+        self.host.commit_transaction(transaction)?;
+        if let Some(lineage) = lineage {
+            match lineage {
+                StagedLesson::Invocation(staged) => {
+                    staged.finish();
+                }
+                StagedLesson::ObservedInvocation(staged) => {
+                    staged.finish();
+                }
+                StagedLesson::Observation(staged) => {
+                    staged.finish();
+                }
+            }
+        }
+        for person in [teacher, student] {
+            for due in self.host.state.due.values_mut() {
+                due.retain(|event| !matches!(event, Due::Physical(id) if *id == person));
+            }
+        }
+        self.host.state.due.retain(|_, due| !due.is_empty());
+        Ok(())
     }
 
     pub(crate) fn request_guardian(
         &mut self,
         requester: PersonId,
-        guardian: PersonId,
+        actor: PersonId,
         request: GuardianRequest,
     ) -> Result<(), Error> {
         let owner_now = self.host.clock().time;
@@ -669,118 +863,92 @@ impl Simulation {
             quantity,
         } = request
         {
-            return self.request_guardian_supply(guardian, requester, good, source, quantity);
+            return self.request_guardian_supply(actor, requester, good, source, quantity);
         }
         let world = self.host.state.lineage.as_ref().ok_or(Error::Unavailable)?;
-        if world.current() != Some(requester)
-            || !world.guardians.contains_key(&guardian)
-            || !self.independent(requester)
-            || self.combat_restricts(requester)
-            || self.in_combat(requester)
-            || self.care_index.contains_key(&requester)
-            || !matches!(
-                *self.host.storage.activity(requester).unwrap(),
-                Activity::Idle | Activity::Rest
-            )
-            || !game_physiology::body(&self.host.storage, requester)
-                .unwrap()
-                .vitals
-                .alive
-            || *game_spatial::location(&self.host.storage, game_ecs::StableId((requester).0))
-                .expect("location exists")
-                != *game_spatial::location(&self.host.storage, game_ecs::StableId((guardian).0))
-                    .expect("location exists")
-            || !matches!(
-                *game_spatial::location(&self.host.storage, game_ecs::StableId((requester).0))
-                    .expect("location exists"),
-                Location::AtArea(_)
-            )
-        {
-            return Err(Error::Unavailable);
-        }
-        let guard = &world.guardians[&guardian];
-        let ready = guard.assessments.get(&requester).is_some_and(|a| a.ready);
-        let activity = self.host.storage.activity(guardian).unwrap();
-        let command = match request {
-            GuardianRequest::Move { destination } => Command::Move { destination },
-            GuardianRequest::Rest => Command::Rest,
-            GuardianRequest::Supply { .. } => unreachable!("handled above"),
-            GuardianRequest::Work { site } => Command::Work { site },
-        };
-        let reason = game_lineage::judge_request(
-            &request,
-            RequestInput {
-                constrained: self.guardian_constraint(guardian).is_some(),
-                in_combat: self.in_combat(guardian),
-                physical_duty_pending: !matches!(*activity, Activity::Idle | Activity::Rest),
-                ready,
-                known_distress: game_characters::decisions::mind::<game_api::Command>(
-                    &self.host.storage,
-                    guardian,
-                )
-                .expect("mind exists")
+        let requester_facts = self.lineage_participant(requester);
+        let mind = game_characters::decisions::mind::<Command>(&self.host.storage, actor)
+            .ok_or(Error::Unavailable)?;
+        let location = game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
+            .ok_or(Error::Unavailable)?;
+        let facts = game_lineage::RequestFacts {
+            now: owner_now,
+            requester_independent: requester_facts.independent,
+            requester_alive: requester_facts.alive,
+            requester_idle: requester_facts.idle,
+            requester_in_combat: requester_facts.in_combat,
+            requester_restricted: requester_facts.restricted,
+            requester_in_care: requester_facts.in_care,
+            requester_location: requester_facts.location,
+            guardian_location: location.clone(),
+            guardian_constrained: self.guardian_constraint(actor).is_some(),
+            guardian_in_combat: self.in_combat(actor),
+            guardian_duty_pending: !matches!(
+                self.host.storage.activity(actor),
+                Some(Activity::Idle | Activity::Rest)
+            ),
+            signal_urgency: mind
                 .child_signals
                 .get(&requester)
-                .is_some_and(|s| s.urgency > 0),
-            },
-        )
-        .err()
-        .map(Refusal::reason);
+                .map_or(0, |signal| signal.urgency),
+        };
+        let prepared =
+            world.prepare_request(&self.host.storage, actor, requester, request.clone(), facts)?;
         self.ensure_event_capacity(1)?;
-        if let Some(reason) = reason {
+        if let game_lineage::RequestDecision::Refused(reason) = prepared.output().clone() {
+            self.commit_lineage(prepared)?;
             self.emit(EventKind::GuardianRefused {
-                guardian,
+                guardian: actor,
                 requester,
                 reason: reason.into(),
             });
-            self.host
-                .state
-                .lineage
-                .as_mut()
-                .unwrap()
-                .guardians
-                .get_mut(&guardian)
-                .unwrap()
-                .explanation = reason.into();
             self.host.bump_revision(1)?;
             return Ok(());
         }
-        let accepted = if let Command::Move { destination } = command {
-            self.start_movement(guardian, destination)
-        } else {
-            self.debug_actor_command(guardian, command)
+        let command = match request {
+            GuardianRequest::Move { destination } => Command::Move { destination },
+            GuardianRequest::Rest => Command::Rest,
+            GuardianRequest::Work { site } => Command::Work { site },
+            GuardianRequest::Supply { .. } => unreachable!("supply bound separately"),
         };
-        match accepted {
+        let result = match command {
+            Command::Move { destination } => self.start_movement(actor, destination),
+            command => self.debug_actor_command(actor, command),
+        };
+        match result {
             Ok(()) => {
-                self.cancel_guardian_delivery(guardian);
-                self.emit(EventKind::GuardianAccepted {
-                    guardian,
-                    requester,
-                });
-                let guard = self
+                let change = self
                     .host
                     .state
                     .lineage
-                    .as_mut()
+                    .as_ref()
                     .unwrap()
-                    .guardians
-                    .get_mut(&guardian)
-                    .unwrap();
-                guard.assignment = Some(Assignment {
-                    request,
-                    accepted_at: owner_now,
+                    .prepare_request_success(&self.host.storage, actor, request, owner_now)?;
+                self.commit_lineage(change)?;
+                self.emit(EventKind::GuardianAccepted {
+                    guardian: actor,
+                    requester,
                 });
-                guard.explanation =
-                    "I accept this physical task while retaining my judgment and lineage duty"
-                        .into();
                 Ok(())
             }
             Err(Error::Overflow) => Err(Error::Overflow),
             Err(_) => {
-                self.emit(EventKind::GuardianRefused { guardian, requester,
-                    reason: "I cannot carry this out with my knowledge, permissions, or physical resources".into() });
-                self.host.state.lineage.as_mut().unwrap().guardians.get_mut(&guardian).unwrap().explanation =
-                    "The task exceeds my known routes, permissions, or physical resources; I remain committed to the lineage".into();
+                let change = self
+                    .host
+                    .state
+                    .lineage
+                    .as_ref()
+                    .unwrap()
+                    .prepare_request_failure(&self.host.storage, actor)?;
+                let game_lineage::RequestDecision::Refused(reason) = self.commit_lineage(change)?
+                else {
+                    unreachable!()
+                };
+                self.emit(EventKind::GuardianRefused {
+                    guardian: actor,
+                    requester,
+                    reason: reason.into(),
+                });
                 self.host.bump_revision(1)?;
                 Ok(())
             }
@@ -788,290 +956,202 @@ impl Simulation {
     }
 
     pub(crate) fn review_lineage(&mut self) -> Result<(), Error> {
-        let owner_now = self.host.clock().time;
-        let Some(world) = &self.host.state.lineage else {
+        let Some(world) = self.host.state.lineage.as_ref() else {
             return Ok(());
         };
-        let current = world.current();
-        let guardians: Vec<_> = world.guardians.keys().copied().collect();
-        for id in guardians {
-            if let Some(person) = current {
-                let same_place =
-                    *game_spatial::location(&self.host.storage, game_ecs::StableId((id).0))
-                        .expect("location exists")
-                        == *game_spatial::location(
-                            &self.host.storage,
-                            game_ecs::StableId((person).0),
-                        )
-                        .expect("location exists")
-                        && matches!(
-                            *game_spatial::location(&self.host.storage, game_ecs::StableId((id).0))
-                                .expect("location exists"),
-                            Location::AtArea(_)
-                        )
-                        && game_physiology::body(&self.host.storage, id)
+        let current = world.current(&self.host.storage);
+        let ids: Vec<_> = game_lineage::guardians(&self.host.storage)
+            .map(|(id, _)| id)
+            .collect();
+        for actor in ids {
+            let now = self.host.clock().time;
+            if let Some(target) = current {
+                let mind =
+                    game_characters::decisions::mind::<Command>(&self.host.storage, actor).unwrap();
+                let prepared = self
+                    .host
+                    .state
+                    .lineage
+                    .as_ref()
+                    .unwrap()
+                    .prepare_stage_sighting(
+                        &self.host.storage,
+                        actor,
+                        guardian_traits(&mind.personality),
+                        game_lifecycle::life(&self.host.storage, target)
+                            .unwrap()
+                            .stage,
+                        now,
+                        game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
+                            .unwrap(),
+                        game_spatial::location(&self.host.storage, game_ecs::StableId(target.0))
+                            .unwrap(),
+                        game_physiology::body(&self.host.storage, actor)
                             .unwrap()
                             .vitals
-                            .health
-                            > 0;
-                if same_place {
-                    let personality = &game_characters::decisions::mind::<game_api::Command>(
-                        &self.host.storage,
-                        id,
+                            .health,
+                    )?;
+                self.commit_lineage(prepared)?;
+            }
+            let escape = self.force_candidate(actor);
+            let delivery = match game_lineage::review_disposition(
+                escape.is_some(),
+                game_lineage::DeliveryAttempt::NotAttempted,
+            ) {
+                game_lineage::ReviewDisposition::AttemptDelivery => {
+                    if self.drive_guardian_delivery(actor)? {
+                        game_lineage::DeliveryAttempt::Occupied
+                    } else {
+                        game_lineage::DeliveryAttempt::Unavailable
+                    }
+                }
+                _ => game_lineage::DeliveryAttempt::NotAttempted,
+            };
+            if game_lineage::review_disposition(escape.is_some(), delivery)
+                == game_lineage::ReviewDisposition::Complete
+            {
+                continue;
+            }
+            let sensed = current.map(|target| self.resolved_location(target));
+            let own = self.resolved_location(actor);
+            let transport_rescue =
+                current.and_then(|target| self.transport_guardian_rescue(actor, target));
+            let force_rescue = current.and_then(|target| self.force_guardian_rescue(actor, target));
+            let mind =
+                game_characters::decisions::mind::<Command>(&self.host.storage, actor).unwrap();
+            let need = current
+                .and_then(|target| mind.child_signals.get(&target))
+                .map(|signal| NeedObservation {
+                    location: signal.location.clone(),
+                    observed_at: signal.observed_at,
+                    urgency: signal.urgency,
+                    hydration_urgency: signal.hydration_urgency,
+                    preference: signal.preference,
+                });
+            let applicable = current.and_then(|target| {
+                self.host
+                    .state
+                    .lineage
+                    .as_ref()
+                    .unwrap()
+                    .care_applicability(
+                        self.dependent_signal_visible(actor, target),
+                        self.host.state.development.as_ref().and_then(|_| {
+                            game_lifecycle::life(&self.host.storage, target).map(|life| life.stage)
+                        }),
                     )
-                    .expect("mind exists")
-                    .personality;
-                    let traits = guardian_traits(personality);
-                    let stage = game_lifecycle::life(&self.host.storage, person)
-                        .expect("life exists")
-                        .stage;
-                    let assessment = self
+            });
+            let activity = self.host.storage.activity(actor).unwrap();
+            let facts = ReviewFacts {
+                now,
+                location: &own,
+                activity: match activity {
+                    Activity::Idle => GuardianActivity::Idle,
+                    Activity::Rest => GuardianActivity::Rest,
+                    Activity::Work { site } => GuardianActivity::Work(*site),
+                    _ => GuardianActivity::Other,
+                },
+                confined: game_conflict::captivity(&self.host.storage, actor).is_some(),
+                incapacitated: game_physiology::body(&self.host.storage, actor)
+                    .unwrap()
+                    .vitals
+                    .health
+                    == 0,
+                combat_restricted: self.combat_restricts(actor),
+                in_combat: self.in_combat(actor),
+                serving_objective: self.mission_actor_busy(actor),
+            };
+            let assistance = current.map(|target| game_lineage::AssistanceFacts {
+                target_location: sensed.as_ref().unwrap(),
+                need: need.clone(),
+                transport_rescue: transport_rescue.is_some(),
+                force_rescue: force_rescue.is_some(),
+                provision: Some(ProvisionFacts {
+                    now,
+                    together: self.transport_same_place(actor, target),
+                    applicable,
+                    need: need.as_ref(),
+                    doses: CareDoses {
+                        food: self.body_rules(actor).meal_size,
+                        water: self.care_dose(Good::Water).unwrap_or(Quantity(0)),
+                    },
+                }),
+            });
+            let prepared = self.host.state.lineage.as_ref().unwrap().prepare_review(
+                &self.host.storage,
+                actor,
+                facts,
+                sensed.clone(),
+                escape.is_some(),
+                assistance,
+            )?;
+            let decision = self.commit_lineage(prepared)?;
+            let command = match decision.action {
+                Some(ReviewAction::Escape) => escape,
+                Some(ReviewAction::TransportRescue) => transport_rescue,
+                Some(ReviewAction::ForceRescue) => force_rescue,
+                Some(ReviewAction::Physical(action)) => Some(match action {
+                    GuardianAction::ApproachRoad {
+                        from,
+                        to,
+                        progress,
+                        duration,
+                    } => Command::Transport {
+                        action: TransportAction::ApproachRoad {
+                            from,
+                            to,
+                            progress,
+                            duration,
+                        },
+                    },
+                    GuardianAction::Move { destination } => Command::Move { destination },
+                    GuardianAction::Comfort { child } => Command::Comfort { child },
+                    GuardianAction::Rest => Command::Rest,
+                }),
+                Some(ReviewAction::Provision(provision)) => {
+                    let target = current.expect("living care destination");
+                    let destination = game_logistics::KnownDestination {
+                        destination: provision.delivery.destination,
+                        location: self.delivery_observed_location(target),
+                        observed_at: now,
+                        accessible: true,
+                        room: None,
+                        direct_transfer: true,
+                    };
+                    let step = self.plan_delivery(
+                        actor,
+                        &provision.delivery,
+                        &destination,
+                        provision.delivery.requirement.quantity,
+                    );
+                    match step {
+                        game_logistics::Step::Arrived { source, .. } => Some(Command::Care {
+                            child: target,
+                            source,
+                        }),
+                        step => self.delivery_command(actor, step),
+                    }
+                }
+                None => None,
+            };
+            if let Some(command) = command {
+                let result = match command {
+                    Command::Move { destination } => self.start_movement(actor, destination),
+                    command => self.debug_actor_command(actor, command),
+                };
+                if result.is_err() {
+                    let prepared = self
                         .host
                         .state
                         .lineage
-                        .as_mut()
+                        .as_ref()
                         .unwrap()
-                        .guardians
-                        .get_mut(&id)
-                        .unwrap()
-                        .assessments
-                        .entry(person)
-                        .or_default();
-                    *assessment =
-                        game_lineage::observe_stage(assessment, traits, stage, owner_now, true);
-                }
-            }
-            let force_command = self.force_candidate(id);
-            if force_command.is_none() && self.drive_guardian_delivery(id)? {
-                continue;
-            }
-            let sensed = current.map(|person| self.resolved_location(person));
-            let body = game_physiology::body(&self.host.storage, id).unwrap();
-            let activity = self.host.storage.activity(id).unwrap();
-            let own_location = self.resolved_location(id);
-            let facts = game_lineage::ReviewFacts {
-                now: owner_now,
-                location: &own_location,
-                active_work: match activity {
-                    Activity::Work { site } => Some(*site),
-                    _ => None,
-                },
-                confined: self
-                    .host
-                    .state
-                    .combat
-                    .as_ref()
-                    .is_some_and(|world| world.captivity.contains_key(&id)),
-                incapacitated: body.vitals.health == 0,
-                combat_restricted: self.combat_restricts(id),
-                in_combat: self.in_combat(id),
-                serving_objective: self.mission_actor_busy(id),
-                can_rest: matches!(*activity, Activity::Idle | Activity::Work { .. }),
-            };
-            let pending = game_lineage::assignment_pending(
-                self.host.state.lineage.as_ref().unwrap().guardians[&id]
-                    .assignment
-                    .as_ref(),
-                facts,
-            );
-            let step =
-                game_lineage::review_priority(current, pending, force_command.is_some(), facts);
-            let (goal, explanation, command) = match step {
-                game_lineage::ReviewStep::Assist(target) => self.guardian_intention(
-                    id,
-                    target,
-                    &own_location,
-                    sensed.as_ref().expect("living incarnation has a location"),
-                ),
-                game_lineage::ReviewStep::Escape => (
-                    step.goal(),
-                    step.explanation(force_command.is_some()).into(),
-                    force_command,
-                ),
-                game_lineage::ReviewStep::Wait { rest } => (
-                    step.goal(),
-                    step.explanation(false).into(),
-                    rest.then_some(Command::Rest),
-                ),
-                _ => (step.goal(), step.explanation(false).into(), None),
-            };
-            let guardian = self
-                .host
-                .state
-                .lineage
-                .as_mut()
-                .unwrap()
-                .guardians
-                .get_mut(&id)
-                .unwrap();
-            guardian.observe_review(game_lineage::ReviewObservation {
-                target: current,
-                sensed_location: sensed,
-                now: owner_now,
-                pending_assignment: pending,
-                goal,
-                explanation,
-            });
-            if let Some(command) = command {
-                let accepted = if let Command::Move { destination } = command {
-                    self.start_movement(id, destination)
-                } else {
-                    self.debug_actor_command(id, command)
-                };
-                if accepted.is_err() {
-                    self.host
-                        .state
-                        .lineage
-                        .as_mut()
-                        .unwrap()
-                        .guardians
-                        .get_mut(&id)
-                        .unwrap()
-                        .observe_failed_attempt();
+                        .prepare_failed_attempt(&self.host.storage, actor)?;
+                    self.commit_lineage(prepared)?;
                 }
             }
         }
         Ok(())
-    }
-
-    fn guardian_intention(
-        &mut self,
-        guardian: PersonId,
-        target: PersonId,
-        own_location: &Location,
-        target_location: &Location,
-    ) -> (GuardianGoal, String, Option<Command>) {
-        let activity = self.host.storage.activity(guardian).unwrap();
-        if let Some(command) = self.transport_guardian_rescue(guardian, target) {
-            return (
-                GuardianGoal::Searching,
-                "Providing physical support to the incarnation on the road".into(),
-                Some(command),
-            );
-        }
-        if let Some(command) = self.force_guardian_rescue(guardian, target) {
-            return (
-                GuardianGoal::Searching,
-                "Reaching the confined incarnation with a physical rescue tool".into(),
-                Some(command),
-            );
-        }
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, guardian)
-                .expect("mind exists");
-        let mut need = mind
-            .child_signals
-            .get(&target)
-            .map(|signal| NeedObservation {
-                location: signal.location.clone(),
-                observed_at: signal.observed_at,
-                urgency: signal.urgency,
-                hydration_urgency: signal.hydration_urgency,
-                preference: signal.preference,
-            });
-        let can_reconsider = matches!(
-            *activity,
-            Activity::Idle | Activity::Rest | Activity::Work { .. }
-        );
-        let should_rest = matches!(*activity, Activity::Idle | Activity::Work { .. });
-        let doses = game_lineage::CareDoses {
-            food: self.body_rules(guardian).meal_size,
-            water: self.care_dose(Good::Water).unwrap_or(Quantity(0)),
-        };
-        let together = self.transport_same_place(guardian, target);
-        let applicable = self.dependent_signal_visible(guardian, target).then(|| {
-            self.host.state.development.as_ref().is_some_and(|_| {
-                game_lifecycle::life(&self.host.storage, target)
-                    .is_some_and(|life| matches!(life.stage, LifeStage::Infant | LifeStage::Child))
-            })
-        });
-        if applicable == Some(false) {
-            need = None;
-            self.host
-                .state
-                .lineage
-                .as_mut()
-                .unwrap()
-                .observe_care_unavailable(guardian);
-        }
-        let provision = game_lineage::review_care_provision(
-            self.host.state.lineage.as_ref().unwrap().guardians[&guardian]
-                .provision
-                .as_ref(),
-            target,
-            self.host.clock().time,
-            together,
-            need.as_ref().filter(|_| applicable != Some(false)),
-            doses,
-        );
-        self.host
-            .state
-            .lineage
-            .as_mut()
-            .unwrap()
-            .guardians
-            .get_mut(&guardian)
-            .unwrap()
-            .provision = provision.clone();
-        if let Some(provision) = provision {
-            // This location fact is the guardian's explicit innate connection;
-            // it conveys no remote need, inventory balance or permissions.
-            let location = self.delivery_observed_location(target);
-            let destination = game_logistics::KnownDestination {
-                destination: provision.delivery.destination,
-                location,
-                observed_at: self.host.clock().time,
-                accessible: true,
-                room: None,
-                direct_transfer: true,
-            };
-            let step = self.plan_delivery(
-                guardian,
-                &provision.delivery,
-                &destination,
-                provision.delivery.requirement.quantity,
-            );
-            let command = match step {
-                game_logistics::Step::Arrived { source, .. } => Some(Command::Care {
-                    child: target,
-                    source,
-                }),
-                step => self.delivery_command(guardian, step),
-            };
-            return (GuardianGoal::Mentoring,"Pursuing the observed care requirement through actual acquisition, carrying and handoff".into(),command);
-        }
-        let intent = game_lineage::guardian_intention(GuardianInput {
-            target,
-            own_location,
-            target_location,
-            now: self.host.clock().time,
-            can_reconsider,
-            should_rest,
-            ready: self.host.state.lineage.as_ref().unwrap().guardians[&guardian]
-                .assessments
-                .get(&target)
-                .is_some_and(|a| a.ready),
-            need,
-        });
-        let command = intent.action.map(|action| match action {
-            GuardianAction::ApproachRoad {
-                from,
-                to,
-                progress,
-                duration,
-            } => Command::Transport {
-                action: TransportAction::ApproachRoad {
-                    from,
-                    to,
-                    progress,
-                    duration,
-                },
-            },
-            GuardianAction::Move { destination } => Command::Move { destination },
-            GuardianAction::Comfort { child } => Command::Comfort { child },
-            GuardianAction::Rest => Command::Rest,
-        });
-        (intent.goal, intent.explanation, command)
     }
 }
 
@@ -1083,256 +1163,264 @@ fn guardian_traits(personality: &decisions::Personality) -> GuardianTraits {
     }
 }
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
-    let Some(world) = &state.state.lineage else {
-        return Ok(());
+    let fail = || Error::InvalidSave("inconsistent composed lineage".into());
+    let Some(world) = state.state.lineage.as_ref() else {
+        return if state
+            .components
+            .iter::<game_lineage::History>()
+            .next()
+            .is_none()
+            && game_lineage::guardians(state.components).next().is_none()
+            && state
+                .components
+                .iter::<game_lineage::InvocationLearning>()
+                .next()
+                .is_none()
+        {
+            Ok(())
+        } else {
+            Err(fail())
+        };
     };
-    let fail = || Error::InvalidSave("inconsistent lineage state".into());
-    let Some(_) = &state.state.physical else {
-        return Err(fail());
-    };
-    let Some(development) = &state.state.development else {
-        return Err(fail());
-    };
-    if state.state.decisions.is_none()
-        || world.incarnations.is_empty()
-        || world.rules.lesson_duration.0 == 0
-        || !(1..=1_000).contains(&world.rules.lesson_gain)
-        || !(1..=1_000).contains(&world.rules.invocation_access_threshold)
-        || world.invocation_learning.iter().any(|(id, value)| {
-            game_physiology::body(state.components, *id).is_none() || *value > 1_000
-        })
-    {
+    if state.state.physical.is_none() || state.state.decisions.is_none() {
         return Err(fail());
     }
-    for (actor, activity) in state.components.activities() {
-        if let Activity::Lesson {
+    let development = state.state.development.as_ref().ok_or_else(fail)?;
+    world.validate_references(
+        state.components,
+        state.time,
+        state.next_event,
+        state.state.ruler,
+        &LineageReferencesAdapter(state),
+    )?;
+    fn progress(activity: Option<&Activity>) -> Option<game_lineage::LessonProgress> {
+        let Activity::Lesson {
             teacher,
             student,
             topic,
             completes,
-        } = *activity
-        {
-            if ![actor, teacher, student]
-                .into_iter()
-                .all(|id| game_physiology::body(state.components, id).is_some())
-                || ![teacher, student].contains(&actor)
-                || teacher == student
-                || !world.guardians.contains_key(&teacher)
-                || world.current() != Some(student)
-                || *state.components.activity(teacher).unwrap()
-                    != *state.components.activity(student).unwrap()
-                || state
-                    .state
-                    .people
-                    .iter()
-                    .find(|p| p.id == teacher)
-                    .and_then(|p| {
-                        game_spatial::location(state.components, game_ecs::StableId((p.id).0))
-                    })
-                    != state
-                        .state
-                        .people
+        } = activity?
+        else {
+            return None;
+        };
+        Some(game_lineage::LessonProgress {
+            teacher: *teacher,
+            student: *student,
+            topic: *topic,
+            completes: *completes,
+        })
+    }
+    for (actor, activity) in state.components.activities() {
+        let Some(lesson) = progress(Some(activity)) else {
+            continue;
+        };
+        let life = game_lifecycle::life(state.components, lesson.student).ok_or_else(fail)?;
+        let partner = if actor == lesson.teacher {
+            lesson.student
+        } else {
+            lesson.teacher
+        };
+        let teacher_location =
+            game_spatial::location(state.components, game_ecs::StableId(lesson.teacher.0))
+                .ok_or_else(fail)?;
+        let student_location =
+            game_spatial::location(state.components, game_ecs::StableId(lesson.student.0))
+                .ok_or_else(fail)?;
+        let scheduled = [lesson.teacher, lesson.student].map(|id| {
+            state
+                .state
+                .due
+                .get(&lesson.completes)
+                .is_some_and(|events| {
+                    events
                         .iter()
-                        .find(|p| p.id == student)
-                        .and_then(|p| {
-                            game_spatial::location(state.components, game_ecs::StableId((p.id).0))
-                        })
-            {
-                return Err(fail());
-            }
-            let started = completes
-                .0
-                .checked_sub(world.rules.lesson_duration.0)
-                .ok_or_else(fail)?;
-            let life = game_lifecycle::life(state.components, student).ok_or_else(fail)?;
-            let age = started
-                .checked_sub(life.born.0)
-                .and_then(|v| v.checked_add(life.initial_age.0))
-                .ok_or_else(fail)?;
-            if started > state.time.0
-                || age < development.rules.infancy.0
-                || !state.state.due.get(&completes).is_some_and(|due| {
-                    [teacher, student].into_iter().all(|person| {
-                        due.iter()
-                            .any(|event| matches!(event, Due::Physical(id) if *id == person))
-                    })
+                        .any(|event| matches!(event, Due::Physical(actor) if *actor == id))
                 })
-                || matches!(topic, LessonTopic::Invocation)
-                    && !world.guardians[&teacher].knows_invocation
-            {
-                return Err(fail());
-            }
-        }
-    }
-    let mut seen = BTreeSet::new();
-    for (i, incarnation) in world.incarnations.iter().enumerate() {
-        let life = game_lifecycle::life(state.components, incarnation.person).ok_or_else(fail)?;
-        let body = game_physiology::body(state.components, incarnation.person).ok_or_else(fail)?;
-        if !seen.insert(incarnation.person)
-            || incarnation.bound_at > state.time
-            || incarnation
-                .died_at
-                .is_some_and(|d| d < incarnation.bound_at || d > state.time)
-            || incarnation.died_at.is_some() == body.vitals.alive
-            || i + 1 < world.incarnations.len() && incarnation.died_at.is_none()
-        {
-            return Err(fail());
-        }
-        if let Some(died) = incarnation.died_at && !state.events.iter().any(|event| {
-            event.at == died
-                && matches!(event.event, EventKind::Died { actor } if actor == incarnation.person)
-        }) {
-            return Err(fail());
-        }
-        if i > 0 {
-            let previous_death = world.incarnations[i - 1].died_at.ok_or_else(fail)?;
-            let first_eligible = game_lifecycle::all_lives(state.components)
-                .map(|(_, life)| life)
-                .filter(|candidate| {
-                    candidate.born > previous_death
-                        && candidate.initial_age == SimDuration(0)
-                        && candidate.parents.len() == 2
-                })
-                .min_by_key(|candidate| (candidate.born, candidate.id))
-                .map(|candidate| candidate.id);
-            if life.born != incarnation.bound_at
-                || life.born <= previous_death
-                || life.initial_age != SimDuration(0)
-                || life.parents.len() != 2
-                || first_eligible != Some(incarnation.person)
-            {
-                return Err(fail());
-            }
-        }
-    }
-    let last = world.incarnations.last().unwrap();
-    if last.person != state.state.ruler {
-        return Err(fail());
-    }
-    match (&world.waiting, last.died_at) {
-        (Some(waiting), Some(died))
-            if waiting.predecessor == last.person && waiting.died_at == died => {}
-        (None, None) => {}
-        _ => return Err(fail()),
-    }
-    let expected_guardians: BTreeSet<_> = state
-        .state
-        .people
-        .iter()
-        .filter(|p| p.role == Role::Guardian)
-        .map(|p| p.id)
-        .collect();
-    if world.guardians.keys().copied().collect::<BTreeSet<_>>() != expected_guardians {
-        return Err(fail());
-    }
-    for (guardian_id, guardian) in &world.guardians {
-        if guardian.target != world.current()
-            || guardian.sensed_at > state.time
-            || guardian.target.is_some() != guardian.sensed_location.is_some()
-        {
-            return Err(fail());
-        }
-        if guardian.provision.as_ref().is_some_and(|plan| {
-            !plan.delivery.valid()
-                || world.current().is_none_or(|target| {
-                    plan.delivery.destination != game_logistics::Destination::Contact(target)
-                })
-                || plan.delivery.last_receipt >= state.next_event
-                || plan.delivery.requirement.source.is_some_and(|source| {
-                    !game_cargo::inventory(state.components, source).is_some()
-                })
-                || plan.observed_at > state.time
-        }) {
-            return Err(fail());
-        }
-        if let Some(requested) = &guardian.requested_delivery {
-            let delivery = &requested.delivery;
-            if !delivery.valid()
-                || requested.accepted_at > state.time
-                || requested.last_event >= state.next_event
-                || delivery.last_receipt >= state.next_event
-                || delivery.requirement.source.is_none_or(|source| {
-                    !game_cargo::inventory(state.components, source)
-                        .is_some_and(|stock| stock.good == delivery.requirement.good)
-                })
-                || world.current().is_none_or(|target| {
-                    delivery.destination != game_logistics::Destination::Contact(target)
-                })
-                || requested.cargo.iter().any(|(inventory, quantity)| {
-                    *quantity == 0
-                        || !game_cargo::inventory(state.components, *(inventory)).is_some_and(
-                            |stock| {
-                                stock.good == delivery.requirement.good
-                                    && stock.location == InventoryLocation::Carried(*guardian_id)
-                                    && *quantity <= stock.quantity.0
-                            },
-                        )
-                })
-            {
-                return Err(fail());
-            }
-        }
-        for (person, assessment) in &guardian.assessments {
-            if !seen.contains(person)
-                || assessment.observed_at > state.time
-                || [
-                    assessment.independence,
-                    assessment.competence,
-                    assessment.judgment,
-                    assessment.risks,
-                ]
-                .into_iter()
-                .any(|value| value > 1_000)
-                || assessment.ready
-                    && (assessment.independence < 100
-                        || assessment.competence < 100
-                        || assessment.judgment < 75
-                        || assessment.observed_stage == Some(LifeStage::Infant))
-            {
-                return Err(fail());
-            }
-        }
-        if let Some(assignment) = &guardian.assignment
-            && (assignment.accepted_at > state.time
-                || world.current().is_none()
-                || match assignment.request {
-                    GuardianRequest::Move { destination } => {
-                        !state.state.areas.iter().any(|a| a.id == destination)
-                    }
-                    GuardianRequest::Work { site } => {
-                        game_workshop::site(state.components, site).is_none()
-                    }
-                    GuardianRequest::Rest => false,
-                    GuardianRequest::Supply {
-                        source, quantity, ..
-                    } => {
-                        !game_cargo::inventory(state.components, source).is_some()
-                            || quantity.0 == 0
-                    }
-                })
-        {
-            return Err(fail());
-        }
-        if let Some(location) = &guardian.sensed_location {
-            let known_area = |id| state.state.areas.iter().any(|area| area.id == id);
-            match location {
-                Location::AtArea(area) if !known_area(*area) => return Err(fail()),
-                Location::InTransit {
-                    from,
-                    to,
-                    departed,
-                    arrives,
-                    ..
-                } if !known_area(*from)
-                    || !known_area(*to)
-                    || departed >= arrives
-                    || *departed > guardian.sensed_at =>
-                {
-                    return Err(fail());
-                }
-                _ => {}
-            }
-        }
+        });
+        world.validate_lesson(
+            state.components,
+            state.time,
+            game_lineage::LessonSaveFacts {
+                actor,
+                progress: lesson,
+                partner: progress(state.components.activity(partner)),
+                teacher_location,
+                student_location,
+                born: life.born,
+                initial_age: life.initial_age,
+                infancy: development.rules.infancy,
+                scheduled,
+            },
+        )?;
     }
     Ok(())
+}
+struct LineageReferencesAdapter<'a>(&'a CanonicalState<'a>);
+impl game_lineage::LineageReferences for LineageReferencesAdapter<'_> {
+    fn people(&self) -> impl Iterator<Item = game_lineage::PersonReference> {
+        self.0.people().filter_map(|person| {
+            let life = game_lifecycle::life(self.0.components, person.id)?;
+            let body = game_physiology::body(self.0.components, person.id)?;
+            Some(game_lineage::PersonReference {
+                person: person.id,
+                born: life.born,
+                initial_age: life.initial_age,
+                parent_count: life.parents.len(),
+                alive: body.vitals.alive,
+            })
+        })
+    }
+    fn guardian_people(&self) -> impl Iterator<Item = PersonId> {
+        self.0
+            .people()
+            .filter(|person| person.role == Role::Guardian)
+            .map(|person| person.id)
+    }
+    fn recorded_death(&self, person: PersonId, at: SimTime) -> bool {
+        self.0.events.iter().any(|event| {
+            event.at == at && matches!(event.event, EventKind::Died { actor } if actor == person)
+        })
+    }
+    fn stock(&self, id: InventoryId) -> Option<game_lineage::StockReference> {
+        let stock = game_cargo::inventory(self.0.components, id)?;
+        Some(game_lineage::StockReference {
+            good: stock.good,
+            quantity: stock.quantity,
+            holder: match stock.location {
+                InventoryLocation::Carried(actor) => Some(actor),
+                _ => None,
+            },
+        })
+    }
+    fn area_exists(&self, id: AreaId) -> bool {
+        self.0.state.areas.iter().any(|area| area.id == id)
+    }
+    fn site_exists(&self, id: SiteId) -> bool {
+        game_workshop::site(self.0.components, id).is_some()
+    }
+}
+
+#[cfg(test)]
+mod lesson_publication_tests {
+    use super::*;
+
+    fn ready(topic: LessonTopic) -> (Simulation, PersonId, PersonId) {
+        let mut sim = Simulation::lineage_fixture(9, Execution::default()).unwrap();
+        sim.initialize_genetics(genetics::Config::default())
+            .unwrap();
+        let student = sim.host.state.ruler;
+        let teacher = game_lineage::guardians(&sim.host.storage).next().unwrap().0;
+        game_characters::decisions::mind_mut::<Command>(&mut sim.host.storage, teacher)
+            .unwrap()
+            .interests
+            .insert(ChildhoodInterest::Craft, 100);
+        let completes = sim.host.clock().time;
+        for actor in [teacher, student] {
+            sim.host
+                .storage
+                .set_activity(
+                    actor,
+                    Activity::Lesson {
+                        teacher,
+                        student,
+                        topic,
+                        completes,
+                    },
+                )
+                .unwrap();
+            sim.host
+                .state
+                .due
+                .entry(completes)
+                .or_default()
+                .push(Due::Physical(actor));
+        }
+        (sim, teacher, student)
+    }
+
+    #[test]
+    fn invocation_craft_and_travel_complete_with_one_receipt_and_one_guidance_credit() {
+        for topic in [
+            LessonTopic::Invocation,
+            LessonTopic::Craft,
+            LessonTopic::Travel,
+        ] {
+            let (mut sim, teacher, student) = ready(topic);
+            let before_events = sim.host.events().len();
+            let before_teacher =
+                game_characters::temperament::person_temperament(&sim.host.storage, teacher)
+                    .unwrap()
+                    .learned_offsets;
+            let before_student =
+                game_characters::temperament::person_temperament(&sim.host.storage, student)
+                    .unwrap()
+                    .learned_offsets;
+            sim.complete_lesson(student).unwrap();
+            assert_eq!(sim.host.events().len(), before_events + 1);
+            assert!(
+                matches!(sim.host.events().last().unwrap().event, EventKind::LessonCompleted { topic: actual, .. } if actual == topic)
+            );
+            for (actor, before) in [(teacher, before_teacher), (student, before_student)] {
+                let after =
+                    game_characters::temperament::person_temperament(&sim.host.storage, actor)
+                        .unwrap();
+                assert_eq!(
+                    after.learned_offsets,
+                    [before[0] + 1, before[1] + 1, before[2], before[3]]
+                );
+                assert_eq!(sim.host.storage.activity(actor), Some(&Activity::Idle));
+                assert!(
+                    sim.host
+                        .state
+                        .due
+                        .values()
+                        .flatten()
+                        .all(|due| !matches!(due, Due::Physical(id) if *id == actor))
+                );
+            }
+            match topic {
+                LessonTopic::Invocation => assert_eq!(
+                    game_lineage::invocation_learning(&sim.host.storage, student),
+                    100
+                ),
+                LessonTopic::Craft => assert_eq!(
+                    game_characters::decisions::mind::<Command>(&sim.host.storage, student)
+                        .unwrap()
+                        .interests[&ChildhoodInterest::Craft],
+                    100
+                ),
+                LessonTopic::Travel => {
+                    let teacher =
+                        game_characters::decisions::mind::<Command>(&sim.host.storage, teacher)
+                            .unwrap();
+                    let student =
+                        game_characters::decisions::mind::<Command>(&sim.host.storage, student)
+                            .unwrap();
+                    for (from, links) in &teacher.routes {
+                        for (to, duration) in links {
+                            assert_eq!(student.routes[from][to], *duration);
+                        }
+                    }
+                }
+            }
+            sim.complete_lesson(teacher).unwrap();
+            assert_eq!(sim.host.events().len(), before_events + 1);
+        }
+    }
+
+    #[test]
+    fn invalid_lesson_source_leaves_learning_activities_due_and_receipt_unpublished() {
+        let (mut sim, teacher, student) = ready(LessonTopic::Craft);
+        game_characters::decisions::mind_mut::<Command>(&mut sim.host.storage, teacher)
+            .unwrap()
+            .interests
+            .insert(ChildhoodInterest::Craft, 1001);
+        let before_rows = sim.host.storage.clone();
+        let before_due = sim.host.state.due.clone();
+        let before_events = sim.host.events().to_vec();
+        assert!(sim.complete_lesson(student).is_err());
+        assert_eq!(sim.host.storage, before_rows);
+        assert_eq!(sim.host.state.due, before_due);
+        assert_eq!(sim.host.events(), before_events);
+    }
 }

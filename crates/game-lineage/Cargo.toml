@@ -12,4 +12,5 @@ game-core.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-characters.workspace = true
 serde_json.workspace = true

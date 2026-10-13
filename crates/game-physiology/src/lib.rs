@@ -1,11 +1,14 @@
 //! Numerical body rules. External systems supply contributions; this crate has
 //! no knowledge of health, invocation, inventories, decisions, or Simulation.
+pub mod completion_order;
 pub mod traits;
 
 use game_core::{Error, PersonId, Vitals};
 use serde::{Deserialize, Serialize};
 mod components;
 pub use components::{bodies, body, body_mut, insert_body, register_components, remove_body};
+mod equipment_demand;
+pub use equipment_demand::{EquipmentActivity, equipment_demand};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -459,3 +462,30 @@ pub use charges::*;
 
 mod sustainable_work;
 pub use sustainable_work::sustainable_work;
+
+mod interval;
+pub use interval::*;
+
+mod injury;
+pub use injury::{InjuryReceipt, PreparedInjury, prepare_death, prepare_injury};
+
+mod newborn;
+#[cfg(feature = "genetics")]
+pub use newborn::PreparedFounderExpression;
+pub use newborn::{PreparedNewbornBody, prepare_newborn_body};
+
+mod interruption;
+pub use interruption::*;
+
+mod admission;
+pub use admission::*;
+
+mod reservations;
+pub use reservations::*;
+mod consumption;
+pub use consumption::*;
+
+pub mod save_validation;
+
+mod ending;
+pub use ending::*;
