@@ -1,7 +1,7 @@
 //! Deadline selection, physical revalidation, and completion belong to Invocation.
 use crate::*;
 use game_core::*;
-use game_ecs::{Batch, Component, StableId, Store};
+use game_ecs::{Batch, Component, ReadFootprint, ReadGuard, ReadSet, StableId, Store};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,16 +50,18 @@ pub struct MemoryCompletion {
     pub participants: Vec<PersonId>,
     pub allocation_demand: u64,
     learning: Option<game_characters::memories::MemoryLearningFinalization>,
+    reads: ReadGuard,
 }
 impl MemoryCompletion {
     pub fn validate_batch<A: Component>(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.reads.validate(store, batch)?;
         if let Some(learning) = &self.learning {
             learning.validate_batch::<A>(store, batch)?;
         }
         store.validate_batch(batch)
     }
-    /// The batch is restricted to Invocation, Cargo, and activity rows; it must
-    /// preserve the receiving character's Mind row and knowledge footprint.
+    /// Canonical learning rows were staged with the memory source transaction.
+    /// Kept for callers that finalize an admitted completion after publication.
     pub fn finish_learning<A: Component>(self, store: &mut Store) {
         if let Some(learning) = self.learning {
             learning.finish::<A>(store);
@@ -317,6 +319,63 @@ impl PreparedMemoryCompletion {
         if let Some(learning) = &self.learning {
             learning.validate::<A>(store)?;
         }
+        let mut reads = ReadSet::new();
+        let mut admitted = ReadFootprint::new();
+        reads.membership::<ControlSession>(store, |_, _| true);
+        for (actor, _) in sessions(store) {
+            reads.read::<ControlSession>(store, StableId(actor.0));
+        }
+        let participants = self.ending.participants().to_vec();
+        reads.membership::<MemoryAction>(store, move |_, action| {
+            participants.contains(&action.actor)
+                || matches!(action.work, MemoryWork::Teach { recipient, .. }
+                    if participants.contains(&recipient))
+        });
+        for actor in self.ending.owners() {
+            reads.read::<MemoryAction>(store, StableId(actor.0));
+            admitted.protect::<MemoryAction>(StableId(actor.0));
+        }
+        for actor in self.ending.participants() {
+            reads.read::<Location>(store, StableId(actor.0));
+        }
+        match self.action.work {
+            MemoryWork::Write { tool, .. } => {
+                reads.read::<game_cargo::Inventory>(store, StableId(tool.0));
+            }
+            MemoryWork::Read { record: id } | MemoryWork::Move { record: id, .. } => {
+                if let Some(record) = reads.read::<Record>(store, StableId(id.0)) {
+                    reads.read::<game_cargo::Inventory>(store, StableId(record.inventory.0));
+                }
+            }
+            MemoryWork::Teach { .. } => {}
+        }
+        if let Some((before, after)) = &self.record_patch {
+            reads.expect_row(StableId(after.id.0), before.clone());
+            admitted.protect::<Record>(StableId(after.id.0));
+        }
+        match self.effect {
+            MemoryEffect::Recorded {
+                record, inventory, ..
+            } => {
+                reads.exclusive_entity(store, StableId(record.0))?;
+                reads.exclusive_entity(store, StableId(inventory.0))?;
+                reads.read::<game_cargo::Inventory>(store, StableId(inventory.0));
+                admitted.protect::<game_cargo::Inventory>(StableId(inventory.0));
+            }
+            MemoryEffect::Transferred {
+                source,
+                destination,
+                ..
+            } => {
+                reads.read::<game_cargo::Inventory>(store, StableId(source.0));
+                reads.read::<game_cargo::Inventory>(store, StableId(destination.0));
+                reads.exclusive_entity(store, StableId(destination.0))?;
+                admitted.protect::<game_cargo::Inventory>(StableId(source.0));
+                admitted.protect::<game_cargo::Inventory>(StableId(destination.0));
+            }
+            _ => {}
+        }
+
         if let Some((before, after)) = self.record_patch {
             if record(store, after.id) != before.as_ref() {
                 return Err(Error::Unavailable);
@@ -336,6 +395,7 @@ impl PreparedMemoryCompletion {
             participants,
             allocation_demand: self.allocation_demand,
             learning,
+            reads: reads.bind(store, batch, &admitted)?,
         })
     }
 }

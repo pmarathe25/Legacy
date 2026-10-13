@@ -580,3 +580,40 @@ fn selected_delivery_is_admitted_by_real_cargo_without_assembly() {
         Some(MemberExplanation::SourceUnknown)
     );
 }
+
+#[test]
+fn production_member_executor_uses_restraint_failure_to_engage_and_preserves_success() {
+    struct Execute {
+        actions: Vec<MemberAction<u8>>,
+        restraint_success: bool,
+    }
+    impl MemberExecution<u8> for Execute {
+        fn action(&mut self, _: MissionId, _: PersonId, action: &MemberAction<u8>) -> bool {
+            self.actions.push(action.clone());
+            !matches!(action, MemberAction::Restrain(_)) || self.restraint_success
+        }
+        fn explain(&mut self, _: MissionId, _: PersonId, _: MemberExplanation) {
+            panic!("unexpected explanation");
+        }
+    }
+    let w = world(MissionObjective::Confine {
+        person: ENEMY,
+        until: SimTime(100),
+    });
+    let facts = Facts::default();
+    for (restraint_success, expected) in [
+        (
+            false,
+            vec![MemberAction::Restrain(ENEMY), MemberAction::Engage(ENEMY)],
+        ),
+        (true, vec![MemberAction::Restrain(ENEMY)]),
+    ] {
+        let decision = w.member_decision(&w.store, ID, input(&motives()), &facts);
+        let mut port = Execute {
+            actions: Vec::new(),
+            restraint_success,
+        };
+        execute_member_decision(&mut port, ID, A, decision);
+        assert_eq!(port.actions, expected);
+    }
+}

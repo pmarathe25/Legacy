@@ -113,26 +113,29 @@ fn search_patch_rejects_moved_or_changed_fighter_without_replacing_other_state()
         cursor: 0,
         active: true,
     };
-    let mut world = World {
-        rules: rules(),
-        profiles: BTreeMap::new(),
-        maps: BTreeMap::from([(
-            AreaId(1),
-            Map {
-                id: CombatMapId(1),
-                version: 1,
-                area: AreaId(1),
-                location: Location::AtArea(AreaId(1)),
-                width: 20_000,
-                height: 20_000,
-                obstacles: Vec::new(),
-                exits: Vec::new(),
-            },
-        )]),
-        road_maps: BTreeMap::new(),
-        encounters: BTreeMap::from([(encounter.id, encounter)]),
-        captivity: BTreeMap::new(),
-    };
+    let _world = World { rules: rules() };
+    let mut store = crate::test_store();
+    let rows: BTreeMap<AreaId, Map> = BTreeMap::from([(
+        AreaId(1),
+        Map {
+            id: CombatMapId(1),
+            version: 1,
+            area: AreaId(1),
+            location: Location::AtArea(AreaId(1)),
+            width: 20_000,
+            height: 20_000,
+            obstacles: Vec::new(),
+            exits: Vec::new(),
+        },
+    )]);
+    for (_, row) in rows {
+        crate::insert_map(&mut store, row).unwrap();
+    }
+    let rows: BTreeMap<EncounterId, Encounter> = BTreeMap::from([(encounter.id, encounter)]);
+    for (_, row) in rows {
+        crate::insert_encounter(&mut store, row).unwrap();
+    }
+
     let patch = PreparedSearch::new(
         EncounterId(1),
         &fighter,
@@ -141,16 +144,14 @@ fn search_patch_rejects_moved_or_changed_fighter_without_replacing_other_state()
             goal: None,
         },
     );
-    world
-        .encounters
-        .get_mut(&EncounterId(1))
+    crate::encounter_mut(&mut store, EncounterId(1))
         .unwrap()
         .fighters
         .get_mut(&fighter.actor)
         .unwrap()
         .position
         .x += 1;
-    let before = world.clone();
-    assert!(patch.commit(&mut world).is_err());
-    assert_eq!(world, before);
+    let before = store.clone();
+    assert!(patch.commit(&mut store).is_err());
+    assert_eq!(store, before);
 }

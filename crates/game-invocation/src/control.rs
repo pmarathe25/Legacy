@@ -1,6 +1,6 @@
 use crate::*;
 use game_core::*;
-use game_ecs::{Batch, BatchKey, StableId, Store};
+use game_ecs::{Batch, ReadFootprint, ReadGuard, ReadSet, StableId, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -139,64 +139,30 @@ pub struct PreparedControl {
     new_warning: Option<InvocationWarning>,
     pub effects: Vec<ControlEffect>,
 }
-/// Required native rows and the owner-staged footprint of this exact composition.
-#[derive(Clone, Debug)]
+/// Owner-bound projected reads of the exact control transaction.
+#[derive(Debug)]
 pub struct ControlReceipt {
-    batch: BatchKey,
     rules: Rules,
-    before_session: Option<(PersonId, ControlSession)>,
-    before_warning_record: Option<InvocationWarning>,
-    burdens: BTreeMap<PersonId, Option<Burden>>,
-    session_edit: Option<PersonId>,
     after_actor: Option<PersonId>,
-    warning: Option<WarningId>,
-    new_warning: Option<WarningId>,
+    reads: ReadGuard,
 }
 impl ControlReceipt {
+    pub fn guard(&self) -> &ReadGuard {
+        &self.reads
+    }
+    pub(crate) fn actor_after(&self) -> Option<PersonId> {
+        self.after_actor
+    }
     pub fn validate_batch(
         &self,
         state: &ControlState,
         store: &Store,
         batch: &Batch,
     ) -> Result<(), Error> {
-        if self.batch != batch.key()
-            || self.rules != state.rules
-            || one_session(store)?.map(|(actor, row)| (actor, row.clone())) != self.before_session
-            || state.pending_warning(store) != self.before_warning_record.as_ref()
-            || self
-                .burdens
-                .iter()
-                .any(|(actor, before)| burden(store, *actor) != before.as_ref())
-            || self
-                .new_warning
-                .is_some_and(|id| warning(store, id).is_some())
-            || self.after_actor.is_some_and(|actor| {
-                !self.burdens.contains_key(&actor) && burden(store, actor).is_none()
-            })
-            || batch.edited_ids::<ControlSession>().collect::<Vec<_>>()
-                != self
-                    .session_edit
-                    .into_iter()
-                    .map(|actor| StableId(actor.0))
-                    .collect::<Vec<_>>()
-            || self.warning.is_some_and(|id| {
-                batch
-                    .edited_ids::<InvocationWarning>()
-                    .filter(|edited| *edited == StableId(id.0))
-                    .count()
-                    != usize::from(self.new_warning == Some(id))
-            })
-            || self.after_actor.is_some_and(|actor| {
-                batch
-                    .edited_ids::<Burden>()
-                    .filter(|edited| *edited == StableId(actor.0))
-                    .count()
-                    != usize::from(self.burdens.contains_key(&actor))
-            })
-        {
+        if self.rules != state.rules {
             return Err(Error::Unavailable);
         }
-        Ok(())
+        self.reads.validate(store, batch)
     }
 }
 impl PreparedControl {
@@ -253,21 +219,33 @@ impl PreparedControl {
         {
             return Err(Error::Unavailable);
         }
-        let guards = ControlReceipt {
-            batch: batch.key(),
-            rules: self.rules.clone(),
-            before_session: self.before_session,
-            before_warning_record: self.before_warning_record,
-            burdens: self
-                .burdens
-                .iter()
-                .map(|(actor, (before, _))| (*actor, before.clone()))
-                .collect(),
-            session_edit: after_actor.or(before_actor),
-            after_actor,
-            warning: self.warning.as_ref().map(|pending| pending.id),
-            new_warning: self.new_warning.as_ref().map(|warning| warning.id),
-        };
+        let mut reads = ReadSet::new();
+        reads.membership::<ControlSession>(store, |_, _| true);
+        if let Some((actor, before)) = &self.before_session {
+            reads.expect_row(StableId(actor.0), Some(before.clone()));
+        }
+        if let Some(actor) = after_actor {
+            reads.read::<ControlSession>(store, StableId(actor.0));
+            reads.read::<Burden>(store, StableId(actor.0));
+        }
+        if let Some(before) = &self.before_warning_record {
+            reads.expect_row(StableId(before.id.0), Some(before.clone()));
+        }
+        if let Some(warning) = &self.new_warning {
+            reads.exclusive_entity(store, StableId(warning.id.0))?;
+            reads.read::<InvocationWarning>(store, StableId(warning.id.0));
+        }
+        let mut admitted = ReadFootprint::new();
+        for (actor, (before, _)) in &self.burdens {
+            reads.expect_row(StableId(actor.0), before.clone());
+            admitted.protect::<Burden>(StableId(actor.0));
+        }
+        if let Some(warning) = &self.new_warning {
+            admitted.protect::<InvocationWarning>(StableId(warning.id.0));
+        }
+        if let Some(actor) = after_actor.or(before_actor) {
+            admitted.protect::<ControlSession>(StableId(actor.0));
+        }
         for (actor, (_, value)) in self.burdens {
             batch.insert(game_ecs::StableId(actor.0), value);
         }
@@ -287,7 +265,11 @@ impl PreparedControl {
         } else if let Some(actor) = before_actor {
             batch.remove::<ControlSession>(game_ecs::StableId(actor.0));
         }
-        Ok(guards)
+        Ok(ControlReceipt {
+            rules: self.rules,
+            after_actor,
+            reads: reads.bind(store, batch, &admitted)?,
+        })
     }
     pub fn commit(self, state: &ControlState, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
@@ -300,6 +282,9 @@ impl PreparedControl {
             || burden(store, actor).map_or(0, |row| row.lifespan_loss),
             |(_, after)| after.lifespan_loss,
         )
+    }
+    pub fn has_updates(&self) -> bool {
+        !self.effects.is_empty() || !self.burdens.is_empty()
     }
     pub fn at(&self) -> SimTime {
         self.at

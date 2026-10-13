@@ -91,7 +91,8 @@ fn selected_record_and_actual_cargo_move_once_in_a_shared_batch() {
     let receipt = phase.stage_next_into(&store, &mut batch).unwrap().unwrap();
     assert!(receipt.1);
     assert_eq!(receipt.0.source, source);
-    records.stage_into(&store, &mut batch).unwrap();
+    let record_guard = records.stage_guarded_into(&store, &mut batch).unwrap();
+    record_guard.validate(&store, &batch).unwrap();
     store.apply_batch(batch).unwrap();
     assert!(
         phase
@@ -189,4 +190,57 @@ fn ordinary_materials_have_no_record_effect_with_unrelated_native_records_presen
     );
     assert_eq!(store.snapshot().unwrap(), before);
     assert_eq!(records(&store).count(), 2);
+}
+
+#[test]
+fn transfer_guard_protects_identity_and_source_membership_but_allows_unselected_reader_changes() {
+    let (runtime, store) = fixture();
+    for attack in 0..3 {
+        let records = runtime
+            .prepare_record_transfer(
+                &store,
+                InventoryId(20),
+                InventoryId(30),
+                Quantity(1000),
+                Some(RecordId(42)),
+            )
+            .unwrap()
+            .unwrap();
+        let before = store.clone();
+        let mut batch = Batch::new();
+        let guard = records.stage_guarded_into(&store, &mut batch).unwrap();
+        match attack {
+            0 => {
+                batch.remove::<Record>(StableId(42));
+            }
+            1 => {
+                let mut sibling = record(&store, RecordId(41)).unwrap().clone();
+                sibling.intact = false;
+                batch.insert(StableId(41), sibling);
+            }
+            _ => {
+                let mut incoming = record(&store, RecordId(41)).unwrap().clone();
+                incoming.id = RecordId(43);
+                batch.insert(StableId(43), incoming);
+            }
+        }
+        assert!(guard.validate(&store, &batch).is_err());
+        assert_eq!(store, before);
+    }
+    let records = runtime
+        .prepare_record_transfer(
+            &store,
+            InventoryId(20),
+            InventoryId(30),
+            Quantity(1000),
+            Some(RecordId(42)),
+        )
+        .unwrap()
+        .unwrap();
+    let mut batch = Batch::new();
+    let guard = records.stage_guarded_into(&store, &mut batch).unwrap();
+    let mut sibling = record(&store, RecordId(41)).unwrap().clone();
+    sibling.readers.insert(PersonId(11));
+    batch.insert(StableId(41), sibling);
+    guard.validate(&store, &batch).unwrap();
 }

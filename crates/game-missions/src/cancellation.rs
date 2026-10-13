@@ -8,7 +8,14 @@ pub struct ClearTalk {
     pub speaker: PersonId,
     pub completes: SimTime,
 }
+impl ClearTalk {
+    /// Select the receiving activity only when its native deadline still matches.
+    pub fn activity_reset(&self, deadline: Option<SimTime>) -> Option<PersonId> {
+        (deadline == Some(self.completes)).then_some(self.speaker)
+    }
+}
 pub struct PreparedTalkCancellations {
+    runtime: Runtime,
     before: BTreeMap<PersonId, PendingTalk>,
     membership: Vec<(PersonId, Vec<PersonId>)>,
     groups: Vec<(PersonId, Vec<ClearTalk>)>,
@@ -46,6 +53,7 @@ impl Runtime {
             groups.push((actor, effects));
         }
         PreparedTalkCancellations {
+            runtime: self.clone(),
             before,
             membership,
             groups,
@@ -53,6 +61,46 @@ impl Runtime {
     }
 }
 impl PreparedTalkCancellations {
+    pub fn stage_into_with_activities<C: game_ecs::Component>(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        facts: &impl TalkActivityFacts<C>,
+        idle: C,
+        batch: &mut Batch,
+    ) -> Result<TalkActivityPublication, Error> {
+        if runtime != &self.runtime {
+            return Err(Error::Unavailable);
+        }
+        self.validate(store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        for (actor, _) in &self.membership {
+            let actor = *actor;
+            reads.membership::<PendingTalk>(store, move |_, talk| {
+                talk.speaker == actor || talk.listener == actor
+            });
+        }
+        for (id, before) in &self.before {
+            let id = StableId(id.0);
+            reads.expect_row(id, Some(before.clone()));
+            let activity = reads.read::<C>(store, id);
+            if activity.is_some_and(|activity| facts.deadline(activity) == Some(before.completes)) {
+                admitted.protect::<C>(id);
+                if batch.touches::<C>(id) {
+                    return Err(Error::Unavailable);
+                }
+                batch.insert(id, idle.clone());
+            }
+            admitted.protect::<PendingTalk>(id);
+        }
+        let expected_runtime = self.runtime.clone();
+        self.stage_into(store, batch)?;
+        Ok(TalkActivityPublication::new(
+            expected_runtime,
+            reads.bind(store, batch, &admitted)?,
+        ))
+    }
     pub fn effects(&self) -> impl Iterator<Item = (PersonId, &[ClearTalk])> {
         self.groups
             .iter()

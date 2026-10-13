@@ -77,3 +77,12 @@ mod communications;
 pub use communications::*;
 #[cfg(test)]
 mod native_flow_tests;
+
+mod workflow;
+pub use workflow::*;
+
+mod facts;
+pub use facts::*;
+
+#[cfg(test)]
+mod activity_cleanup_tests;

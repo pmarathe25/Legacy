@@ -1,7 +1,7 @@
 //! Memory work owns its collateral participants and cancellation membership.
 use crate::*;
 use game_core::{Error, InventoryId, PersonId, Quantity};
-use game_ecs::{Batch, StableId, Store};
+use game_ecs::{Batch, ReadFootprint, ReadGuard, ReadSet, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +67,31 @@ impl Runtime {
         })
     }
 }
+/// Cancellation keeps its scoped participant membership and removed work rows
+/// protected until every receiving owner has staged the final transaction.
+#[derive(Debug)]
+pub struct MemoryEndingReceipt {
+    pub participants: Vec<PersonId>,
+    reads: ReadGuard,
+    replacement: Option<MemoryReplacement>,
+}
+impl MemoryEndingReceipt {
+    pub fn validate_batch(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        if let Some(replacement) = &self.replacement {
+            replacement.validate_batch(store, batch)?;
+        }
+        self.reads.validate(store, batch)
+    }
+}
 impl PreparedMemoryEnding {
+    pub fn stage_into_with_guard(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<MemoryEndingReceipt, Error> {
+        self.stage_into_composed(runtime, store, None, batch)
+    }
     pub fn participants(&self) -> &[PersonId] {
         &self.participants
     }
@@ -79,20 +103,42 @@ impl PreparedMemoryEnding {
         store: &Store,
         replacement: Option<&MemoryReplacement>,
         batch: &mut Batch,
-    ) -> Result<Vec<PersonId>, Error> {
-        if let Some(replacement) = replacement
-            && !batch.touches::<MemoryAction>(StableId(replacement.actor().0))
-        {
-            return Err(Error::Unavailable);
+    ) -> Result<MemoryEndingReceipt, Error> {
+        // Only the opaque start receipt can authorize the existing replacement
+        // edit. Arbitrary writes to any other scoped action remain forbidden.
+        if let Some(replacement) = replacement {
+            replacement.validate_batch(store, batch)?;
         }
-        self.stage_into(
+        let mut reads = ReadSet::new();
+        let requested = self.requested.clone();
+        reads.membership::<MemoryAction>(store, move |_, action| {
+            requested.contains(&action.actor)
+                || matches!(action.work, MemoryWork::Teach { recipient, .. }
+                    if requested.contains(&recipient))
+        });
+        let mut admitted = ReadFootprint::new();
+        for (actor, action) in &self.rows {
+            reads.expect_row(StableId(actor.0), Some(action.clone()));
+            admitted.protect::<MemoryAction>(StableId(actor.0));
+        }
+        if let Some(replacement) = replacement {
+            let id = StableId(replacement.actor().0);
+            reads.read::<MemoryAction>(store, id);
+            admitted.protect::<MemoryAction>(id);
+        }
+        let participants = self.stage_into(
             runtime,
             store,
             replacement.map(MemoryReplacement::actor),
             batch,
-        )
+        )?;
+        Ok(MemoryEndingReceipt {
+            participants,
+            reads: reads.bind(store, batch, &admitted)?,
+            replacement: replacement.cloned(),
+        })
     }
-    pub fn stage_into(
+    pub(crate) fn stage_into(
         self,
         runtime: &Runtime,
         store: &Store,

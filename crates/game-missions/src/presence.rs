@@ -243,3 +243,50 @@ impl Runtime {
         Ok(())
     }
 }
+
+impl Runtime {
+    /// The service observation scene is the first active actual encounter in
+    /// stable encounter order that contains this observer.
+    pub fn observation_encounter<'a>(
+        &self,
+        person: PersonId,
+        encounters: impl IntoIterator<Item = &'a Encounter>,
+    ) -> Option<&'a Encounter> {
+        encounters
+            .into_iter()
+            .find(|encounter| encounter.active && encounter.fighters.contains_key(&person))
+    }
+}
+
+impl Runtime {
+    /// Prepare a tactical declaration against the supplied projected contact
+    /// scene. Service owns authority, recipients and each companion's consent.
+    pub fn prepare_combat_order(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        id: MissionId,
+        objective: &MissionObjective,
+        command: &CommandFacts,
+        facts: &impl OrderHearingFacts,
+    ) -> Result<PreparedMission, Error> {
+        self.validate_order(store, actor, id, objective, command)?;
+        let leader = mission(store, id)
+            .ok_or(Error::Unavailable)?
+            .proposal
+            .leader;
+        let heard = self.order_heard(store, id, leader, facts)?;
+        self.prepare_order(
+            store,
+            id,
+            leader,
+            objective,
+            &OrderFacts {
+                now: command.now,
+                heard,
+                assets: command.assets.clone(),
+            },
+            false,
+        )
+    }
+}

@@ -409,3 +409,170 @@ pub fn validate_context(
     }
     Ok(())
 }
+
+/// Runtime prerequisites are factual capability presence, checked by service.
+#[derive(Clone, Copy, Debug)]
+pub struct RuntimeAvailability {
+    pub physical: bool,
+    pub decisions: bool,
+    pub conflict: bool,
+    pub agreements: bool,
+}
+pub fn validate_native_context(
+    runtime: Option<&Runtime>,
+    store: &Store,
+    catalog: ValidationCatalog<'_>,
+    availability: RuntimeAvailability,
+    facts: &impl ValidationFacts,
+) -> Result<(), Error> {
+    let Some(runtime) = runtime else {
+        if missions(store).next().is_some()
+            || recruitments(store).next().is_some()
+            || knowledges(store).next().is_some()
+            || talks(store).next().is_some()
+        {
+            return Err(Error::InvalidSave(
+                "mission components without runtime".into(),
+            ));
+        }
+        return Ok(());
+    };
+    if !availability.physical
+        || !availability.decisions
+        || !availability.conflict
+        || !availability.agreements
+    {
+        return Err(Error::InvalidSave(
+            "inconsistent expedition commitments".into(),
+        ));
+    }
+    validate_context(runtime, store, catalog, facts)
+}
+
+pub fn saved_objective_valid(
+    store: &Store,
+    objective: &MissionObjective,
+    people: &BTreeSet<PersonId>,
+    areas: &BTreeSet<AreaId>,
+) -> bool {
+    let area = |a: &AreaId| areas.contains(a);
+    let person = |id: &PersonId| people.contains(id);
+    match objective {
+        MissionObjective::Visit { destination } => area(destination),
+        MissionObjective::Deliver {
+            source,
+            destination,
+            quantity,
+        } => {
+            quantity.0 > 0
+                && source != destination
+                && game_cargo::inventory(store, *source)
+                    .zip(game_cargo::inventory(store, *destination))
+                    .is_some_and(|(a, b)| a.good == b.good)
+        }
+        MissionObjective::Defeat { person: p } | MissionObjective::Confine { person: p, .. } => {
+            person(p)
+        }
+        MissionObjective::Rescue {
+            person: p,
+            return_to,
+        } => person(p) && area(return_to),
+        MissionObjective::Patrol { areas, .. } => {
+            !areas.is_empty() && areas.len() <= 16 && areas.iter().all(area)
+        }
+    }
+}
+pub fn validate_saved_view(
+    store: &Store,
+    v: &MissionView,
+    now: SimTime,
+    people: &BTreeSet<PersonId>,
+    areas: &BTreeSet<AreaId>,
+    agreements_enabled: bool,
+) -> Result<(), Error> {
+    let bad = || Error::InvalidSave("Invalid dated mission report".into());
+    if crate::mission(store, v.id).is_none()
+        || !people.contains(&v.sponsor)
+        || !people.contains(&v.leader)
+        || !areas.contains(&v.home)
+        || !saved_objective_valid(store, &v.objective, people, areas)
+        || v.observed_at > now
+        || v.companions.len() > 32
+        || v.recruitments.len() > 32
+        || v.supplies.len() > 32
+        || v.reported_by.is_some_and(|p| !people.contains(&p))
+    {
+        return Err(bad());
+    }
+    for c in &v.companions {
+        if !people.contains(&c.person)
+            || c.observed_at > now
+            || c.location.as_ref().is_some_and(|l| match l {
+                Location::AtArea(a) => !areas.contains(a),
+                Location::Carried { carrier } => !people.contains(carrier),
+                Location::StoppedOnRoad {
+                    from,
+                    to,
+                    progress,
+                    duration,
+                } => {
+                    !areas.contains(from)
+                        || !areas.contains(to)
+                        || from == to
+                        || duration.0 == 0
+                        || progress > duration
+                }
+                Location::InTransit {
+                    from,
+                    to,
+                    departed,
+                    arrives,
+                    road_start,
+                } => {
+                    !areas.contains(from)
+                        || !areas.contains(to)
+                        || from == to
+                        || departed >= arrives
+                        || road_start.is_some_and(|p| !p.valid())
+                }
+            })
+        {
+            return Err(bad());
+        }
+    }
+    for r in &v.recruitments {
+        if !crate::recruitment(store, r.id)
+            .is_some_and(|a| a.person == r.person && a.mission == v.id)
+            || r.payment_agreement.is_some_and(|id| {
+                !agreements_enabled || game_agreements::agreement(store, id).is_none()
+            })
+            || r.compensation.iter().any(|t| {
+                t.parties().iter().any(|p| !people.contains(p))
+                    || match t {
+                        AgreementTerm::Delivery {
+                            source,
+                            destination,
+                            ..
+                        } => {
+                            game_cargo::inventory(store, *source).is_none()
+                                || game_cargo::inventory(store, *destination).is_none()
+                        }
+                        AgreementTerm::Access { inventory, .. } => {
+                            game_cargo::inventory(store, *inventory).is_none()
+                        }
+                        _ => true,
+                    }
+            })
+        {
+            return Err(bad());
+        }
+    }
+    if v.supplies.iter().any(|supply| {
+        !people.contains(&supply.carrier)
+            || game_cargo::inventory(store, supply.source).is_none()
+            || supply.quantity.0 == 0
+    }) {
+        return Err(bad());
+    }
+    Ok(())
+}

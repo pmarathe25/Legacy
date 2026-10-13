@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug)]
 struct KnowledgePatch {
     actor: PersonId,
-    before: Option<ArmyKnowledge>,
     after: ArmyKnowledge,
 }
 
@@ -14,74 +13,100 @@ struct KnowledgePatch {
 #[derive(Clone, Debug)]
 pub struct PreparedChange {
     id: ArmyId,
-    before: Option<Army>,
     after: Army,
     knowledge: Vec<KnowledgePatch>,
-    claims: BTreeMap<MissionId, Option<ArmyId>>,
+    reads: game_ecs::ReadSet,
     pub effects: Vec<Effect>,
 }
 impl PreparedChange {
-    pub fn check(&self, world: &World) -> Result<(), Error> {
-        if world.armies.get(&self.id) != self.before.as_ref()
-            || self
-                .knowledge
-                .iter()
-                .any(|p| world.view(p.actor, self.id) != p.before.as_ref())
-            || self
-                .claims
-                .iter()
-                .any(|(m, a)| world.commanding_army(*m) != *a)
-            || self.after.orders.keys().any(|id| {
-                self.before
-                    .as_ref()
-                    .is_none_or(|a| !a.orders.contains_key(id))
-                    && world.armies.values().any(|a| a.orders.contains_key(id))
-            })
-            || self.after.reports.keys().any(|id| {
-                self.before
-                    .as_ref()
-                    .is_none_or(|a| !a.reports.contains_key(id))
-                    && world.armies.values().any(|a| a.reports.contains_key(id))
-            })
-        {
-            return Err(Error::Unavailable);
-        }
-        Ok(())
+    pub fn mission_requests(&self) -> impl Iterator<Item = MissionRequest<'_>> {
+        self.effects.iter().filter_map(|effect| match effect {
+            Effect::OfferObjective {
+                mission,
+                leader,
+                objective,
+            } => Some(MissionRequest::Directive {
+                mission: *mission,
+                leader: *leader,
+                objective,
+            }),
+            Effect::OfferRetreat { mission, leader } => Some(MissionRequest::Retreat {
+                mission: *mission,
+                leader: *leader,
+            }),
+            Effect::ReleaseCommand {
+                mission,
+                leader,
+                reason: Departure::Defect,
+            } => Some(MissionRequest::Leave {
+                mission: *mission,
+                leader: *leader,
+            }),
+            Effect::ReleaseCommand { .. } => None,
+        })
     }
-    pub fn commit(self, world: &mut World) -> Result<Vec<Effect>, Error> {
-        self.check(world)?;
-        world.armies.insert(self.id, self.after);
+    pub fn check(&self, world: &Kernel<'_>) -> Result<(), Error> {
+        self.reads.validate(world.store)
+    }
+    pub fn stage(
+        self,
+        store: &game_ecs::Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<(game_ecs::ReadGuard, Vec<Effect>), Error> {
+        self.reads.validate(store)?;
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<Army>(game_ecs::StableId(self.id.0));
+        batch.insert(game_ecs::StableId(self.id.0), self.after);
+        let mut rows: BTreeMap<PersonId, Knowledge> = BTreeMap::new();
         for patch in self.knowledge {
-            world
-                .known
-                .entry(patch.actor)
-                .or_default()
+            rows.entry(patch.actor)
+                .or_insert_with(|| knowledge(store, patch.actor).cloned().unwrap_or_default())
+                .armies
                 .insert(self.id, patch.after);
         }
-        Ok(self.effects)
+        for (actor, row) in rows {
+            admitted.protect::<Knowledge>(game_ecs::StableId(actor.0));
+            batch.insert(game_ecs::StableId(actor.0), row);
+        }
+        let guard = self.reads.bind(store, batch, &admitted)?;
+        Ok((guard, self.effects))
     }
-    fn knowledge<'a>(&'a mut self, world: &World, actor: PersonId) -> &'a mut ArmyKnowledge {
+    pub fn commit(self, store: &mut game_ecs::Store) -> Result<Vec<Effect>, Error> {
+        let mut batch = game_ecs::Batch::new();
+        let (guard, effects) = self.stage(store, &mut batch)?;
+        guard.validate(store, &batch)?;
+        store.apply_batch(batch)?;
+        Ok(effects)
+    }
+    fn knowledge<'a>(&'a mut self, world: &Kernel<'_>, actor: PersonId) -> &'a mut ArmyKnowledge {
         let index = if let Some(index) = self.knowledge.iter().position(|p| p.actor == actor) {
             index
         } else {
             let before = world.view(actor, self.id).cloned();
+            self.reads
+                .read::<Knowledge>(world.store, game_ecs::StableId(actor.0));
             self.knowledge.push(KnowledgePatch {
                 actor,
-                after: before.clone().unwrap_or_default(),
-                before,
+                after: before.unwrap_or_default(),
             });
             self.knowledge.len() - 1
         };
         &mut self.knowledge[index].after
     }
 }
-impl World {
-    pub fn view(&self, actor: PersonId, army: ArmyId) -> Option<&ArmyKnowledge> {
-        self.known.get(&actor)?.get(&army)
+impl<'a> Kernel<'a> {
+    fn reads(&self, id: ArmyId) -> game_ecs::ReadSet {
+        let mut reads = game_ecs::ReadSet::new();
+        reads.read::<Army>(self.store, game_ecs::StableId(id.0));
+        reads
+    }
+
+    pub fn view(&self, actor: PersonId, army: ArmyId) -> Option<&'a ArmyKnowledge> {
+        knowledge(self.store, actor)?.armies.get(&army)
     }
     pub fn views(&self, actor: PersonId) -> Vec<ArmyView> {
-        self.known
-            .get(&actor)
+        knowledge(self.store, actor)
+            .map(|k| &k.armies)
             .into_iter()
             .flat_map(|armies| armies.iter())
             .map(|(id, k)| ArmyView {
@@ -92,8 +117,8 @@ impl World {
             .collect()
     }
     pub fn commanding_army(&self, mission: MissionId) -> Option<ArmyId> {
-        self.armies
-            .values()
+        armies(self.store)
+            .map(|(_, a)| a)
             .find(|a| {
                 a.disbanded_at.is_none()
                     && a.detachments
@@ -103,13 +128,12 @@ impl World {
             .map(|a| a.id)
     }
     fn edit(&self, id: ArmyId) -> Result<PreparedChange, Error> {
-        let before = self.armies.get(&id).ok_or(Error::Unavailable)?.clone();
+        let before = army(self.store, id).ok_or(Error::Unavailable)?.clone();
         Ok(PreparedChange {
             id,
-            before: Some(before.clone()),
             after: before,
             knowledge: Vec::new(),
-            claims: BTreeMap::new(),
+            reads: self.reads(id),
             effects: Vec::new(),
         })
     }
@@ -123,7 +147,7 @@ impl World {
     ) -> Result<PreparedChange, Error> {
         if id.0 == 0
             || commander.0 == 0
-            || self.armies.contains_key(&id)
+            || army(self.store, id).is_some()
             || missions.is_empty()
             || missions.len() > MAX_DETACHMENTS
         {
@@ -174,17 +198,24 @@ impl World {
         };
         Ok(PreparedChange {
             id,
-            before: None,
             after: army,
             knowledge: vec![KnowledgePatch {
                 actor: commander,
-                before: self.view(commander, id).cloned(),
                 after: known,
             }],
-            claims: missions
-                .iter()
-                .map(|m| (*m, self.commanding_army(*m)))
-                .collect(),
+            reads: {
+                let mut reads = self.reads(id);
+                reads.entity(self.store, game_ecs::StableId(id.0));
+                let scope = missions.clone();
+                reads.membership::<Army>(self.store, move |_, a| {
+                    a.disbanded_at.is_none()
+                        && a.detachments
+                            .iter()
+                            .any(|(m, d)| scope.contains(m) && d.participation.active())
+                });
+                reads.read::<Knowledge>(self.store, game_ecs::StableId(commander.0));
+                reads
+            },
             effects: Vec::new(),
         })
     }
@@ -281,7 +312,12 @@ impl World {
         {
             return Err(Error::Unavailable);
         }
-        plan.claims.insert(mission, None);
+        plan.reads.membership::<Army>(self.store, move |_, a| {
+            a.disbanded_at.is_none()
+                && a.detachments
+                    .get(&mission)
+                    .is_some_and(|d| d.participation.active())
+        });
         d.participation = if accept {
             Participation::Accepted
         } else {
@@ -309,6 +345,8 @@ impl World {
             .detachments
             .get(&mission)
             .ok_or(Error::Unavailable)?;
+        plan.reads
+            .read::<Knowledge>(self.store, game_ecs::StableId(d.leader.0));
         let sender = self
             .view(d.leader, id)
             .and_then(|k| k.detachments.get(&mission))
@@ -387,6 +425,8 @@ impl World {
             expires,
         } = proposal;
         let mut plan = self.edit(id)?;
+        plan.reads
+            .membership::<Army>(self.store, move |_, a| a.orders.contains_key(&order));
         if actor != plan.after.commander
             || plan.after.disbanded_at.is_some()
             || now < plan.after.formed_at
@@ -394,7 +434,9 @@ impl World {
             || expires <= now
             || missions.is_empty()
             || missions.len() > MAX_DETACHMENTS
-            || self.armies.values().any(|a| a.orders.contains_key(&order))
+            || armies(self.store)
+                .map(|(_, a)| a)
+                .any(|a| a.orders.contains_key(&order))
         {
             return Err(Error::Unavailable);
         }
@@ -671,6 +713,8 @@ impl World {
         now: SimTime,
     ) -> Result<PreparedChange, Error> {
         let mut plan = self.edit(id)?;
+        plan.reads
+            .read::<Knowledge>(self.store, game_ecs::StableId(receipt.speaker.0));
         let sender = self
             .view(receipt.speaker, id)
             .and_then(|k| k.orders.get(&order))
@@ -831,8 +875,8 @@ impl World {
         Ok(plan)
     }
     pub fn next_boundary(&self, now: SimTime) -> Option<SimTime> {
-        self.armies
-            .values()
+        armies(self.store)
+            .map(|(_, a)| a)
             .filter(|a| a.disbanded_at.is_none())
             .flat_map(|a| a.orders.values())
             .filter(|o| {
@@ -854,6 +898,9 @@ impl World {
         now: SimTime,
     ) -> Result<PreparedChange, Error> {
         let mut plan = self.edit(id)?;
+        let report_id = report.id;
+        plan.reads
+            .membership::<Army>(self.store, move |_, a| a.reports.contains_key(&report_id));
         let d = plan
             .after
             .detachments
@@ -872,9 +919,8 @@ impl World {
                 .companions
                 .iter()
                 .any(|c| c.observed_at > now)
-            || self
-                .armies
-                .values()
+            || armies(self.store)
+                .map(|(_, a)| a)
                 .any(|a| a.reports.contains_key(&report.id))
         {
             return Err(Error::Unavailable);
@@ -895,6 +941,8 @@ impl World {
     ) -> Result<PreparedChange, Error> {
         let mut plan = self.edit(id)?;
         let packet = plan.after.reports.get(&report).ok_or(Error::Unavailable)?;
+        plan.reads
+            .read::<Knowledge>(self.store, game_ecs::StableId(packet.speaker.0));
         if !receipt.valid(packet.speaker, receipt.listener, packet.sent_at, now)
             || self
                 .view(packet.speaker, id)

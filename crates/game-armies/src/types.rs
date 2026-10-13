@@ -96,6 +96,7 @@ pub enum OrderStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Detachment {
     pub mission: MissionId,
     pub leader: PersonId,
@@ -106,6 +107,7 @@ pub struct Detachment {
     pub explanation: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrderRecipient {
     pub leader: PersonId,
     pub status: OrderStatus,
@@ -114,6 +116,7 @@ pub struct OrderRecipient {
     pub explanation: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Order {
     pub id: ArmyOrderId,
     pub commander: PersonId,
@@ -123,6 +126,7 @@ pub struct Order {
     pub recipients: BTreeMap<MissionId, OrderRecipient>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArmyReport {
     pub id: ArmyReportId,
     pub army: ArmyId,
@@ -133,6 +137,7 @@ pub struct ArmyReport {
     pub snapshot: MissionView,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Army {
     pub id: ArmyId,
     pub commander: PersonId,
@@ -144,6 +149,7 @@ pub struct Army {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Dated<T> {
     pub value: T,
     pub observed_at: SimTime,
@@ -151,6 +157,7 @@ pub struct Dated<T> {
     pub source: KnowledgeSource,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArmyKnowledge {
     pub commander: Option<Dated<PersonId>>,
     pub disbanded_at: Option<Dated<SimTime>>,
@@ -161,24 +168,20 @@ pub struct ArmyKnowledge {
     pub reports: BTreeMap<ArmyReportId, Dated<ArmyReport>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArmyView {
     pub id: ArmyId,
     pub knowledge: ArmyKnowledge,
     pub local_engagements: Vec<LocalEngagement>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalEngagement {
     pub mission: MissionId,
     pub encounter: EncounterId,
     pub target: PersonId,
     pub observed_at: SimTime,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct World {
-    pub armies: BTreeMap<ArmyId, Army>,
-    pub known: BTreeMap<PersonId, BTreeMap<ArmyId, ArmyKnowledge>>,
-}
-
 /// Authoritative mission-owner input used only for execution validation.
 /// No copy of members, supplies or positions is retained by the army.
 #[derive(Clone, Debug)]
@@ -246,6 +249,23 @@ pub enum Effect {
         mission: MissionId,
         leader: PersonId,
         reason: Departure,
+    },
+}
+
+/// Native Mission operations selected by Army departure and command policy.
+pub enum MissionRequest<'a> {
+    Directive {
+        mission: MissionId,
+        leader: PersonId,
+        objective: &'a MissionObjective,
+    },
+    Retreat {
+        mission: MissionId,
+        leader: PersonId,
+    },
+    Leave {
+        mission: MissionId,
+        leader: PersonId,
     },
 }
 

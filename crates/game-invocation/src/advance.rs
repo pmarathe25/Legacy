@@ -1,7 +1,7 @@
 //! Sparse cost progression over person-bound components and supplied survival facts.
 use crate::*;
 use game_core::{Error, PersonId, SimTime};
-use game_ecs::{Batch, StableId, Store};
+use game_ecs::{Batch, ReadFootprint, ReadGuard, ReadSet, StableId, Store};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedAdvance {
@@ -58,7 +58,7 @@ impl PreparedAdvance {
         state: &ControlState,
         store: &Store,
         batch: &mut Batch,
-    ) -> Result<(), Error> {
+    ) -> Result<ReadGuard, Error> {
         if state.rules != self.rules
             || state.active(store) != self.active.as_ref()
             || self
@@ -68,14 +68,23 @@ impl PreparedAdvance {
         {
             return Err(Error::Unavailable);
         }
-        for (actor, _, after) in self.updates {
+        let mut reads = ReadSet::new();
+        reads.membership::<ControlSession>(store, |_, _| true);
+        for (actor, _) in sessions(store) {
+            reads.read::<ControlSession>(store, StableId(actor.0));
+        }
+        let mut admitted = ReadFootprint::new();
+        for (actor, before, after) in self.updates {
+            reads.expect_row(StableId(actor.0), Some(before));
+            admitted.protect::<Burden>(StableId(actor.0));
             batch.insert(StableId(actor.0), after);
         }
-        Ok(())
+        reads.bind(store, batch, &admitted)
     }
     pub fn commit(self, state: &ControlState, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        self.stage_into(state, store, &mut batch)?;
+        let receipt = self.stage_into(state, store, &mut batch)?;
+        receipt.validate(store, &batch)?;
         store.apply_batch(batch)
     }
 }

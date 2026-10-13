@@ -147,6 +147,7 @@ fn priority_is_hunger_then_rest_then_hostility_then_care_then_work() {
         },
     );
     f.people.push(ControllerPerson {
+        alive: true,
         person: PersonId(2),
         contact: true,
     });
@@ -208,14 +209,17 @@ fn the_first_hostile_intent_keeps_its_preference_when_physical_contact_fails() {
     }
     f.people = vec![
         ControllerPerson {
+            alive: true,
             person: PersonId(42),
             contact: true,
         },
         ControllerPerson {
+            alive: true,
             person: PersonId(2),
             contact: false,
         },
         ControllerPerson {
+            alive: true,
             person: PersonId(3),
             contact: true,
         },
@@ -415,4 +419,273 @@ fn accepted_control_rotates_lives_and_drives_character_memory_without_the_assemb
         input.hunger = 40000;
         assert_eq!(choose_controller_action(input), act(expected_action));
     }
+}
+
+#[test]
+fn canonical_controller_entry_joins_private_archives_and_restores_identical_turns() {
+    use crate::memory_start::tests::{ACTOR, LIFE, fixture};
+    let (runtime, mut whole, memory) = fixture();
+    let second = PersonId(5);
+    let mut comfortable = archive::<u8>(&whole, LIFE).unwrap().clone();
+    comfortable.person = second;
+    comfortable.mind.dream = Aspiration::Comfort;
+    whole
+        .insert_or_spawn(game_ecs::StableId(second.0), comfortable)
+        .unwrap();
+    let active = session_mut(&mut whole, ACTOR)
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap();
+    active.lives.insert(second);
+    active.episode = Some(Episode {
+        actor: ACTOR,
+        starts: SimTime(0),
+        ends: SimTime(100_000),
+    });
+    let mut restored =
+        game_ecs::Store::restore(whole.schema().clone(), whole.snapshot().unwrap()).unwrap();
+    let facts = ControllerFacts {
+        in_combat: false,
+        independent: true,
+        area: Some(AreaId(3)),
+        activity: ControllerActivity::Other,
+        hunger: 120_000,
+        meal_relief: 120_000,
+        fatigue: 0,
+        fatigue_limit: 100_000,
+    };
+    for tick in 0..3 {
+        let now = SimTime(tick * runtime.control.rules.controller_quantum.0);
+        for store in [&mut whole, &mut restored] {
+            let opening = store.snapshot().unwrap();
+            let prepared = runtime
+                .control
+                .prepare_controller(store, now, true)
+                .unwrap()
+                .unwrap();
+            let decision = runtime
+                .controller_decision::<u8>(store, &prepared, facts, [])
+                .unwrap();
+            // Current stocks are empty; only the selected archive remembers this food.
+            assert_eq!(
+                decision,
+                act(ControllerAction::Eat {
+                    source: InventoryId(2)
+                })
+            );
+            let admission = AdmissionFacts {
+                actor: ACTOR,
+                now,
+                current: Some(ACTOR),
+                alive: true,
+                health: 100_000,
+                independent: true,
+                learning: 100,
+                required_learning: 100,
+                fatigue: 0,
+                fatigue_limit: 100_000,
+                archived: BTreeSet::from([LIFE, second]),
+            };
+            for _ in 0..3 {
+                let view = runtime
+                    .state_view::<u8>(store, &admission, &memory)
+                    .unwrap();
+                assert!(!view.player_control);
+                assert_eq!(view.active_lives, admission.archived);
+            }
+            assert_eq!(store.snapshot().unwrap(), opening);
+            prepared.commit(&runtime.control, store).unwrap();
+            let subject = runtime.controller_mind::<u8>(store, ACTOR).unwrap();
+            assert_eq!(
+                subject.dream,
+                if tick % 2 == 0 {
+                    Aspiration::Independence
+                } else {
+                    Aspiration::Comfort
+                }
+            );
+        }
+        assert_eq!(whole, restored);
+    }
+    let prepared = runtime
+        .control
+        .prepare_controller(&whole, SimTime(90_000), true)
+        .unwrap()
+        .unwrap();
+    session_mut(&mut whole, ACTOR)
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .next_controller = SimTime(100_000);
+    let before = whole.clone();
+    assert!(
+        runtime
+            .controller_decision::<u8>(&whole, &prepared, facts, [])
+            .is_err()
+    );
+    assert_eq!(whole, before);
+}
+
+#[test]
+fn prepared_controller_review_guards_real_body_and_selected_memory_before_publication() {
+    use crate::memory_start::tests::{ACTOR, LIFE, fixture};
+    use game_ecs::{Batch, ReadSet, StableId, Store};
+    struct Source<'a>(&'a Store);
+    impl ControllerFactsSource for Source<'_> {
+        fn facts(&self, actor: PersonId) -> Result<ControllerFacts, Error> {
+            let body = game_physiology::body(self.0, actor).ok_or(Error::Unavailable)?;
+            Ok(ControllerFacts {
+                in_combat: false,
+                independent: true,
+                area: Some(AreaId(3)),
+                activity: ControllerActivity::Other,
+                hunger: body.vitals.hunger,
+                meal_relief: 120_000,
+                fatigue: body.vitals.fatigue,
+                fatigue_limit: 100_000,
+            })
+        }
+        fn protect(&self, store: &Store, actor: PersonId, reads: &mut ReadSet) {
+            reads.read::<game_physiology::Body>(store, StableId(actor.0));
+        }
+    }
+    let (runtime, mut store, _) = fixture();
+    game_physiology::insert_body(
+        &mut store,
+        ACTOR,
+        game_physiology::Body {
+            vitals: Vitals {
+                hunger: 120_000,
+                fatigue: 0,
+                health: 100_000,
+                alive: true,
+            },
+            fatigue_remainder: 0,
+            health_remainder: 0,
+        },
+    )
+    .unwrap();
+    session_mut(&mut store, ACTOR)
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .episode = Some(Episode {
+        actor: ACTOR,
+        starts: SimTime(0),
+        ends: SimTime(100_000),
+    });
+    for attack in 0..4 {
+        let control = runtime
+            .control
+            .prepare_controller(&store, SimTime(0), true)
+            .unwrap()
+            .unwrap();
+        let review = runtime
+            .prepare_controller_review::<u8>(&store, control, &Source(&store), [])
+            .unwrap();
+        assert_eq!(
+            review.decision(),
+            act(ControllerAction::Eat {
+                source: InventoryId(2)
+            })
+        );
+        let before = store.clone();
+        let mut next_id = 100;
+        let mut published = vec![];
+        let mut batch = Batch::new();
+        let receipt = review
+            .stage_into(&runtime.control, &store, &Source(&store), &mut batch)
+            .unwrap();
+        match attack {
+            0 => {
+                batch.remove::<game_physiology::Body>(StableId(ACTOR.0));
+            }
+            1 => {
+                batch.remove::<game_characters::decisions::Stocks>(StableId(ACTOR.0));
+            }
+            2 => {
+                batch.remove::<PastLife<u8>>(StableId(LIFE.0));
+            }
+            _ => {
+                batch.insert(
+                    StableId(ACTOR.0),
+                    game_characters::decisions::mind::<u8>(&store, ACTOR)
+                        .unwrap()
+                        .clone(),
+                );
+            }
+        }
+        let result = (|| -> Result<(), Error> {
+            receipt.validate_batch(&runtime.control, &store, &batch)?;
+            store.apply_batch(batch)?;
+            next_id += 1;
+            published.push(receipt.decision);
+            Ok(())
+        })();
+        assert!(result.is_err());
+        assert_eq!(store, before);
+        assert_eq!(next_id, 100);
+        assert!(published.is_empty());
+    }
+    let mut restored = Store::restore(store.schema().clone(), store.snapshot().unwrap()).unwrap();
+    for candidate in [&mut store, &mut restored] {
+        let control = runtime
+            .control
+            .prepare_controller(candidate, SimTime(0), true)
+            .unwrap()
+            .unwrap();
+        let review = runtime
+            .prepare_controller_review::<u8>(candidate, control, &Source(candidate), [])
+            .unwrap();
+        let mut batch = Batch::new();
+        let receipt = review
+            .stage_into(&runtime.control, candidate, &Source(candidate), &mut batch)
+            .unwrap();
+        receipt
+            .validate_batch(&runtime.control, candidate, &batch)
+            .unwrap();
+        candidate.apply_batch(batch).unwrap();
+        assert_eq!(
+            runtime.control.active(candidate).unwrap().dominant,
+            Some(LIFE)
+        );
+    }
+    assert_eq!(store, restored);
+}
+
+#[test]
+fn invocation_filters_dead_local_bodies_before_selecting_the_archived_hostility() {
+    let mut f = Fixture::new();
+    f.personality.aggression = 800;
+    f.personality.risk_tolerance = 600;
+    for actor in [PersonId(2), PersonId(3)] {
+        f.relationships.insert(
+            actor,
+            Relationship {
+                trust: -1,
+                affection: 0,
+            },
+        );
+    }
+    f.people = vec![
+        ControllerPerson {
+            person: PersonId(2),
+            alive: false,
+            contact: true,
+        },
+        ControllerPerson {
+            person: PersonId(3),
+            alive: true,
+            contact: true,
+        },
+    ];
+    assert_eq!(
+        choose_controller_action(f.input()),
+        act(ControllerAction::Engage {
+            target: PersonId(3)
+        })
+    );
 }

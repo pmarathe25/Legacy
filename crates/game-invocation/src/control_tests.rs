@@ -232,7 +232,8 @@ fn accepted_episode_has_no_dismissal_reconsent_or_protective_cost_cap_and_select
         BTreeSet::from([OLD, PersonId(12)]),
     );
     burden_mut(&mut store, ACTOR).unwrap().burden = state.rules.loss_threshold;
-    let mut id = 10;
+    // Warning records have exclusive global identities, separate from ACTOR.
+    let mut id = 100;
     state
         .prepare_review(&store, &f, Some(WarningId(id)))
         .unwrap()

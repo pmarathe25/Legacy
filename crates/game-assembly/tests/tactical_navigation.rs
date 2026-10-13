@@ -9,6 +9,33 @@ fn submit(sim: &mut Simulation, command: Command) {
     })
     .unwrap();
 }
+fn saved_component<T: serde::de::DeserializeOwned>(
+    state: &CanonicalSnapshot,
+    key: &str,
+    id: u64,
+) -> T {
+    let row = state.components.columns[key]
+        .iter()
+        .find(|row| row.entity == id)
+        .expect("authored component exists");
+    serde_json::from_str(row.value.get()).unwrap()
+}
+fn replace_saved_component<T: serde::Serialize>(
+    state: &mut CanonicalSnapshot,
+    key: &str,
+    id: u64,
+    value: &T,
+) {
+    let row = state
+        .components
+        .columns
+        .get_mut(key)
+        .unwrap()
+        .iter_mut()
+        .find(|row| row.entity == id)
+        .expect("authored component exists");
+    row.value = serde_json::value::to_raw_value(value).unwrap();
+}
 fn author_positions(
     sim: &Simulation,
     id: EncounterId,
@@ -17,9 +44,9 @@ fn author_positions(
 ) -> Simulation {
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
-    let combat = state.state.combat.as_mut().unwrap();
-    let encounter = combat.encounters.get_mut(&id).unwrap();
-    let map = combat.maps.get_mut(&encounter.area).unwrap();
+    let mut encounter: game_conflict::Encounter =
+        saved_component(&state, "conflict/encounter", id.0);
+    let mut map: game_conflict::Map = saved_component(&state, "conflict/map", encounter.map.0);
     map.obstacles = vec![ObstacleView {
         index: 0,
         minimum: Point { x: 9_000, y: 4_000 },
@@ -42,6 +69,8 @@ fn author_positions(
             .known
             .insert(positions[0].0, positions[0].1);
     }
+    replace_saved_component(&mut state, "conflict/map", map.id.0, &map);
+    replace_saved_component(&mut state, "conflict/encounter", id.0, &encounter);
     envelope["state"] = serde_json::to_value(state).unwrap();
     Simulation::load(
         &serde_json::to_vec(&envelope).unwrap(),
@@ -52,7 +81,7 @@ fn author_positions(
 fn hidden_battle(goal: Point, remembered: bool) -> (Simulation, EncounterId, PersonId, PersonId) {
     let mut sim = Simulation::combat_fixture(1, Execution::default()).unwrap();
     let ruler = sim.canonical_state().state.ruler;
-    let npc = sim.canonical_state().state.people[3].id;
+    let npc = sim.canonical_state().person_at(3).id;
     submit(&mut sim, Command::Engage { target: npc });
     let id = sim.observe().combat.unwrap().encounter;
     sim = author_positions(
@@ -92,24 +121,19 @@ fn npc_pursues_a_remembered_position_around_a_wall_and_attacks_only_in_actual_re
         },
         true,
     );
-    let start = sim
-        .canonical_state()
-        .state
-        .combat
-        .as_ref()
+    let start = game_conflict::encounter(sim.canonical_state().components, id)
         .unwrap()
-        .encounters[&id]
         .fighters[&npc]
         .position;
     let mut attacked = false;
     for _ in 0..10 {
         wait(&mut sim, id);
         let combat = sim.canonical_state().state.combat.as_ref().unwrap();
-        let encounter = &combat.encounters[&id];
+        let encounter = game_conflict::encounter(sim.canonical_state().components, id).unwrap();
         let from = encounter.fighters[&npc].position;
         let target = encounter.fighters[&ruler].position;
         if sim.canonical_state().events.iter().any(|e| matches!(e.event, EventKind::Struck { actor, target, .. } if actor == npc && target == ruler)) {
-            assert!(combat.maps[&encounter.area].clear(from, target));
+            assert!(game_conflict::map(sim.canonical_state().components,encounter.map).unwrap().clear(from,target));
             assert!(game_conflict::distance(from, target) <= u128::from(combat.rules.reach).pow(2));
             attacked = true;
             break;
@@ -126,12 +150,8 @@ fn npc_pursues_a_remembered_position_around_a_wall_and_attacks_only_in_actual_re
             > 2
     );
     assert_ne!(
-        sim.canonical_state()
-            .state
-            .combat
-            .as_ref()
+        game_conflict::encounter(sim.canonical_state().components, id)
             .unwrap()
-            .encounters[&id]
             .fighters[&npc]
             .position,
         start
@@ -156,21 +176,11 @@ fn blind_search_does_not_depend_on_hidden_enemy_coordinates_and_survives_save_wo
     );
     wait(&mut first, id);
     wait(&mut second, second_id);
-    let one = &first
-        .canonical_state()
-        .state
-        .combat
-        .as_ref()
+    let one = &game_conflict::encounter(first.canonical_state().components, id)
         .unwrap()
-        .encounters[&id]
         .fighters[&npc];
-    let two = &second
-        .canonical_state()
-        .state
-        .combat
-        .as_ref()
+    let two = &game_conflict::encounter(second.canonical_state().components, second_id)
         .unwrap()
-        .encounters[&second_id]
         .fighters[&second_npc];
     assert_eq!(one.position, two.position);
     assert_eq!(one.search, two.search);
@@ -212,25 +222,16 @@ fn an_observed_empty_last_position_does_not_pull_search_back_each_round() {
     );
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
-    state
-        .state
-        .combat
-        .as_mut()
-        .unwrap()
-        .encounters
-        .get_mut(&id)
-        .unwrap()
-        .fighters
-        .get_mut(&npc)
-        .unwrap()
-        .known
-        .insert(
-            ruler,
-            Point {
-                x: 2_000,
-                y: 10_000,
-            },
-        );
+    let mut encounter: game_conflict::Encounter =
+        saved_component(&state, "conflict/encounter", id.0);
+    encounter.fighters.get_mut(&npc).unwrap().known.insert(
+        ruler,
+        Point {
+            x: 2_000,
+            y: 10_000,
+        },
+    );
+    replace_saved_component(&mut state, "conflict/encounter", id.0, &encounter);
     envelope["state"] = serde_json::to_value(state).unwrap();
     let mut sim = Simulation::load(
         &serde_json::to_vec(&envelope).unwrap(),
@@ -238,26 +239,16 @@ fn an_observed_empty_last_position_does_not_pull_search_back_each_round() {
     )
     .unwrap();
     wait(&mut sim, id);
-    let first = &sim
-        .canonical_state()
-        .state
-        .combat
-        .as_ref()
+    let first = &game_conflict::encounter(sim.canonical_state().components, id)
         .unwrap()
-        .encounters[&id]
         .fighters[&npc];
     let goal = first.search.goal;
     let position = first.position;
     assert!(!first.known.contains_key(&ruler));
     sim.advance(SimDuration(6_000)).unwrap();
     wait(&mut sim, id);
-    let second = &sim
-        .canonical_state()
-        .state
-        .combat
-        .as_ref()
+    let second = &game_conflict::encounter(sim.canonical_state().components, id)
         .unwrap()
-        .encounters[&id]
         .fighters[&npc];
     assert_eq!(second.search.goal, goal);
     assert!(
@@ -270,8 +261,8 @@ fn an_observed_empty_last_position_does_not_pull_search_back_each_round() {
 fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() {
     let mut sim = Simulation::mission_fixture(29, Execution::default()).unwrap();
     let ruler = sim.canonical_state().state.ruler;
-    let leader = sim.canonical_state().state.people[3].id;
-    let enemy = sim.canonical_state().state.people[6].id;
+    let leader = sim.canonical_state().person_at(3).id;
+    let enemy = sim.canonical_state().person_at(6).id;
     let home = sim.canonical_state().state.areas[0].id;
     let destination = sim.canonical_state().state.areas[2].id;
     submit(
@@ -338,13 +329,8 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
         false,
     );
     wait(&mut sim, id);
-    let companion = &sim
-        .canonical_state()
-        .state
-        .combat
-        .as_ref()
+    let companion = &game_conflict::encounter(sim.canonical_state().components, id)
         .unwrap()
-        .encounters[&id]
         .fighters[&leader];
     assert_ne!(
         companion.position,
@@ -368,14 +354,14 @@ fn a_recruited_companion_searches_instead_of_stalling_without_visible_enemies() 
 fn a_nearby_exit_cannot_be_used_through_an_intact_wall() {
     let mut sim = Simulation::combat_fixture(1, Execution::default()).unwrap();
     let ruler = sim.canonical_state().state.ruler;
-    let npc = sim.canonical_state().state.people[3].id;
+    let npc = sim.canonical_state().person_at(3).id;
     submit(&mut sim, Command::Engage { target: npc });
     let id = sim.observe().combat.unwrap().encounter;
     let mut envelope: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
     let mut state: CanonicalSnapshot = serde_json::from_value(envelope["state"].take()).unwrap();
-    let combat = state.state.combat.as_mut().unwrap();
-    let encounter = combat.encounters.get_mut(&id).unwrap();
-    let map = combat.maps.get_mut(&encounter.area).unwrap();
+    let mut encounter: game_conflict::Encounter =
+        saved_component(&state, "conflict/encounter", id.0);
+    let mut map: game_conflict::Map = saved_component(&state, "conflict/map", encounter.map.0);
     let destination = map.exits[0].0;
     map.exits[0].1 = Point { x: 0, y: 10_000 };
     map.obstacles = vec![ObstacleView {
@@ -398,6 +384,8 @@ fn a_nearby_exit_cannot_be_used_through_an_intact_wall() {
     for fighter in encounter.fighters.values_mut() {
         fighter.known.clear();
     }
+    replace_saved_component(&mut state, "conflict/map", map.id.0, &map);
+    replace_saved_component(&mut state, "conflict/encounter", id.0, &encounter);
     envelope["state"] = serde_json::to_value(state).unwrap();
     sim = Simulation::load(
         &serde_json::to_vec(&envelope).unwrap(),

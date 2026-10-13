@@ -54,18 +54,14 @@ impl PreparedSearch {
             after,
         }
     }
-    pub fn commit(self, world: &mut World) -> Result<(), Error> {
-        let map = world
-            .encounters
-            .get(&self.encounter)
-            .and_then(|e| world.map(e.map))
+    pub fn commit(self, store: &mut game_ecs::Store) -> Result<(), Error> {
+        let map = encounter(store, self.encounter)
+            .and_then(|e| crate::map(store, e.map))
             .ok_or(Error::Unavailable)?;
         if !self.after.valid(map) {
             return Err(Error::Unavailable);
         }
-        let fighter = world
-            .encounters
-            .get_mut(&self.encounter)
+        let fighter = encounter_mut(store, self.encounter)
             .and_then(|e| e.fighters.get_mut(&self.actor))
             .ok_or(Error::Unavailable)?;
         if fighter.position != self.position || fighter.search != self.before {

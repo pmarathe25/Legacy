@@ -71,3 +71,15 @@ impl Runtime {
         Ok(plan)
     }
 }
+
+impl Runtime {
+    pub fn army_retreat_objective(
+        &self,
+        store: &Store,
+        id: MissionId,
+    ) -> Result<MissionObjective, Error> {
+        Ok(MissionObjective::Visit {
+            destination: mission(store, id).ok_or(Error::Unavailable)?.proposal.home,
+        })
+    }
+}

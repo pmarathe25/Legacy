@@ -17,13 +17,8 @@ fn learned() -> Simulation {
     let rules = &state.state.development.as_ref().unwrap().rules;
     let child = life.born.0 + rules.infancy.0;
     let adult = life.born.0 + rules.adulthood.0;
-    let teacher = *state
-        .state
-        .lineage
-        .as_ref()
-        .unwrap()
-        .guardians
-        .keys()
+    let teacher = game_lineage::guardians(state.components)
+        .map(|(id, _)| id)
         .next()
         .unwrap();
     sim.advance(SimDuration(child - sim.time().0)).unwrap();

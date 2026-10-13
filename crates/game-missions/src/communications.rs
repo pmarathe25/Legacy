@@ -2,6 +2,26 @@
 use crate::*;
 use game_core::*;
 use game_ecs::{Batch, StableId, Store};
+/// A representation adapter supplies the pending deadline from a native
+/// activity variant; matching and cleanup are service policy.
+pub trait TalkActivityFacts<C: game_ecs::Component> {
+    fn deadline(&self, activity: &C) -> Option<SimTime>;
+}
+pub struct TalkActivityPublication {
+    runtime: Runtime,
+    guard: game_ecs::ReadGuard,
+}
+impl TalkActivityPublication {
+    pub(crate) fn new(runtime: Runtime, guard: game_ecs::ReadGuard) -> Self {
+        Self { runtime, guard }
+    }
+    pub fn validate(&self, runtime: &Runtime, store: &Store, batch: &Batch) -> Result<(), Error> {
+        if runtime != &self.runtime {
+            return Err(Error::Unavailable);
+        }
+        self.guard.validate(store, batch)
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct TalkScene {
     pub speaker_area: Option<AreaId>,
@@ -119,6 +139,7 @@ pub struct CommunicatedOrder {
     pub retreat: bool,
 }
 pub struct PreparedTalkCompletion {
+    runtime: Runtime,
     before: PendingTalk,
     pub clear: ClearTalk,
     pub order: Option<CommunicatedOrder>,
@@ -168,6 +189,7 @@ impl Runtime {
             && scene.listener_area == Some(before.area)
             && scene.active_deadline == Some(before.completes);
         let mut result = PreparedTalkCompletion {
+            runtime: self.clone(),
             clear: ClearTalk {
                 speaker,
                 completes: before.completes,
@@ -219,6 +241,42 @@ impl Runtime {
     }
 }
 impl PreparedTalkCompletion {
+    pub fn stage_into_with_activities<C: game_ecs::Component>(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        facts: &impl TalkActivityFacts<C>,
+        idle: C,
+        batch: &mut Batch,
+    ) -> Result<TalkActivityPublication, Error> {
+        if runtime != &self.runtime {
+            return Err(Error::Unavailable);
+        }
+        let id = StableId(self.before.speaker.0);
+        let mut reads = game_ecs::ReadSet::new();
+        reads.expect_row(id, Some(self.before.clone()));
+        let activity = reads.read::<C>(store, id);
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<PendingTalk>(id);
+        if activity.is_some_and(|activity| facts.deadline(activity) == Some(self.before.completes))
+        {
+            if batch.touches::<C>(id) {
+                return Err(Error::Unavailable);
+            }
+            batch.insert(id, idle);
+            admitted.protect::<C>(id);
+        }
+        if let Some(report) = &self.report {
+            report.add_reads(store, &mut reads);
+            admitted.protect::<Knowledge>(StableId(report.observer().0));
+        }
+        let expected_runtime = self.runtime.clone();
+        self.stage_into(store, batch)?;
+        Ok(TalkActivityPublication::new(
+            expected_runtime,
+            reads.bind(store, batch, &admitted)?,
+        ))
+    }
     pub fn stage_into(self, store: &Store, batch: &mut Batch) -> Result<(), Error> {
         if talk(store, self.before.speaker) != Some(&self.before)
             || batch.touches::<PendingTalk>(StableId(self.before.speaker.0))

@@ -10,9 +10,7 @@ fn autonomous_member_collects_real_supplies_then_completes_the_route_across_save
     let mut serial = Simulation::mission_fixture(129, Execution::default()).unwrap();
     let people = serial
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .map(|p| p.id)
         .collect::<Vec<_>>();
     for person in &people {
@@ -24,11 +22,11 @@ fn autonomous_member_collects_real_supplies_then_completes_the_route_across_save
             .unwrap();
     }
     let state = serial.canonical_state();
-    let leader = state.state.people[5].id;
+    let leader = state.person_at(5).id;
     let ruler = state.state.ruler;
     let home = state.state.areas[0].id;
     let forest = state.state.areas[2].id;
-    let cargo = state.state.people[5].inventory;
+    let cargo = state.person_at(5).inventory;
     let food = game_cargo::inventories(state.components)
         .map(|(_, row)| row)
         .find(|stock| {

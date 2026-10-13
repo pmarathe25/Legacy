@@ -1,7 +1,7 @@
 //! Invocation selects and admits memory work from narrowly supplied physical facts.
 use crate::*;
 use game_core::*;
-use game_ecs::{Batch, Component, StableId, Store};
+use game_ecs::{Batch, Component, ReadFootprint, ReadGuard, ReadSet, StableId, Store};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryPerson {
@@ -51,13 +51,17 @@ pub struct PreparedMemoryStart {
     action: MemoryAction,
     material: Option<game_cargo::PreparedConsumptions>,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MemoryReplacement {
     actor: PersonId,
+    reads: ReadGuard,
 }
 impl MemoryReplacement {
     pub fn actor(&self) -> PersonId {
         self.actor
+    }
+    pub fn validate_batch(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.reads.validate(store, batch)
     }
 }
 impl PreparedMemoryStart {
@@ -69,9 +73,43 @@ impl PreparedMemoryStart {
         now: SimTime,
         batch: &mut Batch,
     ) -> Result<(MemoryAction, MemoryReplacement), Error> {
+        let mut reads = ReadSet::new();
+        let mut admitted = ReadFootprint::new();
+        let actor = self.action.actor;
+        reads.read::<MemoryAction>(store, StableId(actor.0));
+        admitted.protect::<MemoryAction>(StableId(actor.0));
+        reads.membership::<ControlSession>(store, |_, _| true);
+        for (actor, _) in sessions(store) {
+            reads.read::<ControlSession>(store, StableId(actor.0));
+        }
+        for (participant, _) in self.action.starting_participants() {
+            reads.read::<Location>(store, StableId(participant.0));
+        }
+        match &self.action.work {
+            MemoryWork::Write {
+                content,
+                material,
+                tool,
+            } => {
+                reads.read::<PastLife<A>>(store, StableId(content.life().0));
+                reads.read::<game_cargo::Inventory>(store, StableId(material.0));
+                reads.read::<game_cargo::Inventory>(store, StableId(tool.0));
+                admitted.protect::<game_cargo::Inventory>(StableId(material.0));
+            }
+            MemoryWork::Read { record: id } | MemoryWork::Move { record: id, .. } => {
+                if let Some(record) = reads.read::<Record>(store, StableId(id.0)) {
+                    reads.read::<game_cargo::Inventory>(store, StableId(record.inventory.0));
+                }
+            }
+            MemoryWork::Teach { content, recipient } => {
+                reads.read::<PastLife<A>>(store, StableId(content.life().0));
+                reads.read::<game_characters::decisions::Mind<A>>(store, StableId(recipient.0));
+            }
+        }
         let action = self.stage_into::<A>(runtime, store, facts, now, batch)?;
         let replacement = MemoryReplacement {
             actor: action.actor,
+            reads: reads.bind(store, batch, &admitted)?,
         };
         Ok((action, replacement))
     }

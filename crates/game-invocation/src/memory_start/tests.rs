@@ -48,6 +48,7 @@ pub(crate) fn fixture() -> (Runtime, Store, Facts) {
     register_components(&mut schema).unwrap();
     register_memory_components::<u8>(&mut schema).unwrap();
     game_cargo::register_components(&mut schema).unwrap();
+    game_physiology::register_components(&mut schema).unwrap();
     game_characters::decisions::register_minds::<u8>(&mut schema).unwrap();
     schema
         .register::<u64>("test/rejected", |value| {
@@ -433,15 +434,107 @@ fn typed_staged_replacement_preserves_native_work_and_rejects_foreign_removal() 
         let participants = ending
             .stage_into_composed(&runtime, &store, Some(&replacement), &mut batch)
             .unwrap();
-        assert_eq!(participants, vec![ACTOR, PersonId(11)]);
+        assert_eq!(participants.participants, vec![ACTOR, PersonId(11)]);
         if foreign_removal {
             batch.remove::<MemoryAction>(StableId(ACTOR.0));
+            assert!(participants.validate_batch(&store, &batch).is_err());
             assert!(store.validate_batch(&batch).is_err());
             assert_eq!(store, before);
         } else {
+            participants.validate_batch(&store, &batch).unwrap();
             store.apply_batch(batch).unwrap();
             assert_eq!(memory_action(&store, ACTOR), Some(&action));
             store = before;
         }
     }
+}
+
+#[test]
+fn start_replacement_protects_native_archive_tool_and_material_through_final_staging() {
+    let (runtime, store, facts) = fixture();
+    for attack in 0..3 {
+        let plan = runtime
+            .prepare_memory_start::<u8>(&store, &facts, ACTOR, &request(), SimTime(0))
+            .unwrap();
+        let mut batch = Batch::new();
+        let (_, replacement) = plan
+            .stage_into_with_replacement::<u8>(&runtime, &store, &facts, SimTime(0), &mut batch)
+            .unwrap();
+        match attack {
+            0 => batch.remove::<PastLife<u8>>(StableId(LIFE.0)),
+            1 => batch.remove::<game_cargo::Inventory>(StableId(TOOL.0)),
+            _ => batch.remove::<game_cargo::Inventory>(StableId(MATERIAL.0)),
+        };
+        assert!(replacement.validate_batch(&store, &batch).is_err());
+        assert!(memory_action(&store, ACTOR).is_none());
+        assert_eq!(
+            game_cargo::inventory(&store, MATERIAL).unwrap().quantity,
+            Quantity(2000)
+        );
+    }
+}
+
+#[test]
+fn composed_ending_retains_only_opaque_replacement_permission_through_final_staging() {
+    let (runtime, mut store, facts) = fixture();
+    let teaching = InvocationAction::TeachMemory {
+        life: LIFE,
+        inventory: InventoryId(2),
+        recipient: PersonId(11),
+    };
+    let mut batch = Batch::new();
+    runtime
+        .prepare_memory_start::<u8>(&store, &facts, ACTOR, &teaching, SimTime(0))
+        .unwrap()
+        .stage_into::<u8>(&runtime, &store, &facts, SimTime(0), &mut batch)
+        .unwrap();
+    store.apply_batch(batch).unwrap();
+    let previous = memory_action(&store, ACTOR).unwrap().clone();
+    for attack in 0..3 {
+        let ending = runtime.prepare_memory_ending(&store, &[ACTOR, PersonId(11)]);
+        let plan = runtime
+            .prepare_memory_start::<u8>(&store, &facts, ACTOR, &request(), SimTime(1))
+            .unwrap();
+        let before = store.clone();
+        let mut batch = Batch::new();
+        let (_, replacement) = plan
+            .stage_into_with_replacement::<u8>(&runtime, &store, &facts, SimTime(1), &mut batch)
+            .unwrap();
+        let receipt = ending
+            .stage_into_composed(&runtime, &store, Some(&replacement), &mut batch)
+            .unwrap();
+        match attack {
+            0 => {
+                let mut foreign = previous.clone();
+                foreign.actor = PersonId(12);
+                batch.insert(StableId(12), foreign);
+            }
+            1 => {
+                batch.remove::<game_cargo::Inventory>(StableId(MATERIAL.0));
+            }
+            _ => {
+                batch.insert(StableId(ACTOR.0), previous.clone());
+            }
+        }
+        assert!(receipt.validate_batch(&store, &batch).is_err());
+        assert_eq!(store, before);
+    }
+    let ending = runtime.prepare_memory_ending(&store, &[ACTOR, PersonId(11)]);
+    let plan = runtime
+        .prepare_memory_start::<u8>(&store, &facts, ACTOR, &request(), SimTime(1))
+        .unwrap();
+    let mut batch = Batch::new();
+    let (replacement_action, replacement) = plan
+        .stage_into_with_replacement::<u8>(&runtime, &store, &facts, SimTime(1), &mut batch)
+        .unwrap();
+    let receipt = ending
+        .stage_into_composed(&runtime, &store, Some(&replacement), &mut batch)
+        .unwrap();
+    receipt.validate_batch(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert_eq!(memory_action(&store, ACTOR), Some(&replacement_action));
+    assert_eq!(
+        game_cargo::inventory(&store, MATERIAL).unwrap().quantity,
+        Quantity(1000)
+    );
 }

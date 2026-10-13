@@ -11,6 +11,7 @@ pub struct PreparedAllegiance {
 impl World {
     pub fn prepare_allegiance(
         &self,
+        store: &game_ecs::Store,
         encounter: EncounterId,
         actor: PersonId,
         opponent: PersonId,
@@ -24,16 +25,13 @@ impl World {
             before,
             team,
         };
-        prepared.check(self)?;
+        prepared.check(store)?;
         Ok(prepared)
     }
 }
 impl PreparedAllegiance {
-    pub fn check(&self, world: &World) -> Result<(), Error> {
-        let encounter = world
-            .encounters
-            .get(&self.encounter)
-            .ok_or(Error::Unavailable)?;
+    pub fn check(&self, store: &game_ecs::Store) -> Result<(), Error> {
+        let encounter = crate::encounter(store, self.encounter).ok_or(Error::Unavailable)?;
         if encounter
             .fighters
             .get(&self.actor)
@@ -47,32 +45,51 @@ impl PreparedAllegiance {
         }
         Ok(())
     }
-    pub fn commit(self, world: &mut World) -> Result<(), Error> {
-        self.check(world)?;
-        world
-            .encounters
-            .get_mut(&self.encounter)
-            .unwrap()
+    pub fn stage_into(
+        self,
+        store: &game_ecs::Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.check(store)?;
+        let id = game_ecs::StableId(self.encounter.0);
+        if batch.touches::<Encounter>(id) {
+            return Err(Error::Unavailable);
+        }
+        let mut reads = game_ecs::ReadSet::new();
+        let before = reads
+            .read::<Encounter>(store, id)
+            .ok_or(Error::Unavailable)?;
+        let mut after = before.clone();
+        after
             .fighters
             .get_mut(&self.actor)
-            .unwrap()
+            .ok_or(Error::Unavailable)?
             .team = self.team;
-        Ok(())
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<Encounter>(id);
+        batch.insert(id, after);
+        reads.bind(store, batch, &admitted)
+    }
+    pub fn commit(self, store: &mut game_ecs::Store) -> Result<(), Error> {
+        let mut batch = game_ecs::Batch::new();
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
+        store.apply_batch(batch)
     }
 }
 impl World {
     /// Actual living opposing fighters visible in this actor's current scene.
-    pub fn visible_opponents(
+    pub fn visible_opponents<'a>(
         &self,
+        store: &'a game_ecs::Store,
         encounter: EncounterId,
         actor: PersonId,
-    ) -> impl Iterator<Item = &Fighter> {
-        self.encounters
-            .get(&encounter)
+    ) -> impl Iterator<Item = &'a Fighter> + 'a {
+        crate::encounter(store, encounter)
             .into_iter()
             .flat_map(move |encounter| {
                 let fighter = encounter.fighters.get(&actor);
-                let map = self.map(encounter.map);
+                let map = map(store, encounter.map);
                 fighter.into_iter().flat_map(move |fighter| {
                     fighter.known.keys().filter_map(move |person| {
                         encounter.fighters.get(person).filter(|other| {
@@ -91,7 +108,7 @@ impl World {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    fn world() -> World {
+    fn world() -> (World, game_ecs::Store) {
         let actor = PersonId(1);
         let opponent = PersonId(2);
         let fighter = Fighter {
@@ -124,54 +141,54 @@ mod tests {
             cursor: 0,
             active: true,
         };
-        World {
-            rules: Rules {
-                encounter_limit: 128,
-                round: SimDuration(6),
-                movement: 1000,
-                reach: 1000,
-                damage: 10,
-                defence: 2,
-                incapacitation: 10,
-            },
-            profiles: BTreeMap::new(),
-            maps: BTreeMap::new(),
-            road_maps: BTreeMap::new(),
-            encounters: BTreeMap::from([(encounter.id, encounter)]),
-            captivity: BTreeMap::new(),
+        {
+            let world = World {
+                rules: Rules {
+                    encounter_limit: 128,
+                    round: SimDuration(6),
+                    movement: 1000,
+                    reach: 1000,
+                    damage: 10,
+                    defence: 2,
+                    incapacitation: 10,
+                },
+            };
+            let mut store = crate::test_store();
+            let rows: BTreeMap<EncounterId, Encounter> =
+                BTreeMap::from([(encounter.id, encounter)]);
+            for (_, row) in rows {
+                crate::insert_encounter(&mut store, row).unwrap();
+            }
+            (world, store)
         }
     }
     #[test]
     fn allegiance_receipt_checks_actual_teams_and_preserves_other_fighter_fields() {
-        let mut world = world();
+        let (world, mut store) = world();
         let plan = world
-            .prepare_allegiance(EncounterId(1), PersonId(1), PersonId(2), 0, 1)
+            .prepare_allegiance(&store, EncounterId(1), PersonId(1), PersonId(2), 0, 1)
             .unwrap();
-        world
-            .encounters
-            .get_mut(&EncounterId(1))
+        crate::encounter_mut(&mut store, EncounterId(1))
             .unwrap()
             .fighters
             .get_mut(&PersonId(1))
             .unwrap()
             .defending = true;
-        plan.commit(&mut world).unwrap();
-        let actor = &world.encounters[&EncounterId(1)].fighters[&PersonId(1)];
+        plan.commit(&mut store).unwrap();
+        let actor = &crate::encounter(&store, EncounterId(1)).unwrap().fighters[&PersonId(1)];
         assert_eq!(actor.team, 1);
         assert!(actor.defending);
         let plan = world
-            .prepare_allegiance(EncounterId(1), PersonId(1), PersonId(2), 1, 1)
+            .prepare_allegiance(&store, EncounterId(1), PersonId(1), PersonId(2), 1, 1)
             .unwrap();
-        world
-            .encounters
-            .get_mut(&EncounterId(1))
+        crate::encounter_mut(&mut store, EncounterId(1))
             .unwrap()
             .fighters
             .get_mut(&PersonId(2))
             .unwrap()
             .team = 2;
-        let before = world.clone();
-        assert!(plan.commit(&mut world).is_err());
-        assert_eq!(world, before);
+        let before = store.clone();
+        assert!(plan.commit(&mut store).is_err());
+        assert_eq!(store, before);
     }
 }

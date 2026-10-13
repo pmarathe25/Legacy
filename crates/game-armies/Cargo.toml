@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 game-core.workspace = true
+game-ecs.workspace = true
+game-conflict.workspace = true
 game-missions.workspace = true
 serde.workspace = true
 

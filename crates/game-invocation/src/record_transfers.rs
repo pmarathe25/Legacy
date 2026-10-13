@@ -1,7 +1,7 @@
 //! Whole record identity moves with physical cargo through an owner-prepared patch.
 use crate::*;
 use game_core::*;
-use game_ecs::{Batch, StableId, Store};
+use game_ecs::{Batch, ReadFootprint, ReadGuard, ReadSet, StableId, Store};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedRecordTransfer {
@@ -116,6 +116,9 @@ impl Runtime {
 }
 impl PreparedRecordTransfer {
     pub fn stage_into(self, store: &Store, batch: &mut Batch) -> Result<(), Error> {
+        self.stage_guarded_into(store, batch).map(|_| ())
+    }
+    pub fn stage_guarded_into(self, store: &Store, batch: &mut Batch) -> Result<ReadGuard, Error> {
         if source_rows(store, self.source) != self.source_rows
             || self
                 .patches
@@ -124,14 +127,21 @@ impl PreparedRecordTransfer {
         {
             return Err(Error::Unavailable);
         }
-        for (_, after) in self.patches {
+        let mut reads = ReadSet::new();
+        let source = self.source;
+        reads.membership::<Record>(store, move |_, row| row.intact && row.inventory == source);
+        let mut admitted = ReadFootprint::new();
+        for (before, after) in self.patches {
+            reads.expect_row(StableId(before.id.0), Some(before));
+            admitted.protect::<Record>(StableId(after.id.0));
             batch.insert(StableId(after.id.0), after);
         }
-        Ok(())
+        reads.bind(store, batch, &admitted)
     }
     pub fn commit(self, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        self.stage_into(store, &mut batch)?;
+        let guard = self.stage_guarded_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)
     }
 }

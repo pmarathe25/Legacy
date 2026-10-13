@@ -7,7 +7,7 @@ use crate::{Captivity, Rules};
 use game_cargo::{Inventory, InventoryLocation, inventory};
 use game_core::*;
 use game_ecs::{Batch, StableId, Store};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfinementFacts {
@@ -59,14 +59,24 @@ pub struct ConfinementReceipt {
     /// interrupts the target's ordinary activity only after successful binding.
     pub interrupt_target: bool,
 }
-#[derive(Debug)]
+impl ConfinementReceipt {
+    pub fn transport_burden(&self) -> Option<game_transport::ConfinementBurden> {
+        matches!(self.mode, ConfinementMode::Timed { .. }).then_some(
+            game_transport::ConfinementBurden {
+                captor: self.captor,
+                target: self.target,
+                quantity: self.quantity,
+            },
+        )
+    }
+}
+#[derive(Clone, Debug)]
 pub struct PreparedConfinement {
     facts: ConfinementFacts,
     source: Inventory,
-    source_after: Quantity,
-    applied: Inventory,
     captivity: Captivity,
     receipt: ConfinementReceipt,
+    context: ConfinementContext,
 }
 /// Bounded owner decision over actual facts. No recipient-consent or incoming
 /// room fact is accepted here: neither controls a forced binding's feasibility.
@@ -79,6 +89,7 @@ pub fn prepare_confinement(
     mode: ConfinementMode,
     now: SimTime,
 ) -> Result<PreparedConfinement, Error> {
+    rules.validate()?;
     let place_matches = |place: &Location| match (&context.location, place) {
         (Location::AtArea(a), Location::AtArea(b)) => a == b,
         // Contact is the transport owner's canonical exact-point fact; this
@@ -129,16 +140,6 @@ pub fn prepare_confinement(
         return Err(Error::Unavailable);
     }
     let quantity = Quantity(1000);
-    let applied = Inventory {
-        id: applied_binding,
-        location: InventoryLocation::Carried(facts.target),
-        quantity,
-        capacity: quantity,
-        access: BTreeSet::from([facts.captor]),
-        last_granted: None,
-        good: Good::Binding,
-        spoils_at: None,
-    };
     let captivity = Captivity {
         actor: facts.target,
         captor: facts.captor,
@@ -159,31 +160,44 @@ pub fn prepare_confinement(
     Ok(PreparedConfinement {
         facts,
         source: source.clone(),
-        source_after: Quantity(
-            source
-                .quantity
-                .0
-                .checked_sub(quantity.0)
-                .ok_or(Error::Overflow)?,
-        ),
-        applied,
         captivity,
         receipt,
+        context,
     })
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ValidatedConfinement {
     prepared: PreparedConfinement,
+    cargo: game_cargo::PreparedForcedSplit,
+}
+pub struct ConfinementGuard {
+    reads: game_ecs::ReadGuard,
+    cargo: game_ecs::ReadGuard,
+    receipt: ConfinementReceipt,
+    context: ConfinementContext,
+}
+impl ConfinementGuard {
+    pub fn receipt(&self) -> &ConfinementReceipt {
+        &self.receipt
+    }
+    pub fn matches_capture(
+        &self,
+        captor: PersonId,
+        target: PersonId,
+        encounter: EncounterId,
+        context: &ConfinementContext,
+    ) -> bool {
+        self.receipt.captor == captor
+            && self.receipt.target == target
+            && self.receipt.mode == ConfinementMode::Tactical { encounter }
+            && &self.context == context
+    }
+    pub fn validate(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.cargo.validate(store, batch)?;
+        self.reads.validate(store, batch)
+    }
 }
 impl PreparedConfinement {
-    fn batch(&self) -> Batch {
-        let mut batch = Batch::new();
-        let mut source = self.source.clone();
-        source.quantity = self.source_after;
-        batch.insert(StableId(source.id.0), source);
-        batch.insert(StableId(self.applied.id.0), self.applied.clone());
-        batch
-    }
     pub fn receipt(&self) -> &ConfinementReceipt {
         &self.receipt
     }
@@ -192,51 +206,74 @@ impl PreparedConfinement {
     pub fn begin(
         self,
         store: &Store,
-        custody: &BTreeMap<PersonId, Captivity>,
         fresh: &ConfinementFacts,
     ) -> Result<ValidatedConfinement, Error> {
         if fresh != &self.facts
             || inventory(store, self.source.id) != Some(&self.source)
-            || store.contains(StableId(self.applied.id.0))
-            || custody.contains_key(&self.facts.target)
-            || custody.contains_key(&self.facts.captor)
+            || store.contains(StableId(self.receipt.binding.0))
+            || crate::captivity(store, self.facts.target).is_some()
+            || crate::captivity(store, self.facts.captor).is_some()
         {
             return Err(Error::Unavailable);
         }
-        store.validate_batch(&self.batch())?;
-        Ok(ValidatedConfinement { prepared: self })
+        let cargo = game_cargo::prepare_forced_split(
+            store,
+            self.receipt.source,
+            self.receipt.quantity,
+            self.receipt.binding,
+            InventoryLocation::Carried(self.receipt.target),
+            BTreeSet::from([self.receipt.captor]),
+        )?;
+        let validated = ValidatedConfinement {
+            prepared: self,
+            cargo,
+        };
+        let mut batch = Batch::new();
+        let guard = validated.clone().stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
+        store.validate_batch(&batch)?;
+        Ok(validated)
     }
     pub fn apply(
         self,
         store: &mut Store,
-        custody: &mut BTreeMap<PersonId, Captivity>,
         fresh: &ConfinementFacts,
     ) -> Result<ConfinementReceipt, Error> {
-        self.begin(store, custody, fresh)?.apply(store, custody)
+        self.begin(store, fresh)?.apply(store)
     }
 }
 impl ValidatedConfinement {
     pub fn receipt(&self) -> &ConfinementReceipt {
         &self.prepared.receipt
     }
-    /// The binding is forced placement. No receiving consent, body-room check
-    /// or voluntary Load job is involved. The real stock components remain authoritative.
-    pub fn apply(
-        self,
-        store: &mut Store,
-        custody: &mut BTreeMap<PersonId, Captivity>,
-    ) -> Result<ConfinementReceipt, Error> {
+    pub fn stage_into(self, store: &Store, batch: &mut Batch) -> Result<ConfinementGuard, Error> {
+        let cargo = self.cargo.stage_into(store, batch)?;
         let plan = self.prepared;
-        if inventory(store, plan.source.id) != Some(&plan.source)
-            || store.contains(StableId(plan.applied.id.0))
-            || custody.contains_key(&plan.facts.target)
-            || custody.contains_key(&plan.facts.captor)
-        {
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        reads.expect_row::<Captivity>(StableId(plan.facts.target.0), None);
+        reads.expect_row::<Captivity>(StableId(plan.facts.captor.0), None);
+        reads.validate(store)?;
+        if batch.touches::<Captivity>(StableId(plan.facts.target.0)) {
             return Err(Error::Unavailable);
         }
-        store.apply_batch(plan.batch())?;
-        custody.insert(plan.facts.target, plan.captivity);
-        Ok(plan.receipt)
+        admitted.protect::<Captivity>(StableId(plan.facts.target.0));
+        batch.insert(StableId(plan.facts.target.0), plan.captivity);
+        Ok(ConfinementGuard {
+            reads: reads.bind(store, batch, &admitted)?,
+            cargo,
+            receipt: plan.receipt,
+            context: plan.context,
+        })
+    }
+    /// The binding is forced placement. No receiving consent, body-room check
+    /// or voluntary Load job is involved. The real stock components remain authoritative.
+    pub fn apply(self, store: &mut Store) -> Result<ConfinementReceipt, Error> {
+        let mut batch = Batch::new();
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
+        store.apply_batch(batch)?;
+        Ok(guard.receipt)
     }
 }
 #[cfg(test)]
@@ -245,6 +282,7 @@ mod tests {
     fn stocks(rows: impl IntoIterator<Item = Inventory>) -> Store {
         let mut schema = game_ecs::Schema::new();
         game_cargo::register_components(&mut schema).unwrap();
+        crate::register_components(&mut schema).unwrap();
         schema
             .register::<String>("test/foreign", |_| Ok(()))
             .unwrap();
@@ -335,9 +373,8 @@ mod tests {
             timed(),
         ] {
             let mut stocks = stocks([source()]);
-            let mut custody = BTreeMap::new();
             let plan = prepare(facts(), &source(), mode, 100).unwrap();
-            let receipt = plan.apply(&mut stocks, &mut custody, &facts()).unwrap();
+            let receipt = plan.apply(&mut stocks, &facts()).unwrap();
             assert_eq!(
                 game_cargo::inventories(&stocks)
                     .map(|(_, s)| s.quantity.0)
@@ -349,7 +386,7 @@ mod tests {
                 receipt.interrupt_target,
                 matches!(receipt.mode, ConfinementMode::Timed { .. })
             );
-            outcomes.push((stocks, custody));
+            outcomes.push(stocks);
         }
         assert_eq!(outcomes[0], outcomes[1]);
     }
@@ -387,7 +424,6 @@ mod tests {
         for changed in 0..3 {
             let plan = prepare(facts(), &source(), timed(), 100).unwrap();
             let mut stocks = stocks([source()]);
-            let mut custody = BTreeMap::new();
             let mut fresh = facts();
             match changed {
                 0 => {
@@ -407,12 +443,9 @@ mod tests {
                 }
                 _ => fresh.surrendered_to_captor = false,
             }
-            let before = (stocks.clone(), custody.clone());
-            assert_eq!(
-                plan.apply(&mut stocks, &mut custody, &fresh),
-                Err(Error::Unavailable)
-            );
-            assert_eq!((stocks, custody), before);
+            let before = stocks.clone();
+            assert_eq!(plan.apply(&mut stocks, &fresh), Err(Error::Unavailable));
+            assert_eq!(stocks, before);
         }
     }
     #[test]
@@ -429,10 +462,9 @@ mod tests {
                 ..source()
             },
         ]);
-        let mut custody = BTreeMap::new();
         prepare(facts(), &source(), timed(), 100)
             .unwrap()
-            .apply(&mut stocks, &mut custody, &facts())
+            .apply(&mut stocks, &facts())
             .unwrap();
         assert_eq!(
             inventory(&stocks, InventoryId(11)).unwrap().location,
@@ -516,31 +548,26 @@ mod tests {
         let mut store = Store::with_schema(schema);
         game_cargo::insert_inventory(&mut store, source()).unwrap();
         let before = store.clone();
-        let mut custody = BTreeMap::new();
         assert_eq!(
-            prepare(facts(), &source(), timed(), 100).unwrap().apply(
-                &mut store,
-                &mut custody,
-                &facts()
-            ),
+            prepare(facts(), &source(), timed(), 100)
+                .unwrap()
+                .apply(&mut store, &facts()),
             Err(Error::Unavailable)
         );
         assert_eq!(store, before);
-        assert!(custody.is_empty());
+        assert!(crate::captivities(&store).next().is_none());
         let mut store = stocks([source()]);
         store
             .insert_or_spawn(StableId(11), "foreign".to_string())
             .unwrap();
         let before = store.clone();
         assert_eq!(
-            prepare(facts(), &source(), timed(), 100).unwrap().apply(
-                &mut store,
-                &mut custody,
-                &facts()
-            ),
+            prepare(facts(), &source(), timed(), 100)
+                .unwrap()
+                .apply(&mut store, &facts()),
             Err(Error::Unavailable)
         );
         assert_eq!(store, before);
-        assert!(custody.is_empty());
+        assert!(crate::captivities(&store).next().is_none());
     }
 }

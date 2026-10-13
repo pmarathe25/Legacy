@@ -28,6 +28,54 @@ pub enum EngagementPlan {
     Approach(EncounterId),
     Start(Vec<(PersonId, u32)>),
 }
+
+/// Factual execution of the selected cross-owner request. Service owns the
+/// disposition of a failed attempt; the receiving owner retains its admission.
+pub trait EngagementExecution {
+    fn approach(
+        &mut self,
+        actor: PersonId,
+        mission: MissionId,
+        encounter: EncounterId,
+    ) -> Result<(), Error>;
+    fn start_encounter(&mut self, participants: Vec<(PersonId, u32)>)
+    -> Result<EncounterId, Error>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EngagementAttempt {
+    Kept,
+    Approached,
+    Started(EncounterId),
+    Failed(Error),
+}
+impl EngagementAttempt {
+    /// An engagement attempt consumes this member decision even when the
+    /// receiving owner rejects it. It must not trigger another fallback action.
+    pub fn consumes_member_action(&self) -> bool {
+        match self {
+            Self::Kept | Self::Approached | Self::Started(_) | Self::Failed(_) => true,
+        }
+    }
+}
+pub fn execute_engagement_attempt(
+    execution: &mut impl EngagementExecution,
+    plan: EngagementPlan,
+    actor: PersonId,
+    mission: MissionId,
+) -> EngagementAttempt {
+    match plan {
+        EngagementPlan::Keep => EngagementAttempt::Kept,
+        EngagementPlan::Approach(encounter) => execution
+            .approach(actor, mission, encounter)
+            .map(|()| EngagementAttempt::Approached)
+            .unwrap_or_else(EngagementAttempt::Failed),
+        EngagementPlan::Start(participants) => execution
+            .start_encounter(participants)
+            .map(EngagementAttempt::Started)
+            .unwrap_or_else(EngagementAttempt::Failed),
+    }
+}
 impl Runtime {
     pub fn force_willing(
         &self,

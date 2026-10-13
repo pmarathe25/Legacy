@@ -69,3 +69,7 @@ pub(crate) use session::one_session;
 pub use session::*;
 
 mod derived;
+pub use derived::{next_review, review_due, review_preflight};
+
+mod closing;
+pub use closing::*;

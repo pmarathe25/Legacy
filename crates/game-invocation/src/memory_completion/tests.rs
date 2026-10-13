@@ -477,3 +477,47 @@ fn record_creation_requires_current_carrier_and_transport_capacity() {
         Quantity(1000)
     );
 }
+
+#[test]
+fn completion_projection_rejects_tool_record_session_and_work_collisions_atomically() {
+    use crate::memory_start::tests::TOOL;
+    let (runtime, mut store, facts) = fixture();
+    let writing = start(&runtime, &mut store, &facts, &request());
+    for attack in 0..5 {
+        let plan = runtime
+            .prepare_memory_completion::<u8>(&store, &facts, ACTOR, writing.completes, 40)
+            .unwrap();
+        let before = store.clone();
+        let mut next_id = 40;
+        let mut published = Vec::new();
+        let mut batch = Batch::new();
+        let finish = plan
+            .stage_into::<u8>(&runtime, &store, &facts, writing.completes, &mut batch)
+            .unwrap();
+        match attack {
+            0 => batch.remove::<game_cargo::Inventory>(StableId(TOOL.0)),
+            1 => batch.remove::<Record>(StableId(40)),
+            2 => batch.remove::<ControlSession>(StableId(ACTOR.0)),
+            3 => batch.insert(StableId(ACTOR.0), writing.clone()),
+            _ => batch.insert(StableId(40), 5_u64),
+        };
+        let result = (|| -> Result<(), Error> {
+            finish.validate_batch::<u8>(&store, &batch)?;
+            store.apply_batch(batch)?;
+            next_id += finish.allocation_demand;
+            published.push(finish.effect.clone());
+            finish.finish_learning::<u8>(&mut store);
+            Ok(())
+        })();
+        assert!(result.is_err());
+        assert_eq!(store, before);
+        assert_eq!(next_id, 40);
+        assert!(published.is_empty());
+    }
+    let mut resumed = Store::restore(store.schema().clone(), store.snapshot().unwrap()).unwrap();
+    assert_eq!(
+        complete(&runtime, &mut store, &facts, writing.completes, 40),
+        complete(&runtime, &mut resumed, &facts, writing.completes, 40)
+    );
+    assert_eq!(store, resumed);
+}

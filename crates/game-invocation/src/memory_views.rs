@@ -107,3 +107,48 @@ impl Runtime {
             .collect()
     }
 }
+
+/// Owner-selected control, costs, and recalled knowledge for one player view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvocationStateView {
+    pub ready: bool,
+    pub available_lives: Vec<PersonId>,
+    pub active_lives: std::collections::BTreeSet<PersonId>,
+    pub burden: Burden,
+    pub player_control: bool,
+    pub loss_ends: Option<SimTime>,
+    pub warning: Option<InvocationWarning>,
+    pub preview: InvocationPreview,
+    pub memories: Vec<InvokedLifeView>,
+    pub records: Vec<MemoryRecordView>,
+}
+impl Runtime {
+    pub fn state_view<A: game_ecs::Component>(
+        &self,
+        store: &Store,
+        facts: &AdmissionFacts,
+        memory: &impl MemoryFacts,
+    ) -> Result<InvocationStateView, Error> {
+        let actor = facts.actor;
+        let active = self
+            .control
+            .active(store)
+            .filter(|active| active.actor == actor);
+        Ok(InvocationStateView {
+            ready: self.control.ready(actor, facts),
+            available_lives: self.available_lives::<A>(store),
+            active_lives: active.map_or_else(Default::default, |active| active.lives.clone()),
+            burden: burden(store, actor).cloned().unwrap_or_default(),
+            player_control: self
+                .control
+                .player_control(store, actor, facts.now, facts.alive),
+            loss_ends: active
+                .and_then(|active| active.episode.as_ref())
+                .map(|episode| episode.ends),
+            warning: self.control.pending_warning(store).cloned(),
+            preview: self.current_preview::<A>(store, facts)?,
+            memories: self.invoked_life_views::<A>(store, actor),
+            records: self.record_views(store, memory, actor),
+        })
+    }
+}

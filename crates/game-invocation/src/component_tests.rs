@@ -574,3 +574,38 @@ fn final_control_receipt_rejects_pending_warning_burden_and_second_session_colli
     receipt.validate_batch(&control, &store, &batch).unwrap();
     store.apply_batch(batch).unwrap();
 }
+
+#[test]
+fn new_warning_identity_rejects_canonical_occupancy_and_late_foreign_component_shape() {
+    let mut occupied = store();
+    let control = ControlState::new(Rules::fixture()).unwrap();
+    let facts = facts();
+    let prepare = |store: &Store| {
+        control
+            .prepare_action(
+                store,
+                facts.actor,
+                &ControlAction::Activate {
+                    lives: facts.archived.clone(),
+                },
+                &facts,
+                Some(WarningId(1)),
+            )
+            .unwrap()
+    };
+    let pending = prepare(&occupied);
+    occupied.insert_or_spawn(StableId(1), 5_u64).unwrap();
+    let before = occupied.clone();
+    assert!(pending.commit(&control, &mut occupied).is_err());
+    assert_eq!(occupied, before);
+    let clean = store();
+    let mut batch = Batch::new();
+    let receipt = prepare(&clean)
+        .stage_into(&control, &clean, &mut batch)
+        .unwrap();
+    batch.insert(StableId(1), 5_u64);
+    let before = clean.clone();
+    assert!(receipt.validate_batch(&control, &clean, &batch).is_err());
+    assert_eq!(clean, before);
+    assert!(control.pending_consent(&clean).is_none());
+}

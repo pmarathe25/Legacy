@@ -37,32 +37,32 @@ fn communicate(speaker: PersonId, listener: PersonId, at: u64) -> Communication 
     }
 }
 fn form(
-    world: &mut World,
+    world: &mut game_ecs::Store,
     id: ArmyId,
     missions: BTreeSet<MissionId>,
     facts: &BTreeMap<MissionId, DetachmentFacts>,
     at: u64,
 ) {
-    world
+    Kernel::new(world)
         .prepare_form(id, COMMANDER, &missions, facts, SimTime(at))
         .unwrap()
         .commit(world)
         .unwrap();
 }
 fn join(
-    world: &mut World,
+    world: &mut game_ecs::Store,
     id: ArmyId,
     mission: MissionId,
     facts: &BTreeMap<MissionId, DetachmentFacts>,
     at: u64,
 ) {
     let leader = facts[&mission].leader;
-    world
+    Kernel::new(world)
         .prepare_hear_invitation(id, mission, communicate(COMMANDER, leader, at), SimTime(at))
         .unwrap()
         .commit(world)
         .unwrap();
-    world
+    Kernel::new(world)
         .prepare_respond(
             ParticipationDecision {
                 army: id,
@@ -77,7 +77,7 @@ fn join(
         .unwrap()
         .commit(world)
         .unwrap();
-    world
+    Kernel::new(world)
         .prepare_hear_participation(
             id,
             mission,
@@ -88,17 +88,17 @@ fn join(
         .commit(world)
         .unwrap();
 }
-fn army() -> (World, BTreeMap<MissionId, DetachmentFacts>) {
+fn army() -> (game_ecs::Store, BTreeMap<MissionId, DetachmentFacts>) {
     let f = facts();
-    let mut world = World::default();
+    let mut world = fixture();
     form(&mut world, ARMY, f.keys().copied().collect(), &f, 0);
     for m in f.keys() {
         join(&mut world, ARMY, *m, &f, 1);
     }
     (world, f)
 }
-fn issue(world: &mut World, id: u64, at: u64) {
-    world
+fn issue(world: &mut game_ecs::Store, id: u64, at: u64) {
+    Kernel::new(world)
         .prepare_order(
             OrderProposal {
                 army: ARMY,
@@ -115,14 +115,14 @@ fn issue(world: &mut World, id: u64, at: u64) {
         .unwrap();
 }
 fn hear(
-    world: &mut World,
+    world: &mut game_ecs::Store,
     f: &BTreeMap<MissionId, DetachmentFacts>,
     id: u64,
     mission: u64,
     at: u64,
 ) {
     let m = MissionId(mission);
-    world
+    Kernel::new(world)
         .prepare_hear_order(
             ARMY,
             ArmyOrderId(id),
@@ -136,7 +136,7 @@ fn hear(
         .unwrap();
 }
 fn respond(
-    world: &mut World,
+    world: &mut game_ecs::Store,
     f: &BTreeMap<MissionId, DetachmentFacts>,
     id: u64,
     mission: u64,
@@ -144,7 +144,7 @@ fn respond(
     at: u64,
 ) -> Vec<Effect> {
     let m = MissionId(mission);
-    world
+    Kernel::new(world)
         .prepare_respond_order(
             OrderDecision {
                 army: ARMY,
@@ -167,15 +167,16 @@ fn sixty_five_people_remain_owned_by_three_real_detachments() {
     let (world, f) = army();
     let actual_people: BTreeSet<_> = f.values().flat_map(|d| d.members.iter().copied()).collect();
     assert_eq!(actual_people.len(), 65);
-    assert_eq!(world.armies[&ARMY].detachments.len(), 3);
+    assert_eq!(crate::army(&world, ARMY).unwrap().detachments.len(), 3);
     assert!(
-        world.armies[&ARMY]
+        crate::army(&world, ARMY)
+            .unwrap()
             .detachments
             .values()
             .all(|d| d.participation.active())
     );
     // The army stores three command links, not 65 replicated bodies or packs.
-    let serialized = serde_json::to_value(&world.armies[&ARMY]).unwrap();
+    let serialized = serde_json::to_value(crate::army(&world, ARMY).unwrap()).unwrap();
     assert!(serialized.get("members").is_none());
     assert!(serialized.get("inventories").is_none());
     assert!(serialized.get("location").is_none());
@@ -189,11 +190,11 @@ fn invitations_need_hearing_and_each_leader_can_refuse() {
     let f = facts();
     let m = MissionId(2);
     let leader = f[&m].leader;
-    let mut world = World::default();
+    let mut world = fixture();
     form(&mut world, ARMY, BTreeSet::from([m]), &f, 0);
     let before = world.clone();
     assert!(
-        world
+        Kernel::new(&world)
             .prepare_respond(
                 ParticipationDecision {
                     army: ARMY,
@@ -208,14 +209,14 @@ fn invitations_need_hearing_and_each_leader_can_refuse() {
             .is_err()
     );
     assert_eq!(world, before);
-    assert!(world.view(leader, ARMY).is_none());
-    world
+    assert!(Kernel::new(&world).view(leader, ARMY).is_none());
+    Kernel::new(&world)
         .prepare_hear_invitation(ARMY, m, communicate(COMMANDER, leader, 1), SimTime(1))
         .unwrap()
         .commit(&mut world)
         .unwrap();
     assert!(
-        world
+        Kernel::new(&world)
             .prepare_respond(
                 ParticipationDecision {
                     army: ARMY,
@@ -229,7 +230,7 @@ fn invitations_need_hearing_and_each_leader_can_refuse() {
             )
             .is_err()
     );
-    world
+    Kernel::new(&world)
         .prepare_respond(
             ParticipationDecision {
                 army: ARMY,
@@ -245,22 +246,28 @@ fn invitations_need_hearing_and_each_leader_can_refuse() {
         .commit(&mut world)
         .unwrap();
     assert_eq!(
-        world.armies[&ARMY].detachments[&m].participation,
+        crate::army(&world, ARMY).unwrap().detachments[&m].participation,
         Participation::Refused
     );
     assert_eq!(
-        world.view(COMMANDER, ARMY).unwrap().detachments[&m]
+        Kernel::new(&world)
+            .view(COMMANDER, ARMY)
+            .unwrap()
+            .detachments[&m]
             .value
             .participation,
         Participation::Offered
     );
-    world
+    Kernel::new(&world)
         .prepare_hear_participation(ARMY, m, communicate(leader, COMMANDER, 2), SimTime(2))
         .unwrap()
         .commit(&mut world)
         .unwrap();
     assert_eq!(
-        world.view(COMMANDER, ARMY).unwrap().detachments[&m]
+        Kernel::new(&world)
+            .view(COMMANDER, ARMY)
+            .unwrap()
+            .detachments[&m]
             .value
             .participation,
         Participation::Refused
@@ -270,9 +277,15 @@ fn invitations_need_hearing_and_each_leader_can_refuse() {
 fn orders_and_individual_responses_arrive_only_through_communication() {
     let (mut world, f) = army();
     issue(&mut world, 1, 3);
-    assert!(world.view(PersonId(1), ARMY).unwrap().orders.is_empty());
     assert!(
-        world
+        Kernel::new(&world)
+            .view(PersonId(1), ARMY)
+            .unwrap()
+            .orders
+            .is_empty()
+    );
+    assert!(
+        Kernel::new(&world)
             .prepare_respond_order(
                 OrderDecision {
                     army: ARMY,
@@ -289,13 +302,19 @@ fn orders_and_individual_responses_arrive_only_through_communication() {
     );
     hear(&mut world, &f, 1, 1, 4);
     assert_eq!(
-        world.view(PersonId(1), ARMY).unwrap().orders[&ArmyOrderId(1)]
+        Kernel::new(&world).view(PersonId(1), ARMY).unwrap().orders[&ArmyOrderId(1)]
             .value
             .recipients
             .len(),
         1
     );
-    assert!(world.view(PersonId(23), ARMY).unwrap().orders.is_empty());
+    assert!(
+        Kernel::new(&world)
+            .view(PersonId(23), ARMY)
+            .unwrap()
+            .orders
+            .is_empty()
+    );
     assert_eq!(
         respond(&mut world, &f, 1, 1, OrderResponse::Accept, 4),
         vec![Effect::OfferObjective {
@@ -304,8 +323,14 @@ fn orders_and_individual_responses_arrive_only_through_communication() {
             objective: objective()
         }]
     );
-    assert!(world.view(COMMANDER, ARMY).unwrap().responses.is_empty());
-    world
+    assert!(
+        Kernel::new(&world)
+            .view(COMMANDER, ARMY)
+            .unwrap()
+            .responses
+            .is_empty()
+    );
+    Kernel::new(&world)
         .prepare_hear_order_response(
             ARMY,
             ArmyOrderId(1),
@@ -316,7 +341,7 @@ fn orders_and_individual_responses_arrive_only_through_communication() {
         .unwrap()
         .commit(&mut world)
         .unwrap();
-    let known = world.view(COMMANDER, ARMY).unwrap();
+    let known = Kernel::new(&world).view(COMMANDER, ARMY).unwrap();
     assert_eq!(
         known.responses[&ArmyOrderId(1)][&MissionId(1)].value.status,
         OrderStatus::Accepted
@@ -329,7 +354,7 @@ fn orders_and_individual_responses_arrive_only_through_communication() {
     hear(&mut world, &f, 1, 2, 6);
     assert!(respond(&mut world, &f, 1, 2, OrderResponse::Refuse, 6).is_empty());
     assert_eq!(
-        world.armies[&ARMY].detachments[&MissionId(2)].participation,
+        crate::army(&world, ARMY).unwrap().detachments[&MissionId(2)].participation,
         Participation::Accepted
     );
 }
@@ -341,11 +366,11 @@ fn a_delayed_older_order_cannot_replace_a_newer_received_order() {
     hear(&mut world, &f, 2, 1, 5);
     hear(&mut world, &f, 1, 1, 6);
     assert_eq!(
-        world.armies[&ARMY].orders[&ArmyOrderId(1)].recipients[&MissionId(1)].status,
+        crate::army(&world, ARMY).unwrap().orders[&ArmyOrderId(1)].recipients[&MissionId(1)].status,
         OrderStatus::Superseded
     );
     assert!(
-        world
+        Kernel::new(&world)
             .prepare_respond_order(
                 OrderDecision {
                     army: ARMY,
@@ -368,7 +393,7 @@ fn a_delayed_older_order_cannot_replace_a_newer_received_order() {
     issue(&mut world, 3, 7);
     hear(&mut world, &f, 3, 1, 8);
     assert_eq!(
-        world.armies[&ARMY].orders[&ArmyOrderId(2)].recipients[&MissionId(1)].status,
+        crate::army(&world, ARMY).unwrap().orders[&ArmyOrderId(2)].recipients[&MissionId(1)].status,
         OrderStatus::Accepted
     );
 }
@@ -393,8 +418,11 @@ fn retreat_and_defection_release_only_the_chosen_command_relationship() {
             }
         ]
     );
-    assert!(world.commanding_army(MissionId(1)).is_none());
-    assert_eq!(world.commanding_army(MissionId(2)), Some(ARMY));
+    assert!(Kernel::new(&world).commanding_army(MissionId(1)).is_none());
+    assert_eq!(
+        Kernel::new(&world).commanding_army(MissionId(2)),
+        Some(ARMY)
+    );
     assert_eq!(
         respond(&mut world, &f, 1, 2, OrderResponse::Defect, 4),
         vec![Effect::ReleaseCommand {
@@ -404,7 +432,7 @@ fn retreat_and_defection_release_only_the_chosen_command_relationship() {
         }]
     );
     assert_eq!(
-        world.armies[&ARMY].detachments[&MissionId(2)].participation,
+        crate::army(&world, ARMY).unwrap().detachments[&MissionId(2)].participation,
         Participation::Defected
     );
     assert_eq!(f.values().map(|f| f.members.len()).sum::<usize>(), 65);
@@ -413,16 +441,16 @@ fn retreat_and_defection_release_only_the_chosen_command_relationship() {
 fn cross_army_acceptance_races_and_stale_changes_are_atomic() {
     let f = facts();
     let m = MissionId(1);
-    let mut world = World::default();
+    let mut world = fixture();
     for id in [ARMY, ArmyId(2)] {
         form(&mut world, id, BTreeSet::from([m]), &f, 0);
-        world
+        Kernel::new(&world)
             .prepare_hear_invitation(id, m, communicate(COMMANDER, PersonId(1), 1), SimTime(1))
             .unwrap()
             .commit(&mut world)
             .unwrap();
     }
-    let first = world
+    let first = Kernel::new(&world)
         .prepare_respond(
             ParticipationDecision {
                 army: ARMY,
@@ -435,7 +463,7 @@ fn cross_army_acceptance_races_and_stale_changes_are_atomic() {
             SimTime(1),
         )
         .unwrap();
-    let second = world
+    let second = Kernel::new(&world)
         .prepare_respond(
             ParticipationDecision {
                 army: ArmyId(2),
@@ -452,7 +480,7 @@ fn cross_army_acceptance_races_and_stale_changes_are_atomic() {
     let before = world.clone();
     assert!(second.commit(&mut world).is_err());
     assert_eq!(world, before);
-    let stale = world
+    let stale = Kernel::new(&world)
         .prepare_leave(
             ARMY,
             m,
@@ -462,7 +490,7 @@ fn cross_army_acceptance_races_and_stale_changes_are_atomic() {
             SimTime(2),
         )
         .unwrap();
-    world
+    Kernel::new(&world)
         .prepare_disband(ARMY, COMMANDER, SimTime(2))
         .unwrap()
         .commit(&mut world)
@@ -476,20 +504,23 @@ fn expiration_neither_executes_an_order_nor_updates_distant_knowledge() {
     let (mut world, f) = army();
     issue(&mut world, 1, 3);
     hear(&mut world, &f, 1, 1, 4);
-    assert_eq!(world.next_boundary(SimTime(4)), Some(SimTime(100)));
-    let before = world.known.clone();
+    assert_eq!(
+        Kernel::new(&world).next_boundary(SimTime(4)),
+        Some(SimTime(100))
+    );
+    let before = known_snapshot(&world);
     assert!(
-        world
+        Kernel::new(&world)
             .prepare_expire(ARMY, SimTime(100))
             .unwrap()
             .commit(&mut world)
             .unwrap()
             .is_empty()
     );
-    assert_eq!(world.known, before);
-    assert_eq!(world.next_boundary(SimTime(100)), None);
+    assert_eq!(known_snapshot(&world), before);
+    assert_eq!(Kernel::new(&world).next_boundary(SimTime(100)), None);
     assert!(
-        world
+        Kernel::new(&world)
             .prepare_respond_order(
                 OrderDecision {
                     army: ARMY,
@@ -531,7 +562,7 @@ fn mission_report() -> MissionView {
 #[test]
 fn frozen_reports_preserve_attributable_losses_and_survive_save_continuation() {
     let (mut world, _) = army();
-    world
+    Kernel::new(&world)
         .prepare_report(
             ARMY,
             ArmyReport {
@@ -547,22 +578,30 @@ fn frozen_reports_preserve_attributable_losses_and_survive_save_continuation() {
         .unwrap()
         .commit(&mut world)
         .unwrap();
-    assert!(world.view(COMMANDER, ARMY).unwrap().reports.is_empty());
-    let bytes = serde_json::to_vec(&world).unwrap();
-    let mut saved: World = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        Kernel::new(&world)
+            .view(COMMANDER, ARMY)
+            .unwrap()
+            .reports
+            .is_empty()
+    );
+    let bytes = serde_json::to_vec(&world.snapshot().unwrap()).unwrap();
+    let mut saved: game_ecs::Store =
+        game_ecs::Store::restore(schema(), serde_json::from_slice(&bytes).unwrap()).unwrap();
     for w in [&mut world, &mut saved] {
-        w.prepare_hear_report(
-            ARMY,
-            ArmyReportId(1),
-            communicate(PersonId(1), COMMANDER, 20),
-            SimTime(20),
-        )
-        .unwrap()
-        .commit(w)
-        .unwrap();
+        Kernel::new(w)
+            .prepare_hear_report(
+                ARMY,
+                ArmyReportId(1),
+                communicate(PersonId(1), COMMANDER, 20),
+                SimTime(20),
+            )
+            .unwrap()
+            .commit(w)
+            .unwrap();
     }
     assert_eq!(world, saved);
-    let report = &world.view(COMMANDER, ARMY).unwrap().reports[&ArmyReportId(1)];
+    let report = &Kernel::new(&world).view(COMMANDER, ARMY).unwrap().reports[&ArmyReportId(1)];
     assert_eq!(report.observed_at, SimTime(5));
     assert_eq!(report.learned_at, SimTime(20));
     assert_eq!(report.value.snapshot.companions[0].person, PersonId(2));
@@ -576,14 +615,14 @@ fn a_self_led_detachment_requires_the_commanders_own_choices() {
     let mut f = facts();
     f.get_mut(&MissionId(1)).unwrap().leader = COMMANDER;
     f.get_mut(&MissionId(1)).unwrap().members.insert(COMMANDER);
-    let mut world = World::default();
+    let mut world = fixture();
     form(&mut world, ARMY, BTreeSet::from([MissionId(1)]), &f, 0);
-    world
+    Kernel::new(&world)
         .prepare_consider_own_invitation(ARMY, MissionId(1), COMMANDER, SimTime(0))
         .unwrap()
         .commit(&mut world)
         .unwrap();
-    world
+    Kernel::new(&world)
         .prepare_respond(
             ParticipationDecision {
                 army: ARMY,
@@ -598,7 +637,7 @@ fn a_self_led_detachment_requires_the_commanders_own_choices() {
         .unwrap()
         .commit(&mut world)
         .unwrap();
-    world
+    Kernel::new(&world)
         .prepare_order(
             OrderProposal {
                 army: ARMY,
@@ -613,7 +652,7 @@ fn a_self_led_detachment_requires_the_commanders_own_choices() {
         .unwrap()
         .commit(&mut world)
         .unwrap();
-    world
+    Kernel::new(&world)
         .prepare_consider_own_order(
             ARMY,
             ArmyOrderId(1),
@@ -626,7 +665,7 @@ fn a_self_led_detachment_requires_the_commanders_own_choices() {
         .commit(&mut world)
         .unwrap();
     assert_eq!(
-        world
+        Kernel::new(&world)
             .prepare_respond_order(
                 OrderDecision {
                     army: ARMY,
@@ -647,7 +686,7 @@ fn a_self_led_detachment_requires_the_commanders_own_choices() {
     );
 }
 
-fn validate(world: &World, now: SimTime) -> Result<(), Error> {
+fn validate(world: &game_ecs::Store, now: SimTime) -> Result<(), Error> {
     let f = facts();
     let people: BTreeSet<_> = f
         .values()
@@ -655,7 +694,7 @@ fn validate(world: &World, now: SimTime) -> Result<(), Error> {
         .chain([COMMANDER, PersonId(200)])
         .collect();
     let missions = f.keys().copied().collect();
-    world.validate(
+    Kernel::new(world).validate(
         &ValidationCatalog {
             people: &people,
             missions: &missions,
@@ -688,7 +727,7 @@ fn save_validation_accepts_dated_beliefs_but_rejects_unknown_and_conflicting_aut
     issue(&mut world, 1, 3);
     hear(&mut world, &f, 1, 1, 4);
     respond(&mut world, &f, 1, 1, OrderResponse::Accept, 4);
-    world
+    Kernel::new(&world)
         .prepare_hear_order_response(
             ARMY,
             ArmyOrderId(1),
@@ -699,20 +738,20 @@ fn save_validation_accepts_dated_beliefs_but_rejects_unknown_and_conflicting_aut
         .unwrap()
         .commit(&mut world)
         .unwrap();
-    world
+    Kernel::new(&world)
         .prepare_expire(ARMY, SimTime(100))
         .unwrap()
         .commit(&mut world)
         .unwrap();
     validate(&world, SimTime(100)).unwrap();
-    let json = serde_json::to_vec(&world).unwrap();
-    let restored: World = serde_json::from_slice(&json).unwrap();
+    let json = serde_json::to_vec(&world.snapshot().unwrap()).unwrap();
+    let restored: game_ecs::Store =
+        game_ecs::Store::restore(schema(), serde_json::from_slice(&json).unwrap()).unwrap();
     assert_eq!(world, restored);
     validate(&restored, SimTime(100)).unwrap();
     let mut unknown = world.clone();
     unknown
-        .armies
-        .get_mut(&ARMY)
+        .get_mut::<Army>(game_ecs::StableId(ARMY.0))
         .unwrap()
         .detachments
         .get_mut(&MissionId(1))
@@ -720,16 +759,16 @@ fn save_validation_accepts_dated_beliefs_but_rejects_unknown_and_conflicting_aut
         .leader = PersonId(999);
     assert!(validate(&unknown, SimTime(100)).is_err());
     let mut conflicting = world.clone();
-    let mut other = conflicting.armies[&ARMY].clone();
+    let mut other = crate::army(&conflicting, ARMY).unwrap().clone();
     other.id = ArmyId(2);
     other.orders.clear();
-    conflicting.armies.insert(other.id, other);
+    insert_army(&mut conflicting, other.id, other).unwrap();
     assert!(validate(&conflicting, SimTime(100)).is_err());
     let mut forged = world;
     forged
-        .known
-        .get_mut(&COMMANDER)
+        .get_mut::<Knowledge>(game_ecs::StableId(COMMANDER.0))
         .unwrap()
+        .armies
         .get_mut(&ARMY)
         .unwrap()
         .responses
@@ -747,13 +786,13 @@ fn a_pending_expiration_has_the_same_result_under_irregular_clock_slices() {
     issue(&mut whole, 1, 3);
     hear(&mut whole, &f, 1, 1, 4);
     let mut sliced = whole.clone();
-    whole
+    Kernel::new(&whole)
         .prepare_expire(ARMY, SimTime(100))
         .unwrap()
         .commit(&mut whole)
         .unwrap();
     for at in [5, 6, 17, 91, 99, 100] {
-        sliced
+        Kernel::new(&sliced)
             .prepare_expire(ARMY, SimTime(at))
             .unwrap()
             .commit(&mut sliced)
@@ -766,17 +805,211 @@ fn a_pending_expiration_has_the_same_result_under_irregular_clock_slices() {
 #[test]
 fn native_mission_completion_releases_a_link_without_sending_a_remote_report() {
     let (mut world, mut f) = army();
-    let before = world.known.clone();
+    let before = known_snapshot(&world);
     let ended = f.get_mut(&MissionId(1)).unwrap();
     ended.status = MissionStatus::Completed;
-    let effects = world
+    let effects = Kernel::new(&world)
         .prepare_native_termination(ARMY, ended, SimTime(10))
         .unwrap()
         .commit(&mut world)
         .unwrap();
     assert!(effects.is_empty());
-    assert!(world.commanding_army(MissionId(1)).is_none());
-    assert_eq!(world.known, before);
-    assert_eq!(world.commanding_army(MissionId(2)), Some(ARMY));
+    assert!(Kernel::new(&world).commanding_army(MissionId(1)).is_none());
+    assert_eq!(known_snapshot(&world), before);
+    assert_eq!(
+        Kernel::new(&world).commanding_army(MissionId(2)),
+        Some(ARMY)
+    );
     validate(&world, SimTime(10)).unwrap();
+}
+
+fn schema() -> game_ecs::Schema {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+}
+fn fixture() -> game_ecs::Store {
+    game_ecs::Store::with_schema(schema())
+}
+fn known_snapshot(store: &game_ecs::Store) -> BTreeMap<PersonId, Knowledge> {
+    knowledges(store).map(|(id, k)| (id, k.clone())).collect()
+}
+
+#[test]
+fn army_staging_preserves_unrelated_components_and_rejects_late_foreign_edits() {
+    let (mut world, _) = army();
+    let plan = Kernel::new(&world)
+        .prepare_disband(ARMY, COMMANDER, SimTime(10))
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let (guard, _) = plan.stage(&world, &mut batch).unwrap();
+    // A separate person's communication queue is not an Army relationship input.
+    batch.insert(game_ecs::StableId(201), Queue::default());
+    guard.validate(&world, &batch).unwrap();
+    world.apply_batch(batch).unwrap();
+    assert!(crate::army(&world, ARMY).unwrap().disbanded_at.is_some());
+    let plan = Kernel::new(&world)
+        .prepare_expire(ARMY, SimTime(100))
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let (guard, _) = plan.stage(&world, &mut batch).unwrap();
+    batch.remove::<Army>(game_ecs::StableId(ARMY.0));
+    assert_eq!(guard.validate(&world, &batch), Err(Error::Unavailable));
+}
+
+#[test]
+fn accepted_army_orders_and_native_mission_directives_publish_in_one_owner_transaction() {
+    let (old_store, f) = army();
+    let mut combined_schema = schema();
+    game_missions::register_components(&mut combined_schema).unwrap();
+    let mut snapshot = old_store.snapshot().unwrap();
+    // Each registered column, including empty native ones, belongs to this save.
+    let empty = game_ecs::Store::with_schema(combined_schema.clone())
+        .snapshot()
+        .unwrap();
+    for (key, rows) in empty.columns {
+        snapshot.columns.entry(key).or_insert(rows);
+    }
+    let mut store = game_ecs::Store::restore(combined_schema, snapshot).unwrap();
+    let id = MissionId(1);
+    let members = f[&id]
+        .members
+        .iter()
+        .map(|person| {
+            let recruitment = RecruitmentId(1_000 + person.0);
+            game_missions::insert_recruitment(
+                &mut store,
+                recruitment,
+                game_missions::Recruitment {
+                    id: recruitment,
+                    mission: id,
+                    person: *person,
+                    compensation: vec![],
+                    agreement: None,
+                    countered: false,
+                },
+            )
+            .unwrap();
+            (
+                *person,
+                game_missions::Companion {
+                    confinement: None,
+                    person: *person,
+                    recruitment,
+                    status: CompanionStatus::Accepted,
+                    directive: MissionObjective::Visit {
+                        destination: AreaId(1),
+                    },
+                    received_at: SimTime(0),
+                    visited: BTreeSet::new(),
+                    delivered: 0,
+                    cargo: BTreeMap::new(),
+                    supply_cargo: BTreeMap::new(),
+                    contacts: BTreeMap::new(),
+                    last_leg_from: None,
+                    explanation: "Accepted service".into(),
+                    declared_explanation: "Accepted service".into(),
+                },
+            )
+        })
+        .collect();
+    game_missions::insert_mission(
+        &mut store,
+        id,
+        game_missions::Mission {
+            id,
+            sponsor: COMMANDER,
+            proposal: game_missions::MissionProposal {
+                leader: PersonId(1),
+                recruits: f[&id]
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(|p| *p != PersonId(1))
+                    .collect(),
+                objective: MissionObjective::Visit {
+                    destination: AreaId(1),
+                },
+                home: AreaId(1),
+                supplies: vec![],
+                compensation: BTreeMap::new(),
+                deadline: SimTime(200),
+            },
+            status: MissionStatus::Operating,
+            members,
+            created_at: SimTime(0),
+            departed_at: Some(SimTime(1)),
+            explanation: "Operating".into(),
+            succeeded: false,
+        },
+    )
+    .unwrap();
+    issue(&mut store, 1, 3);
+    hear(&mut store, &f, 1, 1, 4);
+    let army_plan = Kernel::new(&store)
+        .prepare_respond_order(
+            OrderDecision {
+                army: ARMY,
+                order: ArmyOrderId(1),
+                mission: id,
+                actor: PersonId(1),
+                response: OrderResponse::Accept,
+                explanation: "Personally accepted the force objective".into(),
+            },
+            &f[&id],
+            SimTime(4),
+        )
+        .unwrap();
+    let Effect::OfferObjective {
+        mission,
+        leader,
+        objective,
+    } = &army_plan.effects[0]
+    else {
+        panic!("typed native objective required")
+    };
+    let runtime = game_missions::Runtime::default();
+    let mission_plan = runtime
+        .prepare_army_directive(
+            &store,
+            *mission,
+            *leader,
+            objective,
+            &game_missions::OrderFacts {
+                now: SimTime(4),
+                heard: BTreeMap::from([(
+                    PersonId(1),
+                    game_missions::ServiceChoice::DeclaredAcceptance,
+                )]),
+                assets: game_missions::MissionAssets {
+                    people: BTreeSet::from([PersonId(200)]),
+                    ..Default::default()
+                },
+            },
+            false,
+        )
+        .unwrap();
+    let expected_objective = objective.clone();
+    let opening = store.clone();
+    let mut batch = game_ecs::Batch::new();
+    let (army_guard, _) = army_plan.stage(&store, &mut batch).unwrap();
+    let (_finish, mission_guard) = mission_plan
+        .stage_guarded(&runtime, &store, &mut batch)
+        .unwrap();
+    army_guard.validate(&store, &batch).unwrap();
+    mission_guard.validate(&store, &batch).unwrap();
+    assert_eq!(store, opening);
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        crate::army(&store, ARMY).unwrap().orders[&ArmyOrderId(1)].recipients[&id].status,
+        OrderStatus::Accepted
+    );
+    let native = game_missions::mission(&store, id).unwrap();
+    assert_eq!(native.members[&PersonId(1)].directive, expected_objective);
+    assert_eq!(
+        native.members[&PersonId(2)].directive,
+        MissionObjective::Visit {
+            destination: AreaId(1)
+        }
+    );
 }

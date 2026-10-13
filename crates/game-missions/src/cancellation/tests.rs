@@ -58,3 +58,14 @@ fn new_related_talk_invalidates_cancellation_before_foreign_batch_publication() 
     assert!(w.store.apply_batch(batch).is_err());
     assert_eq!(before, w);
 }
+
+#[test]
+fn cancellation_projection_requires_native_matching_deadline() {
+    let effect = ClearTalk {
+        speaker: PersonId(7),
+        completes: SimTime(10),
+    };
+    assert_eq!(effect.activity_reset(Some(SimTime(10))), Some(PersonId(7)));
+    assert_eq!(effect.activity_reset(Some(SimTime(11))), None);
+    assert_eq!(effect.activity_reset(None), None);
+}

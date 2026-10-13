@@ -22,6 +22,16 @@ pub struct PreparedObservation {
     pub snapshot: MissionView,
 }
 impl PreparedObservation {
+    pub(crate) fn observer(&self) -> PersonId {
+        self.observer
+    }
+    pub(crate) fn add_reads(&self, store: &Store, reads: &mut game_ecs::ReadSet) {
+        reads.read::<Knowledge>(store, StableId(self.observer.0));
+        reads.read::<Mission>(store, StableId(self.mission.0));
+        for offer in &self.offers {
+            reads.expect_row(StableId(offer.id.0), Some(offer.clone()));
+        }
+    }
     pub fn check(&self, store: &Store) -> Result<(), Error> {
         let personal = knowledge(store, self.observer);
         if personal.and_then(|k| k.missions.get(&self.mission)) != self.before.as_ref()

@@ -324,9 +324,53 @@ impl PreparedMission {
             receipt_cursor: self.receipt_cursor.map(|(_, after)| after),
         })
     }
+    /// Bind native service sources and writes to the generic transaction guard.
+    /// Validate the returned guard after every collaborating owner has staged.
+    pub fn stage_guarded(
+        self,
+        state: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(MissionFinalization, game_ecs::ReadGuard), Error> {
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        for patch in &self.missions {
+            let id = StableId(patch.after.id.0);
+            reads.expect_row(id, patch.before.clone());
+            if patch.before.is_none() {
+                reads.entity(store, id);
+            }
+            admitted.protect::<Mission>(id);
+        }
+        for patch in &self.recruitments {
+            let id = StableId(patch.after.id.0);
+            reads.expect_row(id, patch.before.clone());
+            if patch.before.is_none() {
+                reads.entity(store, id);
+            }
+            admitted.protect::<Recruitment>(id);
+        }
+        for (actor, _) in &self.memberships {
+            let actor = *actor;
+            reads.read::<Knowledge>(store, StableId(actor.0));
+            let ids = reads.membership::<Mission>(store, move |_, mission| {
+                mission
+                    .members
+                    .get(&actor)
+                    .is_some_and(|member| member.status == CompanionStatus::Accepted)
+            });
+            for id in ids {
+                reads.read::<Mission>(store, id);
+            }
+        }
+        let finish = self.stage_into(state, store, batch)?;
+        let guard = reads.bind(store, batch, &admitted)?;
+        Ok((finish, guard))
+    }
     pub fn commit(self, state: &mut Runtime, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        let finish = self.stage_into(state, store, &mut batch)?;
+        let (finish, guard) = self.stage_guarded(state, store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)?;
         finish.finish(state);
         Ok(())
@@ -932,5 +976,30 @@ impl MissionPublicationGuard {
             return Err(Error::Unavailable);
         }
         Ok(())
+    }
+}
+
+impl Runtime {
+    /// A communicated Army choice is one native service effect. Companion
+    /// consent and directive reception follow the ordinary order pathway.
+    pub fn prepare_army_directive(
+        &self,
+        store: &Store,
+        id: MissionId,
+        leader: PersonId,
+        objective: &MissionObjective,
+        facts: &OrderFacts,
+        retreat: bool,
+    ) -> Result<PreparedMission, Error> {
+        let mut plan = self.prepare_order(store, id, leader, objective, facts, false)?;
+        if retreat {
+            let mission = &mut plan.missions.first_mut().ok_or(Error::Unavailable)?.after;
+            mission.status = MissionStatus::Returning;
+            mission.succeeded = false;
+            mission.explanation =
+                "The leader chose to retreat after an army order; companions retain their choices"
+                    .into();
+        }
+        Ok(plan)
     }
 }

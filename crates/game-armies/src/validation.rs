@@ -8,7 +8,7 @@ pub struct ValidationCatalog<'a> {
     pub missions: &'a BTreeSet<MissionId>,
     pub now: SimTime,
 }
-impl World {
+impl Kernel<'_> {
     /// Native mission views remain the mission owner's protocol. Its validator
     /// checks nested objectives, compensation and inventory/area references.
     /// Remembered outcomes need not agree with current distant world facts.
@@ -22,10 +22,10 @@ impl World {
         let mut commanded = BTreeSet::new();
         let mut orders = BTreeSet::new();
         let mut reports = BTreeSet::new();
-        for (id, a) in &self.armies {
+        for (id, a) in armies(self.store) {
             require(
                 id.0 > 0
-                    && a.id == *id
+                    && a.id == id
                     && c.people.contains(&a.commander)
                     && a.formed_at <= c.now
                     && !a.detachments.is_empty()
@@ -66,20 +66,21 @@ impl World {
                 validate_mission_view(&r.snapshot)?;
             }
         }
-        for (actor, armies) in &self.known {
-            require(c.people.contains(actor))?;
+        for (actor, row) in knowledges(self.store) {
+            let armies = &row.armies;
+            require(c.people.contains(&actor))?;
             for (id, k) in armies {
-                let a = self.armies.get(id).ok_or_else(invalid)?;
+                let a = army(self.store, *id).ok_or_else(invalid)?;
                 if let Some(d) = &k.commander {
-                    require(dated_valid(d, *actor, c) && d.value == a.commander)?;
+                    require(dated_valid(d, actor, c) && d.value == a.commander)?;
                 }
                 if let Some(d) = &k.disbanded_at {
-                    require(dated_valid(d, *actor, c) && Some(d.value) == a.disbanded_at)?;
+                    require(dated_valid(d, actor, c) && Some(d.value) == a.disbanded_at)?;
                 }
                 for (mission, d) in &k.detachments {
                     let actual = a.detachments.get(mission).ok_or_else(invalid)?;
                     require(
-                        dated_valid(d, *actor, c)
+                        dated_valid(d, actor, c)
                             && d.value.mission == *mission
                             && d.value.leader == actual.leader
                             && detachment_valid(&d.value, a.formed_at, c.now),
@@ -88,7 +89,7 @@ impl World {
                 for (id, d) in &k.orders {
                     let actual = a.orders.get(id).ok_or_else(invalid)?;
                     require(
-                        dated_valid(d, *actor, c)
+                        dated_valid(d, actor, c)
                             && same_order(&d.value, actual)
                             && order_valid(&d.value, a, c.now),
                     )?;
@@ -97,7 +98,7 @@ impl World {
                     let o = a.orders.get(id).ok_or_else(invalid)?;
                     for (mission, d) in rs {
                         require(
-                            dated_valid(d, *actor, c)
+                            dated_valid(d, actor, c)
                                 && recipient_valid(&d.value, o, c.now)
                                 && d.value.responded_at.is_some()
                                 && o.recipients
@@ -107,7 +108,7 @@ impl World {
                     }
                 }
                 for (id, d) in &k.reports {
-                    require(dated_valid(d, *actor, c) && a.reports.get(id) == Some(&d.value))?;
+                    require(dated_valid(d, actor, c) && a.reports.get(id) == Some(&d.value))?;
                 }
             }
         }
@@ -182,4 +183,35 @@ fn invalid() -> Error {
 }
 fn require(condition: bool) -> Result<(), Error> {
     if condition { Ok(()) } else { Err(invalid()) }
+}
+
+/// Local record admission; referential and current-time checks use the catalog.
+pub(crate) fn army_shape_valid(a: &Army) -> bool {
+    let latest = SimTime(u64::MAX);
+    a.id.0 > 0
+        && a.commander.0 > 0
+        && !a.detachments.is_empty()
+        && a.detachments.len() <= MAX_DETACHMENTS
+        && a.disbanded_at.is_none_or(|at| at >= a.formed_at)
+        && a.detachments.iter().all(|(id, d)| {
+            id.0 > 0
+                && d.mission == *id
+                && d.leader.0 > 0
+                && detachment_valid(d, a.formed_at, latest)
+        })
+        && a.orders
+            .iter()
+            .all(|(id, o)| id.0 > 0 && o.id == *id && order_valid(o, a, latest))
+        && a.reports.iter().all(|(id, r)| {
+            id.0 > 0
+                && r.id == *id
+                && r.army == a.id
+                && r.sent_at >= a.formed_at
+                && r.snapshot.id == r.mission
+                && r.snapshot.leader == r.speaker
+                && r.snapshot.observed_at <= r.sent_at
+                && a.detachments
+                    .get(&r.mission)
+                    .is_some_and(|d| d.leader == r.speaker)
+        })
 }

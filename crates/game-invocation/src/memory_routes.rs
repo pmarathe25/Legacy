@@ -56,9 +56,7 @@ mod tests {
 /// The only current-memory rows required to reconcile dismissed recollection.
 #[derive(Clone, Debug)]
 pub struct PreparedRecallLoss {
-    actor: game_core::PersonId,
-    routes: BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>,
-    location: Location,
+    reads: game_ecs::ReadSet,
     pending: Vec<AreaId>,
     replacement: Vec<AreaId>,
 }
@@ -67,17 +65,17 @@ pub fn prepare_recall_loss<A: game_ecs::Component>(
     actor: game_core::PersonId,
     pending: &[AreaId],
 ) -> Result<Option<PreparedRecallLoss>, game_core::Error> {
-    let location = store
-        .get::<Location>(game_ecs::StableId(actor.0))
+    let mut reads = game_ecs::ReadSet::new();
+    let location = reads
+        .read::<Location>(store, game_ecs::StableId(actor.0))
         .ok_or(game_core::Error::Unavailable)?;
-    let mind =
-        game_characters::decisions::mind::<A>(store, actor).ok_or(game_core::Error::Unavailable)?;
+    let mind = reads
+        .read::<game_characters::decisions::Mind<A>>(store, game_ecs::StableId(actor.0))
+        .ok_or(game_core::Error::Unavailable)?;
     Ok(
         retained_route_after_dismissal(&mind.routes, location, pending).map(|replacement| {
             PreparedRecallLoss {
-                actor,
-                routes: mind.routes.clone(),
-                location: location.clone(),
+                reads,
                 pending: pending.to_vec(),
                 replacement,
             }
@@ -94,16 +92,13 @@ impl PreparedRecallLoss {
         pending: &[AreaId],
         batch: &game_ecs::Batch,
     ) -> Result<(), game_core::Error> {
-        let key = game_ecs::StableId(self.actor.0);
-        if pending != self.pending
-            || store.get::<Location>(key) != Some(&self.location)
-            || game_characters::decisions::mind::<A>(store, self.actor)
-                .is_none_or(|mind| mind.routes != self.routes)
-            || batch.touches::<Location>(key)
-            || batch.touches::<game_characters::decisions::Mind<A>>(key)
-        {
+        if pending != self.pending {
             return Err(game_core::Error::Unavailable);
         }
+        self.reads
+            .clone()
+            .bind(store, batch, &game_ecs::ReadFootprint::new())?
+            .validate(store, batch)?;
         Ok(())
     }
 }
@@ -219,7 +214,7 @@ mod receipt_tests {
                     game_transport::route_steps(&store, ACTOR),
                     &batch,
                 )?;
-                route_receipt.validate_footprint(&batch)?;
+                route_receipt.validate_footprint(&store, &batch)?;
                 store.apply_batch(batch)?;
                 next_id += 1;
                 published.extend(effects);
@@ -246,14 +241,18 @@ mod receipt_tests {
             .stage_into(&runtime.control, &store, &mut batch)
             .unwrap();
         let route_receipt = route.stage_into(&store, &mut batch).unwrap();
-        assert!(route_receipt.validate_footprint(&Batch::new()).is_err());
+        assert!(
+            route_receipt
+                .validate_footprint(&store, &Batch::new())
+                .is_err()
+        );
         control_receipt
             .validate_batch(&runtime.control, &store, &batch)
             .unwrap();
         recall
             .validate_batch::<u8>(&store, game_transport::route_steps(&store, ACTOR), &batch)
             .unwrap();
-        route_receipt.validate_footprint(&batch).unwrap();
+        route_receipt.validate_footprint(&store, &batch).unwrap();
         store.apply_batch(batch).unwrap();
         assert!(session(&store, ACTOR).is_none());
         assert!(game_transport::route_steps(&store, ACTOR).is_empty());

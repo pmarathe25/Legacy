@@ -1,5 +1,7 @@
 # game-armies
 
-`game-armies` records command relationships among existing missions. A commander can invite detachments by mission ID; each detachment keeps its own named leader, who decides whether to join. Commanders issue dated objectives, and leaders receive and answer them through recorded communication. Leaders can also send dated reports containing a snapshot of their mission’s known account. Personal views retain when information was observed and learned.
+`game-armies` owns coordinated command relationships among existing missions, local communication queues, personal army knowledge, autonomy, reinforcement approaches, and their validation. Each mission retains its named leader and members. Leaders choose whether to join, accept orders, retreat, or defect; distant knowledge changes only through dated communication.
 
-The crate returns requests for mission owners to handle orders, retreats, and releases. It stores no soldier bodies, equipment, or maps; mission membership, supplies, position, and individual decisions remain with their owning systems.
+`register_components` installs `Army`, personal `Knowledge`, `Talk`, `Queue`, and `Approach` in the shared component store. `World` retains only rules and review timing. `Kernel` borrows canonical rows for prepared relationship changes. `PreparedChange::stage` and cancellation staging return generic ECS read guards for composed transactions.
+
+`Systems` exposes owner behavior independently of the assembly. Its `Ports` supply borrowed native mission, body, location, route and encounter facts, and sequence prepared Army and mission effects in one transaction. Army selection and progression stay in this crate; mission directives and departures use mission-owned preparation. The assembly registers schemas, builds fixtures, supplies factual ports, and binds public commands and views.

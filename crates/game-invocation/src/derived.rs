@@ -48,6 +48,14 @@ impl Runtime {
                 .map_or(0, |entry| entry.level)
         }))
     }
+    /// Closing advancement can publish control changes and up to three events
+    /// for each native memory action, including its interruption reactions.
+    pub fn advance_event_demand(&self, store: &Store) -> Result<u64, Error> {
+        (store.count::<MemoryAction>() as u64)
+            .checked_mul(3)
+            .and_then(|count| count.checked_add(16))
+            .ok_or(Error::Overflow)
+    }
     pub fn allocation_bound(&self, store: &Store, next: SimTime) -> u64 {
         self.memory_allocation_bound(store, next) + self.control.allocation_bound(store, next)
     }
@@ -532,5 +540,114 @@ impl ControlState {
             now,
             alive,
         )
+    }
+}
+
+impl Runtime {
+    /// Player menus follow the native actor's binding control episode. The
+    /// element types are opaque; Invocation suppresses every action channel
+    /// together without depending on public command or quantity schemas.
+    pub fn filter_controlled_menu<C, Q>(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        now: SimTime,
+        alive: bool,
+        commands: &mut Vec<C>,
+        quantities: &mut Vec<Q>,
+    ) {
+        if self.control.controls(store, actor, now, alive) {
+            commands.clear();
+            quantities.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+    use crate::memory_start::tests::{ACTOR, fixture};
+
+    #[test]
+    fn control_menu_suppression_is_actor_bound_readonly_and_ends_at_the_exact_deadline() {
+        let (runtime, mut store, _) = fixture();
+        let ends = runtime.control.rules.loss_duration.0;
+        session_mut(&mut store, ACTOR)
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .episode = Some(Episode {
+            actor: ACTOR,
+            starts: SimTime(0),
+            ends: SimTime(ends),
+        });
+        let before = store.snapshot().unwrap();
+        for (actor, now, alive, suppressed) in [
+            (ACTOR, SimTime(ends - 1), true, true),
+            (PersonId(11), SimTime(ends - 1), true, false),
+            (ACTOR, SimTime(ends), true, false),
+            (ACTOR, SimTime(ends - 1), false, false),
+        ] {
+            let mut commands = vec![1_u8, 2_u8];
+            let mut quantities = vec!["food", "water"];
+            runtime.filter_controlled_menu(
+                &store,
+                actor,
+                now,
+                alive,
+                &mut commands,
+                &mut quantities,
+            );
+            if suppressed {
+                assert!(commands.is_empty());
+                assert!(quantities.is_empty());
+            } else {
+                assert_eq!(commands, vec![1, 2]);
+                assert_eq!(quantities, vec!["food", "water"]);
+            }
+        }
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+}
+
+/// Controller review shares the current fixed review tick. Its callback and
+/// overflow horizon are owner policy; scheduling the returned deadline is host
+/// metadata binding.
+pub fn review_due(now: SimTime) -> bool {
+    now.0.is_multiple_of(MINUTE.0)
+}
+pub fn next_review(now: SimTime) -> Result<SimTime, Error> {
+    Ok(SimTime(now.0.checked_add(MINUTE.0).ok_or(Error::Overflow)?))
+}
+pub fn review_preflight(now: SimTime, with_character_review: bool) -> Result<SimTime, Error> {
+    let horizon = if with_character_review {
+        MINUTE.0 * 2
+    } else {
+        MINUTE.0
+    };
+    Ok(SimTime(now.0.checked_add(horizon).ok_or(Error::Overflow)?))
+}
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+    #[test]
+    fn review_deadlines_and_checked_character_horizon_keep_the_existing_clock_contract() {
+        assert!(review_due(SimTime(0)));
+        assert!(review_due(SimTime(60_000)));
+        assert!(!review_due(SimTime(59_999)));
+        assert_eq!(next_review(SimTime(60_000)), Ok(SimTime(120_000)));
+        assert_eq!(
+            review_preflight(SimTime(60_000), true),
+            Ok(SimTime(180_000))
+        );
+        let last_single = SimTime(u64::MAX - MINUTE.0);
+        assert_eq!(next_review(last_single), Ok(SimTime(u64::MAX)));
+        assert_eq!(review_preflight(last_single, false), Ok(SimTime(u64::MAX)));
+        assert_eq!(review_preflight(last_single, true), Err(Error::Overflow));
+        assert_eq!(
+            next_review(SimTime(last_single.0 + 1)),
+            Err(Error::Overflow)
+        );
     }
 }

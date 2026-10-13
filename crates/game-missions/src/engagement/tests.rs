@@ -2,6 +2,90 @@ use super::*;
 use crate::fixture::Fixture;
 use crate::transition_tests::*;
 use std::collections::BTreeMap;
+
+#[test]
+fn engagement_attempts_consume_the_decision_including_rejected_receivers() {
+    #[derive(Default)]
+    struct Execution {
+        approaches: Vec<(PersonId, MissionId, EncounterId)>,
+        starts: Vec<Vec<(PersonId, u32)>>,
+        reject: bool,
+    }
+    impl EngagementExecution for Execution {
+        fn approach(
+            &mut self,
+            actor: PersonId,
+            mission: MissionId,
+            encounter: EncounterId,
+        ) -> Result<(), Error> {
+            self.approaches.push((actor, mission, encounter));
+            if self.reject {
+                Err(Error::Unavailable)
+            } else {
+                Ok(())
+            }
+        }
+        fn start_encounter(
+            &mut self,
+            participants: Vec<(PersonId, u32)>,
+        ) -> Result<EncounterId, Error> {
+            self.starts.push(participants);
+            if self.reject {
+                Err(Error::Overflow)
+            } else {
+                Ok(EncounterId(91))
+            }
+        }
+    }
+    let mut execution = Execution::default();
+    let actor = PersonId(7);
+    let mission = MissionId(8);
+    let encounter = EncounterId(9);
+    let participants = vec![(actor, 0), (PersonId(10), 1)];
+    let kept = execute_engagement_attempt(&mut execution, EngagementPlan::Keep, actor, mission);
+    assert_eq!(kept, EngagementAttempt::Kept);
+    assert!(kept.consumes_member_action());
+    assert!(execution.approaches.is_empty() && execution.starts.is_empty());
+    let approached = execute_engagement_attempt(
+        &mut execution,
+        EngagementPlan::Approach(encounter),
+        actor,
+        mission,
+    );
+    assert_eq!(approached, EngagementAttempt::Approached);
+    assert!(approached.consumes_member_action());
+    let started = execute_engagement_attempt(
+        &mut execution,
+        EngagementPlan::Start(participants.clone()),
+        actor,
+        mission,
+    );
+    assert_eq!(started, EngagementAttempt::Started(EncounterId(91)));
+    assert!(started.consumes_member_action());
+    execution.reject = true;
+    let rejected_approach = execute_engagement_attempt(
+        &mut execution,
+        EngagementPlan::Approach(encounter),
+        actor,
+        mission,
+    );
+    assert_eq!(
+        rejected_approach,
+        EngagementAttempt::Failed(Error::Unavailable)
+    );
+    assert!(rejected_approach.consumes_member_action());
+    let rejected_start = execute_engagement_attempt(
+        &mut execution,
+        EngagementPlan::Start(participants.clone()),
+        actor,
+        mission,
+    );
+    assert_eq!(rejected_start, EngagementAttempt::Failed(Error::Overflow));
+    assert!(rejected_start.consumes_member_action());
+    assert_eq!(execution.approaches, vec![(actor, mission, encounter); 2]);
+    assert_eq!(execution.starts, vec![participants; 2]);
+}
+
 struct Facts {
     encounters: Vec<EncounterFacts>,
     bodies: BTreeMap<PersonId, FighterFacts>,
