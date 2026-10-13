@@ -349,3 +349,93 @@ fn batch_indexes_follow_appends_types_entity_counts_and_duplicate_removals() {
     assert!(!footprint.has_one_edit_per_row(&batch));
     assert!(!footprint.is_untouched(&batch));
 }
+
+#[test]
+fn bounded_projection_diff_guards_unchanged_absent_and_allocated_rows() {
+    let mut schema = Schema::new();
+    schema
+        .register::<u64>("number", |row| {
+            if *row == 0 {
+                Err(Error::Unavailable)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+    schema.register::<String>("name", |_| Ok(())).unwrap();
+    let mut source = Store::with_schema(schema);
+    source.insert_or_spawn(StableId(1), 10_u64).unwrap();
+    source
+        .insert_or_spawn(StableId(2), "unrelated".to_owned())
+        .unwrap();
+    let opening = source.project_entities([StableId(1), StableId(9)]).unwrap();
+    assert_eq!(opening.ids().collect::<Vec<_>>(), vec![StableId(1)]);
+    let mut preview = opening.clone();
+    assert!(preview.insert(StableId(1), 0_u64).is_err());
+    preview
+        .insert(StableId(1), "introduced".to_owned())
+        .unwrap();
+    preview.insert_or_spawn(StableId(9), 9_u64).unwrap();
+    let mut batch = Batch::new();
+    let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+    assert_eq!(batch.edit_count(StableId(1)), 1);
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    guard.validate(&source, &batch).unwrap();
+    source.insert(StableId(1), 11_u64).unwrap();
+    assert!(guard.validate(&source, &batch).is_err());
+    source.insert(StableId(1), 10_u64).unwrap();
+    batch.insert(StableId(9), "foreign allocation shape".to_owned());
+    assert!(guard.validate(&source, &batch).is_err());
+}
+
+#[test]
+fn bounded_projection_diff_protects_selected_absence_and_removed_rows() {
+    let mut schema = Schema::new();
+    schema.register::<u64>("number", |_| Ok(())).unwrap();
+    schema.register::<String>("name", |_| Ok(())).unwrap();
+    let mut source = Store::with_schema(schema);
+    source.insert_or_spawn(StableId(1), 10_u64).unwrap();
+    let opening = source
+        .project_entities([StableId(1), StableId(50)])
+        .unwrap();
+    let mut preview = opening.clone();
+    preview.remove::<u64>(StableId(1)).unwrap();
+    let mut batch = Batch::new();
+    let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    batch.insert(StableId(1), "introduced foreign type".to_owned());
+    assert!(guard.validate(&source, &batch).is_err());
+    let mut batch = Batch::new();
+    let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    source.spawn(StableId(50)).unwrap();
+    assert!(guard.validate(&source, &batch).is_err());
+}
+
+#[test]
+fn projection_diff_rejects_invalid_mutation_without_partial_staging() {
+    let mut schema = Schema::new();
+    schema
+        .register::<u64>("number", |row| {
+            if *row == 0 {
+                Err(Error::Unavailable)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+    let mut source = Store::with_schema(schema);
+    source.insert_or_spawn(StableId(1), 1_u64).unwrap();
+    source.insert_or_spawn(StableId(2), 2_u64).unwrap();
+    let opening = source.project_entities([StableId(1), StableId(2)]).unwrap();
+    let mut preview = opening.clone();
+    *preview.get_mut::<u64>(StableId(1)).unwrap() = 3;
+    *preview.get_mut::<u64>(StableId(2)).unwrap() = 0;
+    let mut batch = Batch::new();
+    batch.insert(StableId(80), 80_u64);
+    assert!(preview.diff_into(&opening, &mut batch).is_err());
+    assert_eq!(
+        batch.edited_entities().collect::<Vec<_>>(),
+        vec![StableId(80)]
+    );
+}

@@ -230,6 +230,24 @@ impl Batch {
     pub fn edited_entities(&self) -> impl Iterator<Item = StableId> + '_ {
         self.edits.iter().map(|edit| edit.key().0)
     }
+    /// Distinct edited identities in stable order, without scanning the source.
+    pub fn edited_entity_ids(&self) -> impl Iterator<Item = StableId> + '_ {
+        self.by_entity.keys().copied()
+    }
+    /// Apply these typed staged values only to a bounded preview copy.
+    /// The source batch remains intact; callers retain its guards separately.
+    pub fn apply_to_projection(&self, projection: &mut Store) -> Result<(), Error> {
+        if !projection.backend.is_projection() {
+            return Err(Error::InvalidConfiguration(
+                "batch preview requires a bounded projection".into(),
+            ));
+        }
+        let mut local = Batch::new();
+        for edit in &self.edits {
+            local.push(edit.cloned());
+        }
+        projection.apply_batch(local)
+    }
     /// Identities that will receive components, including repeated identities.
     pub fn inserted_entities(&self) -> impl Iterator<Item = StableId> + '_ {
         self.edits
@@ -275,6 +293,23 @@ impl Store {
         Self {
             backend: backend::Storage::new(schema),
         }
+    }
+    /// Copy only selected existing entities and their typed native components.
+    /// The exact schema registrations and validators are retained.
+    pub fn project_entities(&self, ids: impl IntoIterator<Item = StableId>) -> Result<Self, Error> {
+        Ok(Self {
+            backend: self.backend.project_entities(ids)?,
+        })
+    }
+    /// Coalesce a bounded preview into sparse writes and opening dependencies.
+    /// Bind the returned reads and footprint against the original source store
+    /// immediately after staging; new preview identities require exclusive creation.
+    pub fn diff_into(
+        &self,
+        opening: &Store,
+        batch: &mut Batch,
+    ) -> Result<(ReadSet, ReadFootprint), Error> {
+        self.backend.diff_into(&opening.backend, batch)
     }
     pub fn schema(&self) -> &Schema {
         self.backend.schema()

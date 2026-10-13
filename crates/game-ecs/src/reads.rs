@@ -49,8 +49,14 @@ impl ReadSet {
     }
     pub fn entity(&mut self, store: &Store, id: StableId) -> bool {
         let present = store.contains(id);
-        self.dependencies.push(Arc::new(Entity { id, present }));
+        self.expect_entity(id, present);
         present
+    }
+    pub(crate) fn expect_entity(&mut self, id: StableId, present: bool) {
+        self.dependencies.push(Arc::new(Entity { id, present }));
+    }
+    pub(crate) fn expect_exclusive_entity(&mut self, id: StableId) {
+        self.dependencies.push(Arc::new(ExclusiveEntity { id }));
     }
     /// Reserve an owner-exclusive new entity shape. At binding, every component
     /// edit at this identity must be a declared insertion. The resulting guard

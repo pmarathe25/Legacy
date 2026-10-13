@@ -32,6 +32,7 @@ pub(super) struct Registration {
     equal: EqualRow,
     clone_row: CloneRow,
     restore: Arc<RestoreRow>,
+    diff: fn(&Storage, &Storage, StableId, &mut Batch, &mut ReadSet, &mut ReadFootprint),
 }
 pub(super) fn is_stable_id<C: Component>() -> bool {
     TypeId::of::<C>() == TypeId::of::<StableId>()
@@ -73,6 +74,29 @@ impl Registration {
                     .insert(Native(component.0.clone()));
             }
         }
+        fn diff<C: Component>(
+            opening: &Storage,
+            final_store: &Storage,
+            id: StableId,
+            batch: &mut Batch,
+            reads: &mut ReadSet,
+            writes: &mut ReadFootprint,
+        ) {
+            let before = opening.get::<C>(id);
+            let after = final_store.get::<C>(id);
+            reads.expect_row::<C>(id, before.cloned());
+            if before != after {
+                writes.protect::<C>(id);
+                match after {
+                    Some(value) => {
+                        batch.insert(id, value.clone());
+                    }
+                    None => {
+                        batch.remove::<C>(id);
+                    }
+                }
+            }
+        }
         let restore = move |world: &mut World, entity: Entity, raw: &RawValue| {
             let component: C = serde_json::from_str(raw.get())
                 .map_err(|error| Error::InvalidSave(format!("invalid component data: {error}")))?;
@@ -89,6 +113,7 @@ impl Registration {
             equal: equal::<C>,
             clone_row: clone_row::<C>,
             restore: Arc::new(restore),
+            diff: diff::<C>,
         }
     }
 }
@@ -113,6 +138,7 @@ pub(super) struct Storage {
     entities: BTreeMap<StableId, Entity>,
     schema: Schema,
     structural_revision: Generation,
+    projection_members: Option<std::collections::BTreeSet<StableId>>,
 }
 // Pending operations are erased only inside this adapter. They validate against
 // typed registrations and publish into native typed columns, never a value bag.
@@ -212,7 +238,87 @@ impl Storage {
             entities: BTreeMap::new(),
             schema,
             structural_revision: Generation::default(),
+            projection_members: None,
         }
+    }
+    pub(super) fn project_entities(
+        &self,
+        ids: impl IntoIterator<Item = StableId>,
+    ) -> Result<Self, Error> {
+        let ids: std::collections::BTreeSet<_> = ids.into_iter().collect();
+        let mut projected = Self::new(self.schema.clone());
+        projected.projection_members = Some(ids.clone());
+        for id in ids {
+            if id.0 == 0 {
+                return Err(Error::InvalidConfiguration("zero stable entity ID".into()));
+            }
+            let Some(source_entity) = self.entities.get(&id) else {
+                continue;
+            };
+            projected.spawn(id)?;
+            let destination_entity = projected.entities[&id];
+            for registration in self.schema.components.values() {
+                (registration.clone_row)(
+                    &self.world,
+                    *source_entity,
+                    &mut projected.world,
+                    destination_entity,
+                );
+            }
+        }
+        Ok(projected)
+    }
+    pub(super) fn diff_into(
+        &self,
+        opening: &Self,
+        batch: &mut Batch,
+    ) -> Result<(ReadSet, ReadFootprint), Error> {
+        if self.schema != opening.schema
+            || self.schema.components.iter().any(|(key, registration)| {
+                !Arc::ptr_eq(
+                    &registration.validator,
+                    &opening.schema.components[key].validator,
+                )
+            })
+        {
+            return Err(Error::InvalidConfiguration(
+                "projection schemas differ".into(),
+            ));
+        }
+        let members = opening.projection_members.as_ref().ok_or_else(|| {
+            Error::InvalidConfiguration("diff requires a bounded opening projection".into())
+        })?;
+        let ids: std::collections::BTreeSet<_> =
+            members.iter().copied().chain(self.ids()).collect();
+        let mut reads = ReadSet::new();
+        let mut writes = ReadFootprint::new();
+        // Stage separately so a rejected diff cannot partially change the caller's batch.
+        let mut staged = Batch::new();
+        for id in ids {
+            if opening.contains(id) {
+                reads.expect_entity(id, true);
+            } else {
+                if self.contains(id) {
+                    reads.expect_exclusive_entity(id);
+                } else {
+                    reads.expect_entity(id, false);
+                }
+            }
+            for registration in opening.schema.components.values() {
+                (registration.diff)(opening, self, id, &mut staged, &mut reads, &mut writes);
+            }
+            if !opening.contains(id) && self.contains(id) && staged.edit_count(id) == 0 {
+                return Err(Error::Unavailable);
+            }
+        }
+        opening.validate_batch(&staged.edits)?;
+        for edit in staged.edits {
+            batch.push(edit);
+        }
+        Ok((reads, writes))
+    }
+    pub(super) fn is_projection(&self) -> bool {
+        self.projection_members.is_some()
     }
     pub(super) fn schema(&self) -> &Schema {
         &self.schema
@@ -521,6 +627,7 @@ impl Clone for Storage {
                 );
             }
         }
+        cloned.projection_members = self.projection_members.clone();
         cloned
     }
 }

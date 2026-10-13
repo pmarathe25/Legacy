@@ -23,6 +23,124 @@ fn fixture() -> Host {
     host
 }
 
+#[test]
+fn preview_retains_logical_opening_without_history_or_source_affinity() {
+    let mut source = fixture();
+    source.publish_clock(Clock {
+        time: SimTime(77),
+        revision: 9,
+    });
+    source.append_many(vec!["historical"]).unwrap();
+    let opening = source.transaction_opening();
+    let before = source.snapshot().unwrap();
+    let mut preview = Host::preview(
+        game_ecs::Store::with_schema(source.storage.schema().clone()),
+        123,
+        &opening,
+        source.seed(),
+    );
+    assert_eq!(preview.clock(), source.clock());
+    assert_eq!(preview.next_id(), source.next_id());
+    assert_eq!(preview.next_event(), source.next_event());
+    assert_eq!(preview.seed(), source.seed());
+    assert_eq!(preview.state, 123);
+    assert!(preview.storage.is_empty());
+    assert!(preview.events().is_empty());
+    assert_ne!(preview.transaction_opening(), opening);
+    assert_eq!(
+        preview.commit_transaction(Transaction::new(opening, Batch::new())),
+        Err(Error::Unavailable)
+    );
+    preview.append_many(vec!["projected"]).unwrap();
+    assert_eq!(preview.events().len(), 1);
+    assert_eq!(preview.events()[0].sequence, source.next_event());
+    assert_eq!(preview.events()[0].at, source.clock().time);
+    assert_eq!(source.snapshot().unwrap(), before);
+}
+
+#[test]
+fn preview_tail_preserves_pending_sequences_and_partitions_by_cursor() {
+    let mut source = fixture();
+    source.publish_clock(Clock {
+        time: SimTime(77),
+        revision: 9,
+    });
+    source
+        .append_many(vec!["a", "b", "c", "d", "e", "f"])
+        .unwrap();
+    let opening = source.transaction_opening();
+    let before = source.snapshot().unwrap();
+    let tail = source.events_since(3);
+    assert_eq!(
+        tail.iter()
+            .map(|record| record.sequence)
+            .collect::<Vec<_>>(),
+        [4, 5, 6]
+    );
+    let mut preview = Host::preview_with_tail(
+        game_ecs::Store::with_schema(source.storage.schema().clone()),
+        123,
+        &opening,
+        source.seed(),
+        tail,
+    )
+    .unwrap();
+    assert_eq!(preview.events(), tail);
+    assert_eq!(preview.next_event(), opening.next_event);
+    assert_eq!(preview.next_id(), opening.next_id);
+    assert_eq!(preview.clock(), opening.clock);
+    assert_ne!(preview.transaction_opening(), opening);
+    preview.append_many(vec!["projected"]).unwrap();
+    assert_eq!(
+        preview
+            .events_since(4)
+            .iter()
+            .map(|record| record.sequence)
+            .collect::<Vec<_>>(),
+        [5, 6, 7]
+    );
+    assert_eq!(preview.events_since(6)[0].event, "projected");
+    assert!(preview.events_since(u64::MAX).is_empty());
+    assert_eq!(preview.events_since(0).len(), 4);
+    assert_eq!(source.snapshot().unwrap(), before);
+}
+
+#[test]
+fn preview_tail_rejects_bad_sequences_or_timestamps_without_touching_source() {
+    let mut source = fixture();
+    source.publish_clock(Clock {
+        time: SimTime(77),
+        revision: 9,
+    });
+    source.append_many(vec!["a", "b", "c"]).unwrap();
+    let opening = source.transaction_opening();
+    let before = source.snapshot().unwrap();
+    let mutations: [fn(&mut Vec<game_world::Published<&'static str>>); 6] = [
+        |records| records[0].sequence = 0,
+        |records| records[0].sequence = 4,
+        |records| records[1].sequence = records[0].sequence,
+        |records| records.swap(0, 1),
+        |records| records[0].at = SimTime(78),
+        |records| records[1].at = SimTime(76),
+    ];
+    for mutate in mutations {
+        let mut tail = source.events().to_vec();
+        mutate(&mut tail);
+        assert!(
+            Host::preview_with_tail(
+                game_ecs::Store::with_schema(source.storage.schema().clone()),
+                123,
+                &opening,
+                source.seed(),
+                &tail,
+            )
+            .is_err()
+        );
+        assert_eq!(source.snapshot().unwrap(), before);
+        assert_eq!(source.transaction_opening(), opening);
+    }
+}
+
 // A tiny owner finalization token: domain validation happens before staging,
 // and its precomputed runtime cursor is published without fallible work.
 struct Finish {

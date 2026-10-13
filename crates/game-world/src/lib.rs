@@ -183,6 +183,58 @@ impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
             lineage: Arc::new(()),
         }
     }
+    /// Build an isolated, transient projection at an existing logical opening.
+    /// Supplied storage and state are already selected by the caller. Historical
+    /// records are omitted; `events()` contains only records emitted by this
+    /// preview, retaining their original sequence numbers. Its snapshot is not
+    /// a complete save. Independent lineage prevents preview plans from being
+    /// committed to the source host without explicit source-side preparation.
+    pub fn preview(
+        storage: Storage,
+        state: State,
+        opening: &TransactionOpening,
+        seed: u64,
+    ) -> Self {
+        Self {
+            storage,
+            state,
+            clock: opening.clock,
+            seed,
+            next_id: opening.next_id,
+            next_event: opening.next_event,
+            events: Vec::new(),
+            lineage: Arc::new(()),
+        }
+    }
+    /// Seed only the bounded pending record suffix needed by a preview's owners.
+    /// Historical sequences and timestamps remain intact; copying this tail
+    /// consumes no event IDs. The preview still has independent host affinity.
+    pub fn preview_with_tail(
+        storage: Storage,
+        state: State,
+        opening: &TransactionOpening,
+        seed: u64,
+        tail: &[Published<Event>],
+    ) -> Result<Self, Error>
+    where
+        Event: Clone,
+    {
+        if tail.iter().any(|record| {
+            record.sequence == 0
+                || record.sequence >= opening.next_event
+                || record.at > opening.clock.time
+        }) || tail
+            .windows(2)
+            .any(|pair| pair[0].sequence >= pair[1].sequence || pair[0].at > pair[1].at)
+        {
+            return Err(Error::InvalidConfiguration(
+                "invalid preview event tail".into(),
+            ));
+        }
+        let mut preview = Self::preview(storage, state, opening, seed);
+        preview.events = tail.to_vec();
+        Ok(preview)
+    }
     pub fn seed(&self) -> u64 {
         self.seed
     }
@@ -219,6 +271,14 @@ impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
     }
     pub fn events(&self) -> &[Published<Event>] {
         &self.events
+    }
+    /// Records strictly after the last consumed sequence. Sequence partitioning
+    /// works both for a complete log and for a preview's retained suffix.
+    pub fn events_since(&self, cursor: u64) -> &[Published<Event>] {
+        let first = self
+            .events
+            .partition_point(|record| record.sequence <= cursor);
+        &self.events[first..]
     }
     pub fn next_id(&self) -> u64 {
         self.next_id
