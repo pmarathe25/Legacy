@@ -1,6 +1,8 @@
 //! Backend-independent typed storage, stable identity, and explicit save schemas.
 mod backend;
+mod reads;
 use game_core::Error;
+pub use reads::{ReadGuard, ReadSet};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::value::RawValue;
 use std::{collections::BTreeMap, fmt};
@@ -140,26 +142,27 @@ impl ReadFootprint {
         self.rows.extend(other.rows);
     }
     pub fn has_one_edit_per_row(&self, batch: &Batch) -> bool {
-        self.rows
-            .iter()
-            .all(|key| batch.edits.iter().filter(|edit| edit.key() == *key).count() == 1)
+        self.rows.iter().all(|key| batch.row_edit_count(*key) == 1)
     }
     pub fn is_untouched(&self, batch: &Batch) -> bool {
-        batch
-            .edits
-            .iter()
-            .all(|edit| !self.rows.contains(&edit.key()))
+        self.rows.iter().all(|key| batch.row_edit_count(*key) == 0)
     }
 }
 pub struct Batch {
     key: BatchKey,
     edits: Vec<Box<dyn backend::Edit>>,
+    by_row: BTreeMap<(StableId, std::any::TypeId), Vec<usize>>,
+    by_type: BTreeMap<std::any::TypeId, Vec<usize>>,
+    by_entity: BTreeMap<StableId, Vec<usize>>,
 }
 impl Default for Batch {
     fn default() -> Self {
         Self {
             key: BatchKey(std::sync::Arc::new(())),
             edits: Vec::new(),
+            by_row: BTreeMap::new(),
+            by_type: BTreeMap::new(),
+            by_entity: BTreeMap::new(),
         }
     }
 }
@@ -170,29 +173,92 @@ impl Batch {
     pub fn key(&self) -> BatchKey {
         self.key.clone()
     }
+    fn push(&mut self, edit: Box<dyn backend::Edit>) {
+        let (id, component) = edit.key();
+        let index = self.edits.len();
+        self.by_row.entry((id, component)).or_default().push(index);
+        self.by_type.entry(component).or_default().push(index);
+        self.by_entity.entry(id).or_default().push(index);
+        self.edits.push(edit);
+    }
+    fn row_edit_count(&self, key: (StableId, std::any::TypeId)) -> usize {
+        self.by_row.get(&key).map_or(0, Vec::len)
+    }
+    fn edits_at(
+        &self,
+        key: (StableId, std::any::TypeId),
+    ) -> impl Iterator<Item = &dyn backend::Edit> {
+        self.by_row
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .map(|index| &*self.edits[*index])
+    }
+    fn edits_on(&self, id: StableId) -> impl Iterator<Item = &dyn backend::Edit> {
+        self.by_entity
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .map(|index| &*self.edits[*index])
+    }
+    fn typed_edits<C: Component>(&self) -> impl Iterator<Item = &dyn backend::Edit> {
+        self.by_type
+            .get(&std::any::TypeId::of::<C>())
+            .into_iter()
+            .flatten()
+            .map(|index| &*self.edits[*index])
+    }
+    /// Read a final typed row without publishing the combined writes. Duplicate
+    /// edits to the requested row are rejected rather than choosing a winner.
+    pub fn projected<'a, C: Component>(
+        &'a self,
+        store: &'a Store,
+        id: StableId,
+    ) -> Result<Option<&'a C>, Error> {
+        let mut edits = self.edits_at((id, std::any::TypeId::of::<C>()));
+        let Some(edit) = edits.next() else {
+            return Ok(store.get::<C>(id));
+        };
+        if edits.next().is_some() {
+            return Err(Error::Unavailable);
+        }
+        Ok(edit
+            .inserted_value()
+            .and_then(|value| value.downcast_ref::<C>()))
+    }
+    /// Stable entity identities mentioned by edits, including duplicates.
+    pub fn edited_entities(&self) -> impl Iterator<Item = StableId> + '_ {
+        self.edits.iter().map(|edit| edit.key().0)
+    }
+    /// Identities that will receive components, including repeated identities.
+    pub fn inserted_entities(&self) -> impl Iterator<Item = StableId> + '_ {
+        self.edits
+            .iter()
+            .filter_map(|edit| edit.inserted_value().map(|_| edit.key().0))
+    }
     pub fn insert<C: Component>(&mut self, id: StableId, value: C) -> &mut Self {
-        self.edits.push(backend::insert_edit(id, value));
+        self.push(backend::insert_edit(id, value));
         self
     }
     pub fn remove<C: Component>(&mut self, id: StableId) -> &mut Self {
-        self.edits.push(backend::remove_edit::<C>(id));
+        self.push(backend::remove_edit::<C>(id));
         self
     }
     /// Whether a combined batch writes or removes this typed row. Owners use
     /// this before publication to protect rows needed by sparse finalization.
     pub fn touches<C: Component>(&self, id: StableId) -> bool {
         let key = (id, std::any::TypeId::of::<C>());
-        self.edits.iter().any(|edit| edit.key() == key)
+        self.row_edit_count(key) > 0
     }
     /// Number of component edits at an entity, including duplicate removals.
     /// An allocating owner can guard a new entity's declared component footprint.
     pub fn edit_count(&self, id: StableId) -> usize {
-        self.edits.iter().filter(|edit| edit.key().0 == id).count()
+        self.by_entity.get(&id).map_or(0, Vec::len)
     }
     /// Borrow plain staged insertions, in submission order. Removed rows are
     /// absent; duplicates remain visible until the composed batch is admitted.
     pub fn insertions<C: Component>(&self) -> impl Iterator<Item = (StableId, &C)> + '_ {
-        self.edits.iter().filter_map(|edit| {
+        self.typed_edits::<C>().filter_map(|edit| {
             edit.inserted_value()?
                 .downcast_ref::<C>()
                 .map(|row| (edit.key().0, row))
@@ -201,11 +267,7 @@ impl Batch {
     /// Typed row identities in submission order, including removals and repeated
     /// edits. Owners validate their final composed footprint before publication.
     pub fn edited_ids<C: Component>(&self) -> impl Iterator<Item = StableId> + '_ {
-        let component = std::any::TypeId::of::<C>();
-        self.edits.iter().filter_map(move |edit| {
-            let (id, kind) = edit.key();
-            (kind == component).then_some(id)
-        })
+        self.typed_edits::<C>().map(|edit| edit.key().0)
     }
 }
 impl Store {
@@ -228,6 +290,10 @@ impl Store {
     }
     pub fn contains(&self, id: StableId) -> bool {
         self.backend.contains(id)
+    }
+    /// Test an identity reservation without visiting unrelated entities.
+    pub fn has_entities_in(&self, range: std::ops::Range<StableId>) -> bool {
+        self.backend.has_entities_in(range)
     }
     pub fn spawn(&mut self, id: StableId) -> Result<(), Error> {
         self.backend.spawn(id)

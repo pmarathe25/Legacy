@@ -116,8 +116,10 @@ pub(super) struct Storage {
 }
 // Pending operations are erased only inside this adapter. They validate against
 // typed registrations and publish into native typed columns, never a value bag.
-pub(super) trait Edit: Send {
+pub(super) trait Edit: Send + Sync {
     fn key(&self) -> (StableId, TypeId);
+    fn cloned(&self) -> Box<dyn Edit>;
+    fn same_value(&self, other: &dyn Edit) -> bool;
     fn inserted_value(&self) -> Option<&dyn Any> {
         None
     }
@@ -129,6 +131,16 @@ struct Insert<C: Component> {
     value: C,
 }
 impl<C: Component> Edit for Insert<C> {
+    fn cloned(&self) -> Box<dyn Edit> {
+        insert_edit(self.id, self.value.clone())
+    }
+    fn same_value(&self, other: &dyn Edit) -> bool {
+        self.key() == other.key()
+            && other
+                .inserted_value()
+                .and_then(|value| value.downcast_ref::<C>())
+                == Some(&self.value)
+    }
     fn inserted_value(&self) -> Option<&dyn Any> {
         Some(&self.value)
     }
@@ -160,6 +172,12 @@ struct Remove<C: Component> {
     marker: std::marker::PhantomData<C>,
 }
 impl<C: Component> Edit for Remove<C> {
+    fn cloned(&self) -> Box<dyn Edit> {
+        remove_edit::<C>(self.id)
+    }
+    fn same_value(&self, other: &dyn Edit) -> bool {
+        self.key() == other.key() && other.inserted_value().is_none()
+    }
     fn key(&self) -> (StableId, TypeId) {
         (self.id, TypeId::of::<C>())
     }
@@ -207,6 +225,9 @@ impl Storage {
     }
     pub(super) fn contains(&self, id: StableId) -> bool {
         self.entities.contains_key(&id)
+    }
+    pub(super) fn has_entities_in(&self, range: std::ops::Range<StableId>) -> bool {
+        range.start < range.end && self.entities.range(range).next().is_some()
     }
     pub(super) fn validate_batch(&self, edits: &[Box<dyn Edit>]) -> Result<(), Error> {
         self.batch_is_structural(edits).map(|_| ())

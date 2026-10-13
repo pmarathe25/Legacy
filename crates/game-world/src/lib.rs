@@ -1,9 +1,10 @@
 //! Generic canonical storage and publication. Scheduling and feature systems
 //! are supplied by composition through the existing game-sim engine.
 use game_core::{Error, SimTime};
-use game_ecs::{Schema, StableId, Store};
+use game_ecs::{Batch, ReadGuard, Schema, StableId, Store};
 use game_sim::{Clock, ClockWorld};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Sum a transaction's allocations and publications before any mutation.
 #[derive(Default)]
@@ -62,7 +63,50 @@ impl StorageAccess for Store {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// Counters and logical clock consulted while preparing a host transaction.
+#[derive(Clone, Debug)]
+pub struct TransactionOpening {
+    pub clock: Clock,
+    pub next_id: u64,
+    pub next_event: u64,
+    lineage: Arc<()>,
+}
+impl PartialEq for TransactionOpening {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.lineage, &other.lineage)
+            && self.clock == other.clock
+            && self.next_id == other.next_id
+            && self.next_event == other.next_event
+    }
+}
+impl Eq for TransactionOpening {}
+
+/// Already owner-validated combined effects. Runtime/content witnesses remain
+/// private to their owners and must be checked before calling commit_transaction.
+/// Bind each guard immediately after its owner's writes are staged. No owner
+/// finalization may perform fallible work after successful canonical publication.
+pub struct Transaction<Event> {
+    pub opening: TransactionOpening,
+    pub batch: Batch,
+    pub guards: Vec<ReadGuard>,
+    pub ids: u64,
+    pub events: Vec<Event>,
+    pub revisions: u64,
+}
+impl<Event> Transaction<Event> {
+    pub fn new(opening: TransactionOpening, batch: Batch) -> Self {
+        Self {
+            opening,
+            batch,
+            guards: Vec::new(),
+            ids: 0,
+            events: Vec::new(),
+            revisions: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct GenericHost<State, Event, Storage = Store> {
     pub storage: Storage,
     clock: Clock,
@@ -71,6 +115,35 @@ pub struct GenericHost<State, Event, Storage = Store> {
     next_event: u64,
     pub state: State,
     events: Vec<Published<Event>>,
+    lineage: Arc<()>,
+}
+impl<State: PartialEq, Event: PartialEq, Storage: PartialEq> PartialEq
+    for GenericHost<State, Event, Storage>
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.storage == other.storage
+            && self.clock == other.clock
+            && self.seed == other.seed
+            && self.next_id == other.next_id
+            && self.next_event == other.next_event
+            && self.state == other.state
+            && self.events == other.events
+    }
+}
+impl<State: Eq, Event: Eq, Storage: Eq> Eq for GenericHost<State, Event, Storage> {}
+impl<State: Clone, Event: Clone, Storage: Clone> Clone for GenericHost<State, Event, Storage> {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            clock: self.clock,
+            seed: self.seed,
+            next_id: self.next_id,
+            next_event: self.next_event,
+            state: self.state.clone(),
+            events: self.events.clone(),
+            lineage: Arc::new(()),
+        }
+    }
 }
 
 pub struct Parts<'a, State, Event> {
@@ -107,6 +180,7 @@ impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
             next_id: 1,
             next_event: 1,
             events: Vec::new(),
+            lineage: Arc::new(()),
         }
     }
     pub fn seed(&self) -> u64 {
@@ -151,6 +225,55 @@ impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
     }
     pub fn next_event(&self) -> u64 {
         self.next_event
+    }
+    pub fn transaction_opening(&self) -> TransactionOpening {
+        TransactionOpening {
+            clock: self.clock,
+            next_id: self.next_id,
+            next_event: self.next_event,
+            lineage: self.lineage.clone(),
+        }
+    }
+    /// Admit one combined batch and its complete publication budget before any
+    /// mutation. All Result-returning work precedes the backend's atomic batch
+    /// application. Successful application is followed only by infallible cursor
+    /// assignments and record publication; failed validation preserves all state.
+    pub fn commit_transaction(&mut self, transaction: Transaction<Event>) -> Result<(), Error> {
+        if transaction.opening != self.transaction_opening() {
+            return Err(Error::Unavailable);
+        }
+        let count = u64::try_from(transaction.events.len()).map_err(|_| Error::Overflow)?;
+        self.preflight_records(transaction.ids, count, transaction.revisions)?;
+        let next_id = self.next_id + transaction.ids;
+        let next_event = self.next_event + count;
+        let revision = self.clock.revision + transaction.revisions;
+        let store = self.storage.store();
+        if store.has_entities_in(StableId(self.next_id)..StableId(next_id))
+            || transaction
+                .batch
+                .inserted_entities()
+                .any(|id| !store.contains(id) && (id.0 < self.next_id || id.0 >= next_id))
+        {
+            return Err(Error::Unavailable);
+        }
+        for guard in &transaction.guards {
+            guard.validate(store, &transaction.batch)?;
+        }
+        // apply_batch invokes exact registered validators and structural checks
+        // before the first component change. No duplicate schema admission here.
+        self.storage.store_mut().apply_batch(transaction.batch)?;
+        self.next_id = next_id;
+        let first_event = self.next_event;
+        for (offset, event) in transaction.events.into_iter().enumerate() {
+            self.events.push(Published {
+                sequence: first_event + offset as u64,
+                at: self.clock.time,
+                event,
+            });
+        }
+        self.next_event = next_event;
+        self.clock.revision = revision;
+        Ok(())
     }
 
     /// Reserve the whole prospective interval before any feature mutation.
@@ -277,6 +400,7 @@ impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
             next_event: snapshot.next_event,
             state: snapshot.state,
             events: snapshot.events,
+            lineage: Arc::new(()),
         };
         validate_context(&host)?;
         Ok(host)
@@ -308,5 +432,31 @@ mod private_counter_tests {
         let before = host.snapshot().unwrap();
         assert_eq!(host.append_many(vec![4]), Err(Error::Overflow));
         assert_eq!(host.snapshot().unwrap(), before);
+    }
+    #[test]
+    fn transaction_budgets_fail_before_rows_ids_events_or_revision_change() {
+        for exhausted in 0..3 {
+            let mut schema = Schema::new();
+            schema.register::<u64>("test/number", |_| Ok(())).unwrap();
+            let mut host = GenericHost::<(), u8>::new(schema, 1, ());
+            let id = host.allocate_id().unwrap();
+            host.storage.insert_or_spawn(id, 10_u64).unwrap();
+            match exhausted {
+                0 => host.next_id = u64::MAX,
+                1 => host.next_event = u64::MAX,
+                _ => host.clock.revision = u64::MAX,
+            }
+            let before = host.snapshot().unwrap();
+            let clock = host.clock;
+            let mut batch = Batch::new();
+            batch.insert(id, 11_u64);
+            let mut transaction = Transaction::new(host.transaction_opening(), batch);
+            transaction.ids = 1;
+            transaction.events.push(1);
+            transaction.revisions = 1;
+            assert_eq!(host.commit_transaction(transaction), Err(Error::Overflow));
+            assert_eq!(host.snapshot().unwrap(), before);
+            assert_eq!(host.clock, clock);
+        }
     }
 }

@@ -6,7 +6,13 @@ Stores plain, typed feature data on entities with stable game IDs. Features regi
 
 Saves contain sorted IDs and component columns under explicit stable keys. Restore validates a separate store before it can replace live state. Clone and equality use typed values; scheduling and gameplay rules remain outside this crate.
 
-A typed `Batch` applies sparse insertions and removals atomically. All registrations, validators, and identities pass before any row changes. Features check their own opening values; unrelated components remain in place.
+A typed `Batch` applies sparse insertions and removals atomically. All registrations, validators, and identities pass before any row changes. `Batch::projected<T>` borrows the final typed value without publishing and rejects duplicate edits.
+
+`ReadSet` retains selected typed opening values, absence, entity presence, and predicate-scoped membership. It clones only selected rows; membership enumerates its component column and tracks IDs rather than member values. Predicate inputs must be retained immutably by the owner. Changes outside the recorded dependencies remain valid.
+
+Declare an owner's write keys in a `ReadFootprint`, stage those writes, then immediately call `ReadSet::bind(store, batch, &writes)`. Binding rejects unadmitted writes to protected rows and captures exact declared edits and projected membership. After every owner has staged, validate all returned `ReadGuard`s against the final batch and current store before one application. Entity dependencies guard canonical and projected presence; multiple owners may attach their own components to one explicitly created entity. Exclusive component footprints remain owner policy. Owner configuration, runtime witnesses, and domain validation remain private to the owner.
+
+Batch indexes retain submission order and include duplicate edits. Typed row projection, edit counts, and footprint checks use indexed lookups. Scoped membership checks enumerate their component column plus that type's staged edits. `cargo bench -p game-ecs --bench transaction_guards` measures 1,000, 2,000, and 4,000 selected rows and writes, including staging, binding, final validation, and batch publication.
 
 Query caches retain an opaque generation token. Structural changes replace that token; value updates preserve it. Tokens are derived, excluded from saves, and have no numeric counter to exhaust. Cached queries retain old tokens until refreshed, so allocation reuse cannot make a stale query appear current.
 
