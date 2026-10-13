@@ -63,6 +63,287 @@ fn local_cell_registration_preflights_both_component_validators() {
     );
     assert_eq!(store.snapshot().unwrap(), before);
 }
+
+#[test]
+fn registers_missing_area_cells_and_preserves_existing_cells() {
+    let mut world = World::new(config(), SimTime(0), 19).unwrap();
+    world.register_cell(AreaId(2), upland()).unwrap();
+    let existing = world.local_weather(AreaId(2)).unwrap().clone();
+
+    world
+        .runtime
+        .register_missing_cells(&mut world.store, [AreaId(1), AreaId(2)])
+        .unwrap();
+
+    assert!(world.local_weather(AreaId(1)).is_some());
+    assert_eq!(world.local_weather(AreaId(2)), Some(&existing));
+    world
+        .runtime
+        .register_missing_cells(&mut world.store, [AreaId(1), AreaId(2)])
+        .unwrap();
+}
+
+#[test]
+fn host_validation_rejects_unknown_cells_and_unpaired_component_columns() {
+    let mut world = World::new(config(), SimTime(0), 19).unwrap();
+    world
+        .register_cell(AreaId(2), LocalClimate::default())
+        .unwrap();
+    assert!(matches!(
+        world.runtime.validate_host(
+            &world.store,
+            SimTime(0),
+            19,
+            [AreaId(1)]
+        ),
+        Err(Error::InvalidSave(message)) if message == "unknown weather cell area"
+    ));
+
+    let mut unpaired = Store::with_schema(schema());
+    unpaired
+        .insert_or_spawn(StableId(2), LocalClimate::default())
+        .unwrap();
+    assert!(matches!(
+        world.runtime.validate_host(&unpaired, SimTime(0), 19, [AreaId(2)]),
+        Err(Error::InvalidSave(message)) if message == "unpaired local weather components"
+    ));
+}
+
+#[test]
+fn absent_runtime_rejects_orphan_environment_columns() {
+    let mut store = Store::with_schema(schema());
+    store
+        .insert_or_spawn(StableId(2), LocalClimate::default())
+        .unwrap();
+    assert!(matches!(
+        validate_host_presence(&store, None, SimTime(0), 19, [AreaId(2)]),
+        Err(Error::InvalidSave(message)) if message == "weather components have no environment runtime"
+    ));
+}
+
+#[test]
+fn actor_observation_requires_life_stationary_location_and_registered_cell() {
+    let mut world = World::new(config(), SimTime(0), 19).unwrap();
+    world
+        .register_cell(AreaId(2), LocalClimate::default())
+        .unwrap();
+    let at_area = game_core::Location::AtArea(AreaId(2));
+    let observation = world
+        .runtime
+        .observe_for_actor(&world.store, true, &at_area)
+        .unwrap();
+    assert_eq!(observation, world.observe_cell(AreaId(2)).unwrap());
+    assert!(
+        world
+            .runtime
+            .observe_for_actor(&world.store, false, &at_area)
+            .is_none()
+    );
+    let in_transit = game_core::Location::InTransit {
+        from: AreaId(2),
+        to: AreaId(3),
+        departed: SimTime(0),
+        arrives: SimTime(10),
+        road_start: None,
+    };
+    assert!(
+        world
+            .runtime
+            .observe_for_actor(&world.store, true, &in_transit)
+            .is_none()
+    );
+    assert!(
+        world
+            .runtime
+            .observe_cell(&world.store, AreaId(3))
+            .is_none()
+    );
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+struct OwnerState {
+    environment: Option<Runtime>,
+}
+
+fn owner_host() -> (
+    game_world::GenericHost<OwnerState, ()>,
+    game_world::Registry<OwnerState, ()>,
+) {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    let mut host = game_world::GenericHost::new(schema, 19, OwnerState::default());
+    // Stable area IDs are allocated by the host before the owner attaches rows.
+    host.allocate_ids(2).unwrap();
+    // Weather components attach to the area's already-existing entity.
+    host.storage.spawn(StableId(2)).unwrap();
+    let mut registry = game_world::Registry::new();
+    register_system(
+        &mut registry,
+        game_world::RuntimeSlot::new(
+            |state: &OwnerState| &state.environment,
+            |state: &mut OwnerState| &mut state.environment,
+        ),
+    )
+    .unwrap();
+    (host, registry)
+}
+
+fn initialize_owner(
+    host: &mut game_world::GenericHost<OwnerState, ()>,
+    registry: &game_world::Registry<OwnerState, ()>,
+    config: Config,
+) {
+    let prepared = registry
+        .prepare(host, SimTime(0), None, |tx| {
+            tx.call::<EnvironmentSystem>(SystemInput::Initialize {
+                config,
+                areas: vec![AreaId(2)],
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        registry.commit(host, prepared).unwrap(),
+        SystemOutput::Initialized
+    );
+}
+
+#[test]
+fn owner_weather_advance_commits_rows_and_runtime_together() {
+    let (mut host, registry) = owner_host();
+    let mut config = config();
+    config.calendar.season_days = [1; 4];
+    initialize_owner(&mut host, &registry, config.clone());
+    let before = host.storage.get::<Weather>(StableId(2)).unwrap().clone();
+    let next = SimTime(config.calendar.day.0);
+    let prepared = registry
+        .prepare(&host, next, None, |tx| {
+            tx.call::<EnvironmentSystem>(SystemInput::Advance { next })
+        })
+        .unwrap();
+    assert!(matches!(
+        registry.commit(&mut host, prepared).unwrap(),
+        SystemOutput::Advanced(Some(step)) if step.elapsed_local_day.is_some()
+    ));
+    assert_eq!(host.state.environment.as_ref().unwrap().epoch(), next);
+    assert_eq!(host.state.environment.as_ref().unwrap().weather_day, 1);
+    assert_ne!(host.storage.get::<Weather>(StableId(2)).unwrap(), &before);
+}
+
+#[test]
+fn calendar_and_local_weather_requests_read_owner_metadata_and_typed_rows() {
+    let (mut host, registry) = owner_host();
+    let config = config();
+    initialize_owner(&mut host, &registry, config.clone());
+    let prepared = registry
+        .prepare(&host, SimTime(0), None, |tx| {
+            Ok((
+                tx.request(ReadCalendar { area: AreaId(2) })?,
+                tx.request(ReadLocalWeather { area: AreaId(2) })?,
+                tx.request(ReadCalendar { area: AreaId(3) })?,
+                tx.request(ReadLocalWeather { area: AreaId(3) })?,
+            ))
+        })
+        .unwrap();
+    let (calendar, weather, missing_calendar, missing_weather) =
+        registry.commit(&mut host, prepared).unwrap();
+    let calendar = calendar.unwrap();
+    assert_eq!(calendar.day, 0);
+    assert_eq!(calendar.year_days, config.calendar.year_days());
+    assert_eq!(
+        calendar.day_of_year,
+        u64::from(config.calendar.starting_day)
+    );
+    assert_eq!(
+        calendar.temperature_c,
+        weather.as_ref().map(|row| row.temperature)
+    );
+    assert!(missing_calendar.unwrap().temperature_c.is_none());
+    assert!(missing_weather.is_none());
+}
+
+#[test]
+fn registered_scheduler_advances_environment_at_its_native_day_boundary() {
+    let (mut host, mut registry) = owner_host();
+    let mut config = config();
+    config.calendar.season_days = [1; 4];
+    initialize_owner(&mut host, &registry, config.clone());
+    let mut scheduler = game_world::scheduling::Scheduler::<()>::new();
+    register_schedule(
+        &mut scheduler,
+        &mut registry,
+        game_world::scheduling::Order {
+            priority: 10,
+            module: game_sim::ModuleId(1),
+        },
+    )
+    .unwrap();
+
+    let day = config.calendar.day.0;
+    let span = scheduler
+        .step(&registry, &mut host, SimTime(day * 3), None)
+        .unwrap();
+
+    assert_eq!(
+        span,
+        game_world::scheduling::ClockSpan {
+            from: SimTime(0),
+            to: SimTime(day),
+        }
+    );
+    assert_eq!(
+        host.state.environment.as_ref().unwrap().epoch(),
+        SimTime(day)
+    );
+}
+
+#[test]
+fn shared_elapsed_day_and_readonly_observation_preserve_opening_weather() {
+    let (mut host, registry) = owner_host();
+    let mut config = config();
+    config.calendar.season_days = [1; 4];
+    initialize_owner(&mut host, &registry, config.clone());
+    let opening_weather = host.storage.get::<Weather>(StableId(2)).unwrap().clone();
+    let next = SimTime(config.calendar.day.0);
+    let prepared = registry
+        .prepare(&host, next, None, |tx| {
+            tx.call::<EnvironmentSystem>(SystemInput::Advance { next })?;
+            let elapsed = tx.request(ReadElapsedDay)?;
+            let observation = tx.request(ObserveEnvironment {
+                alive: true,
+                location: Some(game_core::Location::AtArea(AreaId(2))),
+            })?;
+            Ok((elapsed, observation))
+        })
+        .unwrap();
+    let (elapsed, observation) = registry.commit(&mut host, prepared).unwrap();
+
+    let elapsed = elapsed.unwrap();
+    assert_eq!(elapsed.day, 1);
+    assert_eq!(elapsed.day_of_year, u64::from(config.calendar.starting_day));
+    assert_eq!(elapsed.cells.get(&AreaId(2)), Some(&opening_weather));
+    assert_eq!(
+        observation.unwrap().weather,
+        host.storage.get::<Weather>(StableId(2)).unwrap().clone()
+    );
+}
+
+#[test]
+fn late_environment_validation_failure_rejects_weather_and_runtime_together() {
+    let (mut host, registry) = owner_host();
+    initialize_owner(&mut host, &registry, config());
+    let before = host.clone();
+    let next = SimTime(config().calendar.day.0);
+    let result = registry.prepare(&host, next, None, |tx| {
+        tx.call::<EnvironmentSystem>(SystemInput::Advance { next })?;
+        tx.call::<EnvironmentSystem>(SystemInput::Validate { areas: Vec::new() })
+    });
+    assert!(matches!(
+        result,
+        Err(Error::InvalidSave(message)) if message == "unknown weather cell area"
+    ));
+    assert_eq!(host, before);
+}
+
 impl std::fmt::Debug for Queries {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Queries")
