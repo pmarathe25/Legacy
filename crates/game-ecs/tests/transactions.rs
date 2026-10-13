@@ -563,3 +563,131 @@ fn projection_guards_reject_changed_validators_before_binding_and_publication() 
         [StableId(9)]
     );
 }
+
+#[test]
+fn compressed_full_columns_reject_inert_foreign_edits_before_and_after_binding() {
+    for id in [StableId(1), StableId(50)] {
+        let source = fixture();
+        let opening = source.project_entities([id]).unwrap();
+        let preview = opening.clone();
+        let mut batch = Batch::new();
+        let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+        assert!(batch.edited_entity_ids().next().is_none());
+        let guard = reads.clone().bind(&source, &batch, &writes).unwrap();
+        // u64 is absent on both the existing and the absent selected identity.
+        // This edit changes neither final shape nor values nor entity presence.
+        batch.remove::<u64>(id);
+        assert!(reads.bind(&source, &batch, &writes).is_err());
+        assert_eq!(guard.validate(&source, &batch), Err(Error::Unavailable));
+    }
+
+    let source = fixture();
+    let opening = source.project_entities([StableId(1)]).unwrap();
+    let mut batch = Batch::new();
+    let (reads, writes) = opening.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.clone().bind(&source, &batch, &writes).unwrap();
+    batch.insert(StableId(1), source.get::<Row>(StableId(1)).unwrap().clone());
+    assert!(reads.bind(&source, &batch, &writes).is_err());
+    assert!(guard.validate(&source, &batch).is_err());
+}
+
+#[test]
+fn compressed_full_columns_reject_stale_added_source_types_and_late_duplicates() {
+    let mut source = fixture();
+    let opening = source.project_entities([StableId(1)]).unwrap();
+    let mut preview = opening.clone();
+    preview.get_mut::<Row>(StableId(1)).unwrap().value += 1;
+    let mut batch = Batch::new();
+    let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    source.insert(StableId(2), 99_u64).unwrap();
+    guard.validate(&source, &batch).unwrap();
+    source.insert(StableId(1), 99_u64).unwrap();
+    assert_eq!(guard.validate(&source, &batch), Err(Error::Unavailable));
+    source.remove::<u64>(StableId(1)).unwrap();
+    guard.validate(&source, &batch).unwrap();
+    batch.insert(
+        StableId(1),
+        preview.get::<Row>(StableId(1)).unwrap().clone(),
+    );
+    assert_eq!(guard.validate(&source, &batch), Err(Error::Unavailable));
+}
+
+#[test]
+fn sparse_partial_absence_keeps_canonical_foreign_values_independent_but_rejects_foreign_batch_keys()
+ {
+    let mut source = fixture();
+    let mut opening = source.project_entities([]).unwrap();
+    opening.import_rows::<u64>(&source, [StableId(1)]).unwrap();
+    assert!(opening.contains(StableId(1)));
+    assert_eq!(opening.get::<u64>(StableId(1)), None);
+    let mut batch = Batch::new();
+    let (reads, writes) = opening.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.clone().bind(&source, &batch, &writes).unwrap();
+    source.get_mut::<Row>(StableId(1)).unwrap().value += 1;
+    guard.validate(&source, &batch).unwrap();
+    source.insert(StableId(1), 10_u64).unwrap();
+    assert!(guard.validate(&source, &batch).is_err());
+    source.remove::<u64>(StableId(1)).unwrap();
+    guard.validate(&source, &batch).unwrap();
+    batch.insert(StableId(1), source.get::<Row>(StableId(1)).unwrap().clone());
+    assert!(reads.bind(&source, &batch, &writes).is_err());
+    assert!(guard.validate(&source, &batch).is_err());
+
+    let mut batch = Batch::new();
+    let (reads, writes) = opening.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    source.remove::<Row>(StableId(1)).unwrap();
+    guard.validate(&source, &batch).unwrap();
+    batch.remove::<Row>(StableId(1));
+    assert!(guard.validate(&source, &batch).is_err());
+
+    let mut invalid = opening.clone();
+    invalid
+        .insert(
+            StableId(1),
+            Row {
+                scope: 7,
+                value: 11,
+            },
+        )
+        .unwrap();
+    let mut untouched = Batch::new();
+    untouched.insert(StableId(80), 80_u64);
+    assert!(invalid.diff_into(&opening, &mut untouched).is_err());
+    assert_eq!(
+        untouched.edited_entity_ids().collect::<Vec<_>>(),
+        [StableId(80)]
+    );
+}
+
+#[test]
+fn sparse_projection_copy_and_equality_preserve_empty_entities_and_typed_shapes() {
+    let mut source = fixture();
+    source.spawn(StableId(9)).unwrap();
+    source.insert(StableId(2), 22_u64).unwrap();
+    let cloned = source.clone();
+    assert_eq!(source, cloned);
+    assert!(cloned.contains(StableId(9)));
+    let restored = Store::restore(source.schema().clone(), source.snapshot().unwrap()).unwrap();
+    assert_eq!(source, restored);
+    let projection = source.project_entities(source.ids()).unwrap();
+    assert_eq!(source, projection);
+    assert_eq!(source.snapshot().unwrap(), projection.snapshot().unwrap());
+
+    let mut same_column_count = cloned.clone();
+    same_column_count.remove::<Row>(StableId(1)).unwrap();
+    same_column_count.insert(StableId(1), 10_u64).unwrap();
+    assert_ne!(source, same_column_count);
+
+    let mut closing = projection.clone();
+    closing.remove::<Row>(StableId(1)).unwrap();
+    closing.insert(StableId(1), 10_u64).unwrap();
+    closing.insert(StableId(9), 9_u64).unwrap();
+    let mut batch = Batch::new();
+    let (reads, writes) = closing.diff_into(&projection, &mut batch).unwrap();
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    guard.validate(&source, &batch).unwrap();
+    source.apply_batch(batch).unwrap();
+    assert_eq!(source, closing);
+}

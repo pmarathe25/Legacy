@@ -1,7 +1,11 @@
 //! Sparse opening witnesses and owner-bound projections of a composed batch.
 use crate::{Batch, BatchKey, Component, ReadFootprint, Schema, StableId, Store};
 use game_core::Error;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    any::TypeId,
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 trait Dependency: Send + Sync {
     fn validate(&self, store: &Store) -> bool;
@@ -61,6 +65,13 @@ impl ReadSet {
     pub(crate) fn expect_schema(&mut self, schema: Schema) {
         self.dependencies
             .push(Arc::new(RegistrationWitness { schema }));
+    }
+    /// A complete selected entity retains all logical column absences in one
+    /// shape witness. Partial imports omit that check but retain the same exact
+    /// publication census; unimported canonical values remain independent.
+    pub(crate) fn expect_columns(&mut self, id: StableId, shape: Option<Vec<TypeId>>) {
+        self.dependencies
+            .push(Arc::new(EntityColumns { id, shape }));
     }
     /// Reserve an owner-exclusive new entity shape. At binding, every component
     /// edit at this identity must be a declared insertion. The resulting guard
@@ -196,6 +207,52 @@ impl Dependency for RegistrationWitness {
 impl Projection for RegistrationWitness {
     fn validate(&self, store: &Store, _batch: &Batch) -> Result<bool, Error> {
         Ok(self.schema.same_registrations(store.schema()))
+    }
+}
+
+struct EntityColumns {
+    id: StableId,
+    shape: Option<Vec<TypeId>>,
+}
+struct ProjectedColumns {
+    id: StableId,
+    edits: BTreeMap<TypeId, bool>,
+}
+impl Dependency for EntityColumns {
+    fn validate(&self, store: &Store) -> bool {
+        self.shape
+            .as_ref()
+            .is_none_or(|shape| store.backend.has_component_shape(self.id, shape))
+    }
+    fn bind(
+        &self,
+        _store: &Store,
+        batch: &Batch,
+        admitted: &ReadFootprint,
+    ) -> Result<Box<dyn Projection>, Error> {
+        let mut edits = BTreeMap::new();
+        for edit in batch.edits_on(self.id) {
+            if !admitted.rows.contains(&edit.key())
+                || edits
+                    .insert(edit.key().1, edit.inserted_value().is_some())
+                    .is_some()
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        Ok(Box::new(ProjectedColumns { id: self.id, edits }))
+    }
+}
+impl Projection for ProjectedColumns {
+    fn validate(&self, _store: &Store, batch: &Batch) -> Result<bool, Error> {
+        // Shape alone cannot see absent removals, equal rewrites, or swapped
+        // insertion/removal pairs. Retain the exact signed, unique key census;
+        // ReadGuard's admitted edit witnesses independently retain their values.
+        Ok(batch.edit_count(self.id) == self.edits.len()
+            && batch.edits_on(self.id).all(|edit| {
+                self.edits.get(&edit.key().1) == Some(&edit.inserted_value().is_some())
+                    && batch.row_edit_count(edit.key()) == 1
+            }))
     }
 }
 
@@ -383,5 +440,64 @@ impl<C: Component> Dependency for Membership<C> {
 impl<C: Component> Projection for Membership<C> {
     fn validate(&self, store: &Store, batch: &Batch) -> Result<bool, Error> {
         Ok(projected_members(store, batch, &*self.predicate)? == self.members)
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct Sparse<const COLUMN: usize>(u64);
+
+    #[test]
+    fn registered_absences_do_not_expand_full_entity_dependency_count() {
+        let mut schema = Schema::new();
+        schema.register::<u64>("present", |_| Ok(())).unwrap();
+        macro_rules! absent {
+            ($($column:literal),*) => {$(
+                schema.register::<Sparse<$column>>(concat!("absent/", stringify!($column)), |_| Ok(())).unwrap();
+            )*};
+        }
+        absent!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+        let mut source = Store::with_schema(schema);
+        source.insert_or_spawn(StableId(1), 10_u64).unwrap();
+        let opening = source.project_entities([StableId(1)]).unwrap();
+        let mut preview = opening.clone();
+        preview.insert(StableId(1), 11_u64).unwrap();
+        let mut batch = Batch::new();
+        let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+        // A schema-wide absence capture would allocate at least seventeen row
+        // witnesses here. The budget covers attached values, shape, and affinity.
+        assert!(reads.dependencies.len() < 8);
+        let guard = reads.bind(&source, &batch, &writes).unwrap();
+        guard.validate(&source, &batch).unwrap();
+        source.insert(StableId(1), Sparse::<15>(15)).unwrap();
+        assert_eq!(guard.validate(&source, &batch), Err(Error::Unavailable));
+    }
+
+    #[test]
+    fn retained_census_rejects_operation_swaps_even_with_the_same_key_and_count() {
+        let mut schema = Schema::new();
+        schema.register::<u64>("number", |_| Ok(())).unwrap();
+        let mut source = Store::with_schema(schema);
+        source.insert_or_spawn(StableId(1), 10_u64).unwrap();
+        let opening = source.project_entities([StableId(1)]).unwrap();
+        let mut preview = opening.clone();
+        preview.insert(StableId(1), 11_u64).unwrap();
+        let mut batch = Batch::new();
+        let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+        let guard = reads.bind(&source, &batch, &writes).unwrap();
+        let census = ProjectedColumns {
+            id: StableId(1),
+            edits: BTreeMap::from([(TypeId::of::<u64>(), true)]),
+        };
+        assert_eq!(census.validate(&source, &batch), Ok(true));
+        // Keep the opaque batch identity and sparse indexes, changing only the
+        // operation. This exercises the census independently of value guards.
+        batch.edits[0] = crate::backend::remove_edit::<u64>(StableId(1));
+        assert_eq!(census.validate(&source, &batch), Ok(false));
+        assert_eq!(guard.validate(&source, &batch), Err(Error::Unavailable));
     }
 }

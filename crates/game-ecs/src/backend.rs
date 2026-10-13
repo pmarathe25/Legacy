@@ -1,7 +1,7 @@
 //! Private vendor adapter. No engine types escape the storage/query contracts.
 use super::*;
 use bevy_ecs::{
-    component::Component as NativeComponent,
+    component::{Component as NativeComponent, ComponentId},
     entity::Entity,
     query::QueryState,
     world::{World, WorldId},
@@ -27,7 +27,7 @@ pub(super) struct Registration {
     // Immutable validator callbacks are erased here. Components remain typed
     // native storage; no Any world or component bag is exposed to consumers.
     validator: Arc<dyn Any + Send + Sync>,
-    initialize: fn(&mut World),
+    initialize: fn(&mut World) -> ComponentId,
     read: ReadRow,
     equal: EqualRow,
     clone_row: CloneRow,
@@ -48,8 +48,8 @@ impl Registration {
         self.same_type(other) && Arc::ptr_eq(&self.validator, &other.validator)
     }
     pub(super) fn new<C: Component>(validate: fn(&C) -> Result<(), Error>) -> Self {
-        fn initialize<C: Component>(world: &mut World) {
-            world.register_component::<Native<C>>();
+        fn initialize<C: Component>(world: &mut World) -> ComponentId {
+            world.register_component::<Native<C>>()
         }
         fn read<C: Component>(
             world: &World,
@@ -140,6 +140,10 @@ pub(super) struct Storage {
     world: World,
     entities: BTreeMap<StableId, Entity>,
     schema: Schema,
+    // Native IDs index only their own World. Semantic comparisons and witnesses
+    // use plain TypeId; vendor identity never crosses a storage boundary.
+    native_registrations: Vec<Option<Registration>>,
+    typed_registrations: BTreeMap<TypeId, usize>,
     structural_revision: Generation,
     projection_members: Option<std::collections::BTreeSet<StableId>>,
     projection_rows: BTreeMap<StableId, std::collections::BTreeSet<TypeId>>,
@@ -234,13 +238,22 @@ impl Storage {
     pub(super) fn new(schema: Schema) -> Self {
         let mut world = World::new();
         world.register_component::<NativeId>();
+        let mut native_registrations = Vec::new();
+        let mut typed_registrations = BTreeMap::new();
         for registration in schema.components.values() {
-            (registration.initialize)(&mut world);
+            let index = (registration.initialize)(&mut world).index();
+            if native_registrations.len() <= index {
+                native_registrations.resize_with(index + 1, || None);
+            }
+            native_registrations[index] = Some(registration.clone());
+            typed_registrations.insert(registration.component_type, index);
         }
         Self {
             world,
             entities: BTreeMap::new(),
             schema,
+            native_registrations,
+            typed_registrations,
             structural_revision: Generation::default(),
             projection_members: None,
             projection_rows: BTreeMap::new(),
@@ -262,7 +275,7 @@ impl Storage {
             };
             projected.spawn(id)?;
             let destination_entity = projected.entities[&id];
-            for registration in self.schema.components.values() {
+            for registration in self.attached_registrations(*source_entity) {
                 (registration.clone_row)(
                     &self.world,
                     *source_entity,
@@ -344,26 +357,33 @@ impl Storage {
             } else {
                 reads.expect_entity(id, false);
             }
-            for registration in opening.schema.components.values() {
-                if let Some(rows) = opening.projection_rows.get(&id)
-                    && !members.contains(&id)
-                    && !rows.contains(&registration.component_type)
+            let mut types = if let Some(rows) = opening.projection_rows.get(&id)
+                && !members.contains(&id)
+            {
+                // Imported absent rows are dependencies too. Neither copy nor
+                // canonical shape checking may confer authority over other keys.
+                if self
+                    .component_shape(id)
+                    .iter()
+                    .any(|component| !rows.contains(component))
                 {
-                    // Partial imports confer no authority over other component keys.
-                    let mut unexpected = Batch::new();
-                    (registration.diff)(
-                        opening,
-                        self,
-                        id,
-                        &mut unexpected,
-                        &mut ReadSet::new(),
-                        &mut ReadFootprint::new(),
-                    );
-                    if unexpected.edit_count(id) != 0 {
-                        return Err(Error::Unavailable);
-                    }
-                    continue;
+                    return Err(Error::Unavailable);
                 }
+                reads.expect_columns(id, None);
+                rows.iter().copied().collect::<Vec<_>>()
+            } else {
+                let opening_shape = opening.component_shape(id);
+                reads.expect_columns(id, Some(opening_shape.clone()));
+                let mut types = opening_shape;
+                types.extend(self.component_shape(id));
+                types
+            };
+            types.sort_unstable();
+            types.dedup();
+            for component_type in types {
+                let registration = opening
+                    .registration_by_type(component_type)
+                    .expect("projected columns retain registered types");
                 (registration.diff)(opening, self, id, &mut staged, &mut reads, &mut writes);
             }
             if !opening.contains(id) && self.contains(id) && staged.edit_count(id) == 0 {
@@ -378,6 +398,42 @@ impl Storage {
     }
     pub(super) fn is_projection(&self) -> bool {
         self.projection_members.is_some()
+    }
+    fn attached_registrations(&self, entity: Entity) -> impl Iterator<Item = &Registration> {
+        let archetype = self.world.entity(entity).location().archetype_id;
+        self.world.archetypes()[archetype]
+            .components()
+            .iter()
+            .filter_map(|id| {
+                self.native_registrations
+                    .get(id.index())
+                    .and_then(Option::as_ref)
+            })
+    }
+    fn registration_by_type(&self, component_type: TypeId) -> Option<&Registration> {
+        self.typed_registrations
+            .get(&component_type)
+            .and_then(|index| self.native_registrations[*index].as_ref())
+    }
+    pub(super) fn component_shape(&self, id: StableId) -> Vec<TypeId> {
+        let mut shape = self
+            .entities
+            .get(&id)
+            .into_iter()
+            .flat_map(|entity| self.attached_registrations(*entity))
+            .map(|registration| registration.component_type)
+            .collect::<Vec<_>>();
+        shape.sort_unstable();
+        shape
+    }
+    pub(super) fn has_component_shape(&self, id: StableId, expected: &[TypeId]) -> bool {
+        let Some(entity) = self.entities.get(&id) else {
+            return expected.is_empty();
+        };
+        self.attached_registrations(*entity).count() == expected.len()
+            && self
+                .attached_registrations(*entity)
+                .all(|registration| expected.binary_search(&registration.component_type).is_ok())
     }
     pub(super) fn schema(&self) -> &Schema {
         &self.schema
@@ -677,7 +733,7 @@ impl Clone for Storage {
         for (id, source_entity) in &self.entities {
             cloned.spawn(*id).expect("stored stable IDs are valid");
             let destination_entity = cloned.entities[id];
-            for registration in self.schema.components.values() {
+            for registration in self.attached_registrations(*source_entity) {
                 (registration.clone_row)(
                     &self.world,
                     *source_entity,
@@ -695,10 +751,13 @@ impl PartialEq for Storage {
     fn eq(&self, other: &Self) -> bool {
         self.schema == other.schema
             && self.entities.keys().eq(other.entities.keys())
-            && self.schema.components.values().all(|registration| {
-                self.entities.iter().all(|(id, entity)| {
-                    (registration.equal)(&self.world, *entity, &other.world, other.entities[id])
-                })
+            && self.entities.iter().all(|(id, entity)| {
+                let other_entity = other.entities[id];
+                self.attached_registrations(*entity).count()
+                    == other.attached_registrations(other_entity).count()
+                    && self.attached_registrations(*entity).all(|registration| {
+                        (registration.equal)(&self.world, *entity, &other.world, other.entities[id])
+                    })
             })
     }
 }
