@@ -2,8 +2,7 @@
 //! The planner sees personal memories; execution remains with physical owners.
 use crate::*;
 use game_logistics::{
-    AcquisitionOffer, Cargo, Delivery, Destination, KnownDestination, KnownStock, OfferYield,
-    Prerequisite, PrerequisitePlacement, Requirement, Step,
+    AcquisitionOffer, Cargo, Delivery, Destination, KnownDestination, KnownStock, Step,
 };
 
 #[derive(Clone, Copy)]
@@ -26,11 +25,12 @@ impl game_logistics::AcquisitionSource<Command> for AcquisitionFacts<'_> {
         quantity: Quantity,
         room: Quantity,
     ) -> Vec<game_logistics::Candidate<Command>> {
-        self.simulation
+        let offers = self
+            .simulation
             .ecology_acquisition_offers(
                 self.actor,
                 good,
-                Quantity(quantity.0.min(room.0)),
+                game_characters::orchestration::acquisition_request_quantity(quantity, room),
                 room,
                 self.resources,
             )
@@ -42,14 +42,12 @@ impl game_logistics::AcquisitionSource<Command> for AcquisitionFacts<'_> {
             .chain(
                 self.simulation
                     .production_acquisition_offers(self.actor, good),
-            )
-            .map(|offer| game_logistics::Candidate {
-                willing: self
-                    .personality
-                    .accepts_risk(acquisition_risk(&offer.action)),
-                offer,
-            })
-            .collect()
+            );
+        game_characters::orchestration::acquisition_candidates(
+            &self.personality,
+            offers,
+            acquisition_action_facts,
+        )
     }
 }
 impl Simulation {
@@ -123,13 +121,12 @@ impl Simulation {
         providers: DeliveryProviders<'_>,
     ) -> Step<Command> {
         let facts = self.delivery_facts_with_source_cargo(actor, delivery, destination, providers);
-        let personality = self
-            .invocation_personality(actor)
-            .or_else(|| {
-                game_characters::decisions::mind::<Command>(&self.host.storage, actor)
-                    .map(|m| m.personality.clone())
-            })
-            .unwrap_or_else(game_characters::decisions::Personality::restful);
+        let invocation = self.invocation_personality(actor);
+        let mind = game_characters::decisions::mind::<Command>(&self.host.storage, actor);
+        let personality = game_characters::personality_provider::delivery_personality(
+            invocation.as_ref(),
+            mind.map(|m| &m.personality),
+        );
         delivery.plan_with_acquisition(
             facts,
             minimum_handoff,
@@ -153,11 +150,7 @@ impl Simulation {
             offers: additional_offers,
             resources,
         } = providers;
-        let Some(_) = self
-            .person_index
-            .get(&actor)
-            .map(|i| &self.host.state.people[*i])
-        else {
+        let Some(_) = self.person_index.get(&actor).map(|i| self.person_at(*i)) else {
             return game_logistics::DeliveryFacts::absent(false, false, false);
         };
         let Some(body) = self
@@ -181,32 +174,34 @@ impl Simulation {
         let contacts = match delivery.destination {
             game_logistics::Destination::Inventory(_) => BTreeSet::new(),
             game_logistics::Destination::Contact(recipient) => {
-                if self
+                let recipient_alive = self
                     .host
                     .state
                     .physical
                     .as_ref()
                     .and_then(|_| game_physiology::body(&self.host.storage, recipient))
-                    .is_some_and(|body| body.vitals.alive)
-                    && self.transport_same_place(actor, recipient)
-                {
-                    BTreeSet::from([recipient])
-                } else {
-                    BTreeSet::new()
-                }
+                    .is_some_and(|body| body.vitals.alive);
+                game_logistics::contact_recipient(
+                    recipient,
+                    game_logistics::ContactFacts {
+                        recipient_alive,
+                        same_place: recipient_alive && self.transport_same_place(actor, recipient),
+                    },
+                )
+                .into_iter()
+                .collect()
             }
         };
-        let personality = self
-            .invocation_personality(actor)
-            .unwrap_or_else(|| mind.personality.clone());
-        let additional = additional_offers
-            .iter()
-            .cloned()
-            .map(|offer| game_logistics::Candidate {
-                willing: personality.accepts_risk(acquisition_risk(&offer.action)),
-                offer,
-            })
-            .collect();
+        let invocation = self.invocation_personality(actor);
+        let personality = game_characters::personality_provider::delivery_personality(
+            invocation.as_ref(),
+            Some(&mind.personality),
+        );
+        let additional = game_characters::orchestration::acquisition_candidates(
+            &personality,
+            additional_offers.iter().cloned(),
+            acquisition_action_facts,
+        );
         let mut destination = destination.clone();
         destination.direct_transfer = match destination.destination {
             Destination::Inventory(id) => game_cargo::inventory(&self.host.storage, id)
@@ -256,12 +251,9 @@ impl Simulation {
                         .unwrap()
                         .actor_talking(&self.host.storage, actor)
                 }),
-                social_busy: self
-                    .host
-                    .state
-                    .social
-                    .as_ref()
-                    .is_some_and(|w| w.participants.contains_key(&actor)),
+                social_busy: self.host.state.social.as_ref().is_some_and(|_| {
+                    game_characters::social::participant(&self.host.storage, actor).is_some()
+                }),
                 fatigue: body.vitals.fatigue,
                 fatigue_limit: self.body_rules(actor).fatigue_limit,
                 can_depart: self.transport_can_depart(actor),
@@ -277,81 +269,28 @@ impl Simulation {
         let fact = game_characters::decisions::stocks(&self.host.storage, actor)?
             .known
             .get(&inventory);
-        let stock = game_cargo::inventory(&self.host.storage, inventory)?;
-        let local = match stock.location {
-            InventoryLocation::Area(area) => {
-                fact.is_some() && self.resolved_location(actor) == Location::AtArea(area)
-            }
-            InventoryLocation::Carried(holder) => {
-                holder == actor || fact.is_some() && self.transport_same_place(actor, holder)
-            }
-        };
-        if local {
-            let location = match stock.location {
-                InventoryLocation::Area(area) => Location::AtArea(area),
-                InventoryLocation::Carried(holder) => self.delivery_observed_location(holder),
-            };
-            Some(KnownDestination {
-                destination: Destination::Inventory(inventory),
-                location,
-                observed_at: self.host.clock().time,
-                accessible: self.has_stock_access(actor, stock),
-                room: Some(Quantity(stock.capacity.0 - stock.quantity.0)),
-                direct_transfer: false,
-            })
-        } else {
-            let fact = fact.filter(|fact| {
-                fact.observed_at <= self.host.clock().time
-                    && fact.learned_at <= self.host.clock().time
-            })?;
-            Some(KnownDestination {
-                destination: Destination::Inventory(inventory),
-                location: Location::AtArea(fact.area),
-                observed_at: fact.observed_at,
-                accessible: fact.accessible,
-                room: None,
-                direct_transfer: false,
-            })
-        }
+        let current = game_cargo::inventory(&self.host.storage, inventory).map(|stock| {
+            self.delivery_current_stock_facts(
+                actor,
+                stock,
+                stock.quantity,
+                stock.room().expect("valid stock capacity"),
+            )
+        });
+        game_characters::orchestration::delivery_destination_from_facts(
+            inventory,
+            fact,
+            actor,
+            &self.resolved_location(actor),
+            current,
+            self.host.clock().time,
+        )
     }
 
     /// Physical burden includes every carried Good and supported bodies. A new
     /// compartment can be allocated by Carry; its room cannot exceed this bound.
     pub(crate) fn delivery_carrying_room(&self, actor: PersonId) -> Quantity {
-        if !self.person_index.contains_key(&actor) || self.host.state.physical.is_none() {
-            return Quantity(0);
-        }
-        let held = self
-            .inventory_index
-            .get(&InventoryLocation::Carried(actor))
-            .into_iter()
-            .flatten()
-            .map(|id| {
-                u128::from(
-                    game_cargo::inventory(&self.host.storage, *(id))
-                        .expect("inventory exists")
-                        .quantity
-                        .0,
-                )
-            })
-            .sum::<u128>();
-        let mut upper = u128::from(self.body_rules(actor).carrying_capacity.0)
-            .saturating_sub(held)
-            .saturating_sub(u128::from(self.transport_body_load(actor).0))
-            as u64;
-        if self.transport_transfer_capacity(actor, upper) {
-            return Quantity(upper);
-        }
-        let mut lower = 0;
-        while lower < upper {
-            let middle = lower + (upper - lower).div_ceil(2);
-            if self.transport_transfer_capacity(actor, middle) {
-                lower = middle;
-            } else {
-                upper = middle - 1;
-            }
-        }
-        Quantity(lower)
+        self.transport_carrying_room(actor)
     }
     fn agreement_delivery_cargo(
         &self,
@@ -367,40 +306,30 @@ impl Simulation {
         source_cargo: &BTreeMap<InventoryId, Quantity>,
         resources: Option<&equipment::RankingResources>,
     ) -> Vec<Cargo> {
-        self.inventory_index
+        let stocks = self
+            .inventory_index
             .get(&InventoryLocation::Carried(actor))
             .into_iter()
             .flatten()
             .filter_map(|id| {
-                let stock =
-                    game_cargo::inventory(&self.host.storage, *(id)).expect("inventory exists");
-                if !self.has_stock_access(actor, stock) {
-                    return None;
-                }
-                let quantity = self.unreserved_stock_for_planning(*id, actor, resources);
-                let mut origin = None;
-                let mut origin_quantity = Quantity(0);
-                if let Some(source) = delivery.requirement.source
-                    && stock.good == delivery.requirement.good
-                    && source != *id
-                {
-                    origin_quantity = Quantity(
-                        quantity.min(source_cargo.get(id).copied().unwrap_or(Quantity(0)).0),
-                    );
-                    if origin_quantity.0 > 0 {
-                        origin = Some(source);
+                game_cargo::inventory(&self.host.storage, *id).map(|stock| {
+                    game_cargo::CarriedDeliveryFacts {
+                        stock,
+                        accessible: self.has_stock_access(actor, stock),
+                        unreserved: Quantity(
+                            self.unreserved_stock_for_planning(*id, actor, resources),
+                        ),
                     }
-                }
-                Some(Cargo {
-                    inventory: *id,
-                    good: stock.good,
-                    quantity: Quantity(quantity),
-                    origin,
-                    origin_quantity,
-                    room: Quantity(stock.capacity.0.saturating_sub(stock.quantity.0)),
                 })
             })
-            .collect()
+            .collect::<Vec<_>>();
+        game_cargo::delivery_cargo(
+            actor,
+            delivery.requirement.good,
+            delivery.requirement.source,
+            source_cargo,
+            &stocks,
+        )
     }
     fn delivery_known_stocks(
         &self,
@@ -414,68 +343,64 @@ impl Simulation {
             .and_then(|_| game_characters::decisions::stocks(&self.host.storage, actor))
             .into_iter()
             .flat_map(|stocks| stocks.known.values())
-            .filter(|fact| {
-                fact.learned_at <= self.host.clock().time
-                    && fact.observed_at <= self.host.clock().time
-            })
-            .map(|fact| {
-                // A remembered foreign inventory is never refreshed from its
-                // current holder's whereabouts. Only an actually local stock
-                // can supply current physical position/admissibility.
-                let local =
-                    game_cargo::inventory(&self.host.storage, fact.inventory).filter(|stock| {
-                        match stock.location {
-                            InventoryLocation::Area(area) => {
-                                self.resolved_location(actor) == Location::AtArea(area)
-                            }
-                            InventoryLocation::Carried(holder) => {
-                                self.transport_same_place(actor, holder)
-                            }
-                        }
-                    });
-                let location =
-                    local.map_or(Location::AtArea(fact.area), |stock| match stock.location {
-                        InventoryLocation::Area(area) => Location::AtArea(area),
-                        InventoryLocation::Carried(holder) => {
-                            self.delivery_observed_location(holder)
-                        }
-                    });
-                KnownStock {
-                    inventory: fact.inventory,
-                    good: fact.good,
-                    room: local
-                        .map(|stock| Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))),
-                    quantity: local.map_or_else(
-                        || {
-                            if self.resolved_location(actor) == Location::AtArea(fact.area) {
-                                Quantity(0)
-                            } else {
-                                fact.quantity
-                            }
-                        },
-                        |_| {
+            .filter_map(|fact| {
+                let actor_location = self.resolved_location(actor);
+                let current =
+                    game_cargo::inventory(&self.host.storage, fact.inventory).map(|stock| {
+                        self.delivery_current_stock_facts(
+                            actor,
+                            stock,
                             Quantity(self.unreserved_stock_for_planning(
                                 fact.inventory,
                                 actor,
                                 resources,
-                            ))
-                        },
-                    ),
-                    accessible: local
-                        .map_or(fact.accessible, |stock| self.has_stock_access(actor, stock)),
-                    location,
-                    observed_at: if local.is_some()
-                        || self.resolved_location(actor) == Location::AtArea(fact.area)
-                    {
-                        self.host.clock().time
-                    } else {
-                        fact.observed_at
-                    },
-                }
+                            )),
+                            Quantity(stock.capacity.0.saturating_sub(stock.quantity.0)),
+                        )
+                    });
+                game_characters::orchestration::delivery_stock_from_facts(
+                    fact,
+                    actor,
+                    &actor_location,
+                    current,
+                    self.host.clock().time,
+                )
             })
             .collect()
     }
-    /// Used only for an actor already physically perceived by the caller.
+    fn delivery_current_stock_facts(
+        &self,
+        actor: PersonId,
+        stock: &game_cargo::Inventory,
+        quantity: Quantity,
+        room: Quantity,
+    ) -> game_characters::orchestration::CurrentDeliveryStock {
+        use game_characters::orchestration::{
+            CurrentDeliveryStock, DeliveryStockPlacement, LocalStockFacts,
+        };
+        let (placement, location) = match stock.location {
+            InventoryLocation::Area(area) => {
+                (DeliveryStockPlacement::Area(area), Location::AtArea(area))
+            }
+            InventoryLocation::Carried(holder) => (
+                DeliveryStockPlacement::Carried {
+                    holder,
+                    same_place: self.transport_same_place(actor, holder),
+                },
+                self.delivery_observed_location(holder),
+            ),
+        };
+        CurrentDeliveryStock {
+            placement,
+            values: LocalStockFacts {
+                location,
+                quantity,
+                room,
+                accessible: self.has_stock_access(actor, stock),
+            },
+        }
+    }
+    /// Convert actual holder coordinates; Characters decides their visibility.
     pub(crate) fn delivery_observed_location(&self, actor: PersonId) -> Location {
         match self.transport_position(actor) {
             Some(game_transport::Position::Area(area)) => Location::AtArea(area),
@@ -502,41 +427,19 @@ impl Simulation {
         self.property_acquisition_opportunities(actor, Some(good), quantity)
             .into_iter()
             .filter_map(|command| {
-                let (source, quantity) = match command {
-                    Command::Property {
-                        action: PropertyAction::RequestAccess { inventory },
-                    } => (inventory, Quantity(0)),
-                    Command::Property {
-                        action:
-                            PropertyAction::Take {
-                                source, quantity, ..
-                            },
-                    } => (source, quantity),
+                let Command::Property { action } = command else {
+                    return None;
+                };
+                let source = match &action {
+                    PropertyAction::RequestAccess { inventory } => *inventory,
+                    PropertyAction::Take { source, .. } => *source,
                     _ => return None,
                 };
                 let known = game_characters::decisions::stocks(&self.host.storage, actor)?
                     .known
                     .get(&source)?;
-                if known.good != good || known.quantity.0 == 0 {
-                    return None;
-                }
-                Some(AcquisitionOffer {
-                    key: source.0,
-                    good,
-                    source: Some(source),
-                    location: Location::AtArea(known.area),
-                    observed_at: known.observed_at,
-                    accessible: true,
-                    quantity: OfferYield::Known(quantity),
-                    requires_carrying_room: matches!(
-                        &command,
-                        Command::Property {
-                            action: PropertyAction::Take { .. }
-                        }
-                    ),
-                    requirements: Vec::new(),
-                    action: command,
-                })
+                game_property::acquisition_offer(action, known, good)
+                    .map(|offer| offer.map_action(|action| Command::Property { action }))
             })
             .collect()
     }
@@ -545,67 +448,20 @@ impl Simulation {
         actor: PersonId,
         good: Good,
     ) -> Vec<AcquisitionOffer<Command>> {
-        let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-        }) else {
-            return Vec::new();
-        };
-        mind.sites
-            .values()
-            .filter_map(|site| {
-                let output = game_characters::decisions::stocks(&self.host.storage, actor)?
-                    .known
-                    .get(&site.output)?;
-                let input = game_characters::decisions::stocks(&self.host.storage, actor)?
-                    .known
-                    .get(&site.input)?;
-                let tool = game_characters::decisions::stocks(&self.host.storage, actor)?
-                    .known
-                    .get(&site.tool)?;
-                if output.good != good || !site.access || !output.accessible {
-                    return None;
-                }
-                Some(AcquisitionOffer {
-                    key: site.site.0,
-                    good,
-                    source: Some(site.output),
-                    location: Location::AtArea(site.area),
-                    observed_at: output
-                        .observed_at
-                        .max(input.observed_at)
-                        .max(tool.observed_at),
-                    accessible: true,
-                    quantity: OfferYield::Unknown,
-                    requires_carrying_room: self
-                        .inventory_index
-                        .get(&InventoryLocation::Carried(actor))
-                        .is_some_and(|ids| ids.contains(&site.output)),
-                    requirements: vec![
-                        Prerequisite {
-                            requirement: Requirement {
-                                good: input.good,
-                                quantity: site.input_quantity,
-                                source: None,
-                            },
-                            placement: PrerequisitePlacement::AccessibleAtProvider {
-                                inventory: Some(site.input),
-                            },
-                        },
-                        Prerequisite {
-                            requirement: Requirement {
-                                good: tool.good,
-                                quantity: Quantity(1_000),
-                                source: None,
-                            },
-                            placement: PrerequisitePlacement::AccessibleAtProvider {
-                                inventory: Some(site.tool),
-                            },
-                        },
-                    ],
-                    action: Command::Work { site: site.site },
-                })
-            })
-            .collect()
+        let carried_outputs = self
+            .inventory_index
+            .get(&InventoryLocation::Carried(actor))
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        game_characters::orchestration::production_acquisition_offers(
+            &self.host.storage,
+            actor,
+            good,
+            &carried_outputs,
+            |site| Command::Work { site },
+        )
     }
     pub(crate) fn delivery_command(&self, actor: PersonId, step: Step<Command>) -> Option<Command> {
         match step {
@@ -646,29 +502,33 @@ impl Simulation {
 
 /// Semantic evidence for an attempted acquisition, independent of its provider.
 pub(crate) fn acquisition_risk(command: &Command) -> game_characters::decisions::Risk {
+    game_characters::orchestration::acquisition_risk(acquisition_action_facts(command))
+}
+fn acquisition_action_facts(command: &Command) -> game_characters::orchestration::AcquisitionKind {
+    use game_characters::orchestration::AcquisitionKind;
     match command {
         Command::Property {
             action: PropertyAction::Take { .. },
-        }
-        | Command::Ecology {
-            action: EcologyAction::Gather {
-                unauthorized: true, ..
-            },
-        } => game_characters::decisions::Risk::UnconsentedTaking,
-        _ => game_characters::decisions::Risk::Safe,
+        } => AcquisitionKind::PropertyTaking,
+        Command::Ecology {
+            action: EcologyAction::Gather { unauthorized, .. },
+        } => AcquisitionKind::Gathering {
+            unauthorized: *unauthorized,
+        },
+        _ => AcquisitionKind::Other,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use game_logistics::{BlockReason, Requirement};
+    use game_logistics::{BlockReason, PrerequisitePlacement, Requirement};
     fn fixture() -> Simulation {
         let mut sim = Simulation::autonomy_fixture(9, Execution::default()).unwrap();
-        for person in sim.host.state.people.clone() {
-            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            sim.debug_actor_command(person_id, Command::Cancel).unwrap();
             sim.debug_set_personality(
-                person.id,
+                person_id,
                 decisions::Personality::restful(),
                 decisions::Aspiration::Comfort,
             )
@@ -727,7 +587,7 @@ mod tests {
         ] {
             let mut sim = fixture();
             let actor = sim.host.state.ruler;
-            let recipient = sim.host.state.people[1].id;
+            let recipient = sim.person_at(1).id;
             sim.debug_move_actor(recipient, AreaId(2)).unwrap();
             let Location::InTransit { arrives, .. } = sim.resolved_location(recipient) else {
                 panic!("recipient must physically travel");
@@ -944,10 +804,10 @@ mod tests {
     fn a_known_natural_source_uses_real_collection_and_restores_through_partial_time() {
         let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
         let actor = sim.host.state.ruler;
-        for person in sim.host.state.people.clone() {
-            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            sim.debug_actor_command(person_id, Command::Cancel).unwrap();
             sim.debug_set_personality(
-                person.id,
+                person_id,
                 decisions::Personality::restful(),
                 decisions::Aspiration::Comfort,
             )
@@ -1082,10 +942,10 @@ mod tests {
     fn a_conditional_operator_composes_real_equipment_carry_before_actual_harvest() {
         let mut sim = Simulation::ecology_fixture(9, Execution::default()).unwrap();
         let actor = sim.host.state.ruler;
-        for person in sim.host.state.people.clone() {
-            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            sim.debug_actor_command(person_id, Command::Cancel).unwrap();
             sim.debug_set_personality(
-                person.id,
+                person_id,
                 decisions::Personality::restful(),
                 decisions::Aspiration::Comfort,
             )
@@ -1318,10 +1178,10 @@ mod tests {
                 .expect("inventory exists");
             stock.quantity = Quantity(0);
         }
-        for person in sim.host.state.people.clone() {
-            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            sim.debug_actor_command(person_id, Command::Cancel).unwrap();
             sim.debug_set_personality(
-                person.id,
+                person_id,
                 decisions::Personality::restful(),
                 decisions::Aspiration::Comfort,
             )
@@ -1446,7 +1306,7 @@ mod tests {
     fn acquisition_uses_known_partial_stock_without_public_action_list_truncation() {
         let mut sim = Simulation::property_fixture(9, Execution::default()).unwrap();
         let actor = sim.host.state.ruler;
-        let custodian = sim.host.state.people[3].id;
+        let custodian = sim.person_at(3).id;
         let mut source = InventoryId(0);
         for _ in 0..25 {
             source = sim

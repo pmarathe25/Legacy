@@ -10,6 +10,7 @@ fn staged_interrupt(sim: &mut Simulation, actors: &[PersonId]) {
     let mut finish = prepared
         .stage_into(sim, &mut batch, &BTreeMap::new())
         .unwrap();
+    finish.validate_batch(sim, &batch).unwrap();
     sim.host.storage.apply_batch(batch).unwrap();
     for actor in actors {
         finish.finish_actor(sim, *actor);
@@ -18,7 +19,7 @@ fn staged_interrupt(sim: &mut Simulation, actors: &[PersonId]) {
 #[test]
 fn real_pregnancy_cancellation_matches_existing_dispatch_and_restores() {
     let mut old = Simulation::life_fixture(61, Execution::default()).unwrap();
-    let parents = [old.host.state.people[3].id, old.host.state.people[4].id];
+    let parents = [old.person_at(3).id, old.person_at(4).id];
     old.debug_actor_command(
         parents[0],
         Command::Conceive {
@@ -92,10 +93,7 @@ fn realm_recipient_fan_in_counts_every_event_without_fixed_budget() {
     let completes = SimTime(now.0.checked_add(MINUTE.0).unwrap());
     let area = old.resolved_location(recipient).cell().unwrap();
     let speakers: Vec<_> = old
-        .host
-        .state
-        .people
-        .iter()
+        .people()
         .map(|p| p.id)
         .filter(|id| *id != recipient)
         .collect();

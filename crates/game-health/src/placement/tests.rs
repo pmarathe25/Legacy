@@ -257,3 +257,130 @@ fn two_disjoint_placements_share_one_selected_shelter_chain_and_sparse_owner_bat
         );
     }
 }
+
+#[test]
+fn death_placement_coalesces_a_stopped_targets_removal_into_one_occupancy_write() {
+    let (runtime, mut store, facts) = fixture();
+    crate::insert_occupancy(
+        &mut store,
+        PersonId(2),
+        Occupancy {
+            shelter: ShelterId(20),
+        },
+    )
+    .unwrap();
+    let plan = runtime
+        .prepare_death_placements(
+            &store,
+            &[],
+            &[target(Some(AreaId(10)))],
+            &facts,
+            &[PersonId(2), PersonId(2)],
+        )
+        .unwrap();
+    let mut batch = Batch::new();
+    let finish = plan
+        .stage_into(&runtime, &store, &facts, &mut batch)
+        .unwrap();
+    assert_eq!(
+        batch
+            .edited_ids::<Occupancy>()
+            .filter(|id| *id == StableId(2))
+            .count(),
+        1
+    );
+    finish.validate_batch(&runtime, &store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert!(finish.finish().is_empty());
+    assert!(occupancy(&store, PersonId(2)).is_none());
+    assert_eq!(
+        occupancy(&store, PersonId(1)),
+        Some(&Occupancy {
+            shelter: ShelterId(20)
+        })
+    );
+}
+#[test]
+fn carrier_death_removes_only_its_occupancy_and_preserves_a_surviving_passengers_final_shelter() {
+    for reject in [false, true] {
+        let (runtime, mut store, facts) = fixture();
+        let placements = [
+            ShelterPlacement {
+                actor: PersonId(1),
+                final_area: Some(AreaId(10)),
+            },
+            target(Some(AreaId(10))),
+        ];
+        let before = store.clone();
+        let plan = runtime
+            .prepare_death_placements(&store, &[], &placements, &facts, &[PersonId(1)])
+            .unwrap();
+        let mut batch = Batch::new();
+        let finish = plan
+            .stage_into(&runtime, &store, &facts, &mut batch)
+            .unwrap();
+        for actor in [1, 2] {
+            assert_eq!(
+                batch
+                    .edited_ids::<Occupancy>()
+                    .filter(|id| *id == StableId(actor))
+                    .count(),
+                1
+            );
+        }
+        if reject {
+            batch.insert(StableId(1), "reject".to_owned());
+        }
+        finish.validate_batch(&runtime, &store, &batch).unwrap();
+        let result = store.apply_batch(batch);
+        if reject {
+            assert_eq!(result, Err(Error::Unavailable));
+            assert_eq!(store, before);
+        } else {
+            result.unwrap();
+            assert!(occupancy(&store, PersonId(1)).is_none());
+            assert_eq!(
+                occupancy(&store, PersonId(2)),
+                Some(&Occupancy {
+                    shelter: ShelterId(20)
+                })
+            );
+        }
+    }
+}
+#[test]
+fn stationary_death_has_a_guarded_removal_and_coalescing_rejects_stale_opening_occupancy() {
+    let (runtime, mut store, facts) = fixture();
+    let plan = runtime
+        .prepare_death_placements(&store, &[], &[], &facts, &[PersonId(1)])
+        .unwrap();
+    let mut batch = Batch::new();
+    let finish = plan
+        .stage_into(&runtime, &store, &facts, &mut batch)
+        .unwrap();
+    finish.validate_batch(&runtime, &store, &batch).unwrap();
+    batch.insert(
+        StableId(1),
+        Occupancy {
+            shelter: ShelterId(20),
+        },
+    );
+    assert_eq!(
+        finish.validate_batch(&runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    let placement = runtime
+        .prepare_placements(&store, &[], &[target(Some(AreaId(10)))], &facts)
+        .unwrap();
+    crate::insert_occupancy(
+        &mut store,
+        PersonId(1),
+        Occupancy {
+            shelter: ShelterId(21),
+        },
+    )
+    .unwrap();
+    let before = store.clone();
+    assert!(placement.with_deaths(&store, &[PersonId(1)]).is_err());
+    assert_eq!(store, before);
+}

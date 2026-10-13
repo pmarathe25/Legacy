@@ -9,6 +9,46 @@ pub struct RelationFacts {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct OfferEligibilityFacts {
+    pub actor: PersonId,
+    pub ruler: PersonId,
+    pub independent: bool,
+}
+
+impl OfferEligibilityFacts {
+    pub fn autonomous_response(self) -> bool {
+        self.actor != self.ruler && self.independent
+    }
+}
+
+/// Activity classification supplied by the activity owner adapter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupportActivity {
+    Idle,
+    Rest,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SupportAvailabilityFacts {
+    pub activity: Option<SupportActivity>,
+    pub lineage_duty: bool,
+    pub health_duty: bool,
+    pub mission_duty: bool,
+}
+
+impl SupportAvailabilityFacts {
+    pub fn occupied(self) -> bool {
+        !matches!(
+            self.activity,
+            Some(SupportActivity::Idle | SupportActivity::Rest)
+        ) || self.lineage_duty
+            || self.health_duty
+            || self.mission_duty
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct OfferResponseFacts {
     pub autonomous: bool,
     pub alive: bool,
@@ -84,20 +124,38 @@ pub fn local_support_observers(
     facts: &impl SupportWitnessFacts,
 ) -> Result<Vec<PersonId>, Error> {
     let here = game_spatial::resolve(store, game_ecs::StableId(passenger.0))?;
-    let position = position_from_location(&here, now)?;
     Ok(candidates
         .at_location(&here)
         .map(|id| PersonId(id.0))
         .filter(|observer| *observer != passenger && facts.person(*observer))
-        .filter(|observer| {
-            game_spatial::resolve(store, game_ecs::StableId(observer.0))
-                .ok()
-                .and_then(|location| position_from_location(&location, now).ok())
-                .is_some_and(|point| point.same_point(position))
-                && facts.tactical_contact(*observer, passenger)
-        })
+        .filter(|observer| same_place(store, *observer, passenger, now, facts))
         .take(64)
         .collect())
+}
+/// Physical contact combines canonical carrier-resolved geometry with the
+/// tactical owner's factual contact between terminal anchors.
+pub fn same_place(
+    store: &game_ecs::Store,
+    a: PersonId,
+    b: PersonId,
+    now: SimTime,
+    facts: &impl SupportWitnessFacts,
+) -> bool {
+    if !facts.person(a) || !facts.person(b) {
+        return false;
+    }
+    let resolve = |actor| game_spatial::resolved_anchor(store, game_ecs::StableId(actor));
+    let (Ok((a_anchor, a_row)), Ok((b_anchor, b_row))) = (resolve(a.0), resolve(b.0)) else {
+        return false;
+    };
+    let (Ok(a_point), Ok(b_point)) = (
+        position_from_location(a_row, now),
+        position_from_location(b_row, now),
+    ) else {
+        return false;
+    };
+    a_point.same_point(b_point)
+        && facts.tactical_contact(PersonId(a_anchor.0), PersonId(b_anchor.0))
 }
 
 impl Runtime {
@@ -348,6 +406,46 @@ impl Runtime {
             passenger: request.passenger,
         })
     }
+}
+
+/// Strategic navigation begins from the destination of an active journey and
+/// the original departure endpoint of a stopped road placement.
+pub fn navigation_origin(resolved: &Location) -> Result<AreaId, Error> {
+    match *resolved {
+        Location::AtArea(area) => Ok(area),
+        Location::InTransit { to, .. } => Ok(to),
+        Location::StoppedOnRoad { from, .. } => Ok(from),
+        Location::Carried { .. } => Err(Error::Unavailable),
+    }
+}
+/// An actor can replace an active pending itinerary with its current endpoint.
+/// Carried actors use resolved geometry without becoming independent movers.
+pub fn include_same_origin_destination(raw: &Location, pending_route: &[AreaId]) -> bool {
+    matches!(raw, Location::InTransit { .. }) && !pending_route.is_empty()
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuActionKind {
+    Move,
+    Work,
+    Load,
+    Other,
+}
+/// Filter the basic/development action menu before other feature extensions.
+/// The classifier translates public action variants only. Transport determines
+/// eligibility from actual placement and the resolved carrier geometry.
+pub fn filter_position_menu<A>(
+    menu: &mut Vec<A>,
+    raw: &Location,
+    resolved: &Location,
+    classify: impl Fn(&A) -> MenuActionKind,
+) {
+    menu.retain(|action| match classify(action) {
+        MenuActionKind::Move => matches!(raw, Location::AtArea(_) | Location::InTransit { .. }),
+        MenuActionKind::Work | MenuActionKind::Load => {
+            !matches!(resolved, Location::StoppedOnRoad { .. })
+        }
+        MenuActionKind::Other => true,
+    });
 }
 
 #[cfg(test)]

@@ -37,6 +37,25 @@ impl PreparedCancellations {
             (*actor, effects)
         })
     }
+    pub fn projected_incident<'a>(
+        &'a self,
+        store: &'a Store,
+        id: game_core::IncidentId,
+    ) -> Option<&'a Incident> {
+        self.change.projected_incident(store, id)
+    }
+    /// Cancellation outcomes remain observable in the initiating batch.
+    pub fn witness_projected(
+        &mut self,
+        runtime: &Runtime,
+        store: &Store,
+        id: game_core::IncidentId,
+        now: SimTime,
+        observers: &[ObserverFacts],
+    ) -> Result<(), Error> {
+        self.change
+            .witness_projected(runtime, store, id, now, observers)
+    }
     pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
         self.change.validate(runtime, store)
     }
@@ -59,6 +78,8 @@ impl PreparedCancellations {
     ) -> Result<Vec<(PersonId, Vec<Effect>)>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, &mut batch)?;
+        finish.validate_runtime(runtime)?;
+        finish.validate_batch(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish(runtime))
     }
@@ -68,6 +89,12 @@ pub struct CancellationFinalization {
     steps: Vec<(PersonId, usize)>,
 }
 impl CancellationFinalization {
+    pub fn validate_batch(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.change.validate_batch(store, batch)
+    }
+    pub fn validate_runtime(&self, runtime: &Runtime) -> Result<(), Error> {
+        self.change.validate_runtime(runtime)
+    }
     pub fn finish(self, runtime: &mut Runtime) -> Vec<(PersonId, Vec<Effect>)> {
         let mut effects = self.change.finish(runtime).into_iter();
         self.steps

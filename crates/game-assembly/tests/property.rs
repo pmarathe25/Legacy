@@ -17,9 +17,7 @@ fn fixture(workers: usize) -> Simulation {
     .unwrap();
     let people = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .map(|person| person.id)
         .collect::<Vec<_>>();
     for person in people {
@@ -39,7 +37,7 @@ fn fixture(workers: usize) -> Simulation {
     sim
 }
 fn actor(sim: &Simulation, index: usize) -> PersonId {
-    sim.canonical_state().state.people[index].id
+    sim.canonical_state().person_at(index).id
 }
 fn source(sim: &Simulation) -> InventoryId {
     game_cargo::inventories(sim.canonical_state().components)
@@ -52,9 +50,7 @@ fn source(sim: &Simulation) -> InventoryId {
 }
 fn cargo(sim: &Simulation, person: PersonId) -> InventoryId {
     sim.canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|actor| actor.id == person)
         .unwrap()
         .inventory

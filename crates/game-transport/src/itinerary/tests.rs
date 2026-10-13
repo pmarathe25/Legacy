@@ -31,12 +31,12 @@ fn admitted_replacement_does_not_treat_foreign_removal_as_authorization() {
     let before = store.snapshot().unwrap();
     let mut batch = Batch::new();
     batch.remove::<Route>(StableId(1));
-    assert_eq!(
+    assert!(matches!(
         prepare_route_replacement(&store, PersonId(1), vec![AreaId(2)])
             .unwrap()
             .stage_into(&store, &mut batch),
         Err(Error::Unavailable)
-    );
+    ));
     assert_eq!(store.snapshot().unwrap(), before);
     let mut batch = Batch::new();
     prepare_route_replacement(&store, PersonId(1), Vec::new())
@@ -157,14 +157,14 @@ fn route_admission_proves_actual_staging_in_the_originating_batch() {
         .stage_into(&store, &mut identical_foreign)
         .unwrap();
     assert_eq!(
-        admission.validate_footprint(&identical_foreign),
+        admission.validate_footprint(&store, &identical_foreign),
         Err(Error::Unavailable)
     );
     original.remove::<OfferInbox>(StableId(1));
-    admission.validate_footprint(&original).unwrap();
+    admission.validate_footprint(&store, &original).unwrap();
     original.remove::<Route>(StableId(1));
     assert_eq!(
-        admission.validate_footprint(&original),
+        admission.validate_footprint(&store, &original),
         Err(Error::Unavailable)
     );
 }

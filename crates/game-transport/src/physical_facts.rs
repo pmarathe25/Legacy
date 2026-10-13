@@ -164,3 +164,95 @@ pub fn area_leg(
 pub fn exerting(location: &Location, lifting: bool) -> bool {
     matches!(location, Location::InTransit { .. }) || lifting
 }
+
+/// Measurements from receiving body, age, cargo and work owners. Transport
+/// combines these facts with canonical Spatial placement and its growth rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BodyMeasurements {
+    pub age: Option<(SimDuration, SimDuration)>,
+    pub cargo: Quantity,
+    pub capacity: Quantity,
+    pub alive: bool,
+    pub health: u64,
+    pub fatigue: u64,
+    pub fatigue_limit: u64,
+    pub independent: bool,
+    pub combat_restricted: bool,
+    pub work: CarryWork,
+    pub incapacitation: Option<u64>,
+}
+pub trait MeasuredBodyFacts {
+    fn measurements(&self, actor: PersonId, at: SimTime) -> Result<BodyMeasurements, Error>;
+}
+impl Runtime {
+    pub fn measured_body(
+        &self,
+        store: &game_ecs::Store,
+        actor: PersonId,
+        at: SimTime,
+        facts: &impl MeasuredBodyFacts,
+    ) -> Result<Body, Error> {
+        let measurements = facts.measurements(actor, at)?;
+        let placement = game_spatial::resolve(store, game_ecs::StableId(actor.0))?;
+        let carried = matches!(
+            game_spatial::location(store, game_ecs::StableId(actor.0)),
+            Some(Location::Carried { .. })
+        );
+        self.interpret_measurements(&placement, at, carried, measurements)
+    }
+    /// Interpret a planned body before its reserved entity exists. The supplied
+    /// placement is already carrier-resolved by its authoritative owner.
+    pub fn measured_unplaced_body(
+        &self,
+        placement: &Location,
+        at: SimTime,
+        measurements: BodyMeasurements,
+    ) -> Result<Body, Error> {
+        self.interpret_measurements(placement, at, false, measurements)
+    }
+    fn interpret_measurements(
+        &self,
+        placement: &Location,
+        at: SimTime,
+        carried: bool,
+        measurements: BodyMeasurements,
+    ) -> Result<Body, Error> {
+        if !self.rules.valid() {
+            return Err(Error::InvalidConfiguration(
+                "invalid transport body rules".into(),
+            ));
+        }
+        game_spatial::validate(placement)?;
+        Ok(Body::from_facts(BodyInput {
+            position: position_from_location(placement, at)?,
+            mass: measurements
+                .age
+                .map_or(self.rules.adult_mass, |(age, adulthood)| {
+                    body_mass(&self.rules, age, adulthood)
+                }),
+            cargo: measurements.cargo,
+            capacity: measurements.capacity,
+            alive: measurements.alive,
+            health: measurements.health,
+            fatigue: measurements.fatigue,
+            fatigue_limit: measurements.fatigue_limit,
+            independent: measurements.independent,
+            combat_restricted: measurements.combat_restricted,
+            carried,
+            work: measurements.work,
+            incapacitation: measurements.incapacitation,
+        }))
+    }
+    pub fn measured_bodies(
+        &self,
+        store: &game_ecs::Store,
+        actors: impl IntoIterator<Item = PersonId>,
+        at: SimTime,
+        facts: &impl MeasuredBodyFacts,
+    ) -> Result<BTreeMap<PersonId, Body>, Error> {
+        actors
+            .into_iter()
+            .map(|actor| Ok((actor, self.measured_body(store, actor, at, facts)?)))
+            .collect()
+    }
+}

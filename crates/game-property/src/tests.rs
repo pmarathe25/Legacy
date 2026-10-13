@@ -891,3 +891,358 @@ fn permission_preparation_needs_no_cargo_yield_and_never_offers_a_zero_quantity_
     );
     assert_eq!(snapshot(&world, &store), before);
 }
+
+#[test]
+fn observer_judgment_preserves_local_custody_personal_permission_and_autonomous_defense() {
+    let context = ObserverContext {
+        local: true,
+        source_custodian: Some(PersonId(2)),
+        taking_actor_allowed: false,
+        player_controlled: false,
+        capable: true,
+    };
+    let denied = observer_facts(PersonId(2), context);
+    assert!(denied.personal_custody && !denied.personally_allowed && denied.can_defend);
+    let allowed = observer_facts(
+        PersonId(2),
+        ObserverContext {
+            taking_actor_allowed: true,
+            ..context
+        },
+    );
+    assert!(!allowed.personal_custody && allowed.personally_allowed && allowed.can_defend);
+    let player = observer_facts(
+        PersonId(2),
+        ObserverContext {
+            player_controlled: true,
+            ..context
+        },
+    );
+    assert!(player.personal_custody && !player.can_defend);
+    let remote = observer_facts(
+        PersonId(2),
+        ObserverContext {
+            local: false,
+            taking_actor_allowed: true,
+            ..context
+        },
+    );
+    assert!(!remote.personal_custody && !remote.personally_allowed);
+    assert!(remote.can_defend);
+    let bystander = observer_facts(
+        PersonId(3),
+        ObserverContext {
+            taking_actor_allowed: true,
+            ..context
+        },
+    );
+    assert!(!bystander.personal_custody && !bystander.personally_allowed);
+    assert!(
+        !observer_facts(
+            PersonId(2),
+            ObserverContext {
+                capable: false,
+                ..context
+            }
+        )
+        .can_defend
+    );
+}
+
+#[test]
+fn readiness_uses_independence_contact_restriction_care_health_and_exact_fatigue_limit() {
+    let facts = ReadinessFacts {
+        area: Some(AreaId(5)),
+        independent: true,
+        combat_restricted: false,
+        receiving_care: false,
+        health: 1,
+    };
+    assert!(action_capable(facts));
+    for unavailable in [
+        ReadinessFacts {
+            area: None,
+            ..facts
+        },
+        ReadinessFacts {
+            independent: false,
+            ..facts
+        },
+        ReadinessFacts {
+            combat_restricted: true,
+            ..facts
+        },
+        ReadinessFacts {
+            receiving_care: true,
+            ..facts
+        },
+        ReadinessFacts { health: 0, ..facts },
+    ] {
+        assert!(!action_capable(unavailable));
+    }
+    assert!(exertion_ready(99, Some(100)));
+    assert!(!exertion_ready(100, Some(100)));
+    assert!(!exertion_ready(0, None));
+    assert_eq!(
+        local_area(true, Some(&Location::AtArea(AreaId(5)))),
+        Some(AreaId(5))
+    );
+    assert_eq!(local_area(false, Some(&Location::AtArea(AreaId(5)))), None);
+    assert_eq!(local_area(true, None), None);
+}
+
+#[test]
+fn permission_consent_retains_the_custodian_attitude_until_publication() {
+    let (mut runtime, mut store) = fixture();
+    let prepared = runtime
+        .prepare_action(
+            &store,
+            actor(1, 0),
+            &PropertyAction::RequestAccess {
+                inventory: InventoryId(10),
+            },
+            ActionFacts::Request {
+                stock: source(),
+                custodian: contact(2),
+                trust: 0,
+                reserve: Quantity(500),
+            },
+            None,
+        )
+        .unwrap();
+    assert!(
+        prepared
+            .effects()
+            .iter()
+            .any(|effect| matches!(effect, Effect::Permission { allowed: true, .. }))
+    );
+    attitude_mut(&mut store, PersonId(2)).unwrap().sharing = 0;
+    let changed = store.snapshot().unwrap();
+    assert!(prepared.commit(&mut runtime, &mut store).is_err());
+    assert_eq!(store.snapshot().unwrap(), changed);
+}
+#[test]
+fn claim_admission_guards_relevant_claimant_membership_and_allows_other_claimants() {
+    for relevant in [true, false] {
+        let (mut runtime, mut store) = fixture();
+        insert_provenance(
+            &mut store,
+            InventoryId(10),
+            Provenance {
+                portions: BTreeMap::from([(ClaimId(7), 1000)]),
+            },
+        )
+        .unwrap();
+        let rights = BTreeSet::from([ClaimRight::Transfer]);
+        let prepared = runtime
+            .prepare_action(
+                &store,
+                actor(1, 0),
+                &PropertyAction::Claim {
+                    inventory: InventoryId(10),
+                    rights: rights.clone(),
+                    evidence: Vec::new(),
+                },
+                ActionFacts::Claim {
+                    stock: source(),
+                    id: ClaimId(20),
+                    witnesses: vec![PersonId(1)],
+                },
+                None,
+            )
+            .unwrap();
+        insert_claim(
+            &mut store,
+            ClaimId(21),
+            Claim {
+                id: ClaimId(21),
+                claimant: PersonId(if relevant { 1 } else { 2 }),
+                inventory: InventoryId(10),
+                rights,
+                evidence: Vec::new(),
+                portions: BTreeSet::from([ClaimId(7)]),
+                recognized_by: BTreeSet::new(),
+                opposed_by: BTreeSet::new(),
+            },
+        )
+        .unwrap();
+        let changed = store.snapshot().unwrap();
+        if relevant {
+            assert!(prepared.commit(&mut runtime, &mut store).is_err());
+            assert_eq!(store.snapshot().unwrap(), changed);
+        } else {
+            prepared.commit(&mut runtime, &mut store).unwrap();
+            assert!(claim(&store, ClaimId(20)).is_some());
+        }
+    }
+}
+
+#[test]
+fn projected_taking_cancellation_and_observation_publish_one_owner_change() {
+    let (mut world, mut store) = fixture();
+    let before = snapshot(&world, &store);
+    let mut change = world
+        .prepare_action(
+            &store,
+            actor(1, 0),
+            &PropertyAction::Take {
+                source: InventoryId(10),
+                destination: InventoryId(11),
+                quantity: Quantity(500),
+            },
+            ActionFacts::Take {
+                source: source(),
+                destination: destination(),
+                id: IncidentId(30),
+                carrying_room: Quantity(3_000),
+                duration: SimDuration(100),
+            },
+            None,
+        )
+        .unwrap();
+    change.cancel_projected(&store, PersonId(1), SimTime(0));
+    change
+        .witness_projected(
+            &world,
+            &store,
+            IncidentId(30),
+            SimTime(0),
+            &[observer_facts(
+                PersonId(2),
+                ObserverContext {
+                    local: true,
+                    source_custodian: Some(PersonId(2)),
+                    taking_actor_allowed: false,
+                    player_controlled: false,
+                    capable: true,
+                },
+            )],
+        )
+        .unwrap();
+    assert_eq!(snapshot(&world, &store), before);
+    let effects = change.commit(&mut world, &mut store).unwrap();
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::TakingInterrupted { .. }))
+    );
+    assert!(pending(&store, PersonId(1)).is_none());
+    assert_eq!(
+        incident(&store, IncidentId(30)).unwrap().outcome,
+        IncidentOutcome::Interrupted
+    );
+    assert_eq!(
+        known_incidents(&store, PersonId(2)).unwrap()[&IncidentId(30)]
+            .incident
+            .outcome,
+        IncidentOutcome::Interrupted
+    );
+}
+
+#[test]
+fn projected_resistance_retains_two_preexisting_pending_thieves() {
+    let (mut world, mut store) = fixture();
+    taking(&mut world, &mut store);
+    let for_actor = |person, id| {
+        world
+            .prepare_action(
+                &store,
+                actor(person, 0),
+                &PropertyAction::Take {
+                    source: InventoryId(10),
+                    destination: InventoryId(11),
+                    quantity: Quantity(500),
+                },
+                ActionFacts::Take {
+                    source: source(),
+                    destination: StockFacts {
+                        carried_by: Some(PersonId(person)),
+                        custodian: Some(PersonId(person)),
+                        ..destination()
+                    },
+                    id: IncidentId(id),
+                    carrying_room: Quantity(3_000),
+                    duration: SimDuration(100),
+                },
+                None,
+            )
+            .unwrap()
+    };
+    let second = for_actor(3, 31);
+    second.commit(&mut world, &mut store).unwrap();
+    let mut third = world
+        .prepare_action(
+            &store,
+            actor(4, 0),
+            &PropertyAction::Take {
+                source: InventoryId(10),
+                destination: InventoryId(11),
+                quantity: Quantity(500),
+            },
+            ActionFacts::Take {
+                source: source(),
+                destination: StockFacts {
+                    carried_by: Some(PersonId(4)),
+                    custodian: Some(PersonId(4)),
+                    ..destination()
+                },
+                id: IncidentId(32),
+                carrying_room: Quantity(3_000),
+                duration: SimDuration(100),
+            },
+            None,
+        )
+        .unwrap();
+    let observers = [observer_facts(
+        PersonId(2),
+        ObserverContext {
+            local: true,
+            source_custodian: Some(PersonId(2)),
+            taking_actor_allowed: false,
+            player_controlled: false,
+            capable: true,
+        },
+    )];
+    for thief in [PersonId(1), PersonId(3), PersonId(4)] {
+        assert!(
+            matches!(third.projected_resistance(&store, thief, &observers),
+            Some(Effect::Engage { defender: PersonId(2), thief: actual }) if actual == thief)
+        );
+    }
+    let mut admitted = Vec::new();
+    let selected = third
+        .select_projected_resistance(
+            &store,
+            |_| observers.to_vec(),
+            |defender, thief| {
+                admitted.push((defender, thief));
+                thief != PersonId(1)
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        admitted,
+        vec![(PersonId(2), PersonId(1)), (PersonId(2), PersonId(3))]
+    );
+    assert!(matches!(
+        selected,
+        Some(Effect::Engage {
+            defender: PersonId(2),
+            thief: PersonId(3)
+        })
+    ));
+    third.cancel_projected(&store, PersonId(1), SimTime(0));
+    third.commit(&mut world, &mut store).unwrap();
+    assert!(pending(&store, PersonId(1)).is_none());
+    assert_eq!(pending(&store, PersonId(3)), Some(&IncidentId(31)));
+    assert_eq!(pending(&store, PersonId(4)), Some(&IncidentId(32)));
+}
+
+#[test]
+fn autonomous_sharing_respects_controlled_actor_and_need() {
+    let (world, store) = fixture();
+    let generous = actor(2, 0);
+    assert!(world.autonomous_sharing_eligible(&store, generous, PersonId(1), true));
+    assert!(!world.autonomous_sharing_eligible(&store, generous, PersonId(2), true));
+    assert!(!world.autonomous_sharing_eligible(&store, generous, PersonId(1), false));
+}

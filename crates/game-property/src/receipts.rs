@@ -155,3 +155,94 @@ impl Runtime {
         Ok(change)
     }
 }
+
+impl Runtime {
+    /// Receive an owner-admitted physical loss before the combined publication.
+    /// A pending prefix keeps preceding receipts and their provenance changes
+    /// in the same batch; the reserved loss event advances the cursor once.
+    pub fn prepare_loss_receipt(
+        &self,
+        store: &Store,
+        inventory: InventoryId,
+        quantity: Quantity,
+        event: u64,
+        prefix: Option<PreparedProperty>,
+    ) -> Result<PreparedProperty, Error> {
+        let stock = game_cargo::inventory(store, inventory).ok_or(Error::Unavailable)?;
+        if stock.id != inventory {
+            return Err(Error::Unavailable);
+        }
+        let closing = stock
+            .quantity
+            .0
+            .checked_sub(quantity.0)
+            .ok_or(Error::Unavailable)?;
+        let mut change = prefix.unwrap_or_else(PreparedProperty::new);
+        change.validate(self, store)?;
+        let through = change
+            .cursor
+            .map_or(self.last_event, |(_, through)| through);
+        if event <= through {
+            return Err(Error::Unavailable);
+        }
+        if change.current_portions(store, inventory).is_none() {
+            change.set_portions(
+                store,
+                inventory,
+                if stock.quantity.0 == 0 {
+                    BTreeMap::new()
+                } else {
+                    BTreeMap::from([(ClaimId(0), stock.quantity.0)])
+                },
+            );
+        }
+        let parts = change
+            .current_portions(store, inventory)
+            .ok_or(Error::Unavailable)?;
+        let total = parts
+            .values()
+            .try_fold(0u64, |sum, q| sum.checked_add(*q).ok_or(Error::Overflow))?;
+        if total != stock.quantity.0 {
+            return Err(Error::Unavailable);
+        }
+        let (left, _) = split_portions(parts, quantity.0)?;
+        if left
+            .values()
+            .try_fold(0u64, |sum, q| sum.checked_add(*q).ok_or(Error::Overflow))?
+            != closing
+        {
+            return Err(Error::Unavailable);
+        }
+        change.set_portions(store, inventory, left);
+        change.cursor = Some((self.last_event, event));
+        Ok(change)
+    }
+}
+
+impl Runtime {
+    /// Retain an opaque receipt prefix while consuming nonmaterial event slots.
+    /// Material changes in this span must already be folded into the prefix.
+    pub fn prepare_prefix_cursor(
+        &self,
+        store: &Store,
+        prefix: Option<PreparedProperty>,
+        through: u64,
+    ) -> Result<Option<PreparedProperty>, Error> {
+        if through < self.last_event {
+            return Err(Error::Unavailable);
+        }
+        if prefix.is_none() && through == self.last_event {
+            return Ok(None);
+        }
+        let mut change = prefix.unwrap_or_else(PreparedProperty::new);
+        change.validate(self, store)?;
+        if change
+            .cursor
+            .is_some_and(|(_, previous)| previous > through)
+        {
+            return Err(Error::Unavailable);
+        }
+        change.cursor = Some((self.last_event, through));
+        Ok(Some(change))
+    }
+}

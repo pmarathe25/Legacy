@@ -88,10 +88,17 @@ impl PreparedRoute {
         if batch.touches::<Route>(StableId(self.actor.0)) {
             return Err(Error::Unavailable);
         }
+        let mut reads = game_ecs::ReadSet::new();
+        reads.expect_row::<Route>(StableId(self.actor.0), self.before.clone());
+        reads.entity(store, StableId(self.actor.0));
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<Route>(StableId(self.actor.0));
         if let Some(location) = self.location_read {
             if batch.touches::<Location>(StableId(self.actor.0)) {
                 return Err(Error::Unavailable);
             }
+            reads.expect_row::<Location>(StableId(self.actor.0), Some(location.clone()));
+            admitted.protect::<Location>(StableId(self.actor.0));
             batch.insert(StableId(self.actor.0), location);
         }
         // Stage even a no-op removal: the typed key reserves this admitted
@@ -101,7 +108,9 @@ impl PreparedRoute {
         } else {
             batch.remove::<Route>(StableId(self.actor.0));
         }
+        let guard = reads.bind(store, batch, &admitted)?;
         Ok(RouteAdmission {
+            guard,
             actor: self.actor,
             batch_key: batch.key(),
         })
@@ -109,7 +118,7 @@ impl PreparedRoute {
     pub fn commit(self, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
         let admission = self.stage_into(store, &mut batch)?;
-        admission.validate_footprint(&batch)?;
+        admission.validate_footprint(store, &batch)?;
         store.apply_batch(batch)
     }
 }
@@ -196,16 +205,18 @@ pub fn prepare_route_to(
 }
 
 /// Proof that Transport actually staged this replacement in this batch.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct RouteAdmission {
     pub(crate) actor: PersonId,
     pub(crate) batch_key: game_ecs::BatchKey,
+    pub(crate) guard: game_ecs::ReadGuard,
 }
 impl RouteAdmission {
     pub fn actor(&self) -> PersonId {
         self.actor
     }
-    pub fn validate_footprint(&self, batch: &Batch) -> Result<(), Error> {
+    pub fn validate_footprint(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.guard.validate(store, batch)?;
         if self.batch_key != batch.key()
             || batch
                 .edited_ids::<Route>()

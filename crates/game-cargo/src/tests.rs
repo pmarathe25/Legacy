@@ -478,3 +478,41 @@ fn quantity_ceiling_preserves_consolidation_at_full_body_load() {
         .is_ok()
     );
 }
+
+#[test]
+fn stock_contact_uses_actual_area_placement_or_held_body_contact() {
+    assert!(stock_contact(
+        &InventoryLocation::Area(AreaId(1)),
+        || game_core::Location::AtArea(AreaId(1)),
+        |_| panic!("area stock")
+    ));
+    assert!(!stock_contact(
+        &InventoryLocation::Area(AreaId(1)),
+        || game_core::Location::StoppedOnRoad {
+            from: AreaId(1),
+            to: AreaId(2),
+            progress: SimDuration(1),
+            duration: SimDuration(2)
+        },
+        |_| panic!("area stock")
+    ));
+    assert!(stock_contact(
+        &InventoryLocation::Carried(PersonId(2)),
+        || panic!("held stock resolves contact"),
+        |holder| holder == PersonId(2)
+    ));
+    assert!(!stock_contact(
+        &InventoryLocation::Carried(PersonId(2)),
+        || panic!("held stock resolves contact"),
+        |_| false
+    ));
+}
+
+#[test]
+fn physical_stock_use_requires_access_before_resolving_contact() {
+    assert!(!stock_usable(false, || panic!(
+        "inaccessible stock needs no contact query"
+    )));
+    assert!(!stock_usable(true, || false));
+    assert!(stock_usable(true, || true));
+}

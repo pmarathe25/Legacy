@@ -187,3 +187,106 @@ fn split_receipts_reject_foreign_writes_and_preserve_unrelated_components() {
     );
     assert_eq!(store.get::<String>(StableId(3)).unwrap(), "independent");
 }
+
+fn forced_source() -> Inventory {
+    Inventory {
+        id: InventoryId(3),
+        location: InventoryLocation::Carried(PersonId(2)),
+        good: Good::Binding,
+        quantity: Quantity(1500),
+        capacity: Quantity(2000),
+        access: BTreeSet::new(),
+        last_granted: Some(PersonId(2)),
+        spoils_at: Some(SimTime(900)),
+    }
+}
+fn forced(store: &Store) -> PreparedForcedSplit {
+    prepare_forced_split(
+        store,
+        InventoryId(3),
+        Quantity(1000),
+        InventoryId(4),
+        InventoryLocation::Carried(PersonId(9)),
+        BTreeSet::from([PersonId(2)]),
+    )
+    .unwrap()
+}
+#[test]
+fn forced_split_owns_balance_and_new_compartment_metadata_without_receiving_consent() {
+    let mut store = Store::with_schema(schema());
+    insert_inventory(&mut store, forced_source()).unwrap();
+    let before = store.snapshot().unwrap();
+    let prepared = forced(&store);
+    assert_eq!(prepared.receiving().good, Good::Binding);
+    assert_eq!(prepared.receiving().capacity, Quantity(1000));
+    assert_eq!(prepared.receiving().last_granted, None);
+    assert_eq!(prepared.receiving().spoils_at, None);
+    let mut batch = game_ecs::Batch::new();
+    let guard = prepared.stage_into(&store, &mut batch).unwrap();
+    batch.insert(StableId(3), "owner receipt".to_owned());
+    guard.validate(&store, &batch).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
+    store.apply_batch(batch).unwrap();
+    let source = inventory(&store, InventoryId(3)).unwrap();
+    let applied = inventory(&store, InventoryId(4)).unwrap();
+    assert_eq!(source.quantity.0 + applied.quantity.0, 1500);
+    assert_eq!(source.last_granted, Some(PersonId(2)));
+    assert_eq!(source.spoils_at, Some(SimTime(900)));
+    assert_eq!(applied.location, InventoryLocation::Carried(PersonId(9)));
+    assert_eq!(applied.access, BTreeSet::from([PersonId(2)]));
+}
+#[test]
+fn forced_split_rejects_overdraw_stale_source_and_taken_identity_without_publication() {
+    let mut store = Store::with_schema(schema());
+    insert_inventory(&mut store, forced_source()).unwrap();
+    let before = store.snapshot().unwrap();
+    for quantity in [0, 1501] {
+        assert!(
+            prepare_forced_split(
+                &store,
+                InventoryId(3),
+                Quantity(quantity),
+                InventoryId(4),
+                InventoryLocation::Carried(PersonId(9)),
+                BTreeSet::new()
+            )
+            .is_err()
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+    let prepared = forced(&store);
+    inventory_mut(&mut store, InventoryId(3)).unwrap().quantity = Quantity(1499);
+    let changed = store.snapshot().unwrap();
+    assert!(
+        prepared
+            .stage_into(&store, &mut game_ecs::Batch::new())
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), changed);
+    let prepared = forced(&store);
+    store.spawn(StableId(4)).unwrap();
+    let changed = store.snapshot().unwrap();
+    assert!(prepared.commit(&mut store).is_err());
+    assert_eq!(store.snapshot().unwrap(), changed);
+}
+#[test]
+fn forced_split_guard_protects_stock_rows_and_the_exclusive_new_entity_shape() {
+    let mut store = Store::with_schema(schema());
+    insert_inventory(&mut store, forced_source()).unwrap();
+    let before = store.snapshot().unwrap();
+    for conflict in [0, 1, 2] {
+        let mut batch = game_ecs::Batch::new();
+        let guard = forced(&store).stage_into(&store, &mut batch).unwrap();
+        match conflict {
+            0 => batch.remove::<Inventory>(StableId(3)),
+            1 => batch.remove::<Inventory>(StableId(4)),
+            _ => batch.insert(StableId(4), "foreign minted component".to_owned()),
+        };
+        assert_eq!(guard.validate(&store, &batch), Err(Error::Unavailable));
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+    let mut batch = game_ecs::Batch::new();
+    batch.insert(StableId(4), "preexisting minted component".to_owned());
+    assert!(forced(&store).stage_into(&store, &mut batch).is_err());
+    assert_eq!(store.snapshot().unwrap(), before);
+}

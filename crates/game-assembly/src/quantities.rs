@@ -12,53 +12,25 @@ impl Simulation {
         source: Option<InventoryId>,
         destination: Option<InventoryId>,
     ) -> Vec<Quantity> {
-        let mut quantities = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut add = |quantity: Quantity| {
-            let quantity = quantity.0.min(upper_bound.0) / increment.0 * increment.0;
-            if quantity > 0 && seen.insert(quantity) {
-                quantities.push(Quantity(quantity));
-            }
-        };
+        let mut examples = Vec::new();
         if let Some(dose) = self.care_dose(good) {
-            add(dose);
+            examples.push(dose);
         }
         if let Some(health) = &self.host.state.health {
-            match good {
-                Good::Timber => add(health.rules.boiling_fuel),
-                Good::Herb => add(health.rules.treatment_herbs),
-                Good::Water => add(health.rules.treatment_water),
-                Good::Tool => add(Quantity(1_000)),
-                _ => {}
-            }
+            examples.extend(health.quantity_examples(good));
         }
-        if let Some(mind) = self.host.state.decisions.as_ref().and_then(|_| {
-            game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-        }) {
-            for site in mind.sites.values() {
-                if game_characters::decisions::stocks(&self.host.storage, actor)
-                    .expect("stock knowledge exists")
-                    .known
-                    .get(&site.input)
-                    .is_some_and(|stock| stock.good == good)
-                {
-                    let quantity = if destination == Some(site.input) {
-                        // The caller supplies only freshly visible local destinations.
-                        Quantity(
-                            site.input_quantity.0.saturating_sub(
-                                game_cargo::inventory(&self.host.storage, site.input)
-                                    .expect("inventory exists")
-                                    .quantity
-                                    .0,
-                            ),
-                        )
-                    } else {
-                        site.input_quantity
-                    };
-                    add(quantity);
-                }
-            }
-        }
+        let visible_destination_quantity = destination.and_then(|id| {
+            game_cargo::inventory(&self.host.storage, id).map(|stock| stock.quantity)
+        });
+        examples.extend(game_characters::orchestration::known_input_quantities::<
+            Command,
+        >(
+            &self.host.storage,
+            actor,
+            good,
+            destination,
+            visible_destination_quantity,
+        ));
         for quantity in game_agreements::known_delivery_amounts(
             &self.host.storage,
             actor,
@@ -66,31 +38,14 @@ impl Simulation {
             source,
             destination,
         ) {
-            add(quantity);
+            examples.push(quantity);
         }
-        if let Some(request) = self
-            .host
-            .state
-            .lineage
-            .as_ref()
-            .and_then(|world| world.guardians.get(&actor))
-            .and_then(|guardian| guardian.requested_delivery.as_ref())
-            .filter(|request| request.delivery.requirement.good == good)
-        {
-            let quantity = source
-                .and_then(|id| request.cargo.get(&id).copied())
-                .map_or(request.delivery.remaining.0, |cargo| {
-                    cargo.min(request.delivery.remaining.0)
-                });
-            add(Quantity(quantity));
+        if let Some(quantity) = self.host.state.lineage.as_ref().and_then(|world| {
+            world.requested_delivery_quantity(&self.host.storage, actor, good, source)
+        }) {
+            examples.push(quantity);
         }
-        add(Quantity(1_000));
-        add(upper_bound);
-        // A bounded legal custom amount remains discoverable even when every
-        // serving or obligation example exceeds an acceptance/transport limit.
-        // Keep this final so ordinary client selection retains useful portions.
-        add(increment);
-        quantities
+        game_cargo::quantity_choices(upper_bound, increment, examples)
     }
 
     pub(crate) fn cargo_quantity_opportunities(&self, actor: PersonId) -> Vec<QuantityOpportunity> {
@@ -103,118 +58,121 @@ impl Simulation {
         let Ok(actor_facts) = self.cargo_actor_facts(actor) else {
             return Vec::new();
         };
-        let rules = self.body_rules(actor);
-        let capacity = rules.carrying_capacity;
-        let held: u128 = self
-            .inventory_index
-            .get(&InventoryLocation::Carried(actor))
-            .into_iter()
-            .flatten()
-            .map(|id| {
-                u128::from(
-                    game_cargo::inventory(&self.host.storage, *(id))
-                        .expect("inventory exists")
-                        .quantity
-                        .0,
-                )
-            })
-            .sum();
-        let body_room = Quantity(u128::from(capacity.0).saturating_sub(held) as u64);
-        let mut opportunities = Vec::new();
-        for source in view
+        let stocks = view
             .local_stocks
             .iter()
-            .filter(|stock| stock.can_access && stock.quantity.0 > 0)
-        {
-            let from =
-                game_cargo::inventory(&self.host.storage, source.id).expect("inventory exists");
-            let increment = self.record_quantity_increment(source.id);
-            let supply = self.cargo_source_facts(actor, from, increment);
-            if from.location != InventoryLocation::Carried(actor)
-                && let Ok(upper_bound) =
-                    game_cargo::pickup_upper_bound(from, supply, body_room, capacity)
-            {
-                let suggested = self
-                    .quantity_suggestions(
-                        actor,
-                        from.good,
-                        upper_bound,
-                        increment,
-                        Some(source.id),
-                        None,
-                    )
-                    .into_iter()
-                    .filter(|quantity| {
-                        self.prepare_carried_compartment(actor, source.id, actor, *quantity, false)
-                            .is_ok()
-                    })
-                    .collect::<Vec<_>>();
-                if !suggested.is_empty() {
-                    opportunities.push(QuantityOpportunity {
-                        action: QuantityAction::Carry { source: source.id },
-                        upper_bound,
-                        increment,
-                        suggested,
-                    });
-                }
-            }
-            for destination in &view.local_stocks {
-                let to = game_cargo::inventory(&self.host.storage, destination.id)
-                    .expect("inventory exists");
-                if source.id == destination.id
-                    || from.good != to.good
-                    || (from.location != InventoryLocation::Carried(actor)
-                        && to.location != InventoryLocation::Carried(actor))
-                {
-                    continue;
-                }
-                let receiver = self.cargo_receiver_facts(actor, source.id, to, increment);
-                let Ok(upper_bound) = game_cargo::load_upper_bound(from, to, supply, receiver)
-                else {
-                    continue;
-                };
-                let suggested = self
-                    .quantity_suggestions(
-                        actor,
-                        from.good,
-                        upper_bound,
-                        increment,
-                        Some(source.id),
-                        Some(destination.id),
-                    )
-                    .into_iter()
-                    .filter(|quantity| {
-                        game_cargo::prepare_load(
-                            actor_facts,
-                            from,
-                            to,
-                            *quantity,
-                            game_cargo::SourceFacts {
-                                record_permission: self
-                                    .record_transfer_allowed(source.id, *quantity),
-                                ..supply
-                            },
-                            self.cargo_receiver_facts(actor, source.id, to, *quantity),
-                            self.host.clock().time,
-                            rules.loading_time,
-                        )
-                        .is_ok()
-                    })
-                    .collect::<Vec<_>>();
-                if !suggested.is_empty() {
-                    opportunities.push(QuantityOpportunity {
-                        action: QuantityAction::Load {
-                            source: source.id,
-                            destination: destination.id,
-                        },
-                        upper_bound,
-                        increment,
-                        suggested,
-                    });
-                }
-            }
-        }
-        opportunities
+            .filter_map(|stock| game_cargo::inventory(&self.host.storage, stock.id))
+            .collect::<Vec<_>>();
+        let body_room = game_cargo::carried_quantity_rows(
+            self.inventory_index
+                .get(&InventoryLocation::Carried(actor))
+                .into_iter()
+                .flatten()
+                .filter_map(|id| game_cargo::inventory(&self.host.storage, *id)),
+        )
+        .map(|held| {
+            Quantity(
+                self.body_rules(actor)
+                    .carrying_capacity
+                    .0
+                    .saturating_sub(held.0),
+            )
+        })
+        .unwrap_or(Quantity(0));
+        game_cargo::quantity_opportunities(&PublicQuantityFacts {
+            simulation: self,
+            actor,
+            actor_facts,
+            stocks,
+            body_room,
+        })
+        .into_iter()
+        .map(|offer| QuantityOpportunity {
+            action: match offer.operation {
+                game_cargo::QuantityOperation::Carry { source } => QuantityAction::Carry { source },
+                game_cargo::QuantityOperation::Load {
+                    source,
+                    destination,
+                } => QuantityAction::Load {
+                    source,
+                    destination,
+                },
+            },
+            upper_bound: offer.upper_bound,
+            increment: offer.increment,
+            suggested: offer.suggested,
+        })
+        .collect()
+    }
+}
+
+struct PublicQuantityFacts<'a> {
+    simulation: &'a Simulation,
+    actor: PersonId,
+    actor_facts: game_cargo::ActorFacts,
+    stocks: Vec<&'a game_cargo::Inventory>,
+    body_room: Quantity,
+}
+impl game_cargo::QuantityFacts for PublicQuantityFacts<'_> {
+    fn actor(&self) -> game_cargo::ActorFacts {
+        self.actor_facts
+    }
+    fn now(&self) -> SimTime {
+        self.simulation.host.clock().time
+    }
+    fn duration(&self) -> SimDuration {
+        self.simulation.body_rules(self.actor).loading_time
+    }
+    fn capacity(&self) -> Quantity {
+        self.simulation.body_rules(self.actor).carrying_capacity
+    }
+    fn body_room(&self) -> Quantity {
+        self.body_room
+    }
+    fn stocks(&self) -> impl Iterator<Item = &game_cargo::Inventory> {
+        self.stocks.iter().copied()
+    }
+    fn increment(&self, source: InventoryId) -> Quantity {
+        self.simulation.record_quantity_increment(source)
+    }
+    fn source(
+        &self,
+        source: &game_cargo::Inventory,
+        quantity: Quantity,
+    ) -> game_cargo::SourceFacts {
+        self.simulation
+            .cargo_source_facts(self.actor, source, quantity)
+    }
+    fn receiver(
+        &self,
+        source: InventoryId,
+        destination: &game_cargo::Inventory,
+        quantity: Quantity,
+    ) -> game_cargo::ReceiverFacts {
+        self.simulation
+            .cargo_receiver_facts(self.actor, source, destination, quantity)
+    }
+    fn examples(
+        &self,
+        good: Good,
+        bound: Quantity,
+        increment: Quantity,
+        source: InventoryId,
+        destination: Option<InventoryId>,
+    ) -> Vec<Quantity> {
+        self.simulation.quantity_suggestions(
+            self.actor,
+            good,
+            bound,
+            increment,
+            Some(source),
+            destination,
+        )
+    }
+    fn carry_admitted(&self, source: InventoryId, quantity: Quantity) -> bool {
+        self.simulation
+            .prepare_carried_compartment(self.actor, source, self.actor, quantity, false)
+            .is_ok()
     }
 }
 
@@ -225,7 +183,7 @@ mod tests {
     fn personally_accepted_remaining_delivery_is_suggested_below_a_larger_stock_bound() {
         let mut sim = Simulation::agreement_fixture(1, Execution::default()).unwrap();
         let actor = sim.host.state.ruler;
-        let recipient = sim.host.state.people[3].id;
+        let recipient = sim.person_at(3).id;
         let source = sim
             .debug_add_inventory(
                 Good::Timber,

@@ -10,4 +10,9 @@ game-ecs.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-cargo.workspace = true
 serde_json.workspace = true
+
+[[bench]]
+name = "cancellation"
+harness = false

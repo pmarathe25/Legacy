@@ -4,10 +4,7 @@ use game_api::{Command, PersonId, Role, SimDuration, Submission, TransportAction
 fn offered() -> (Simulation, PersonId, PersonId) {
     let mut sim = Simulation::transport_fixture(51, Execution::default()).unwrap();
     let people = sim
-        .host
-        .state
-        .people
-        .iter()
+        .people()
         .map(|person| (person.id, person.role))
         .collect::<Vec<_>>();
     for (actor, role) in people {
@@ -19,7 +16,7 @@ fn offered() -> (Simulation, PersonId, PersonId) {
         }
     }
     let ruler = sim.host.state.ruler;
-    let passenger = sim.host.state.people[8].id;
+    let passenger = sim.person_at(8).id;
     sim.debug_set_relationship(
         passenger,
         ruler,

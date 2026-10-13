@@ -13,6 +13,7 @@ pub enum MotionPlan {
     LiftStart(PreparedLiftStart),
     Offer(PreparedCarryOffer),
     Reconcile(PreparedReconciliation),
+    Confinement(PreparedConfinementMotion),
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +52,7 @@ impl MotionPlan {
             Self::LiftStart(plan) => plan.projection(),
             Self::Offer(plan) => plan.projection(),
             Self::Reconcile(plan) => plan.projection(),
+            Self::Confinement(plan) => plan.projection(),
         }
     }
     pub fn stage_into(
@@ -87,15 +89,23 @@ impl MotionPlan {
             Self::Reconcile(plan) => {
                 plan.stage_into(runtime, store, &facts.reconciliation(), now, batch)
             }
+            Self::Confinement(plan) => {
+                plan.stage_into(runtime, store, &facts.reconciliation(), now, batch)
+            }
         }
     }
 }
 
 impl MotionFinalization {
-    pub fn validate_scope(&self, batch: &Batch, scope: MotionScope) -> Result<(), Error> {
+    pub fn validate_scope(
+        &self,
+        store: &Store,
+        batch: &Batch,
+        scope: MotionScope,
+    ) -> Result<(), Error> {
         match scope {
-            MotionScope::Ordinary => self.validate_footprint(batch),
-            MotionScope::StationaryReview => self.validate_preserving_locations(batch),
+            MotionScope::Ordinary => self.validate_footprint(store, batch),
+            MotionScope::StationaryReview => self.validate_preserving_locations(store, batch),
         }
     }
     pub fn finish_optional(self, runtime: Option<&mut Runtime>) -> Vec<MotionEffect> {

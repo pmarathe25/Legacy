@@ -326,3 +326,156 @@ fn actual_cargo_and_provenance_owners_stage_conserved_transfer_together() {
         Some(&500)
     );
 }
+
+#[test]
+fn staged_receipt_rejects_cursor_advance_before_publication_without_rewinding() {
+    let (mut runtime, store) = fixture();
+    let before = store.snapshot().unwrap();
+    let mut batch = Batch::new();
+    let finish = consume(&runtime, &store)
+        .stage_into(&runtime, &store, &mut batch)
+        .unwrap();
+    finish.validate_runtime(&runtime).unwrap();
+    runtime.last_event = 2;
+    assert_eq!(finish.validate_runtime(&runtime), Err(Error::Unavailable));
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert_eq!(runtime.last_event, 2);
+}
+
+#[test]
+fn taking_judgment_and_character_trust_reaction_share_one_admitted_publication() {
+    use game_characters::decisions::{Aspiration, Mind, Personality, Relationship, TrustDelta};
+    for existing in [false, true] {
+        let mut schema = schema();
+        game_characters::decisions::register_minds::<u8>(&mut schema).unwrap();
+        let mut store = Store::with_schema(schema);
+        let mut runtime = Runtime::default();
+        insert_incident(
+            &mut store,
+            IncidentId(30),
+            Incident {
+                id: IncidentId(30),
+                actor: PersonId(1),
+                source: InventoryId(10),
+                destination: InventoryId(11),
+                area: AreaId(5),
+                quantity: Quantity(500),
+                started_at: SimTime(0),
+                completes: SimTime(100),
+                changed_at: SimTime(100),
+                outcome: IncidentOutcome::Taken,
+                portions: BTreeMap::from([(ClaimId(7), 500)]),
+            },
+        )
+        .unwrap();
+        insert_attitude(
+            &mut store,
+            PersonId(2),
+            Attitude {
+                exclusive_claims: 900,
+                sharing: 100,
+                willingness_to_defend: 900,
+            },
+        )
+        .unwrap();
+        let mut mind = Mind::<u8>::new(Personality::industrious(), Aspiration::Comfort).unwrap();
+        if existing {
+            mind.relationships.insert(
+                PersonId(1),
+                Relationship {
+                    trust: -950,
+                    affection: 200,
+                },
+            );
+        }
+        game_characters::decisions::insert_mind(&mut store, PersonId(2), mind).unwrap();
+        store.insert_or_spawn(StableId(2), Foreign(7)).unwrap();
+        let observer = observer_facts(
+            PersonId(2),
+            ObserverContext {
+                local: true,
+                source_custodian: Some(PersonId(2)),
+                taking_actor_allowed: false,
+                player_controlled: false,
+                capable: true,
+            },
+        );
+        let before = store.snapshot().unwrap();
+        let original_attitude = attitude(&store, PersonId(2)).unwrap().clone();
+        let published = store.snapshot().unwrap();
+        let mut batch = Batch::new();
+        let read_guard = runtime
+            .prepare_witness(&store, IncidentId(30), SimTime(100), &[observer])
+            .unwrap()
+            .stage_into(&runtime, &store, &mut batch)
+            .unwrap();
+        batch.remove::<Attitude>(StableId(2));
+        assert_eq!(
+            read_guard.validate_batch(&store, &batch),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(store.snapshot().unwrap(), published);
+        let pending = runtime
+            .prepare_witness(&store, IncidentId(30), SimTime(100), &[observer])
+            .unwrap();
+        attitude_mut(&mut store, PersonId(2)).unwrap().sharing = 700;
+        let changed = store.snapshot().unwrap();
+        assert!(pending.commit(&mut runtime, &mut store).is_err());
+        assert_eq!(store.snapshot().unwrap(), changed);
+        insert_attitude(&mut store, PersonId(2), original_attitude).unwrap();
+        for rejected in [true, false] {
+            let property = runtime
+                .prepare_witness(&store, IncidentId(30), SimTime(100), &[observer])
+                .unwrap();
+            let trust = game_characters::receivers::prepare_trust_reactions::<u8>(
+                &store,
+                property.effects().iter().filter_map(|effect| match effect {
+                    Effect::Relationship {
+                        observer,
+                        target,
+                        trust,
+                    } => Some(TrustDelta {
+                        observer: *observer,
+                        subject: *target,
+                        delta: *trust,
+                    }),
+                    _ => None,
+                }),
+            )
+            .unwrap();
+            let mut batch = Batch::new();
+            let finish = property.stage_into(&runtime, &store, &mut batch).unwrap();
+            let trust_guard = trust.stage_into(&store, &mut batch).unwrap();
+            finish.validate_runtime(&runtime).unwrap();
+            finish.validate_batch(&store, &batch).unwrap();
+            trust_guard.validate(&store, &batch).unwrap();
+            if rejected {
+                batch.insert(StableId(2), Foreign(99));
+                assert!(store.apply_batch(batch).is_err());
+                assert_eq!(store.snapshot().unwrap(), before);
+                assert!(known_incidents(&store, PersonId(2)).is_none());
+            } else {
+                store.apply_batch(batch).unwrap();
+                finish.finish(&mut runtime);
+            }
+        }
+        assert!(
+            known_incidents(&store, PersonId(2))
+                .unwrap()
+                .contains_key(&IncidentId(30))
+        );
+        let relation = &game_characters::decisions::mind::<u8>(&store, PersonId(2))
+            .unwrap()
+            .relationships[&PersonId(1)];
+        assert_eq!(relation.trust, if existing { -1000 } else { -100 });
+        assert_eq!(relation.affection, if existing { 200 } else { 0 });
+        assert!(
+            !runtime
+                .prepare_witness(&store, IncidentId(30), SimTime(100), &[observer])
+                .unwrap()
+                .effects()
+                .iter()
+                .any(|effect| matches!(effect, Effect::Relationship { .. }))
+        );
+    }
+}

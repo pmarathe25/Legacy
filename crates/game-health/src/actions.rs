@@ -82,6 +82,10 @@ pub enum ActionFacts {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HealthEffect {
+    Clinical {
+        actor: PersonId,
+        event: ClinicalEvent,
+    },
     Interrupt {
         actor: PersonId,
     },
@@ -146,21 +150,75 @@ pub enum HealthEffect {
         patient: PersonId,
     },
 }
-fn related_jobs(store: &Store, actor: PersonId) -> BTreeMap<PersonId, Job> {
-    jobs(store)
-        .filter(|(_, job)| job.actor == actor || job.patient() == Some(actor))
-        .map(|(id, job)| (id, job.clone()))
-        .collect()
+/// Temporary borrowed lookup for the actors touched by one preparation. Every
+/// job and offer column is joined once, even when many actors are cancelled.
+struct HealthScopeIndex<'a> {
+    jobs: BTreeMap<PersonId, BTreeMap<PersonId, &'a Job>>,
+    offers: BTreeMap<PersonId, BTreeMap<(PersonId, PersonId), &'a Offer>>,
+}
+impl<'a> HealthScopeIndex<'a> {
+    fn new(store: &'a Store, actors: &BTreeSet<PersonId>) -> Self {
+        let mut index = Self {
+            jobs: BTreeMap::new(),
+            offers: BTreeMap::new(),
+        };
+        if actors.is_empty() {
+            return index;
+        }
+        for (id, row) in jobs(store) {
+            if actors.contains(&row.actor) {
+                index.jobs.entry(row.actor).or_default().insert(id, row);
+            }
+            if let Some(patient) = row
+                .patient()
+                .filter(|patient| *patient != row.actor && actors.contains(patient))
+            {
+                index.jobs.entry(patient).or_default().insert(id, row);
+            }
+        }
+        for (giver, patient, row) in all_offers(store) {
+            if actors.contains(&giver) {
+                index
+                    .offers
+                    .entry(giver)
+                    .or_default()
+                    .insert((giver, patient), row);
+            }
+            if patient != giver && actors.contains(&patient) {
+                index
+                    .offers
+                    .entry(patient)
+                    .or_default()
+                    .insert((giver, patient), row);
+            }
+        }
+        index
+    }
+    fn related_jobs(&self, actor: PersonId) -> BTreeMap<PersonId, Job> {
+        self.jobs
+            .get(&actor)
+            .into_iter()
+            .flat_map(|rows| rows.iter())
+            .map(|(id, row)| (*id, (*row).clone()))
+            .collect()
+    }
+    fn related_offers(&self, actor: PersonId) -> OfferMembership {
+        self.offers
+            .get(&actor)
+            .into_iter()
+            .flat_map(|rows| rows.iter())
+            .map(|(key, row)| (*key, (*row).clone()))
+            .collect()
+    }
+    fn patient_busy(&self, actor: PersonId) -> bool {
+        self.jobs
+            .get(&actor)
+            .is_some_and(|rows| rows.values().any(|row| row.patient() == Some(actor)))
+    }
 }
 
 type OfferMembership = BTreeMap<(PersonId, PersonId), Offer>;
 
-fn related_offers(store: &Store, actor: PersonId) -> OfferMembership {
-    all_offers(store)
-        .filter(|(giver, patient, _)| *giver == actor || *patient == actor)
-        .map(|(giver, patient, offer)| ((giver, patient), offer.clone()))
-        .collect()
-}
 fn expired_offers(store: &Store, now: SimTime) -> OfferMembership {
     all_offers(store)
         .filter(|(_, _, offer)| offer.expires <= now)
@@ -185,6 +243,7 @@ pub struct PreparedHealth {
     shelters: BTreeMap<ShelterId, (Option<Shelter>, Option<Shelter>)>,
     occupancy: BTreeMap<PersonId, (Option<Occupancy>, Option<Occupancy>)>,
     water_knowledge: BTreeMap<PersonId, (Option<Knowledge>, Knowledge)>,
+    knowledge_reads: BTreeMap<PersonId, Option<Knowledge>>,
     job_reads: BTreeMap<PersonId, BTreeMap<PersonId, Job>>,
     occupancy_reads: BTreeMap<ShelterId, BTreeMap<PersonId, Occupancy>>,
     shelter_reads: BTreeMap<ShelterId, Option<Shelter>>,
@@ -204,6 +263,7 @@ impl PreparedHealth {
             shelters: BTreeMap::new(),
             occupancy: BTreeMap::new(),
             water_knowledge: BTreeMap::new(),
+            knowledge_reads: BTreeMap::new(),
             job_reads: BTreeMap::new(),
             occupancy_reads: BTreeMap::new(),
             shelter_reads: BTreeMap::new(),
@@ -234,13 +294,19 @@ impl PreparedHealth {
         }
         patch.1 = (!row.patients.is_empty()).then_some(row);
     }
-    fn observe_jobs(&mut self, store: &Store, actor: PersonId) {
+    fn observe_jobs(&mut self, index: &HealthScopeIndex<'_>, actor: PersonId) {
         self.job_reads
             .entry(actor)
-            .or_insert_with(|| related_jobs(store, actor));
+            .or_insert_with(|| index.related_jobs(actor));
     }
-    fn cancel(&mut self, _world: &Runtime, store: &Store, actor: PersonId) {
-        let related = related_jobs(store, actor);
+    fn cancel(
+        &mut self,
+        _world: &Runtime,
+        store: &Store,
+        index: &HealthScopeIndex<'_>,
+        actor: PersonId,
+    ) {
+        let related = index.related_jobs(actor);
         self.job_reads
             .entry(actor)
             .or_insert_with(|| related.clone());
@@ -251,7 +317,7 @@ impl PreparedHealth {
                 completes: job.completes,
             });
         }
-        let related = related_offers(store, actor);
+        let related = index.related_offers(actor);
         self.offer_reads
             .entry(actor)
             .or_insert_with(|| related.clone());
@@ -259,17 +325,19 @@ impl PreparedHealth {
             self.set_offer(store, *key, None);
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         world: &Runtime,
         store: &Store,
+        index: &HealthScopeIndex<'_>,
         actor: ActorFacts,
         kind: HealthWorkKind,
         duration: SimDuration,
         work: Work,
     ) -> Result<(), Error> {
         let completes = SimTime(actor.now.0.checked_add(duration.0).ok_or(Error::Overflow)?);
-        self.cancel(world, store, actor.actor);
+        self.cancel(world, store, index, actor.actor);
         self.effects
             .push(HealthEffect::Interrupt { actor: actor.actor });
         self.set_job(
@@ -333,26 +401,11 @@ impl PreparedHealth {
     }
     pub fn validate(&self, world: &Runtime, store: &Store) -> Result<(), Error> {
         if world.rules != self.rules
-            || self
-                .job_reads
-                .iter()
-                .any(|(actor, before)| *before != related_jobs(store, *actor))
-            || self
-                .occupancy_reads
-                .iter()
-                .any(|(shelter, before)| *before != shelter_members(store, *shelter))
+            || !self.memberships_match(store)
             || self
                 .shelter_reads
                 .iter()
                 .any(|(id, before)| crate::shelter(store, *id) != before.as_ref())
-            || self
-                .offer_reads
-                .iter()
-                .any(|(actor, before)| *before != related_offers(store, *actor))
-            || self
-                .expired_reads
-                .as_ref()
-                .is_some_and(|(now, before)| *before != expired_offers(store, *now))
             || self
                 .jobs
                 .iter()
@@ -385,6 +438,10 @@ impl PreparedHealth {
                 .water_knowledge
                 .iter()
                 .any(|(id, (before, _))| knowledge(store, *id) != before.as_ref())
+            || self
+                .knowledge_reads
+                .iter()
+                .any(|(id, before)| knowledge(store, *id) != before.as_ref())
         {
             return Err(Error::Unavailable);
         }
@@ -399,6 +456,8 @@ impl PreparedHealth {
         batch: &mut Batch,
     ) -> Result<HealthFinalization, Error> {
         self.validate(world, store)?;
+        let (reads, admitted) = self.transaction_reads(store);
+        let rules = self.rules.clone();
         for (id, (_, after)) in &self.jobs {
             if let Some(value) = after {
                 value.validate()?;
@@ -435,8 +494,11 @@ impl PreparedHealth {
             after.validate()?;
             batch.insert(StableId(id.0), after);
         }
+        let guard = reads.bind(store, batch, &admitted)?;
         Ok(HealthFinalization {
             effects: self.effects,
+            rules,
+            guard,
         })
     }
     pub fn commit(
@@ -446,14 +508,28 @@ impl PreparedHealth {
     ) -> Result<Vec<HealthEffect>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(world, store, &mut batch)?;
+        finish.validate_batch(world, store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish())
     }
 }
 pub struct HealthFinalization {
     effects: Vec<HealthEffect>,
+    rules: Rules,
+    guard: game_ecs::ReadGuard,
 }
 impl HealthFinalization {
+    pub fn validate_batch(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &Batch,
+    ) -> Result<(), Error> {
+        if runtime.rules != self.rules {
+            return Err(Error::Unavailable);
+        }
+        self.guard.validate(store, batch)
+    }
     pub fn finish(self) -> Vec<HealthEffect> {
         self.effects
     }
@@ -461,6 +537,17 @@ impl HealthFinalization {
 pub struct PreparedHealthCancellations {
     change: PreparedHealth,
     groups: Vec<(PersonId, Vec<HealthEffect>)>,
+}
+/// Select clearing from cancellation effects and a factual receiving work stamp.
+pub fn cancellation_activity_resets(
+    effects: &[HealthEffect],
+    mut activity: impl FnMut(PersonId) -> HealthActivityState,
+) -> Vec<PersonId> {
+    effects.iter().filter_map(|effect| match *effect {
+        HealthEffect::ClearWork { actor, completes }
+            if matches!(activity(actor), HealthActivityState::Working { completes: at } if at == completes) => Some(actor),
+        _ => None,
+    }).collect()
 }
 impl PreparedHealthCancellations {
     pub fn effects(&self) -> impl Iterator<Item = (PersonId, &[HealthEffect])> {
@@ -477,9 +564,10 @@ impl PreparedHealthCancellations {
         store: &Store,
         batch: &mut Batch,
     ) -> Result<HealthCancellationFinalization, Error> {
-        self.change.stage_into(runtime, store, batch)?;
+        let finish = self.change.stage_into(runtime, store, batch)?;
         Ok(HealthCancellationFinalization {
             groups: self.groups,
+            finish,
         })
     }
     pub fn commit(
@@ -489,14 +577,24 @@ impl PreparedHealthCancellations {
     ) -> Result<Vec<(PersonId, Vec<HealthEffect>)>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, &mut batch)?;
+        finish.validate_batch(runtime, store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish())
     }
 }
 pub struct HealthCancellationFinalization {
     groups: Vec<(PersonId, Vec<HealthEffect>)>,
+    finish: HealthFinalization,
 }
 impl HealthCancellationFinalization {
+    pub fn validate_batch(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &Batch,
+    ) -> Result<(), Error> {
+        self.finish.validate_batch(runtime, store, batch)
+    }
     pub fn finish(self) -> Vec<(PersonId, Vec<HealthEffect>)> {
         self.groups
     }
@@ -508,11 +606,12 @@ impl Runtime {
         actors: &[PersonId],
     ) -> PreparedHealthCancellations {
         let mut change = PreparedHealth::new(self);
+        let index = HealthScopeIndex::new(store, &actors.iter().copied().collect());
         let mut groups = Vec::new();
         let mut seen = BTreeSet::new();
         let mut cleared = BTreeSet::new();
         for actor in actors.iter().copied().filter(|actor| seen.insert(*actor)) {
-            change.cancel(self, store, actor);
+            change.cancel(self, store, &index, actor);
             let effects = std::mem::take(&mut change.effects)
                 .into_iter()
                 .filter(|effect| match effect {
@@ -528,7 +627,8 @@ impl Runtime {
     }
     pub fn prepare_cancel(&self, store: &Store, actor: PersonId) -> PreparedHealth {
         let mut change = PreparedHealth::new(self);
-        change.cancel(self, store, actor);
+        let index = HealthScopeIndex::new(store, &BTreeSet::from([actor]));
+        change.cancel(self, store, &index, actor);
         change
     }
     pub fn prepare_leave(&self, store: &Store, actors: &[PersonId]) -> PreparedHealth {
@@ -581,6 +681,17 @@ impl Runtime {
         }
         let r = &self.rules;
         let mut change = PreparedHealth::new(self);
+        let actors = match action {
+            HealthAction::Treat { patient, .. } => BTreeSet::from([actor.actor, *patient]),
+            HealthAction::Drink { .. }
+            | HealthAction::Boil { .. }
+            | HealthAction::BuildShelter { .. }
+            | HealthAction::EnterShelter { .. }
+            | HealthAction::AcceptTreatment { .. }
+            | HealthAction::RefuseTreatment { .. } => BTreeSet::from([actor.actor]),
+            _ => BTreeSet::new(),
+        };
+        let index = HealthScopeIndex::new(store, &actors);
         match (action, facts) {
             (HealthAction::Drink { source }, ActionFacts::Drink { water, .. }) => {
                 if !water.permits(*source, Good::Water, r.drink_quantity) {
@@ -590,6 +701,7 @@ impl Runtime {
                 change.start(
                     self,
                     store,
+                    &index,
                     actor,
                     HealthWorkKind::Drink,
                     r.drinking_time,
@@ -617,6 +729,7 @@ impl Runtime {
                 change.start(
                     self,
                     store,
+                    &index,
                     actor,
                     HealthWorkKind::Boil,
                     r.boiling_time,
@@ -660,6 +773,7 @@ impl Runtime {
                 change.start(
                     self,
                     store,
+                    &index,
                     actor,
                     HealthWorkKind::Shelter,
                     duration,
@@ -711,19 +825,18 @@ impl Runtime {
             }
             (HealthAction::EnterShelter { shelter }, ActionFacts::ShelterOccupancy { leaving }) => {
                 let s = crate::shelter(store, *shelter).ok_or(Error::Unavailable)?;
+                let members = shelter_members(store, *shelter);
                 if s.area != area
                     || !s.access.contains(&actor.actor)
-                    || shelter_members(store, *shelter).len() >= s.capacity as usize
+                    || members.len() >= s.capacity as usize
                     || occupancy(store, actor.actor).is_some_and(|row| row.shelter == *shelter)
                 {
                     return Err(Error::Unavailable);
                 }
-                change
-                    .occupancy_reads
-                    .insert(*shelter, shelter_members(store, *shelter));
+                change.occupancy_reads.insert(*shelter, members);
                 change.shelter_reads.insert(*shelter, Some(s.clone()));
                 change.leave(store, &leaving);
-                change.cancel(self, store, actor.actor);
+                change.cancel(self, store, &index, actor.actor);
                 change.occupancy.insert(
                     actor.actor,
                     (
@@ -844,7 +957,7 @@ impl Runtime {
                 if offer.accepted || offer.expires <= actor.now || !giver_present || !contact {
                     return Err(Error::Unavailable);
                 }
-                change.cancel(self, store, actor.actor);
+                change.cancel(self, store, &index, actor.actor);
                 change.set_offer(
                     store,
                     (*caregiver, actor.actor),
@@ -868,7 +981,7 @@ impl Runtime {
                 if offer(store, *caregiver, actor.actor).is_none() {
                     return Err(Error::Unavailable);
                 }
-                change.cancel(self, store, actor.actor);
+                change.cancel(self, store, &index, actor.actor);
                 change.effects.push(HealthEffect::Refused {
                     caregiver: *caregiver,
                     patient: actor.actor,
@@ -891,7 +1004,7 @@ impl Runtime {
                     || !target.present
                     || !target.contact
                     || medicine == 0
-                    || self.patient_busy(store, *patient)
+                    || index.patient_busy(*patient)
                     || !plants.permits(*herbs, Good::Herb, r.treatment_herbs)
                     || !stock.permits(*water, Good::Water, r.treatment_water)
                     || *patient != actor.actor
@@ -912,10 +1025,11 @@ impl Runtime {
                     .and_then(|t| t.checked_add(r.treatment_duration.0))
                     .ok_or(Error::Overflow)?;
                 preflight_intake(r, actor.now)?;
-                change.observe_jobs(store, *patient);
+                change.observe_jobs(&index, *patient);
                 change.start(
                     self,
                     store,
+                    &index,
                     actor,
                     HealthWorkKind::Treat,
                     r.treatment_time,
@@ -1154,6 +1268,27 @@ impl Runtime {
         }
         change
     }
+    /// Health owns which pending jobs claim physical water quantities.
+    pub fn stock_reservations(
+        &self,
+        store: &Store,
+        source: Option<InventoryId>,
+    ) -> Vec<(PersonId, InventoryId, Quantity)> {
+        jobs(store)
+            .filter_map(|(_, job)| {
+                let (inventory, quantity) = match job.work {
+                    Work::Drink { source, quantity }
+                    | Work::Boil {
+                        source, quantity, ..
+                    } => (source, quantity),
+                    _ => return None,
+                };
+                source
+                    .is_none_or(|wanted| inventory == wanted)
+                    .then_some((job.actor, inventory, quantity))
+            })
+            .collect()
+    }
     pub fn reserved_stock(&self, store: &Store, source: InventoryId, except: PersonId) -> u64 {
         jobs(store)
             .filter(|(_, job)| job.actor != except)
@@ -1185,3 +1320,646 @@ mod staging_tests;
 #[path = "placement.rs"]
 mod placement;
 pub use placement::*;
+
+/// Opening physical quantities supplied by the material owner. Health owns
+/// contamination conservation and the observer's subjective water memory.
+#[derive(Clone, Copy, Debug)]
+pub enum WaterReaction {
+    Transfer {
+        actor: PersonId,
+        source: InventoryId,
+        destination: InventoryId,
+        quantity: Quantity,
+        source_before: Quantity,
+        destination_before: Quantity,
+    },
+    Consume {
+        source: InventoryId,
+        quantity: Quantity,
+        source_before: Quantity,
+    },
+    Produce {
+        actor: PersonId,
+        output: InventoryId,
+        quantity: Quantity,
+        quantity_before: Quantity,
+    },
+    Spoil {
+        inventory: InventoryId,
+    },
+}
+#[derive(Clone, Copy, Debug)]
+pub enum HealthReaction {
+    Born {
+        child: PersonId,
+        inherited_shelter: Option<ShelterId>,
+    },
+    Died {
+        actor: PersonId,
+    },
+    IllnessStarted {
+        actor: PersonId,
+        kind: IllnessKind,
+    },
+}
+impl Runtime {
+    pub fn prepare_water_reaction(
+        &self,
+        store: &Store,
+        now: SimTime,
+        reaction: WaterReaction,
+    ) -> Result<PreparedHealth, Error> {
+        let mut change = PreparedHealth::new(self);
+        match reaction {
+            WaterReaction::Transfer {
+                actor,
+                source,
+                destination,
+                quantity,
+                source_before,
+                destination_before,
+            } => {
+                if source == destination || quantity.0 == 0 {
+                    return Err(Error::Unavailable);
+                }
+                let source_lot = water_lot(store, source)
+                    .cloned()
+                    .unwrap_or_else(|| WaterLot::new(source_before.0, 0));
+                let destination_lot = water_lot(store, destination)
+                    .cloned()
+                    .unwrap_or_else(|| WaterLot::new(destination_before.0, 0));
+                if source_lot.quantity() != source_before.0
+                    || destination_lot.quantity() != destination_before.0
+                {
+                    return Err(Error::Unavailable);
+                }
+                let result = transfer_water(WaterTransferInput {
+                    source: &source_lot,
+                    destination: &destination_lot,
+                    quantity: quantity.0,
+                })?;
+                change.water.insert(
+                    source,
+                    (water_lot(store, source).cloned(), Some(result.source)),
+                );
+                change.water.insert(
+                    destination,
+                    (
+                        water_lot(store, destination).cloned(),
+                        Some(result.destination),
+                    ),
+                );
+                let before = knowledge(store, actor).cloned();
+                if let Some(source_known) =
+                    before.as_ref().and_then(|known| known.water.get(&source))
+                {
+                    let destination_known = before
+                        .as_ref()
+                        .and_then(|known| known.water.get(&destination));
+                    let purified = source_known.purified
+                        && (destination_before.0 == 0
+                            || destination_known.is_some_and(|known| known.purified));
+                    let suspected_unsafe = source_known.suspected_unsafe
+                        || destination_known.is_some_and(|known| known.suspected_unsafe);
+                    let mut after = before.clone().unwrap_or_default();
+                    after.water.insert(
+                        destination,
+                        WaterSafetyView {
+                            inventory: destination,
+                            purified,
+                            suspected_unsafe,
+                            observed_at: now,
+                        },
+                    );
+                    change.water_knowledge.insert(actor, (before, after));
+                } else {
+                    // Selection also depends on the absence of source memory.
+                    change
+                        .water_knowledge
+                        .insert(actor, (before.clone(), before.unwrap_or_default()));
+                }
+            }
+            WaterReaction::Consume {
+                source,
+                quantity,
+                source_before,
+            } => {
+                let before = water_lot(store, source).cloned();
+                let opening = before
+                    .clone()
+                    .unwrap_or_else(|| WaterLot::new(source_before.0, 0));
+                if opening.quantity() != source_before.0 {
+                    return Err(Error::Unavailable);
+                }
+                let result = consume_water(&opening, quantity.0)?;
+                change
+                    .water
+                    .insert(source, (before, Some(result.remaining)));
+            }
+            WaterReaction::Produce {
+                actor,
+                output,
+                quantity,
+                quantity_before,
+            } => {
+                let before = water_lot(store, output).cloned();
+                if before
+                    .as_ref()
+                    .is_some_and(|lot| lot.quantity() != quantity_before.0)
+                {
+                    return Err(Error::Unavailable);
+                }
+                let quantity_after = quantity_before
+                    .0
+                    .checked_add(quantity.0)
+                    .ok_or(Error::Overflow)?;
+                let after =
+                    WaterLot::new(quantity_after, before.as_ref().map_or(0, WaterLot::load));
+                after.validate_fields()?;
+                change.water.insert(output, (before, Some(after)));
+                let before = knowledge(store, actor).cloned();
+                let mut after = before.clone().unwrap_or_default();
+                after.water.remove(&output);
+                change.water_knowledge.insert(actor, (before, after));
+            }
+            WaterReaction::Spoil { inventory } => {
+                change.water.insert(
+                    inventory,
+                    (
+                        water_lot(store, inventory).cloned(),
+                        Some(WaterLot::new(0, 0)),
+                    ),
+                );
+            }
+        }
+        Ok(change)
+    }
+    pub fn prepare_reaction(
+        &self,
+        store: &Store,
+        now: SimTime,
+        reaction: HealthReaction,
+    ) -> Result<PreparedHealth, Error> {
+        let mut change = PreparedHealth::new(self);
+        match reaction {
+            HealthReaction::Born {
+                child,
+                inherited_shelter,
+            } => {
+                if child.0 == 0 {
+                    return Err(Error::Unavailable);
+                }
+                if let Some(id) = inherited_shelter {
+                    let row = shelter(store, id).cloned().ok_or(Error::Unavailable)?;
+                    change.shelter_reads.insert(id, Some(row));
+                    change.occupancy.insert(
+                        child,
+                        (
+                            occupancy(store, child).cloned(),
+                            Some(Occupancy { shelter: id }),
+                        ),
+                    );
+                }
+                if clinical(store, child).is_none() {
+                    change
+                        .clinical
+                        .insert(child, (None, Some(Clinical::default())));
+                }
+            }
+            HealthReaction::Died { actor } => {
+                change
+                    .occupancy
+                    .insert(actor, (occupancy(store, actor).cloned(), None));
+            }
+            HealthReaction::IllnessStarted { actor, kind } => {
+                change.react_illness_started(store, &self.rules, now, actor, kind);
+            }
+        }
+        Ok(change)
+    }
+    pub fn prepare_water_received(
+        &self,
+        store: &Store,
+        patient: PersonId,
+        source: StockFacts,
+        quantity: Quantity,
+        physiology: ClinicalPhysiology,
+        now: SimTime,
+    ) -> Result<PreparedHealth, Error> {
+        if patient.0 == 0 || source.good != Good::Water || source.quantity < quantity {
+            return Err(Error::Unavailable);
+        }
+        let mut change = PreparedHealth::new(self);
+        change.receive(self, store, patient, physiology, now, (source, quantity))?;
+        Ok(change)
+    }
+}
+impl Runtime {
+    pub fn birth_shelter(
+        &self,
+        parents: &[(PersonId, bool)],
+        mut shelter: impl FnMut(PersonId) -> Option<ShelterId>,
+    ) -> Option<ShelterId> {
+        parents
+            .iter()
+            .find(|(_, gestates)| *gestates)
+            .and_then(|(parent, _)| shelter(*parent))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FinishReadiness {
+    pub area: Option<AreaId>,
+    pub equipment_available: bool,
+    pub active_deadline: Option<SimTime>,
+}
+pub fn finish_ready(job: &Job, facts: FinishReadiness) -> bool {
+    facts.area == Some(job.area)
+        && (!matches!(job.work, Work::Boil { .. } | Work::Shelter { .. })
+            || facts.equipment_available)
+        && facts.active_deadline == Some(job.completes)
+}
+impl Runtime {
+    pub fn prepare_clinical_reconciliation(
+        &self,
+        store: &Store,
+        now: SimTime,
+        mut alive: impl FnMut(PersonId) -> bool,
+    ) -> Result<PreparedHealth, Error> {
+        let mut change = PreparedHealth::new(self);
+        let actors = clinicals(store)
+            .map(|(actor, state)| (actor, state, alive(actor)))
+            .collect::<Vec<_>>();
+        let dead = actors
+            .iter()
+            .filter(|(_, _, alive)| !alive)
+            .map(|(actor, _, _)| *actor)
+            .collect();
+        let index = HealthScopeIndex::new(store, &dead);
+        for (actor, state, alive) in actors {
+            if !alive {
+                change.cancel(self, store, &index, actor);
+                continue;
+            }
+            let transition = reconcile_clinical(state, &self.rules, now, true)?;
+            change
+                .clinical
+                .insert(actor, (Some(state.clone()), Some(transition.state)));
+            for event in transition.events {
+                if let ClinicalEvent::Started(kind) = event {
+                    change.react_illness_started(store, &self.rules, now, actor, kind);
+                }
+                change.effects.push(HealthEffect::Clinical { actor, event });
+            }
+        }
+        Ok(change)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum HealthActivityState {
+    Other,
+    Working { completes: SimTime },
+}
+#[derive(Clone, Copy, Debug)]
+pub enum HealthActivityChange {
+    Idle,
+    Work {
+        kind: HealthWorkKind,
+        completes: SimTime,
+    },
+    Rest,
+}
+pub struct HealthOperations {
+    pub interruptions: Vec<PersonId>,
+    pub consumptions: Vec<(InventoryId, Quantity)>,
+    pub activities: BTreeMap<PersonId, HealthActivityChange>,
+}
+impl PreparedHealth {
+    /// Select receiving operations from owner effects. Adapters translate these
+    /// activity requests into their public representation and order transactions.
+    pub fn operations(
+        &self,
+        mut activity: impl FnMut(PersonId) -> HealthActivityState,
+    ) -> HealthOperations {
+        let mut result = HealthOperations {
+            interruptions: Vec::new(),
+            consumptions: Vec::new(),
+            activities: BTreeMap::new(),
+        };
+        for effect in &self.effects {
+            match *effect {
+                HealthEffect::Interrupt { actor } => result.interruptions.push(actor),
+                HealthEffect::Consume {
+                    source, quantity, ..
+                } => result.consumptions.push((source, quantity)),
+                HealthEffect::ClearWork { actor, completes } => {
+                    if matches!(activity(actor), HealthActivityState::Working { completes: deadline } if deadline == completes)
+                    {
+                        result.activities.insert(actor, HealthActivityChange::Idle);
+                    }
+                }
+                HealthEffect::Start {
+                    actor,
+                    kind,
+                    completes,
+                } => {
+                    result
+                        .activities
+                        .insert(actor, HealthActivityChange::Work { kind, completes });
+                }
+                HealthEffect::Rest { actor } => {
+                    result.activities.insert(actor, HealthActivityChange::Rest);
+                }
+                _ => {}
+            }
+        }
+        result
+    }
+    /// Consume contamination with the same owned transition that receives its
+    /// clinical dose. Physical quantities are supplied at phase opening.
+    pub fn with_consumption_reactions(
+        mut self,
+        store: &Store,
+        mut source: impl FnMut(InventoryId) -> Result<(Good, Quantity), Error>,
+    ) -> Result<Self, Error> {
+        let mut quantities = BTreeMap::<InventoryId, u64>::new();
+        for effect in &self.effects {
+            if let HealthEffect::Consume {
+                source, quantity, ..
+            } = effect
+            {
+                let sum = quantities.entry(*source).or_default();
+                *sum = sum.checked_add(quantity.0).ok_or(Error::Overflow)?;
+            }
+        }
+        for (id, quantity) in quantities {
+            let (good, opening_quantity) = source(id)?;
+            if good != Good::Water {
+                continue;
+            }
+            let before = water_lot(store, id).cloned();
+            let opening = before
+                .clone()
+                .unwrap_or_else(|| WaterLot::new(opening_quantity.0, 0));
+            if opening.quantity() != opening_quantity.0 {
+                return Err(Error::Unavailable);
+            }
+            let after = consume_water(&opening, quantity)?.remaining;
+            if self.water.contains_key(&id) {
+                return Err(Error::Unavailable);
+            }
+            self.water.insert(id, (before, Some(after)));
+        }
+        Ok(self)
+    }
+}
+
+impl PreparedHealth {
+    /// Validate the union of selected scopes once per component column. Exact
+    /// rows retain each member's identity, so moving inside the union is stale.
+    fn memberships_match(&self, store: &Store) -> bool {
+        if !self.job_reads.is_empty() {
+            let actors = self.job_reads.keys().copied().collect::<BTreeSet<_>>();
+            let expected = self
+                .job_reads
+                .values()
+                .flat_map(|rows| rows.iter())
+                .map(|(id, row)| (*id, row))
+                .collect::<BTreeMap<_, _>>();
+            let actual = jobs(store)
+                .filter(|(_, row)| {
+                    actors.contains(&row.actor)
+                        || row
+                            .patient()
+                            .is_some_and(|patient| actors.contains(&patient))
+                })
+                .collect::<BTreeMap<_, _>>();
+            if expected != actual {
+                return false;
+            }
+        }
+        if !self.occupancy_reads.is_empty() {
+            let shelters = self
+                .occupancy_reads
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let expected = self
+                .occupancy_reads
+                .values()
+                .flat_map(|rows| rows.iter())
+                .map(|(id, row)| (*id, row))
+                .collect::<BTreeMap<_, _>>();
+            let actual = occupancies(store)
+                .filter(|(_, row)| shelters.contains(&row.shelter))
+                .collect::<BTreeMap<_, _>>();
+            if expected != actual {
+                return false;
+            }
+        }
+        if !self.offer_reads.is_empty() || self.expired_reads.is_some() {
+            let actors = self.offer_reads.keys().copied().collect::<BTreeSet<_>>();
+            let expires = self.expired_reads.as_ref().map(|(now, _)| *now);
+            let expected = self
+                .offer_reads
+                .values()
+                .flat_map(|rows| rows.iter())
+                .chain(self.expired_reads.iter().flat_map(|(_, rows)| rows.iter()))
+                .map(|(key, row)| (*key, row))
+                .collect::<BTreeMap<_, _>>();
+            let actual = all_offers(store)
+                .filter(|(giver, patient, row)| {
+                    actors.contains(giver)
+                        || actors.contains(patient)
+                        || expires.is_some_and(|now| row.expires <= now)
+                })
+                .map(|(giver, patient, row)| ((giver, patient), row))
+                .collect::<BTreeMap<_, _>>();
+            if expected != actual {
+                return false;
+            }
+        }
+        true
+    }
+    fn transaction_reads(&self, store: &Store) -> (game_ecs::ReadSet, game_ecs::ReadFootprint) {
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        macro_rules! rows {
+            ($field:ident, $row:ty) => {
+                for (id, (before, _)) in &self.$field {
+                    reads.expect_row::<$row>(StableId(id.0), before.clone());
+                    admitted.protect::<$row>(StableId(id.0));
+                }
+            };
+        }
+        rows!(jobs, Job);
+        rows!(offers, Offers);
+        rows!(clinical, Clinical);
+        rows!(water, WaterLot);
+        rows!(shelters, Shelter);
+        rows!(occupancy, Occupancy);
+        rows!(water_knowledge, Knowledge);
+        for (id, before) in &self.water_reads {
+            reads.expect_row::<WaterLot>(StableId(id.0), before.clone());
+        }
+        for (id, before) in &self.knowledge_reads {
+            if !self.water_knowledge.contains_key(id) {
+                reads.expect_row::<Knowledge>(StableId(id.0), before.clone());
+            }
+        }
+        for (id, before) in &self.shelter_reads {
+            reads.expect_row::<Shelter>(StableId(id.0), before.clone());
+        }
+        if !self.job_reads.is_empty() {
+            let actors = self.job_reads.keys().copied().collect::<BTreeSet<_>>();
+            reads.membership::<Job>(store, move |_, job| {
+                actors.contains(&job.actor)
+                    || job
+                        .patient()
+                        .is_some_and(|patient| actors.contains(&patient))
+            });
+            let rows = self
+                .job_reads
+                .values()
+                .flat_map(|rows| rows.iter())
+                .collect::<BTreeMap<_, _>>();
+            for (id, row) in rows {
+                if !self.jobs.contains_key(id) {
+                    reads.expect_row::<Job>(StableId(id.0), Some(row.clone()));
+                }
+            }
+        }
+        if !self.occupancy_reads.is_empty() {
+            let shelters = self
+                .occupancy_reads
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            reads.membership::<Occupancy>(store, move |_, row| shelters.contains(&row.shelter));
+            let rows = self
+                .occupancy_reads
+                .values()
+                .flat_map(|rows| rows.iter())
+                .collect::<BTreeMap<_, _>>();
+            for (actor, row) in rows {
+                if !self.occupancy.contains_key(actor) {
+                    reads.expect_row::<Occupancy>(StableId(actor.0), Some(row.clone()));
+                }
+            }
+        }
+        if !self.offer_reads.is_empty() || self.expired_reads.is_some() {
+            let actors = self.offer_reads.keys().copied().collect::<BTreeSet<_>>();
+            let expires = self.expired_reads.as_ref().map(|(now, _)| *now);
+            let ids = reads.membership::<Offers>(store, move |_, row| {
+                actors.contains(&row.caregiver)
+                    || row.patients.values().any(|offer| {
+                        actors.contains(&offer.patient)
+                            || expires.is_some_and(|now| offer.expires <= now)
+                    })
+            });
+            for id in ids {
+                if !self.offers.contains_key(&PersonId(id.0)) {
+                    let _ = reads.read::<Offers>(store, id);
+                }
+            }
+        }
+        (reads, admitted)
+    }
+}
+
+impl PreparedHealth {
+    /// Couple an intake's opening dose with its physical water debit so both
+    /// belong to one Health plan and one final batch guard.
+    pub fn with_water_consumption(
+        mut self,
+        store: &Store,
+        source: InventoryId,
+        quantity: Quantity,
+        source_before: Quantity,
+    ) -> Result<Self, Error> {
+        let before = water_lot(store, source).cloned();
+        let opening = before
+            .clone()
+            .unwrap_or_else(|| WaterLot::new(source_before.0, 0));
+        if opening.quantity() != source_before.0 || self.water.contains_key(&source) {
+            return Err(Error::Unavailable);
+        }
+        let after = consume_water(&opening, quantity.0)?.remaining;
+        self.water.insert(source, (before, Some(after)));
+        Ok(self)
+    }
+}
+
+#[cfg(test)]
+#[path = "scope_tests.rs"]
+mod scope_tests;
+
+impl Runtime {
+    /// Prepare the recipient's clinical intake and the source's contaminant
+    /// debit together, so a Cargo debit can share their one Health final guard.
+    pub fn prepare_care_water_received(
+        &self,
+        store: &Store,
+        patient: PersonId,
+        source: StockFacts,
+        quantity: Quantity,
+        physiology: ClinicalPhysiology,
+        now: SimTime,
+    ) -> Result<PreparedHealth, Error> {
+        self.prepare_water_received(store, patient, source, quantity, physiology, now)?
+            .with_water_consumption(store, source.id, quantity, source.quantity)
+    }
+}
+
+impl PreparedHealth {
+    /// Enteric symptoms may make recent personally consumed water suspect.
+    /// Resolve against this plan's projected Clinical and Knowledge rows so the
+    /// origin transition and receiving memory reaction publish together.
+    fn react_illness_started(
+        &mut self,
+        store: &Store,
+        rules: &Rules,
+        now: SimTime,
+        actor: PersonId,
+        kind: IllnessKind,
+    ) {
+        if kind != IllnessKind::Enteric {
+            return;
+        }
+        let opening = clinical(store, actor).cloned();
+        let projected = self
+            .clinical
+            .entry(actor)
+            .or_insert_with(|| (opening.clone(), opening));
+        let Some((source, drank)) = projected.1.as_ref().and_then(|row| row.last_drink) else {
+            return;
+        };
+        if now.0.saturating_sub(drank.0) > rules.incubation.0 {
+            return;
+        }
+        let before = knowledge(store, actor).cloned();
+        self.knowledge_reads
+            .entry(actor)
+            .or_insert_with(|| before.clone());
+        let mut after = self
+            .water_knowledge
+            .get(&actor)
+            .map(|(_, after)| after.clone())
+            .or_else(|| before.clone())
+            .unwrap_or_default();
+        if after.water.get(&source).is_some_and(|known| known.purified) {
+            return;
+        }
+        after.water.insert(
+            source,
+            WaterSafetyView {
+                inventory: source,
+                purified: false,
+                suspected_unsafe: true,
+                observed_at: now,
+            },
+        );
+        self.water_knowledge.insert(actor, (before, after));
+    }
+}

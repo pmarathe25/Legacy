@@ -556,3 +556,42 @@ mod release_tests {
         }
     }
 }
+
+/// Admission of one actual toolkit slot using factual body and placement inputs.
+#[allow(clippy::too_many_arguments)]
+pub fn tool_available(
+    actor: PersonId,
+    stock: &Inventory,
+    body: ToolBodyFacts,
+    stationary_area: Option<AreaId>,
+    inventory_area: Option<AreaId>,
+    allocations: &ToolAllocations,
+    released: bool,
+) -> bool {
+    body.alive
+        && body.health > 0
+        && stock.good == Good::Tool
+        && stock.quantity >= Quantity(1_000)
+        && inventory_area.is_some()
+        && stationary_area == inventory_area
+        && if released {
+            allocations.allows_after_release(actor, stock.id)
+        } else {
+            allocations.allows(actor, stock.id)
+        }
+}
+
+/// Equipment demand joins optional slot allocation with the production owner's
+/// factual declaration that a job can run without a tool.
+pub fn equipment_availability(
+    demands: impl IntoIterator<Item = (PersonId, bool)>,
+    allocations: Option<&ToolAllocations>,
+) -> BTreeMap<PersonId, bool> {
+    let mut available: BTreeMap<_, _> = demands.into_iter().collect();
+    if let Some(allocations) = allocations {
+        for actor in allocations.allocated_actors() {
+            available.insert(actor, true);
+        }
+    }
+    available
+}

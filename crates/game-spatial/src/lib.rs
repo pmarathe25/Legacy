@@ -113,17 +113,67 @@ pub fn remove_location(store: &mut Store, entity: StableId) -> Result<Option<Loc
     store.remove(entity)
 }
 
+/// One owner-prepared canonical placement, including shared reserved creation.
+#[derive(Clone, Debug)]
+pub struct PreparedLocation {
+    entity: StableId,
+    after: Location,
+    reads: game_ecs::ReadSet,
+}
+pub fn prepare_location(
+    store: &Store,
+    entity: StableId,
+    after: Location,
+) -> Result<PreparedLocation, Error> {
+    if entity.0 == 0 {
+        return Err(Error::InvalidConfiguration("zero spatial entity".into()));
+    }
+    validate(&after)?;
+    let mut reads = game_ecs::ReadSet::new();
+    let _ = reads.read::<Location>(store, entity);
+    reads.entity(store, entity);
+    Ok(PreparedLocation {
+        entity,
+        after,
+        reads,
+    })
+}
+impl PreparedLocation {
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.reads.validate(store)?;
+        if batch.touches::<Location>(self.entity) {
+            return Err(Error::Unavailable);
+        }
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<Location>(self.entity);
+        batch.insert(self.entity, self.after);
+        self.reads.bind(store, batch, &admitted)
+    }
+}
+
 /// Returns the terminal entity and its borrowed canonical row. Missing anchors
 /// and cycles fail explicitly rather than assigning a guessed cell or endpoint.
 pub fn resolved_anchor(store: &Store, entity: StableId) -> Result<(StableId, &Location), Error> {
+    resolved_anchor_with(entity, |entity| location(store, entity))
+}
+/// Resolve an owner-prepared projection with the same canonical carrier rules.
+/// The provider supplies borrowed actual or projected rows; it owns no policy.
+pub fn resolved_anchor_with<'a>(
+    entity: StableId,
+    mut location: impl FnMut(StableId) -> Option<&'a Location>,
+) -> Result<(StableId, &'a Location), Error> {
     let mut current = entity;
     let mut seen = BTreeSet::new();
     loop {
         if !seen.insert(current) {
             return Err(Error::InvalidSave("cyclic spatial carrying".into()));
         }
-        let row = location(store, current)
-            .ok_or_else(|| Error::InvalidSave("missing spatial anchor".into()))?;
+        let row =
+            location(current).ok_or_else(|| Error::InvalidSave("missing spatial anchor".into()))?;
         validate(row).map_err(|_| Error::InvalidSave("invalid spatial anchor".into()))?;
         match *row {
             Location::Carried { carrier } => current = StableId(carrier.0),
@@ -208,3 +258,5 @@ pub use navigation::{RoadGraph, shortest_path};
 
 mod audience;
 pub use audience::*;
+
+pub mod receipt_validation;

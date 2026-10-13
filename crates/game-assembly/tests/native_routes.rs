@@ -33,7 +33,12 @@ fn native_route_has_eight_columns_no_person_shadow_and_is_legal_without_carry_ru
     let saved = sim.save().unwrap();
     let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(json["version"], 51);
-    assert!(json["state"]["state"]["people"][0].get("route").is_none());
+    assert!(json["state"]["state"].get("people").is_none());
+    assert!(
+        json["state"]["components"]["columns"]["characters/person"][0]["value"]
+            .get("route")
+            .is_none()
+    );
     assert_eq!(
         json["state"]["components"]["columns"]
             .as_object()
@@ -60,7 +65,10 @@ fn removed_person_field_orphan_and_malformed_native_route_rows_reject_restoratio
     for failure in 0..5 {
         let mut json = base.clone();
         match failure {
-            0 => json["state"]["state"]["people"][0]["route"] = serde_json::json!([]),
+            0 => {
+                json["state"]["components"]["columns"]["characters/person"][0]["value"]["route"] =
+                    serde_json::json!([])
+            }
             1 => {
                 json["state"]["components"]["columns"]["transport/route"][0]["value"]["steps"] =
                     serde_json::json!([])
@@ -74,7 +82,7 @@ fn removed_person_field_orphan_and_malformed_native_route_rows_reject_restoratio
                     serde_json::json!([99])
             }
             _ => {
-                let inventory = json["state"]["state"]["people"][0]["inventory"]
+                let inventory = json["state"]["components"]["columns"]["characters/person"][0]["value"]["inventory"]
                     .as_u64()
                     .unwrap();
                 json["state"]["components"]["columns"]["transport/route"]

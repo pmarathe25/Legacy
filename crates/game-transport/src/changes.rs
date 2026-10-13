@@ -65,6 +65,18 @@ impl<C: Component> Rows<C> {
         }
         Ok(())
     }
+    fn protect(&self, reads: &mut game_ecs::ReadSet) {
+        for (actor, (before, _)) in &self.edits {
+            reads.expect_row::<C>(StableId(actor.0), before.clone());
+        }
+    }
+    fn admissions(&self, writes: &mut game_ecs::ReadFootprint, reserve: bool) {
+        for (actor, (before, after)) in &self.edits {
+            if reserve || before != after {
+                writes.protect::<C>(StableId(actor.0));
+            }
+        }
+    }
     fn stage(self, batch: &mut Batch) {
         for (actor, (before, after)) in self.edits {
             if before == after {
@@ -136,6 +148,7 @@ pub struct PreparedTransport<T> {
     paused: Rows<PausedApproach>,
     knowledge: Rows<SupportKnowledge>,
     body_reads: BTreeMap<PersonId, Body>,
+    factual_reads: game_ecs::ReadSet,
     topology: Vec<TopologyGuard>,
     journal: Option<(Vec<Response>, Vec<Response>)>,
     expired_inboxes: Option<(SimTime, Vec<(PersonId, OfferInbox)>)>,
@@ -155,6 +168,7 @@ impl<T> PreparedTransport<T> {
             paused: Rows::new(),
             knowledge: Rows::new(),
             body_reads: BTreeMap::new(),
+            factual_reads: game_ecs::ReadSet::new(),
             topology: Vec::new(),
             journal: None,
             expired_inboxes: None,
@@ -174,6 +188,7 @@ impl<T> PreparedTransport<T> {
             paused: self.paused,
             knowledge: self.knowledge,
             body_reads: self.body_reads,
+            factual_reads: self.factual_reads,
             topology: self.topology,
             journal: self.journal,
             expired_inboxes: self.expired_inboxes,
@@ -211,6 +226,7 @@ impl<T> PreparedTransport<T> {
         bodies: &impl BodyFacts,
         now: SimTime,
     ) -> Result<(), Error> {
+        self.factual_reads.validate(store)?;
         if self.at.is_some_and(|at| at != now)
             || runtime.rules != self.rules
             || self
@@ -243,6 +259,44 @@ impl<T> PreparedTransport<T> {
         self.paused.validate(store)?;
         self.knowledge.validate(store)
     }
+    fn read_set(&self, store: &Store) -> game_ecs::ReadSet {
+        let mut reads = self.factual_reads.clone();
+        self.routes.protect(&mut reads);
+        self.groups.protect(&mut reads);
+        self.offers.protect(&mut reads);
+        self.lifts.protect(&mut reads);
+        self.approaches.protect(&mut reads);
+        self.resume.protect(&mut reads);
+        self.paused.protect(&mut reads);
+        self.knowledge.protect(&mut reads);
+        for guard in &self.topology {
+            let linked = connected(store, &guard.seed);
+            let group_members = linked.clone();
+            let lift_members = linked;
+            let groups = reads.membership::<CarryGroup>(store, move |_, row| {
+                group_members.contains(&row.passenger) || !row.bearers.is_disjoint(&group_members)
+            });
+            let lifts = reads.membership::<Lift>(store, move |_, row| {
+                lift_members.contains(&row.passenger) || !row.bearers.is_disjoint(&lift_members)
+            });
+            for id in groups {
+                let _ = reads.read::<CarryGroup>(store, id);
+            }
+            for id in lifts {
+                let _ = reads.read::<Lift>(store, id);
+            }
+        }
+        if let Some((at, _)) = &self.expired_inboxes {
+            let at = *at;
+            let inboxes = reads.membership::<OfferInbox>(store, move |_, row| {
+                row.by_bearer.values().any(|offer| offer.expires <= at)
+            });
+            for id in inboxes {
+                let _ = reads.read::<OfferInbox>(store, id);
+            }
+        }
+        reads
+    }
     pub fn stage_into(
         self,
         runtime: &Runtime,
@@ -252,6 +306,16 @@ impl<T> PreparedTransport<T> {
         batch: &mut Batch,
     ) -> Result<TransportFinalization<T>, Error> {
         self.validate(runtime, store, bodies, now)?;
+        let reads = self.read_set(store);
+        let mut admitted = game_ecs::ReadFootprint::new();
+        self.routes.admissions(&mut admitted, false);
+        self.groups.admissions(&mut admitted, false);
+        self.offers.admissions(&mut admitted, false);
+        self.lifts.admissions(&mut admitted, false);
+        self.approaches.admissions(&mut admitted, false);
+        self.resume.admissions(&mut admitted, false);
+        self.paused.admissions(&mut admitted, false);
+        self.knowledge.admissions(&mut admitted, false);
         self.routes.stage(batch);
         self.groups.stage(batch);
         self.offers.stage(batch);
@@ -260,7 +324,9 @@ impl<T> PreparedTransport<T> {
         self.resume.stage(batch);
         self.paused.stage(batch);
         self.knowledge.stage(batch);
+        let guard = reads.bind(store, batch, &admitted)?;
         Ok(TransportFinalization {
+            guard,
             journal: self.journal.map(|(_, after)| after),
             result: self.result,
         })
@@ -274,15 +340,20 @@ impl<T> PreparedTransport<T> {
     ) -> Result<T, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, bodies, now, &mut batch)?;
+        finish.validate_batch(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish(runtime))
     }
 }
 pub struct TransportFinalization<T> {
+    guard: game_ecs::ReadGuard,
     journal: Option<Vec<Response>>,
     result: T,
 }
 impl<T> TransportFinalization<T> {
+    pub fn validate_batch(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.guard.validate(store, batch)
+    }
     pub fn finish(self, runtime: &mut Runtime) -> T {
         if let Some(journal) = self.journal {
             runtime.responses = journal;

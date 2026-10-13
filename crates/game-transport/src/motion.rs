@@ -46,6 +46,8 @@ pub struct PreparedMotion {
     pub(super) transport: PreparedTransport<Vec<MotionEffect>>,
     pub(super) locations: Rows<Location>,
     pub(super) route_replacements: BTreeSet<PersonId>,
+    confinement_release_targets: BTreeSet<PersonId>,
+    death_targets: BTreeSet<PersonId>,
 }
 impl PreparedMotion {
     pub(super) fn new(runtime: &Runtime, now: SimTime) -> Self {
@@ -55,7 +57,13 @@ impl PreparedMotion {
             transport,
             locations: Rows::new(),
             route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
         }
+    }
+    pub fn with_factual_reads(mut self, reads: game_ecs::ReadSet) -> Self {
+        self.transport.factual_reads.extend(reads);
+        self
     }
     fn replace_route(&mut self, store: &Store, actor: PersonId, after: Option<Route>) {
         self.transport.routes.set(store, actor, after);
@@ -103,21 +111,11 @@ impl PreparedMotion {
         store: &'a Store,
         actor: PersonId,
     ) -> Result<(PersonId, &'a Location), Error> {
-        let mut actor = actor;
-        let mut seen = BTreeSet::new();
-        loop {
-            if !seen.insert(actor) {
-                return Err(Error::Unavailable);
-            }
-            let location = self
-                .projected_location(store, actor)
-                .ok_or(Error::Unavailable)?;
-            if let Location::Carried { carrier } = location {
-                actor = *carrier;
-            } else {
-                return Ok((actor, location));
-            }
-        }
+        let (anchor, location) = game_spatial::resolved_anchor_with(StableId(actor.0), |id| {
+            self.projected_location(store, PersonId(id.0))
+        })
+        .map_err(|_| Error::Unavailable)?;
+        Ok((PersonId(anchor.0), location))
     }
     pub fn projected_position(
         &self,
@@ -125,20 +123,7 @@ impl PreparedMotion {
         actor: PersonId,
         now: SimTime,
     ) -> Result<Position, Error> {
-        let mut actor = actor;
-        let mut seen = BTreeSet::new();
-        loop {
-            if !seen.insert(actor) {
-                return Err(Error::Unavailable);
-            }
-            let location = self
-                .projected_location(store, actor)
-                .ok_or(Error::Unavailable)?;
-            match location {
-                Location::Carried { carrier } => actor = *carrier,
-                other => return position_from_location(other, now),
-            }
-        }
+        position_from_location(self.projected_anchor(store, actor)?.1, now)
     }
     fn validate_projection(&self, store: &Store, now: SimTime) -> Result<(), Error> {
         let projected_group = |actor| {
@@ -223,7 +208,7 @@ impl PreparedMotion {
     ) -> Result<Vec<MotionEffect>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, bodies, now, &mut batch)?;
-        finish.validate_footprint(&batch)?;
+        finish.validate_footprint(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish(runtime))
     }
@@ -236,13 +221,16 @@ pub struct MotionFinalization {
     reserved_locations: BTreeSet<StableId>,
     preserves_locations: bool,
     route_replacements: BTreeSet<PersonId>,
+    confinement_release_targets: BTreeSet<PersonId>,
+    death_targets: BTreeSet<PersonId>,
     batch_key: game_ecs::BatchKey,
+    guard: game_ecs::ReadGuard,
 }
 impl MotionFinalization {
     /// A review phase can retain shared local candidate identities only when
     /// its entire final Location footprint consists of this owner's no-ops.
-    pub fn validate_preserving_locations(&self, batch: &Batch) -> Result<(), Error> {
-        self.validate_footprint(batch)?;
+    pub fn validate_preserving_locations(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.validate_footprint(store, batch)?;
         if !self.preserves_locations
             || batch
                 .edited_ids::<Location>()
@@ -255,7 +243,9 @@ impl MotionFinalization {
     /// Call after every participant has staged and before the host admits or
     /// publishes the batch. Extra carrying edges need their own explicit plan
     /// in the envelope; a foreign component touch never authorizes an edge.
-    pub fn validate_footprint(&self, batch: &Batch) -> Result<(), Error> {
+    pub fn validate_footprint(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
+        self.guard.validate(store, batch)?;
+        self.transport.validate_batch(store, batch)?;
         if self.batch_key != batch.key()
             || batch.edited_ids::<CarryGroup>().count() != self.expected_groups.len()
             || batch.edited_ids::<Lift>().count() != self.expected_lifts.len()
@@ -286,12 +276,28 @@ impl MotionFinalization {
         }
         Ok(())
     }
+    /// Native motion location identities for cooperating owners' declared
+    /// projected reads. Validate this finalization before admitting the rows.
+    pub fn location_ids(&self) -> impl Iterator<Item = StableId> + '_ {
+        self.reserved_locations.iter().copied()
+    }
+    /// A semantic proof emitted only by the native captive-release operation.
+    /// Callers still validate this finalization's guarded final batch first.
+    pub fn releases_confinement(&self, target: PersonId) -> bool {
+        self.confinement_release_targets.contains(&target)
+    }
+    /// Proof that this exact actor was prepared by the native death operation.
+    /// Validate the guarded final batch before accepting its location authority.
+    pub fn deaths_actor(&self, actor: PersonId) -> bool {
+        self.death_targets.contains(&actor)
+    }
     pub fn route_admission(&self, actor: PersonId) -> Option<RouteAdmission> {
         self.route_replacements
             .contains(&actor)
             .then(|| RouteAdmission {
                 actor,
                 batch_key: self.batch_key.clone(),
+                guard: self.guard.clone(),
             })
     }
     pub fn finish(self, runtime: &mut Runtime) -> Vec<MotionEffect> {
@@ -426,6 +432,35 @@ impl Runtime {
         }
         Ok(motion)
     }
+    /// Physical intervention stops each connected carrying component once and
+    /// cancels its requested participants' pending lifts in the same native plan.
+    pub fn prepare_force_stops(
+        &self,
+        store: &Store,
+        actors: &[PersonId],
+        now: SimTime,
+    ) -> Result<PreparedMotion, Error> {
+        let mut envelope = MotionBatch::new(self, now);
+        let mut handled = BTreeSet::new();
+        for actor in actors.iter().copied() {
+            if handled.contains(&actor) {
+                continue;
+            }
+            handled.extend(self.component(store, actor));
+            envelope.push(self.prepare_stop(store, actor, now)?)?;
+        }
+        let mut cancelled = self.prepare_cancel_lifts(store, actors);
+        cancelled.at = Some(now);
+        envelope.push(PreparedMotion {
+            transport: cancelled
+                .map_result(|lifts| lifts.into_iter().map(MotionEffect::LiftCancelled).collect()),
+            locations: Rows::new(),
+            route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
+        })?;
+        Ok(envelope.into_motion())
+    }
     pub fn prepare_arrival(
         &self,
         store: &Store,
@@ -525,6 +560,8 @@ impl Runtime {
                 .map_result(|lifts| lifts.into_iter().map(MotionEffect::LiftCancelled).collect()),
             locations: Rows::new(),
             route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
         })?;
         // Cancellation has no clock guard, so set it to the common timestamp.
         envelope.motion.transport.at = Some(now);
@@ -540,6 +577,7 @@ impl Runtime {
             .transport
             .topology
             .extend(envelope.motion.transport.topology);
+        motion.death_targets.insert(actor);
         Ok(motion)
     }
     pub fn prepare_completed_lift_motion(
@@ -564,6 +602,8 @@ impl Runtime {
             }),
             locations: Rows::new(),
             route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
         };
         for member in motion.transport.guard_topology(store, [passenger]) {
             motion.locations.guard(store, member);
@@ -604,6 +644,8 @@ impl Runtime {
             transport: native.map_result(|_| vec![MotionEffect::ClearArrival(child)]),
             locations: Rows::new(),
             route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
         };
         for member in motion.transport.guard_topology(store, [child, gestator]) {
             motion.locations.guard(store, member);
@@ -617,6 +659,80 @@ impl Runtime {
         );
         motion.replace_route(store, child, None);
         Ok(motion)
+    }
+    /// Prepare an absent newborn's attachment together with the resulting
+    /// connected capacity reaction, before its shared entity is published.
+    /// The factual provider includes the planned newborn body alongside live
+    /// bodies. The caller reserves identity and stages the other owner rows.
+    pub fn prepare_reserved_birth_motion(
+        &self,
+        store: &Store,
+        child: PersonId,
+        gestator: PersonId,
+        now: SimTime,
+        bodies: &impl BodyFacts,
+    ) -> Result<PreparedMotion, Error> {
+        if store.contains(StableId(child.0)) {
+            return Err(Error::Unavailable);
+        }
+        let mut birth = self.prepare_birth_motion(store, child, gestator, now, bodies)?;
+        birth
+            .transport
+            .factual_reads
+            .entity(store, StableId(child.0));
+        let newborn_group = birth
+            .transport
+            .groups
+            .edits
+            .get(&child)
+            .and_then(|(_, after)| after.as_ref())
+            .ok_or(Error::Unavailable)?
+            .clone();
+        let mut linked = self.component(store, gestator);
+        linked.insert(child);
+        let mut rows = groups(store)
+            .filter(|(_, row)| linked.contains(&row.passenger) || !row.bearers.is_disjoint(&linked))
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        rows.push(&newborn_group);
+        rows.sort_by_key(|row| row.passenger);
+        let plan = capacity_plan_rows(rows.iter().copied(), bodies, None)?;
+        let mut stopped = plan.unable;
+        for passenger in plan.overloaded {
+            stopped.extend(
+                rows.iter()
+                    .find(|row| row.passenger == passenger)
+                    .ok_or(Error::Unavailable)?
+                    .bearers
+                    .iter()
+                    .copied(),
+            );
+        }
+        birth
+            .transport
+            .guard_bodies(bodies, linked.iter().copied())?;
+        for actor in linked {
+            let body = bodies.body(actor).ok_or(Error::Unavailable)?;
+            if (!body.can_walk || body.cargo > body.capacity)
+                && matches!(
+                    game_spatial::location(store, StableId(actor.0)),
+                    Some(Location::InTransit { .. })
+                )
+            {
+                stopped.insert(actor);
+            }
+        }
+        let mut envelope = MotionBatch::new(self, now);
+        envelope.push(birth)?;
+        let mut handled = BTreeSet::new();
+        for actor in stopped {
+            if handled.contains(&actor) {
+                continue;
+            }
+            handled.extend(self.component(store, actor));
+            envelope.push(self.prepare_stop(store, actor, now)?)?;
+        }
+        Ok(envelope.motion)
     }
     pub fn prepare_put_down(
         &self,
@@ -884,6 +1000,10 @@ impl MotionBatch {
         self.motion
             .route_replacements
             .extend(next.route_replacements);
+        self.motion
+            .confinement_release_targets
+            .extend(next.confinement_release_targets);
+        self.motion.death_targets.extend(next.death_targets);
         for (actor, body) in b.body_reads {
             if a.body_reads
                 .get(&actor)
@@ -893,9 +1013,13 @@ impl MotionBatch {
             }
             a.body_reads.insert(actor, body);
         }
+        a.factual_reads.extend(b.factual_reads);
         a.topology.extend(b.topology);
         a.result.extend(b.result);
         Ok(())
+    }
+    pub fn into_motion(self) -> PreparedMotion {
+        self.motion
     }
     pub fn effects(&self) -> &[MotionEffect] {
         self.motion.effects()
@@ -957,12 +1081,22 @@ impl MotionBatch {
             mut transport,
             locations,
             route_replacements,
+            confinement_release_targets,
+            death_targets,
         } = self.motion;
+        let mut reads = game_ecs::ReadSet::new();
+        transport.routes.protect(&mut reads);
+        locations.protect(&mut reads);
+        let mut admitted = game_ecs::ReadFootprint::new();
+        transport.routes.admissions(&mut admitted, true);
+        locations.admissions(&mut admitted, true);
         let routes = std::mem::replace(&mut transport.routes, Rows::new());
         routes.reserve(batch)?;
         locations.reserve(batch)?;
         let finish = transport.stage_into(runtime, store, bodies, now, batch)?;
+        let guard = reads.bind(store, batch, &admitted)?;
         Ok(MotionFinalization {
+            guard,
             transport: finish,
             expected_groups,
             expected_lifts,
@@ -970,6 +1104,8 @@ impl MotionBatch {
             reserved_locations,
             preserves_locations,
             route_replacements,
+            confinement_release_targets,
+            death_targets,
             batch_key: batch.key(),
         })
     }
@@ -1157,6 +1293,83 @@ pub trait ReconciliationFacts: BodyFacts {
     fn actors(&self) -> impl Iterator<Item = PersonId>;
     fn alive(&self, actor: PersonId) -> bool;
 }
+/// Cargo's validated forced split moves binding stock from the captor to the
+/// newly confined target. Captivity restricts walking, but not physical holding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConfinementBurden {
+    pub captor: PersonId,
+    pub target: PersonId,
+    pub quantity: Quantity,
+}
+struct ConfinedBodies<'a, F> {
+    baseline: &'a F,
+    burden: ConfinementBurden,
+}
+impl<F: ReconciliationFacts> ConfinedBodies<'_, F> {
+    fn projected_body(&self, actor: PersonId) -> Result<Body, Error> {
+        let mut body = self.baseline.body(actor).ok_or(Error::Unavailable)?;
+        if actor == self.burden.captor {
+            body.cargo.0 = body
+                .cargo
+                .0
+                .checked_sub(self.burden.quantity.0)
+                .ok_or(Error::Unavailable)?;
+            // Completing the timed restraint ends the captor's work to Idle.
+            body.can_bear = body.can_walk;
+        }
+        if actor == self.burden.target {
+            body.cargo.0 = body
+                .cargo
+                .0
+                .checked_add(self.burden.quantity.0)
+                .ok_or(Error::Overflow)?;
+            body.can_walk = false;
+            body.can_bear = false;
+        }
+        Ok(body)
+    }
+}
+impl<F: ReconciliationFacts> BodyFacts for ConfinedBodies<'_, F> {
+    fn body(&self, actor: PersonId) -> Option<Body> {
+        self.projected_body(actor).ok()
+    }
+}
+impl<F: ReconciliationFacts> ReconciliationFacts for ConfinedBodies<'_, F> {
+    fn actors(&self) -> impl Iterator<Item = PersonId> {
+        self.baseline.actors()
+    }
+    fn alive(&self, actor: PersonId) -> bool {
+        self.baseline.alive(actor)
+    }
+}
+pub struct PreparedConfinementMotion {
+    motion: PreparedReconciliation,
+    burden: ConfinementBurden,
+}
+impl PreparedConfinementMotion {
+    pub fn projection(&self) -> &PreparedMotion {
+        self.motion.projection()
+    }
+    pub fn with_factual_reads(mut self, reads: game_ecs::ReadSet) -> Self {
+        self.motion.motion = self.motion.motion.with_factual_reads(reads);
+        self
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        baseline: &impl ReconciliationFacts,
+        now: SimTime,
+        batch: &mut Batch,
+    ) -> Result<MotionFinalization, Error> {
+        let projected = ConfinedBodies {
+            baseline,
+            burden: self.burden,
+        };
+        self.motion
+            .stage_into(runtime, store, &projected, now, batch)
+    }
+}
 pub struct PreparedReconciliation {
     motion: PreparedMotion,
     actors: Vec<(PersonId, bool)>,
@@ -1185,6 +1398,28 @@ impl PreparedReconciliation {
     }
 }
 impl Runtime {
+    /// Prepare the receiving transport reaction over the validated confinement's
+    /// projected cargo and captivity, without publishing or cloning a Store.
+    pub fn prepare_confinement_reconciliation(
+        &self,
+        store: &Store,
+        now: SimTime,
+        baseline: &impl ReconciliationFacts,
+        burden: ConfinementBurden,
+    ) -> Result<PreparedConfinementMotion, Error> {
+        if burden.captor.0 == 0
+            || burden.target.0 == 0
+            || burden.captor == burden.target
+            || burden.quantity.0 == 0
+        {
+            return Err(Error::Unavailable);
+        }
+        let projected = ConfinedBodies { baseline, burden };
+        projected.projected_body(burden.captor)?;
+        projected.projected_body(burden.target)?;
+        let motion = self.prepare_reconciliation(store, now, &projected)?;
+        Ok(PreparedConfinementMotion { motion, burden })
+    }
     pub fn prepare_reconciliation(
         &self,
         store: &Store,
@@ -1279,7 +1514,7 @@ impl Runtime {
         if carried.authority != Authority::Captive {
             return Err(Error::Unavailable);
         }
-        self.prepare_put_down(
+        let mut motion = self.prepare_put_down(
             store,
             carried.anchor,
             passenger,
@@ -1288,7 +1523,9 @@ impl Runtime {
                 passenger_independent: false,
                 passenger_combat_restricted: false,
             },
-        )
+        )?;
+        motion.confinement_release_targets.insert(passenger);
+        Ok(motion)
     }
 }
 impl Runtime {
@@ -1368,7 +1605,7 @@ impl PreparedLiftMotion {
     ) -> Result<Vec<MotionEffect>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, bodies, activities, now, &mut batch)?;
-        finish.validate_footprint(&batch)?;
+        finish.validate_footprint(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish(runtime))
     }
@@ -1500,6 +1737,8 @@ impl Runtime {
                 .map_result(|lifts| lifts.into_iter().map(MotionEffect::LiftCancelled).collect()),
             locations: Rows::new(),
             route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
         }
     }
     pub fn prepare_lift_completion_by_bearer(
@@ -1650,6 +1889,8 @@ impl Runtime {
             transport: native.map_result(|_| effects),
             locations: Rows::new(),
             route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
         };
         for actor in motion.transport.guard_topology(
             store,
@@ -1723,6 +1964,8 @@ impl Runtime {
             transport: native.map_result(|_| Vec::new()),
             locations: Rows::new(),
             route_replacements: BTreeSet::new(),
+            confinement_release_targets: BTreeSet::new(),
+            death_targets: BTreeSet::new(),
         };
         for actor in motion
             .transport

@@ -4,6 +4,9 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod contacts;
+pub use contacts::{ContactFacts, contact_recipient};
+
 pub type KnownRoutes = BTreeMap<AreaId, BTreeMap<AreaId, SimDuration>>;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Requirement {

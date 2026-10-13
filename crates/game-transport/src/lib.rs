@@ -182,6 +182,26 @@ pub fn remaining_duration(
         u64::try_from(elapsed).map_err(|_| Error::Overflow)?,
     ))
 }
+/// Choose the actual directed road duration for an endpoint retreat. The
+/// outward link travels from the point's original `from` endpoint to `to`;
+/// the inward link travels in the reverse direction.
+pub fn retreat_with_routes(
+    point: RoadPosition,
+    destination: AreaId,
+    outward: Option<SimDuration>,
+    inward: Option<SimDuration>,
+    at: SimTime,
+) -> Result<Leg, Error> {
+    let duration = if destination == point.to {
+        outward
+    } else if destination == point.from {
+        inward
+    } else {
+        return Err(Error::NoRoute);
+    }
+    .ok_or(Error::NoRoute)?;
+    retreat(point, destination, duration, at)
+}
 pub fn retreat(
     position: RoadPosition,
     destination: AreaId,
@@ -710,34 +730,16 @@ pub fn transfer_capacity(
 pub fn resolve_locations(
     locations: &BTreeMap<PersonId, Location>,
 ) -> Result<BTreeMap<PersonId, Location>, Error> {
-    let mut result: BTreeMap<PersonId, Location> = BTreeMap::new();
-    for actor in locations.keys() {
-        if result.contains_key(actor) {
-            continue;
-        }
-        let mut current = *actor;
-        let mut path = BTreeSet::new();
-        let resolved = loop {
-            if let Some(location) = result.get(&current) {
-                break location.clone();
-            }
-            if !path.insert(current) {
-                return Err(Error::InvalidSave("cyclic physical carrying".into()));
-            }
-            match locations
-                .get(&current)
-                .ok_or_else(|| Error::InvalidSave("unknown physical carrier".into()))?
-            {
-                Location::Carried { carrier } => current = *carrier,
-                location => break location.clone(),
-            }
-        };
-        for actor in path {
-            result.insert(actor, resolved.clone());
-        }
-    }
-    Ok(result)
+    Ok(game_spatial::resolve_locations(
+        locations
+            .iter()
+            .map(|(actor, location)| (game_ecs::StableId(actor.0), location)),
+    )?
+    .into_iter()
+    .map(|(actor, location)| (PersonId(actor.0), location))
+    .collect())
 }
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct View {
     pub mass: Quantity,
@@ -767,3 +769,9 @@ mod presentation;
 
 mod incoming;
 pub use incoming::IncomingCargo;
+
+mod review;
+pub use review::{ReviewHost, local_bodies, review_choices};
+
+mod effects;
+pub use effects::*;

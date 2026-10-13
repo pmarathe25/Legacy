@@ -143,3 +143,25 @@ pub fn validate_motion(
 
 #[cfg(test)]
 mod tests;
+
+/// Complete transport save validation, including physical body reconstruction.
+/// The assembly supplies topology, scheduling, activity and measurement facts.
+pub fn validate_save(
+    runtime: Option<&Runtime>,
+    store: &game_ecs::Store,
+    facts: &(impl RouteReferences + MotionReferences + TransportReferences + MeasuredBodyFacts),
+    now: SimTime,
+) -> Result<(), Error> {
+    validate_routes(store, facts)?;
+    validate_motion(store, facts, now)?;
+    let Some(runtime) = runtime else {
+        return validate_absent(store);
+    };
+    if !runtime.rules.valid() || !facts.physical_enabled() {
+        return Err(Error::InvalidSave(
+            "transport requires physical bodies".into(),
+        ));
+    }
+    let bodies = runtime.measured_bodies(store, facts.actors(), now, facts)?;
+    validate_composition(runtime, store, &bodies, facts, now)
+}

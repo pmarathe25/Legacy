@@ -102,6 +102,37 @@ pub struct ValidatedTransfers {
     remaining: std::vec::IntoIter<TransferEffect>,
 }
 impl ValidatedTransfers {
+    pub fn stage_next_guarded_into(
+        &mut self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<Option<(TransferIntent, bool, game_ecs::ReadGuard)>, Error> {
+        let Some(effect) = self.remaining.as_slice().first() else {
+            return Ok(None);
+        };
+        effect.validate_opening(store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        if let Some((before, after)) = &effect.rows {
+            for row in before {
+                let id = StableId(row.id.0);
+                reads.expect_row(id, Some(row.clone()));
+                if batch.touches::<Inventory>(id) {
+                    return Err(Error::Unavailable);
+                }
+            }
+            if effect.granted {
+                for row in after {
+                    admitted.protect::<Inventory>(StableId(row.id.0));
+                }
+            }
+        }
+        let result = self
+            .stage_next_into(store, batch)?
+            .expect("checked phase effect");
+        let guard = reads.bind(store, batch, &admitted)?;
+        Ok(Some((result.0, result.1, guard)))
+    }
     /// Stage one ordered physical transfer for composition with a receiving
     /// owner's receipt. Publishing the caller's combined batch precedes the
     /// next call; a rejected batch abandons this transient phase.
@@ -142,6 +173,40 @@ impl ValidatedTransfers {
 impl PreparedTransfers {
     pub fn decisions(&self) -> &[(TransferIntent, bool)] {
         &self.decisions
+    }
+    /// Final canonical rows, after Cargo's stable arbitration and conservation.
+    pub fn closing_stocks(&self) -> BTreeMap<InventoryId, &Inventory> {
+        let mut rows = BTreeMap::new();
+        for effect in &self.effects {
+            if let Some((_, after)) = &effect.rows {
+                for row in after {
+                    rows.insert(row.id, row);
+                }
+            }
+        }
+        rows
+    }
+    pub fn stage_guarded_into(
+        self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(Vec<(TransferIntent, bool)>, game_ecs::ReadGuard), Error> {
+        self.validate(store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        for (id, row) in &self.guards {
+            let id = StableId(id.0);
+            reads.expect_row(id, Some(row.clone()));
+            if batch.touches::<Inventory>(id) {
+                return Err(Error::Unavailable);
+            }
+        }
+        for id in self.closing_stocks().keys() {
+            admitted.protect::<Inventory>(StableId(id.0));
+        }
+        let decisions = self.stage_into(store, batch)?;
+        let guard = reads.bind(store, batch, &admitted)?;
+        Ok((decisions, guard))
     }
     fn validate(&self, store: &Store) -> Result<(), Error> {
         if self
@@ -188,7 +253,8 @@ impl PreparedTransfers {
     /// Without receipt interleaving, publish all final rows atomically.
     pub fn commit(self, store: &mut Store) -> Result<Vec<(TransferIntent, bool)>, Error> {
         let mut batch = Batch::new();
-        let decisions = self.stage_into(store, &mut batch)?;
+        let (decisions, guard) = self.stage_guarded_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(decisions)
     }

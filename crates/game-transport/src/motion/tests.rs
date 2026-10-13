@@ -207,10 +207,13 @@ fn disjoint_motion_plans_share_one_envelope_and_undeclared_edges_reject() {
                     accepted_at: SimTime(40),
                 },
             );
-            assert_eq!(finish.validate_footprint(&batch), Err(Error::Unavailable));
+            assert_eq!(
+                finish.validate_footprint(&store, &batch),
+                Err(Error::Unavailable)
+            );
             assert_eq!(store.snapshot().unwrap(), before);
         } else {
-            finish.validate_footprint(&batch).unwrap();
+            finish.validate_footprint(&store, &batch).unwrap();
             store.apply_batch(batch).unwrap();
             assert!(matches!(
                 game_spatial::location(&store, StableId(4)),
@@ -266,7 +269,10 @@ fn opening_topology_time_and_exact_reserved_rows_reject_stale_or_foreign_changes
         } else {
             let finish = admitted.unwrap();
             batch.remove::<Route>(StableId(3));
-            assert_eq!(finish.validate_footprint(&batch), Err(Error::Unavailable));
+            assert_eq!(
+                finish.validate_footprint(&store, &batch),
+                Err(Error::Unavailable)
+            );
             assert!(store.apply_batch(batch).is_err());
         }
         assert_eq!(store.snapshot().unwrap(), before);
@@ -323,7 +329,7 @@ fn reverse_return_stages_connected_body_motion_with_exact_asymmetric_geometry() 
     let finish = plan
         .stage_into(&runtime, &store, &facts, &roads, SimTime(25), &mut batch)
         .unwrap();
-    finish.validate_footprint(&batch).unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
     store.apply_batch(batch).unwrap();
     let location = game_spatial::location(&store, StableId(1)).unwrap();
     assert!(matches!(
@@ -429,7 +435,7 @@ fn real_birth_beside_carried_gestator_uses_existing_bearers_then_overload_stops_
     let finish = plan
         .stage_into(&runtime, &store, &facts, SimTime(40), &mut batch)
         .unwrap();
-    finish.validate_footprint(&batch).unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
     store.apply_batch(batch).unwrap();
     finish.finish(&mut runtime);
     for actor in [1, 2] {
@@ -561,15 +567,15 @@ fn motion_admission_is_bound_to_its_batch_even_with_identical_foreign_contents()
         .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut foreign)
         .unwrap();
     assert_eq!(
-        admitted.validate_footprint(&foreign),
+        admitted.validate_footprint(&store, &foreign),
         Err(Error::Unavailable)
     );
     original.insert(StableId(4), "independent".to_owned());
-    admitted.validate_footprint(&original).unwrap();
+    admitted.validate_footprint(&store, &original).unwrap();
     admitted
         .route_admission(PersonId(1))
         .unwrap()
-        .validate_footprint(&original)
+        .validate_footprint(&store, &original)
         .unwrap();
     assert!(admitted.route_admission(PersonId(3)).is_none());
 }
@@ -721,7 +727,9 @@ fn real_offer_acceptance_and_failed_closing_are_owner_policies_without_assembly(
     let finish = plan
         .stage_into(&runtime, &store, &facts, SimTime(0), &mut batch)
         .unwrap();
-    finish.validate_preserving_locations(&batch).unwrap();
+    finish
+        .validate_preserving_locations(&store, &batch)
+        .unwrap();
     store.apply_batch(batch).unwrap();
     finish.finish(&mut runtime);
     assert!(
@@ -800,7 +808,9 @@ fn real_offer_acceptance_and_failed_closing_are_owner_policies_without_assembly(
     let finish = plan
         .stage_into(&runtime, &store, &facts, SimTime(0), &mut batch)
         .unwrap();
-    finish.validate_preserving_locations(&batch).unwrap();
+    finish
+        .validate_preserving_locations(&store, &batch)
+        .unwrap();
     store.apply_batch(batch).unwrap();
     finish.finish(&mut runtime);
     facts.bodies.get_mut(&PersonId(1)).unwrap().can_walk = false;
@@ -837,11 +847,13 @@ fn review_phase_rejects_actual_motion_and_undeclared_foreign_location_before_pub
     let finish = plan
         .stage_into(&runtime, &store, &facts, SimTime(0), &mut batch)
         .unwrap();
-    finish.validate_preserving_locations(&batch).unwrap();
+    finish
+        .validate_preserving_locations(&store, &batch)
+        .unwrap();
     batch.insert(StableId(99), Location::AtArea(AreaId(10)));
-    finish.validate_footprint(&batch).unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
     assert_eq!(
-        finish.validate_preserving_locations(&batch),
+        finish.validate_preserving_locations(&store, &batch),
         Err(Error::Unavailable)
     );
     assert_eq!(store.snapshot().unwrap(), before);
@@ -852,9 +864,466 @@ fn review_phase_rejects_actual_motion_and_undeclared_foreign_location_before_pub
         .unwrap()
         .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
         .unwrap();
-    finish.validate_footprint(&batch).unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
     assert_eq!(
-        finish.validate_preserving_locations(&batch),
+        finish.validate_preserving_locations(&store, &batch),
         Err(Error::Unavailable)
     );
+}
+
+#[test]
+fn common_motion_guard_rechecks_opening_rows_after_staging_before_publication() {
+    let (runtime, mut store) = fixture();
+    let mut batch = Batch::new();
+    let finish = runtime
+        .prepare_stop(&store, PersonId(1), SimTime(40))
+        .unwrap()
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
+    *game_spatial::location_mut(&mut store, StableId(2)).unwrap() = Location::AtArea(AreaId(10));
+    let before = store.snapshot().unwrap();
+    assert_eq!(
+        finish.validate_footprint(&store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+#[test]
+fn common_transport_guard_rejects_foreign_guard_only_bearer_topology_edits() {
+    let (runtime, store) = fixture();
+    let change = runtime.prepare_cancel_lifts(&store, &[PersonId(1)]);
+    let mut batch = Batch::new();
+    let finish = change
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    finish.validate_batch(&store, &batch).unwrap();
+    batch.insert(
+        StableId(99),
+        CarryGroup {
+            passenger: PersonId(99),
+            anchor: PersonId(1),
+            bearers: BTreeSet::from([PersonId(1)]),
+            authority: Authority::Newborn,
+            accepted_at: SimTime(40),
+        },
+    );
+    assert_eq!(
+        finish.validate_batch(&store, &batch),
+        Err(Error::Unavailable)
+    );
+}
+
+#[test]
+fn absent_reserved_birth_shares_one_batch_with_other_owner_rows_and_capacity_stops() {
+    for reject_foreign in [false, true] {
+        let (mut runtime, mut store) = fixture();
+        let mut bodies = road_bodies(&store, SimTime(40));
+        let mut newborn = bodies[&PersonId(3)].clone();
+        newborn.mass = Quantity(200_000);
+        newborn.can_walk = false;
+        newborn.can_bear = false;
+        bodies.insert(PersonId(4), newborn);
+        assert!(!store.contains(StableId(4)));
+        let before = store.snapshot().unwrap();
+        let header = runtime.clone();
+        let plan = runtime
+            .prepare_reserved_birth_motion(&store, PersonId(4), PersonId(3), SimTime(40), &bodies)
+            .unwrap();
+        let mut batch = Batch::new();
+        let finish = plan
+            .stage_into(&runtime, &store, &bodies, SimTime(40), &mut batch)
+            .unwrap();
+        batch.insert(
+            StableId(4),
+            if reject_foreign {
+                "reject"
+            } else {
+                "newborn identity"
+            }
+            .to_owned(),
+        );
+        finish.validate_footprint(&store, &batch).unwrap();
+        let outcome = store.apply_batch(batch);
+        if reject_foreign {
+            assert_eq!(outcome, Err(Error::Unavailable));
+            assert_eq!(store.snapshot().unwrap(), before);
+            assert_eq!(runtime, header);
+            assert!(!store.contains(StableId(4)));
+        } else {
+            outcome.unwrap();
+            finish.finish(&mut runtime);
+            assert_eq!(
+                group(&store, PersonId(4)).unwrap().bearers,
+                BTreeSet::from([PersonId(1), PersonId(2)])
+            );
+            assert_eq!(
+                game_spatial::location(&store, StableId(4)),
+                Some(&Location::Carried {
+                    carrier: PersonId(1)
+                })
+            );
+            for actor in [1, 2] {
+                assert!(matches!(
+                    game_spatial::location(&store, StableId(actor)),
+                    Some(Location::StoppedOnRoad {
+                        progress: SimDuration(40),
+                        ..
+                    })
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn force_stop_deduplicates_connected_bearers_and_cancels_pending_lifts_in_one_plan() {
+    let (mut runtime, mut store) = fixture();
+    for actor in [4, 5] {
+        game_spatial::set_location(&mut store, StableId(actor), Location::AtArea(AreaId(10)))
+            .unwrap();
+    }
+    let mut bodies = road_bodies(&store, SimTime(0));
+    runtime
+        .offer(&mut store, PersonId(4), PersonId(5), SimTime(0), &bodies)
+        .unwrap();
+    runtime
+        .prepare_begin_lift(
+            &store,
+            PersonId(5),
+            BTreeSet::from([PersonId(4)]),
+            Permission {
+                passenger_accepted: true,
+                ..Permission::default()
+            },
+            SimTime(0),
+            &bodies,
+        )
+        .unwrap()
+        .commit(&mut runtime, &mut store, &bodies, SimTime(0))
+        .unwrap();
+    bodies = road_bodies(&store, SimTime(40));
+    let plan = runtime
+        .prepare_force_stops(
+            &store,
+            &[PersonId(1), PersonId(2), PersonId(1), PersonId(4)],
+            SimTime(40),
+        )
+        .unwrap();
+    for actor in [PersonId(1), PersonId(2)] {
+        assert_eq!(plan.effects().iter().filter(|effect|
+            matches!(effect, MotionEffect::Interrupted { actor: id } if *id == actor)).count(), 1);
+        assert_eq!(
+            plan.effects()
+                .iter()
+                .filter(|effect| matches!(effect, MotionEffect::ClearArrival(id) if *id == actor))
+                .count(),
+            1
+        );
+    }
+    assert_eq!(plan.effects().iter().filter(|effect|
+        matches!(effect, MotionEffect::LiftCancelled(row) if row.passenger == PersonId(5))).count(), 1);
+    let mut batch = Batch::new();
+    let finish = plan
+        .stage_into(&runtime, &store, &bodies, SimTime(40), &mut batch)
+        .unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    finish.finish(&mut runtime);
+    assert!(lift(&store, PersonId(5)).is_none());
+    assert!(group(&store, PersonId(3)).is_some());
+    for actor in [1, 2] {
+        assert!(matches!(
+            game_spatial::location(&store, StableId(actor)),
+            Some(Location::StoppedOnRoad {
+                progress: SimDuration(40),
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn native_confinement_release_proof_is_target_specific_and_survives_motion_composition() {
+    let (runtime, mut store) = fixture();
+    group_mut(&mut store, PersonId(3)).unwrap().authority = Authority::Captive;
+    let mut batch = Batch::new();
+    let stop = runtime
+        .prepare_stop(&store, PersonId(1), SimTime(40))
+        .unwrap()
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    stop.validate_footprint(&store, &batch).unwrap();
+    assert!(!stop.releases_confinement(PersonId(3)));
+    let mut batch = Batch::new();
+    let ordinary = runtime
+        .prepare_put_down(
+            &store,
+            PersonId(1),
+            PersonId(3),
+            SimTime(40),
+            PutDownFacts {
+                passenger_independent: false,
+                passenger_combat_restricted: false,
+            },
+        )
+        .unwrap()
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    ordinary.validate_footprint(&store, &batch).unwrap();
+    assert!(!ordinary.releases_confinement(PersonId(3)));
+    let mut envelope = MotionBatch::new(&runtime, SimTime(40));
+    envelope
+        .push(
+            runtime
+                .prepare_confinement_release(&store, PersonId(3), SimTime(40))
+                .unwrap(),
+        )
+        .unwrap();
+    envelope
+        .push(
+            runtime
+                .prepare_stop(&store, PersonId(2), SimTime(40))
+                .unwrap(),
+        )
+        .unwrap();
+    let mut batch = Batch::new();
+    let release = envelope
+        .into_motion()
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    release.validate_footprint(&store, &batch).unwrap();
+    assert!(release.releases_confinement(PersonId(3)));
+    assert!(!release.releases_confinement(PersonId(1)));
+    group_mut(&mut store, PersonId(3)).unwrap().authority = Authority::Consented;
+    assert!(
+        runtime
+            .prepare_confinement_release(&store, PersonId(3), SimTime(40))
+            .is_err()
+    );
+    assert_eq!(
+        release.validate_footprint(&store, &batch),
+        Err(Error::Unavailable)
+    );
+}
+
+#[test]
+fn native_death_proof_is_actor_specific_and_does_not_accept_an_ordinary_stop() {
+    let (runtime, mut store) = fixture();
+    let mut batch = Batch::new();
+    let ordinary = runtime
+        .prepare_stop(&store, PersonId(1), SimTime(40))
+        .unwrap()
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    ordinary.validate_footprint(&store, &batch).unwrap();
+    assert!(!ordinary.deaths_actor(PersonId(1)));
+    let mut envelope = MotionBatch::new(&runtime, SimTime(40));
+    envelope
+        .push(
+            runtime
+                .prepare_death_motion(&store, PersonId(1), SimTime(40))
+                .unwrap(),
+        )
+        .unwrap();
+    envelope
+        .push(
+            runtime
+                .prepare_stop(&store, PersonId(2), SimTime(40))
+                .unwrap(),
+        )
+        .unwrap();
+    let mut batch = Batch::new();
+    let death = envelope
+        .into_motion()
+        .stage_into(&runtime, &store, &empty_bodies(), SimTime(40), &mut batch)
+        .unwrap();
+    death.validate_footprint(&store, &batch).unwrap();
+    assert!(death.deaths_actor(PersonId(1)));
+    assert!(!death.deaths_actor(PersonId(2)));
+    assert!(!death.releases_confinement(PersonId(1)));
+    *game_spatial::location_mut(&mut store, StableId(1)).unwrap() = Location::AtArea(AreaId(10));
+    assert_eq!(
+        death.validate_footprint(&store, &batch),
+        Err(Error::Unavailable)
+    );
+}
+
+#[test]
+fn confinement_receiving_motion_uses_projected_cargo_and_rejects_stale_baseline() {
+    struct Facts(BTreeMap<PersonId, Body>);
+    impl BodyFacts for Facts {
+        fn body(&self, actor: PersonId) -> Option<Body> {
+            self.0.body(actor)
+        }
+    }
+    impl ReconciliationFacts for Facts {
+        fn actors(&self) -> impl Iterator<Item = PersonId> {
+            self.0.keys().copied()
+        }
+        fn alive(&self, _: PersonId) -> bool {
+            true
+        }
+    }
+    for stale in [false, true] {
+        let (mut runtime, mut store) = fixture();
+        game_spatial::set_location(&mut store, StableId(4), Location::AtArea(AreaId(10))).unwrap();
+        let mut facts = Facts(road_bodies(&store, SimTime(40)));
+        facts.0.get_mut(&PersonId(4)).unwrap().cargo = Quantity(1_000);
+        let burden = ConfinementBurden {
+            captor: PersonId(4),
+            target: PersonId(1),
+            quantity: Quantity(1_000),
+        };
+        let plan = runtime
+            .prepare_confinement_reconciliation(&store, SimTime(40), &facts, burden)
+            .unwrap();
+        assert!(matches!(
+            plan.projection().projected_location(&store, PersonId(1)),
+            Some(Location::StoppedOnRoad {
+                progress: SimDuration(40),
+                ..
+            })
+        ));
+        if stale {
+            facts.0.get_mut(&PersonId(4)).unwrap().cargo = Quantity(2_000);
+        }
+        let before = store.snapshot().unwrap();
+        let mut batch = Batch::new();
+        let staged = plan.stage_into(&runtime, &store, &facts, SimTime(40), &mut batch);
+        if stale {
+            assert!(matches!(staged, Err(Error::Unavailable)));
+            assert_eq!(store.snapshot().unwrap(), before);
+        } else {
+            let finish = staged.unwrap();
+            finish.validate_footprint(&store, &batch).unwrap();
+            store.apply_batch(batch).unwrap();
+            finish.finish(&mut runtime);
+            for actor in [1, 2] {
+                assert!(matches!(
+                    game_spatial::location(&store, StableId(actor)),
+                    Some(Location::StoppedOnRoad {
+                        progress: SimDuration(40),
+                        ..
+                    })
+                ));
+            }
+        }
+    }
+}
+#[test]
+fn confinement_projection_accounts_for_new_binding_weight_without_removing_held_passenger() {
+    struct Facts(BTreeMap<PersonId, Body>);
+    impl BodyFacts for Facts {
+        fn body(&self, actor: PersonId) -> Option<Body> {
+            self.0.body(actor)
+        }
+    }
+    impl ReconciliationFacts for Facts {
+        fn actors(&self) -> impl Iterator<Item = PersonId> {
+            self.0.keys().copied()
+        }
+        fn alive(&self, _: PersonId) -> bool {
+            true
+        }
+    }
+    let (runtime, mut store) = fixture();
+    game_spatial::set_location(&mut store, StableId(4), Location::AtArea(AreaId(10))).unwrap();
+    let mut facts = Facts(road_bodies(&store, SimTime(40)));
+    for actor in [PersonId(1), PersonId(2)] {
+        facts.0.get_mut(&actor).unwrap().capacity = Quantity(2_000);
+    }
+    facts.0.get_mut(&PersonId(4)).unwrap().cargo = Quantity(2_000);
+    let plan = runtime
+        .prepare_confinement_reconciliation(
+            &store,
+            SimTime(40),
+            &facts,
+            ConfinementBurden {
+                captor: PersonId(4),
+                target: PersonId(3),
+                quantity: Quantity(2_000),
+            },
+        )
+        .unwrap();
+    for actor in [PersonId(1), PersonId(2)] {
+        assert!(matches!(
+            plan.projection().projected_location(&store, actor),
+            Some(Location::StoppedOnRoad {
+                progress: SimDuration(40),
+                ..
+            })
+        ));
+    }
+    assert_eq!(
+        plan.projection().projected_location(&store, PersonId(3)),
+        Some(&Location::Carried {
+            carrier: PersonId(1)
+        })
+    );
+    assert!(
+        runtime
+            .prepare_confinement_reconciliation(
+                &store,
+                SimTime(40),
+                &facts,
+                ConfinementBurden {
+                    captor: PersonId(4),
+                    target: PersonId(3),
+                    quantity: Quantity(2_001)
+                }
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn completed_restraint_projects_captor_idle_before_carried_load_reconciliation() {
+    struct Facts(BTreeMap<PersonId, Body>);
+    impl BodyFacts for Facts {
+        fn body(&self, actor: PersonId) -> Option<Body> {
+            self.0.body(actor)
+        }
+    }
+    impl ReconciliationFacts for Facts {
+        fn actors(&self) -> impl Iterator<Item = PersonId> {
+            self.0.keys().copied()
+        }
+        fn alive(&self, _: PersonId) -> bool {
+            true
+        }
+    }
+    let (runtime, mut store) = fixture();
+    game_spatial::set_location(&mut store, StableId(4), Location::AtArea(AreaId(10))).unwrap();
+    let mut facts = Facts(road_bodies(&store, SimTime(40)));
+    facts.0.get_mut(&PersonId(1)).unwrap().cargo = Quantity(2_000);
+    facts.0.get_mut(&PersonId(1)).unwrap().can_bear = false;
+    let plan = runtime
+        .prepare_confinement_reconciliation(
+            &store,
+            SimTime(40),
+            &facts,
+            ConfinementBurden {
+                captor: PersonId(1),
+                target: PersonId(4),
+                quantity: Quantity(1_000),
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        plan.projection().projected_location(&store, PersonId(1)),
+        Some(Location::InTransit { .. })
+    ));
+    assert!(
+        !plan
+            .projection()
+            .effects()
+            .iter()
+            .any(|effect| matches!(effect, MotionEffect::Interrupted { .. }))
+    );
+    let mut batch = Batch::new();
+    let finish = plan
+        .stage_into(&runtime, &store, &facts, SimTime(40), &mut batch)
+        .unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
 }

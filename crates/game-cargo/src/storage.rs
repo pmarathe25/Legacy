@@ -111,6 +111,36 @@ pub fn prepare_inventory_split(
     })
 }
 impl PreparedInventoryCreation {
+    pub fn stage_guarded_into(
+        self,
+        store: &Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.stage_guarded(store, batch, false)
+    }
+    fn stage_guarded(
+        self,
+        store: &Store,
+        batch: &mut game_ecs::Batch,
+        exclusive: bool,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        let receiving = StableId(self.receiving.id.0);
+        if exclusive {
+            reads.exclusive_entity(store, receiving)?;
+        } else {
+            reads.entity(store, receiving);
+        }
+        reads.expect_row::<Inventory>(receiving, None);
+        admitted.protect::<Inventory>(receiving);
+        if let Some((before, _)) = &self.source {
+            reads.expect_row(StableId(before.id.0), Some(before.clone()));
+            admitted.protect::<Inventory>(StableId(before.id.0));
+        }
+        self.stage_into(store, batch)?;
+        reads.bind(store, batch, &admitted)
+    }
     pub fn receiving(&self) -> &Inventory {
         &self.receiving
     }
@@ -168,5 +198,91 @@ impl InventoryCreationGuard {
             return Err(Error::Unavailable);
         }
         Ok(())
+    }
+}
+
+/// Owner construction for a forced physical split. The coercion owner supplies
+/// placement and access; Cargo validates material, balances and the fresh ID.
+/// Applied material starts without grant or spoil scheduling metadata.
+#[derive(Clone, Debug)]
+pub struct PreparedForcedSplit {
+    creation: PreparedInventoryCreation,
+}
+pub fn prepare_forced_split(
+    store: &Store,
+    source: InventoryId,
+    quantity: game_core::Quantity,
+    new_id: InventoryId,
+    location: InventoryLocation,
+    access: std::collections::BTreeSet<game_core::PersonId>,
+) -> Result<PreparedForcedSplit, Error> {
+    let source_row = inventory(store, source).ok_or(Error::Unavailable)?;
+    let receiving = Inventory {
+        id: new_id,
+        location,
+        access,
+        quantity: game_core::Quantity(0),
+        capacity: quantity,
+        last_granted: None,
+        good: source_row.good,
+        spoils_at: None,
+    };
+    Ok(PreparedForcedSplit {
+        creation: prepare_inventory_split(store, source, receiving, quantity)?,
+    })
+}
+impl PreparedForcedSplit {
+    pub fn receiving(&self) -> &Inventory {
+        self.creation.receiving()
+    }
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.creation.stage_guarded(store, batch, true)
+    }
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+        let mut batch = game_ecs::Batch::new();
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
+        store.apply_batch(batch)
+    }
+}
+
+/// Owner-authored empty carried food compartment assigned at birth.
+#[derive(Clone, Debug)]
+pub struct PreparedNewbornInventory {
+    creation: PreparedInventoryCreation,
+}
+pub fn prepare_newborn_inventory(
+    store: &Store,
+    id: InventoryId,
+    child: game_core::PersonId,
+) -> Result<PreparedNewbornInventory, Error> {
+    let row = Inventory {
+        id,
+        location: InventoryLocation::Carried(child),
+        quantity: game_core::Quantity(0),
+        capacity: game_core::Quantity(10_000),
+        access: std::collections::BTreeSet::from([child]),
+        last_granted: None,
+        good: game_core::Good::Food,
+        spoils_at: None,
+    };
+    Ok(PreparedNewbornInventory {
+        creation: prepare_inventory_creation(store, row)?,
+    })
+}
+impl PreparedNewbornInventory {
+    pub fn receiving(&self) -> &Inventory {
+        self.creation.receiving()
+    }
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.creation.stage_guarded(store, batch, false)
     }
 }

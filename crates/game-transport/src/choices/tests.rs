@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn autonomous_offer_response_requires_an_independent_non_ruler() {
+    for (actor, independent, eligible) in [
+        (PersonId(1), true, false),
+        (PersonId(1), false, false),
+        (PersonId(2), false, false),
+        (PersonId(2), true, true),
+    ] {
+        assert_eq!(
+            OfferEligibilityFacts {
+                actor,
+                ruler: PersonId(1),
+                independent,
+            }
+            .autonomous_response(),
+            eligible,
+        );
+    }
+}
+
+#[test]
+fn support_is_occupied_by_missing_activity_other_work_or_any_feature_duty() {
+    for activity in [None, Some(SupportActivity::Other)] {
+        assert!(
+            SupportAvailabilityFacts {
+                activity,
+                lineage_duty: false,
+                health_duty: false,
+                mission_duty: false,
+            }
+            .occupied()
+        );
+    }
+    for activity in [SupportActivity::Idle, SupportActivity::Rest] {
+        for duties in 0u8..8 {
+            assert_eq!(
+                SupportAvailabilityFacts {
+                    activity: Some(activity),
+                    lineage_duty: duties & 1 != 0,
+                    health_duty: duties & 2 != 0,
+                    mission_duty: duties & 4 != 0,
+                }
+                .occupied(),
+                duties != 0,
+                "{activity:?} with duty flags {duties}",
+            );
+        }
+    }
+}
+
+#[test]
 fn shared_local_candidates_reborrow_current_contact_before_stable_witness_cap() {
     let mut schema = game_ecs::Schema::new();
     game_spatial::register_components(&mut schema).unwrap();
@@ -608,4 +658,105 @@ fn response_and_support_memories_are_bounded_and_duplicates_do_not_refresh_histo
             .by_passenger
             .contains_key(&PersonId(66))
     );
+}
+
+#[test]
+fn navigation_origins_and_same_endpoint_choices_preserve_raw_carrier_policy() {
+    let area = Location::AtArea(AreaId(10));
+    let moving = Location::InTransit {
+        from: AreaId(10),
+        to: AreaId(11),
+        departed: SimTime(0),
+        arrives: SimTime(100),
+        road_start: None,
+    };
+    let stopped = Location::StoppedOnRoad {
+        from: AreaId(10),
+        to: AreaId(11),
+        progress: SimDuration(30),
+        duration: SimDuration(100),
+    };
+    let carried = Location::Carried {
+        carrier: PersonId(1),
+    };
+    assert_eq!(navigation_origin(&area).unwrap(), AreaId(10));
+    assert_eq!(navigation_origin(&moving).unwrap(), AreaId(11));
+    assert_eq!(navigation_origin(&stopped).unwrap(), AreaId(10));
+    assert_eq!(navigation_origin(&carried), Err(Error::Unavailable));
+    assert!(include_same_origin_destination(&moving, &[AreaId(12)]));
+    assert!(!include_same_origin_destination(&moving, &[]));
+    for raw in [&area, &stopped, &carried] {
+        assert!(!include_same_origin_destination(raw, &[AreaId(12)]));
+    }
+}
+#[test]
+fn basic_position_menu_uses_raw_movement_and_resolved_road_work_restrictions() {
+    let area = Location::AtArea(AreaId(10));
+    let moving = Location::InTransit {
+        from: AreaId(10),
+        to: AreaId(11),
+        departed: SimTime(0),
+        arrives: SimTime(100),
+        road_start: None,
+    };
+    let stopped = Location::StoppedOnRoad {
+        from: AreaId(10),
+        to: AreaId(11),
+        progress: SimDuration(30),
+        duration: SimDuration(100),
+    };
+    let carried = Location::Carried {
+        carrier: PersonId(1),
+    };
+    for (raw, resolved, expected) in [
+        (
+            &area,
+            &area,
+            vec![
+                MenuActionKind::Move,
+                MenuActionKind::Work,
+                MenuActionKind::Load,
+                MenuActionKind::Other,
+            ],
+        ),
+        (
+            &moving,
+            &moving,
+            vec![
+                MenuActionKind::Move,
+                MenuActionKind::Work,
+                MenuActionKind::Load,
+                MenuActionKind::Other,
+            ],
+        ),
+        (&stopped, &stopped, vec![MenuActionKind::Other]),
+        (
+            &carried,
+            &area,
+            vec![
+                MenuActionKind::Work,
+                MenuActionKind::Load,
+                MenuActionKind::Other,
+            ],
+        ),
+        (
+            &carried,
+            &moving,
+            vec![
+                MenuActionKind::Work,
+                MenuActionKind::Load,
+                MenuActionKind::Other,
+            ],
+        ),
+        (&carried, &stopped, vec![MenuActionKind::Other]),
+    ] {
+        let mut menu = vec![
+            MenuActionKind::Move,
+            MenuActionKind::Work,
+            MenuActionKind::Load,
+            MenuActionKind::Other,
+        ];
+        filter_position_menu(&mut menu, raw, resolved, |kind| *kind);
+        assert_eq!(menu, expected);
+    }
 }

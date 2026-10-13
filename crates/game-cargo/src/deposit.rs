@@ -24,10 +24,27 @@ impl PreparedDeposit {
     pub fn append_writes(self, batch: &mut Batch) {
         batch.insert(StableId(self.after.id.0), self.after);
     }
-    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
         self.validate(store)?;
+        let id = StableId(self.before.id.0);
+        let mut reads = game_ecs::ReadSet::new();
+        reads.expect_row(id, Some(self.before.clone()));
+        if batch.touches::<Inventory>(id) {
+            return Err(Error::Unavailable);
+        }
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<Inventory>(id);
+        self.append_writes(batch);
+        reads.bind(store, batch, &admitted)
+    }
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        self.append_writes(&mut batch);
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)
     }
 }

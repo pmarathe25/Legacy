@@ -68,7 +68,7 @@ fn kernel_journey_has_native_pending_steps_without_a_carrying_runtime_or_body_ca
     let finish = plan
         .stage_into(None, &store, &facts, SimTime(0), &mut batch)
         .unwrap();
-    finish.validate_footprint(&batch).unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
     store.apply_batch(batch).unwrap();
     finish.finish(&mut fallback);
     assert_eq!(route_steps(&store, PersonId(1)), &[AreaId(3)]);
@@ -109,7 +109,7 @@ fn kernel_journey_has_native_pending_steps_without_a_carrying_runtime_or_body_ca
     let finish = continuation
         .stage_into(None, &store, &facts, SimTime(100), &mut batch)
         .unwrap();
-    finish.validate_footprint(&batch).unwrap();
+    finish.validate_footprint(&store, &batch).unwrap();
     store.apply_batch(batch).unwrap();
     finish.finish(&mut fallback);
     assert!(route_steps(&store, PersonId(1)).is_empty());
@@ -203,7 +203,7 @@ fn failed_continuation_prepares_guarded_route_removal_and_one_interrupted_effect
             continue;
         }
         let finish = result.unwrap();
-        finish.validate_footprint(&batch).unwrap();
+        finish.validate_footprint(&store, &batch).unwrap();
         store.apply_batch(batch).unwrap();
         assert_eq!(
             finish.finish(&mut runtime),

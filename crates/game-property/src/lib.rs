@@ -5,8 +5,10 @@ mod transitions;
 pub use transitions::*;
 mod cancellation;
 pub use cancellation::*;
+mod receipt_validation;
 mod receipts;
 pub use api::*;
+pub use receipt_validation::*;
 pub use receipts::*;
 mod planning;
 pub use planning::*;
@@ -33,3 +35,12 @@ mod menu_tests;
 
 mod custody;
 pub use custody::*;
+
+mod material;
+pub use material::*;
+
+mod activity_effects;
+pub use activity_effects::*;
+
+mod initialization;
+pub use initialization::*;

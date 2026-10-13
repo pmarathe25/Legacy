@@ -355,3 +355,49 @@ pub fn exposure_urgency(cold: u64, cold_harm: u64) -> i64 {
         0
     }
 }
+
+pub struct CareWillingnessFacts<'a> {
+    pub capable: bool,
+    pub medicine: u16,
+    pub busy: bool,
+    pub body: WorkNeeds,
+    pub dependent_urgencies: &'a [i64],
+    pub empathy: u16,
+    pub trust: Option<i32>,
+    pub stocks: &'a [RememberedStock],
+}
+impl Runtime {
+    pub fn willing_supplies_for(
+        &self,
+        facts: CareWillingnessFacts<'_>,
+    ) -> Option<(InventoryId, InventoryId)> {
+        willing_supplies(
+            &self.rules,
+            WillingCare {
+                capable: facts.capable,
+                medicine: facts.medicine,
+                busy: facts.busy,
+                hungry: facts.body.hunger >= facts.body.meal_relief,
+                fatigued: facts.body.fatigue >= facts.body.fatigue_limit / 2,
+                urgent_dependent: facts
+                    .dependent_urgencies
+                    .iter()
+                    .any(|urgency| *urgency >= 20_000),
+                empathy: facts.empathy,
+                trust: facts.trust.unwrap_or(0),
+                stocks: facts.stocks,
+            },
+        )
+    }
+    pub fn preflight_time(&self, next: SimTime) -> Result<(), Error> {
+        validate_rules(&self.rules)?;
+        next.0
+            .checked_add(self.rules.incubation.0)
+            .and_then(|time| time.checked_add(self.rules.illness_duration.0))
+            .ok_or(Error::Overflow)?;
+        Ok(())
+    }
+    pub fn reconciliation_event_bound(&self, store: &Store) -> usize {
+        clinicals(store).count() * 5 + jobs(store).count() * 5 + 2
+    }
+}

@@ -343,3 +343,66 @@ fn context_checks_topology_and_opening_time_without_owning_transport_rules() {
     )
     .unwrap();
 }
+
+#[test]
+fn projected_anchors_obey_the_same_missing_cycle_and_geometry_rules_as_canonical_rows() {
+    let actor = StableId(1);
+    let mut projection = BTreeMap::from([
+        (
+            actor,
+            Location::Carried {
+                carrier: game_core::PersonId(2),
+            },
+        ),
+        (StableId(2), Location::AtArea(AreaId(10))),
+    ]);
+    assert_eq!(
+        resolved_anchor_with(actor, |id| projection.get(&id)).unwrap(),
+        (StableId(2), &Location::AtArea(AreaId(10)))
+    );
+    projection.insert(
+        StableId(2),
+        Location::Carried {
+            carrier: game_core::PersonId(1),
+        },
+    );
+    assert!(resolved_anchor_with(actor, |id| projection.get(&id)).is_err());
+    projection.remove(&StableId(2));
+    assert!(resolved_anchor_with(actor, |id| projection.get(&id)).is_err());
+    projection.insert(StableId(2), Location::AtArea(AreaId(0)));
+    assert!(resolved_anchor_with(actor, |id| projection.get(&id)).is_err());
+}
+
+#[test]
+fn prepared_placement_allows_shared_absent_creation_and_guards_opening_and_projection() {
+    let mut schema = Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<String>("test/identity", |_| Ok(()))
+        .unwrap();
+    let mut store = Store::with_schema(schema);
+    let entity = StableId(20);
+    let plan = prepare_location(&store, entity, Location::AtArea(AreaId(10))).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage_into(&store, &mut batch).unwrap();
+    batch.insert(entity, "newborn".to_owned());
+    guard.validate(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        location(&store, entity),
+        Some(&Location::AtArea(AreaId(10)))
+    );
+    let plan = prepare_location(&store, entity, Location::AtArea(AreaId(11))).unwrap();
+    *location_mut(&mut store, entity).unwrap() = Location::AtArea(AreaId(12));
+    assert!(matches!(
+        plan.stage_into(&store, &mut game_ecs::Batch::new()),
+        Err(Error::Unavailable)
+    ));
+    let plan = prepare_location(&store, entity, Location::AtArea(AreaId(11))).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage_into(&store, &mut batch).unwrap();
+    batch.remove::<Location>(entity);
+    assert_eq!(guard.validate(&store, &batch), Err(Error::Unavailable));
+    assert!(prepare_location(&store, StableId(0), Location::AtArea(AreaId(10))).is_err());
+    assert!(prepare_location(&store, entity, Location::AtArea(AreaId(0))).is_err());
+}

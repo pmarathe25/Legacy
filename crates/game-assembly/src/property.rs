@@ -32,7 +32,7 @@ impl Simulation {
             last_event: sim.host.next_event() - 1,
             last_observation_event: sim.host.next_event() - 1,
         });
-        let custodian = sim.host.state.people[3].id;
+        let custodian = sim.person_at(3).id;
         let food = game_cargo::inventories(&sim.host.storage)
             .map(|(_, row)| row)
             .find(|stock| {
@@ -47,10 +47,7 @@ impl Simulation {
         game_property::declare_custody(&mut sim.host.storage, food, custodian)
             .expect("declared custody");
         let attitudes: BTreeMap<PersonId, Attitude> = sim
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .enumerate()
             .map(|(index, person)| {
                 (
@@ -118,44 +115,30 @@ impl Simulation {
         Ok(sim)
     }
 
-    fn property_area(&self, actor: PersonId) -> Option<AreaId> {
-        let body = game_physiology::body(&self.host.storage, actor)?;
-        if !body.vitals.alive {
-            return None;
-        }
-        match *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))? {
-            Location::AtArea(area) => Some(area),
-            _ => None,
-        }
+    pub(crate) fn property_area(&self, actor: PersonId) -> Option<AreaId> {
+        game_property::local_area(
+            game_physiology::body(&self.host.storage, actor).is_some_and(|body| body.vitals.alive),
+            game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)),
+        )
     }
     fn property_custodian(&self, inventory: InventoryId) -> Option<PersonId> {
-        let stock = game_cargo::inventory(&self.host.storage, inventory)?;
-        match stock.location {
-            InventoryLocation::Carried(actor) => Some(actor),
-            InventoryLocation::Area(_) => {
-                game_property::inventory_custodian(&self.host.storage, inventory)
-            }
-        }
+        game_property::physical_custodian(&self.host.storage, inventory)
     }
-    fn property_present(&self, area: AreaId) -> Vec<PersonId> {
-        self.host
-            .state
-            .people
-            .iter()
+    pub(crate) fn property_present(&self, area: AreaId) -> Vec<PersonId> {
+        self.people()
             .filter(|person| self.property_area(person.id) == Some(area))
             .map(|p| p.id)
             .collect()
     }
     fn property_able(&self, actor: PersonId) -> bool {
-        self.property_area(actor).is_some()
-            && self.independent(actor)
-            && !self.combat_restricts(actor)
-            && !self.care_index.contains_key(&actor)
-            && game_physiology::body(&self.host.storage, actor)
-                .expect("body exists")
-                .vitals
-                .health
-                > 0
+        game_property::action_capable(game_property::ReadinessFacts {
+            area: self.property_area(actor),
+            independent: self.independent(actor),
+            combat_restricted: self.combat_restricts(actor),
+            receiving_care: self.care_index.contains_key(&actor),
+            health: game_physiology::body(&self.host.storage, actor)
+                .map_or(0, |body| body.vitals.health),
+        })
     }
     fn property_actor_facts(&self, actor: PersonId) -> game_property::ActorFacts {
         game_property::ActorFacts {
@@ -163,16 +146,15 @@ impl Simulation {
             now: self.host.clock().time,
             area: self.property_area(actor),
             capable: self.property_able(actor),
-            exertion_ready: self
-                .host
-                .state
-                .physical
-                .as_ref()
-                .and_then(|w| {
-                    game_physiology::body(&self.host.storage, actor)
-                        .map(|body| body.vitals.fatigue < w.rules.fatigue_limit)
-                })
-                .unwrap_or(false),
+            exertion_ready: game_property::exertion_ready(
+                game_physiology::body(&self.host.storage, actor)
+                    .map_or(u64::MAX, |body| body.vitals.fatigue),
+                self.host
+                    .state
+                    .physical
+                    .as_ref()
+                    .map(|owner| owner.rules.fatigue_limit),
+            ),
         }
     }
     fn property_stock_facts(
@@ -231,22 +213,22 @@ impl Simulation {
                 )
             })
     }
-    fn property_observer_facts(
+    pub(crate) fn property_observer_facts(
         &self,
         observer: PersonId,
         incident: &Incident,
     ) -> game_property::ObserverFacts {
-        let local = self.property_area(observer) == Some(incident.area);
-        let custody = local && self.property_custodian(incident.source) == Some(observer);
-        let allowed = custody
-            && game_cargo::inventory(&self.host.storage, incident.source)
-                .is_some_and(|stock| stock.access.contains(&incident.actor));
-        game_property::ObserverFacts {
-            actor: observer,
-            personal_custody: custody && !allowed,
-            personally_allowed: allowed,
-            can_defend: observer != self.host.state.ruler && self.property_able(observer),
-        }
+        game_property::observer_facts(
+            observer,
+            game_property::ObserverContext {
+                local: self.property_area(observer) == Some(incident.area),
+                source_custodian: self.property_custodian(incident.source),
+                taking_actor_allowed: game_cargo::inventory(&self.host.storage, incident.source)
+                    .is_some_and(|stock| stock.access.contains(&incident.actor)),
+                player_controlled: observer == self.host.state.ruler,
+                capable: self.property_able(observer),
+            },
+        )
     }
     pub fn debug_set_property_attitude(
         &mut self,
@@ -269,6 +251,21 @@ impl Simulation {
         &mut self,
         actor: PersonId,
         action: PropertyAction,
+    ) -> Result<(), Error> {
+        self.debug_property_action_with_maintenance(actor, action, false)
+    }
+    pub(crate) fn property_command(
+        &mut self,
+        actor: PersonId,
+        action: PropertyAction,
+    ) -> Result<(), Error> {
+        self.debug_property_action_with_maintenance(actor, action, true)
+    }
+    fn debug_property_action_with_maintenance(
+        &mut self,
+        actor: PersonId,
+        action: PropertyAction,
+        routed_maintenance: bool,
     ) -> Result<(), Error> {
         self.host.preflight_records(0, 0, 1)?;
         use game_property::ActionFacts;
@@ -314,16 +311,14 @@ impl Simulation {
                         })
                         .and_then(|m| m.relationships.get(&actor))
                         .map_or(0, |r| r.trust),
-                    reserve: Quantity(
+                    reserve: game_property::retention_reserve(
                         self.host
                             .state
                             .physical
                             .as_ref()
                             .ok_or(Error::Unavailable)?
                             .rules
-                            .meal_size
-                            .0
-                            .saturating_mul(2),
+                            .meal_size,
                     ),
                 }
             }
@@ -359,7 +354,7 @@ impl Simulation {
             },
             PropertyAction::ReportIncident { recipient, .. } => ActionFacts::Report {
                 recipient: self.property_contact_facts(*recipient),
-                duration: MINUTE,
+                duration: game_property::Rules::default().report_duration,
             },
             PropertyAction::ResistTaking { thief } => ActionFacts::Resist {
                 thief: self.property_contact_facts(*thief),
@@ -373,16 +368,76 @@ impl Simulation {
             facts,
             prefix,
         )?;
-        self.apply_property_change(change)?;
-        self.host.bump_revision(1)?;
-        Ok(())
+        self.apply_property_change_with_revision(change, 1, routed_maintenance)
     }
     fn apply_property_change(
         &mut self,
         change: game_property::PreparedProperty,
     ) -> Result<(), Error> {
+        self.apply_property_change_with_revision(change, 0, false)
+    }
+    fn apply_property_change_with_revision(
+        &mut self,
+        mut change: game_property::PreparedProperty,
+        origin_revisions: u64,
+        routed_maintenance: bool,
+    ) -> Result<(), Error> {
         let owner_now = self.host.clock().time;
         use game_property::Effect;
+        let review_resistance = change.requires_resistance_review();
+        let engagement = change
+            .select_projected_resistance(
+                &self.host.storage,
+                |incident| {
+                    self.property_present(incident.area)
+                        .into_iter()
+                        .map(|actor| self.property_observer_facts(actor, incident))
+                        .collect()
+                },
+                |defender, thief| {
+                    self.preflight_start_encounter(&[(defender, 0), (thief, 1)])
+                        .is_ok()
+                },
+            )?
+            .and_then(|effect| match effect {
+                Effect::Engage { defender, thief } => Some((defender, thief)),
+                _ => None,
+            });
+        if let Some((defender, thief)) = engagement {
+            change.cancel_projected(&self.host.storage, defender, owner_now);
+            change.cancel_projected(&self.host.storage, thief, owner_now);
+        }
+        let witnessed = change
+            .effects()
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::StartTake { incident, .. }
+                | Effect::TakingInterrupted { incident, .. }
+                | Effect::Taken { incident, .. } => Some(*incident),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for incident_id in witnessed {
+            let incident = change
+                .projected_incident(&self.host.storage, incident_id)
+                .ok_or(Error::Unavailable)?;
+            let observers = self
+                .property_present(incident.area)
+                .into_iter()
+                .map(|actor| self.property_observer_facts(actor, incident))
+                .collect::<Vec<_>>();
+            change.witness_projected(
+                self.host
+                    .state
+                    .property
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                incident_id,
+                owner_now,
+                &observers,
+            )?;
+        }
         let mut next_id = self.host.next_id();
         let mut event_bound = 0usize;
         for effect in change.effects() {
@@ -407,9 +462,7 @@ impl Simulation {
             event_bound = event_bound
                 .checked_add(match effect {
                     Effect::Interrupt { .. } => 128,
-                    Effect::StartTake { .. } | Effect::Engage { .. } => {
-                        self.host.state.people.len() * 8 + 8
-                    }
+                    Effect::StartTake { .. } | Effect::Engage { .. } => self.people().len() * 8 + 8,
                     Effect::ClearTaking { .. }
                     | Effect::Relationship { .. }
                     | Effect::StartReport { .. } => 0,
@@ -425,53 +478,211 @@ impl Simulation {
         {
             next_id.checked_add(3).ok_or(Error::Overflow)?;
         }
+        let encounter = if let Some((defender, thief)) = engagement {
+            let participants = vec![(defender, 0), (thief, 1)];
+            let opening = self.prepare_encounter_opening(&participants)?;
+            let area = opening.area();
+            let map = self.prepare_combat_location_map_at(opening.location(), next_id)?;
+            let id = EncounterId(
+                next_id
+                    .checked_add(u64::from(map.is_new()))
+                    .ok_or(Error::Overflow)?,
+            );
+            next_id = id.0.checked_add(1).ok_or(Error::Overflow)?;
+            let fatigue = participants
+                .iter()
+                .map(|(actor, _)| {
+                    (
+                        *actor,
+                        game_physiology::body(&self.host.storage, *actor)
+                            .ok_or(Error::Unavailable)
+                            .map(|b| b.vitals.fatigue),
+                    )
+                })
+                .map(|(actor, fatigue)| fatigue.map(|fatigue| (actor, fatigue)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let start = self
+                .host
+                .state
+                .combat
+                .as_ref()
+                .ok_or(Error::Unavailable)?
+                .prepare_start(
+                    &self.host.storage,
+                    id,
+                    opening,
+                    map.map(),
+                    &participants,
+                    &fatigue,
+                    owner_now,
+                )?;
+            self.host.preflight_records(0, 0, 1)?;
+            Some((id, area, participants, map, start))
+        } else {
+            None
+        };
         self.ensure_event_capacity(event_bound)?;
-        let mut batch = game_ecs::Batch::new();
-        let transfers = change
+        let mut interrupted_actors = change
             .effects()
             .iter()
             .filter_map(|effect| {
-                if let Effect::Transfer {
-                    actor,
-                    source,
-                    destination,
-                    quantity,
-                } = effect
-                {
-                    // The property owner already admitted this physical taking.
-                    // Its authorization does not grant legal stock access.
-                    Some(game_cargo::TransferRequest {
-                        intent: TransferIntent {
-                            actor: *actor,
-                            source: *source,
-                            destination: *destination,
-                            quantity: *quantity,
-                        },
-                        facts: game_cargo::ClosingFacts {
-                            alive: true,
-                            health: 1,
-                            source_contact: true,
-                            source_access: true,
-                            receiver_contact: true,
-                            receiver_access: true,
-                            receiver_accepted: false,
-                            record_permission: true,
-                        },
-                    })
+                if let Effect::Interrupt { actor } = effect {
+                    Some(*actor)
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
-        if !transfers.is_empty() {
-            let prepared =
-                game_cargo::prepare_transfers(&self.host.storage, None, transfers, None, |_| true)?;
-            if prepared.decisions().iter().any(|(_, granted)| !granted) {
-                return Err(Error::Unavailable);
-            }
-            prepared.stage_into(&self.host.storage, &mut batch)?;
+        if let Some((_, _, participants, _, _)) = &encounter {
+            interrupted_actors.extend(participants.iter().map(|(actor, _)| *actor));
         }
-        let finish = change.stage_into(
+        let interruptions =
+            self.prepare_interruptions(&interrupted_actors, commands::ActivityOwner::Property)?;
+        let activities = game_property::prepare_activity_effects(
+            &self.host.storage,
+            change.effects(),
+            interruptions
+                .projected_activities()
+                .map(|(actor, activity)| (actor, activity.clone())),
+            |activity| matches!(activity, Activity::Take { .. }),
+            |activity| {
+                if let Activity::ReportIncident { completes, .. } = activity {
+                    Some(*completes)
+                } else {
+                    None
+                }
+            },
+            Activity::Idle,
+            |effect| match effect {
+                Effect::StartTake {
+                    source,
+                    destination,
+                    quantity,
+                    completes,
+                    ..
+                } => Some(Activity::Take {
+                    source: *source,
+                    destination: *destination,
+                    quantity: *quantity,
+                    completes: *completes,
+                }),
+                Effect::StartReport {
+                    recipient,
+                    incident,
+                    completes,
+                    ..
+                } => Some(Activity::ReportIncident {
+                    recipient: *recipient,
+                    incident: *incident,
+                    completes: *completes,
+                }),
+                _ => None,
+            },
+        )?;
+        let mut batch = game_ecs::Batch::new();
+        let mut final_activities = activities.replacements().clone();
+        if let Some((id, _, participants, _, _)) = &encounter {
+            for (actor, _) in participants {
+                final_activities.insert(*actor, Activity::Combat { encounter: *id });
+            }
+        }
+        let encounter = encounter
+            .map(|(id, area, participants, map, start)| {
+                let map_guard = map.stage_into(&self.host.storage, &mut batch)?;
+                let start_guard = start.stage_into(
+                    self.host.state.combat.as_ref().ok_or(Error::Unavailable)?,
+                    &self.host.storage,
+                    &mut batch,
+                )?;
+                Ok::<_, Error>((id, area, participants, map_guard, start_guard))
+            })
+            .transpose()?;
+        let mut interrupted = interruptions.stage_into(self, &mut batch, &final_activities)?;
+        let activity_guard = activities.bind(&self.host.storage, &batch)?;
+        let mut permission_memories =
+            BTreeMap::<PersonId, Vec<(InventoryId, bool, PersonId)>>::new();
+        for effect in change.effects() {
+            if let Effect::Permission {
+                actor,
+                inventory,
+                recipient,
+                allowed,
+            } = effect
+            {
+                permission_memories
+                    .entry(*recipient)
+                    .or_default()
+                    .push((*inventory, *allowed, *actor));
+            }
+        }
+        let mut memory_guards = Vec::new();
+        if self.host.state.decisions.is_some() {
+            for (recipient, reports) in permission_memories {
+                let prepared = game_characters::decisions::prepare_permission_memories::<Command>(
+                    &self.host.storage,
+                    recipient,
+                    &reports,
+                    owner_now,
+                )?;
+                memory_guards.push(prepared.stage_into(&self.host.storage, &mut batch)?);
+            }
+        }
+        let relationship_guard = if self.host.state.decisions.is_some() {
+            let effects = change.effects().iter().filter_map(|effect| match effect {
+                Effect::Relationship {
+                    observer,
+                    target,
+                    trust,
+                } => Some(game_characters::decisions::TrustDelta {
+                    observer: *observer,
+                    subject: *target,
+                    delta: *trust,
+                }),
+                _ => None,
+            });
+            Some(
+                game_characters::receivers::prepare_trust_reactions::<Command>(
+                    &self.host.storage,
+                    effects,
+                )?
+                .stage_into(&self.host.storage, &mut batch)?,
+            )
+        } else {
+            None
+        };
+        let mut health_finishes = Vec::new();
+        for effect in change.effects() {
+            if let Effect::Transfer {
+                actor,
+                source,
+                destination,
+                quantity,
+            } = effect
+            {
+                let from =
+                    game_cargo::inventory(&self.host.storage, *source).ok_or(Error::Unavailable)?;
+                let to = game_cargo::inventory(&self.host.storage, *destination)
+                    .ok_or(Error::Unavailable)?;
+                if from.good == Good::Water {
+                    let reaction = game_health::WaterReaction::Transfer {
+                        actor: *actor,
+                        source: *source,
+                        destination: *destination,
+                        quantity: *quantity,
+                        source_before: from.quantity,
+                        destination_before: to.quantity,
+                    };
+                    if let Some(health) = self.prepare_health_water_reaction(reaction)? {
+                        health_finishes.push(health.stage_into(
+                            self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                            &self.host.storage,
+                            &mut batch,
+                        )?);
+                    }
+                }
+            }
+        }
+        let (finish, cargo_guards) = change.stage_material_into(
             self.host
                 .state
                 .property
@@ -479,250 +690,303 @@ impl Simulation {
                 .ok_or(Error::Unavailable)?,
             &self.host.storage,
             &mut batch,
+            self.host.next_event(),
         )?;
-        self.host.storage.apply_batch(batch)?;
-        let effects = finish.finish(
+        for guard in &cargo_guards {
+            guard.validate(&self.host.storage, &batch)?;
+        }
+        finish.validate_runtime(
             self.host
                 .state
                 .property
-                .as_mut()
+                .as_ref()
                 .ok_or(Error::Unavailable)?,
-        );
-        self.host.allocate_ids(
-            (next_id)
-                .checked_sub(self.host.next_id())
+        )?;
+        finish.validate_batch(&self.host.storage, &batch)?;
+        for guard in &memory_guards {
+            guard.validate(&batch)?;
+        }
+        if let Some(guard) = &relationship_guard {
+            guard.validate(&self.host.storage, &batch)?;
+        }
+        for health in &health_finishes {
+            health.validate_batch(
+                self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                &batch,
+            )?;
+        }
+        interrupted.validate_batch(self, &batch)?;
+        activity_guard.validate(&self.host.storage, &batch)?;
+        if let Some((_, _, _, map, start)) = &encounter {
+            map.validate(&self.host.storage, &batch)?;
+            start.validate(&self.host.storage, &batch)?;
+        }
+        let allocated_ids = next_id
+            .checked_sub(self.host.next_id())
+            .ok_or(Error::Overflow)?;
+        self.host.preflight_records(
+            allocated_ids,
+            0,
+            origin_revisions
+                .checked_add(u64::from(encounter.is_some()))
                 .ok_or(Error::Overflow)?,
         )?;
-        for effect in effects {
-            match effect {
-                Effect::Interrupt { actor } => self.interrupt_actor_activity_except_property(actor),
-                Effect::ClearTaking { actor } => {
-                    let activity = self.host.storage.activity_mut(actor).unwrap();
-                    if matches!(activity, Activity::Take { .. }) {
-                        *activity = Activity::Idle;
+        let encounter_id = encounter.as_ref().map(|(id, _, _, _, _)| *id);
+        let finish_origin = move |sim: &mut Simulation| {
+            for health in health_finishes {
+                let _ = health.finish();
+            }
+            let effects = finish.finish(
+                sim.host
+                    .state
+                    .property
+                    .as_mut()
+                    .expect("validated property runtime"),
+            );
+            for effect in effects {
+                match effect {
+                    Effect::Interrupt { actor } => interrupted.finish_actor(sim, actor),
+                    Effect::ClearTaking { actor } => {
+                        for due in sim.host.state.due.values_mut() {
+                            due.retain(|d| !matches!(d,Due::Physical(id) if *id==actor));
+                        }
+                        sim.host.state.due.retain(|_, due| !due.is_empty());
                     }
-                    for due in self.host.state.due.values_mut() {
-                        due.retain(|d| !matches!(d,Due::Physical(id) if *id==actor));
+                    Effect::ClearReport {
+                        sender,
+                        completes,
+                        interrupted,
+                    } => {
+                        if let Some(due) = sim.host.state.due.get_mut(&completes) {
+                            due.retain(|d| !matches!(d,Due::Physical(id) if *id==sender));
+                        }
+                        sim.host.state.due.retain(|_, due| !due.is_empty());
+                        if interrupted {
+                            sim.emit(EventKind::Interrupted { actor: sender });
+                        }
                     }
-                    self.host.state.due.retain(|_, due| !due.is_empty());
-                }
-                Effect::ClearReport {
-                    sender,
-                    completes,
-                    interrupted,
-                } => {
-                    let activity = self.host.storage.activity_mut(sender).unwrap();
-                    if matches!(*activity,Activity::ReportIncident {completes:at,..} if at==completes)
-                    {
-                        *activity = Activity::Idle;
-                    }
-                    if let Some(due) = self.host.state.due.get_mut(&completes) {
-                        due.retain(|d| !matches!(d,Due::Physical(id) if *id==sender));
-                    }
-                    self.host.state.due.retain(|_, due| !due.is_empty());
-                    if interrupted {
-                        self.emit(EventKind::Interrupted { actor: sender });
-                    }
-                }
-                Effect::ClaimPublished {
-                    claim,
-                    actor,
-                    inventory,
-                } => {
-                    self.emit(EventKind::PropertyClaimed {
+                    Effect::ClaimPublished {
                         claim,
                         actor,
                         inventory,
-                    });
-                }
-                Effect::Recognized {
-                    claim,
-                    actor,
-                    support,
-                } => {
-                    self.emit(EventKind::ClaimRecognized {
+                    } => {
+                        sim.emit(EventKind::PropertyClaimed {
+                            claim,
+                            actor,
+                            inventory,
+                        });
+                    }
+                    Effect::Recognized {
                         claim,
                         actor,
                         support,
-                    });
-                }
-                Effect::Requested {
-                    actor,
-                    custodian,
-                    inventory,
-                } => {
-                    self.emit(EventKind::AccessRequested {
+                    } => {
+                        sim.emit(EventKind::ClaimRecognized {
+                            claim,
+                            actor,
+                            support,
+                        });
+                    }
+                    Effect::Requested {
                         actor,
                         custodian,
                         inventory,
-                    });
-                }
-                Effect::Refused {
-                    actor,
-                    custodian,
-                    inventory,
-                } => {
-                    self.emit(EventKind::AccessRefused {
+                    } => {
+                        sim.emit(EventKind::AccessRequested {
+                            actor,
+                            custodian,
+                            inventory,
+                        });
+                    }
+                    Effect::Refused {
                         actor,
                         custodian,
                         inventory,
-                    });
-                }
-                Effect::Permission {
-                    actor,
-                    inventory,
-                    recipient,
-                    allowed,
-                } => {
-                    let access = &mut game_cargo::inventory_mut(&mut self.host.storage, inventory)
-                        .unwrap()
-                        .access;
-                    if allowed {
-                        access.insert(recipient);
-                    } else {
-                        access.remove(&recipient);
+                    } => {
+                        sim.emit(EventKind::AccessRefused {
+                            actor,
+                            custodian,
+                            inventory,
+                        });
                     }
-                    if let Some(fact) = self
-                        .host
-                        .state
-                        .decisions
-                        .as_mut()
-                        .and_then(|_| {
-                            game_characters::decisions::stocks_mut(
-                                &mut self.host.storage,
-                                recipient,
-                            )
-                        })
-                        .and_then(|m| m.known.get_mut(&inventory))
-                    {
-                        fact.accessible = allowed;
-                        fact.learned_at = owner_now;
-                        fact.source = KnowledgeSource::Reported(actor);
-                    }
-                    self.emit(EventKind::PermissionShared {
+                    Effect::Permission {
                         actor,
                         inventory,
                         recipient,
                         allowed,
-                    });
-                }
-                Effect::StartTake {
-                    incident,
-                    actor,
-                    source,
-                    destination,
-                    quantity,
-                    completes,
-                } => {
-                    *self.host.storage.activity_mut(actor).unwrap() = Activity::Take {
+                    } => {
+                        sim.emit(EventKind::PermissionShared {
+                            actor,
+                            inventory,
+                            recipient,
+                            allowed,
+                        });
+                    }
+                    Effect::StartTake {
+                        incident,
+                        actor,
                         source,
                         destination,
                         quantity,
                         completes,
-                    };
-                    self.host
-                        .state
-                        .due
-                        .entry(completes)
-                        .or_default()
-                        .push(Due::Physical(actor));
-                    self.emit(EventKind::TakingAttempted {
+                    } => {
+                        sim.host
+                            .state
+                            .due
+                            .entry(completes)
+                            .or_default()
+                            .push(Due::Physical(actor));
+                        sim.emit(EventKind::TakingAttempted {
+                            incident,
+                            actor,
+                            source,
+                            destination,
+                            quantity,
+                        });
+                    }
+                    Effect::TakingInterrupted { incident, actor } => {
+                        sim.emit(EventKind::TakingInterrupted { incident, actor });
+                    }
+                    Effect::Transfer {
+                        actor,
+                        source,
+                        destination,
+                        quantity,
+                    } => {
+                        sim.emit_prepared_water(EventKind::Transferred {
+                            actor,
+                            source,
+                            destination,
+                            quantity,
+                        });
+                    }
+                    Effect::Taken {
                         incident,
                         actor,
                         source,
                         destination,
                         quantity,
-                    });
-                    self.witness_property_incident(incident)?;
-                    self.review_property_resistance()?;
-                }
-                Effect::TakingInterrupted { incident, actor } => {
-                    self.emit(EventKind::TakingInterrupted { incident, actor });
-                    self.witness_property_incident(incident)?;
-                }
-                Effect::Transfer {
-                    actor,
-                    source,
-                    destination,
-                    quantity,
-                } => {
-                    self.emit(EventKind::Transferred {
-                        actor,
-                        source,
-                        destination,
-                        quantity,
-                    });
-                }
-                Effect::Taken {
-                    incident,
-                    actor,
-                    source,
-                    destination,
-                    quantity,
-                } => {
-                    self.emit(EventKind::Taken {
-                        incident,
-                        actor,
-                        source,
-                        destination,
-                        quantity,
-                    });
-                    self.witness_property_incident(incident)?;
-                }
-                Effect::StartReport {
-                    sender,
-                    recipient,
-                    incident,
-                    completes,
-                } => {
-                    *self.host.storage.activity_mut(sender).unwrap() = Activity::ReportIncident {
-                        recipient,
-                        incident,
-                        completes,
-                    };
-                    self.host
-                        .state
-                        .due
-                        .entry(completes)
-                        .or_default()
-                        .push(Due::Physical(sender));
-                }
-                Effect::Reported {
-                    sender,
-                    recipient,
-                    incident,
-                } => {
-                    self.emit(EventKind::IncidentReported {
+                    } => {
+                        sim.emit(EventKind::Taken {
+                            incident,
+                            actor,
+                            source,
+                            destination,
+                            quantity,
+                        });
+                    }
+                    Effect::StartReport {
+                        sender, completes, ..
+                    } => {
+                        sim.host
+                            .state
+                            .due
+                            .entry(completes)
+                            .or_default()
+                            .push(Due::Physical(sender));
+                    }
+                    Effect::Reported {
                         sender,
                         recipient,
                         incident,
-                    });
+                    } => {
+                        sim.emit(EventKind::IncidentReported {
+                            sender,
+                            recipient,
+                            incident,
+                        });
+                    }
+                    Effect::Engage { defender, thief } => {
+                        let _ = (defender, thief);
+                    }
+                    Effect::Relationship { .. } => {}
                 }
-                Effect::Engage { defender, thief } => {
-                    self.debug_start_encounter(vec![(defender, 0), (thief, 1)])?;
+            }
+            if let Some((id, area, participants, _, _)) = encounter {
+                for (actor, _) in participants {
+                    interrupted.finish_actor(sim, actor);
                 }
-                Effect::Relationship {
-                    observer,
-                    target,
-                    trust,
-                } => {
-                    if let Some(mind) = self.host.state.decisions.as_mut().and_then(|_| {
-                        game_characters::decisions::mind_mut::<game_api::Command>(
-                            &mut self.host.storage,
-                            observer,
-                        )
-                    }) {
-                        let relationship =
-                            mind.relationships
-                                .entry(target)
-                                .or_insert(decisions::Relationship {
-                                    trust: 0,
-                                    affection: 0,
-                                });
-                        relationship.trust = (relationship.trust + trust).clamp(-1_000, 1_000);
+                sim.emit(EventKind::EncounterStarted {
+                    encounter: id,
+                    area,
+                });
+            }
+        };
+        if encounter_id.is_some() || routed_maintenance {
+            let mut extra = BTreeSet::new();
+            if review_resistance {
+                for (thief, incident_id) in game_property::pending_rows(&self.host.storage) {
+                    extra.extend([
+                        game_ecs::StableId(thief.0),
+                        game_ecs::StableId(incident_id.0),
+                    ]);
+                    if let Some(incident) = game_property::incident(&self.host.storage, incident_id)
+                    {
+                        extra.extend([
+                            game_ecs::StableId(incident.area.0),
+                            game_ecs::StableId(incident.source.0),
+                            game_ecs::StableId(incident.destination.0),
+                        ]);
+                        extra.extend(
+                            self.property_present(incident.area)
+                                .into_iter()
+                                .map(|actor| game_ecs::StableId(actor.0)),
+                        );
                     }
                 }
             }
+            let contacts = self.physical_maintenance_contacts(&game_ecs::Batch::new())?;
+            let inputs =
+                self.physical_maintenance_agreement_inputs(&game_ecs::Batch::new(), &[])?;
+            let followups = self.prepare_property_source_followups(
+                encounter_id,
+                &batch,
+                allocated_ids,
+                origin_revisions
+                    .checked_add(u64::from(encounter_id.is_some()))
+                    .ok_or(Error::Overflow)?,
+                extra,
+                finish_origin,
+                move |preview| {
+                    if review_resistance {
+                        preview.review_property_resistance()?;
+                    }
+                    if routed_maintenance {
+                        preview.update_property_events()?;
+                        let mut maintenance_batch = game_ecs::Batch::new();
+                        let maintenance = preview
+                            .prepare_physical_agreement_maintenance_with_context(
+                                &mut maintenance_batch,
+                                &[],
+                                &contacts,
+                                &inputs,
+                            )?;
+                        maintenance.validate(preview, &maintenance_batch)?;
+                        let mut transaction = game_world::Transaction::new(
+                            preview.host.transaction_opening(),
+                            maintenance_batch,
+                        );
+                        transaction.events = maintenance.events().to_vec();
+                        transaction.guards = maintenance.guards();
+                        preview.host.commit_transaction(transaction)?;
+                        maintenance.finish(preview);
+                    }
+                    Ok(())
+                },
+            )?;
+            let (transaction, finalization) = followups.into_transaction(self)?;
+            self.host.commit_transaction(transaction)?;
+            finalization.finish(self);
+        } else {
+            self.host.storage.apply_batch(batch)?;
+            self.host
+                .allocate_ids(allocated_ids)
+                .expect("preflighted property identifiers");
+            self.host
+                .bump_revision(origin_revisions)
+                .expect("preflighted property source revision");
+            finish_origin(self);
         }
         Ok(())
     }
@@ -802,12 +1066,6 @@ impl Simulation {
         }
         Ok(())
     }
-    pub(crate) fn interrupt_property_action(&mut self, actor: PersonId) {
-        if let Some(world) = &self.host.state.property {
-            let change = world.prepare_cancel(&self.host.storage, actor, self.host.clock().time);
-            let _ = self.apply_property_change(change);
-        }
-    }
     pub(crate) fn complete_property_action(&mut self, actor: PersonId) -> Result<(), Error> {
         let world = self
             .host
@@ -855,7 +1113,9 @@ impl Simulation {
         self.update_property_events()?;
         Ok(())
     }
-    fn prepare_property_receipts(&self) -> Result<Option<game_property::PreparedProperty>, Error> {
+    pub(crate) fn prepare_property_receipts(
+        &self,
+    ) -> Result<Option<game_property::PreparedProperty>, Error> {
         use game_property::{PropertyReceipt, ReceiptChange};
         let Some(world) = &self.host.state.property else {
             return Ok(None);
@@ -869,7 +1129,7 @@ impl Simulation {
         }
         let mut receipts = Vec::new();
         let mut touched = BTreeSet::new();
-        for event in self.host.events().iter().skip(world.last_event as usize) {
+        for event in self.host.events_since(world.last_event) {
             let change = match event.event {
                 EventKind::Transferred {
                     source,
@@ -986,7 +1246,7 @@ impl Simulation {
         }
         let area = actor_facts.area.unwrap();
         let quantity = self.host.state.physical.as_ref().unwrap().rules.meal_size;
-        let cargo = self.host.state.people[self.person_index[&actor]].inventory;
+        let cargo = self.person_at(self.person_index[&actor]).inventory;
         let local_stock = game_cargo::inventories(&self.host.storage)
             .filter(|(_, stock)| self.inventory_area(stock) == Some(area))
             .collect::<Vec<_>>();
@@ -1078,47 +1338,37 @@ impl Simulation {
         }) else {
             return Vec::new();
         };
-        let mut destinations = BTreeMap::<Good, InventoryId>::new();
-        for id in self
-            .inventory_index
-            .get(&InventoryLocation::Carried(actor))
-            .into_iter()
-            .flatten()
-        {
-            let stock = game_cargo::inventory(&self.host.storage, *(id)).expect("inventory exists");
-            destinations
-                .entry(stock.good)
-                .and_modify(|existing| *existing = (*existing).min(*id))
-                .or_insert(*id);
-        }
+        let destinations = game_cargo::carried_destinations(
+            self.inventory_index
+                .get(&InventoryLocation::Carried(actor))
+                .into_iter()
+                .flatten()
+                .filter_map(|id| game_cargo::inventory(&self.host.storage, *id)),
+        );
         let stocks = game_characters::decisions::stocks(&self.host.storage, actor)
             .expect("stock knowledge exists");
         let mut actions = Vec::new();
-        for known in stocks
-            .known
-            .values()
-            .filter(|known| good.is_none_or(|good| known.good == good))
-        {
-            let quantity = Quantity(quantity.0.min(known.quantity.0));
+        for known in stocks.known.values() {
             let destination = destinations.get(&known.good).copied();
-            let need = game_property::AcquisitionFacts {
-                actor: actor_facts,
-                good: known.good,
-                destination,
+            let Some(need) = world.acquisition_need(
+                &self.host.storage,
+                actor_facts,
+                known,
+                good,
                 quantity,
-            };
-            if !world.acquisition_source_eligible(&self.host.storage, &need, known) {
+                destination,
+            ) else {
                 continue;
-            }
+            };
+            let quantity = need.quantity;
             let opportunity = game_property::NeedOpportunity {
                 known: known.clone(),
                 local_custodian: self
                     .property_custodian(known.inventory)
                     .is_some_and(|c| c != actor && self.property_area(c) == actor_facts.area),
-                can_take: quantity.0 > 0
-                    && destination.is_some_and(|destination| {
-                        self.taking_possible(actor, known.inventory, destination, quantity, true)
-                    }),
+                can_take: destination.is_some_and(|destination| {
+                    self.taking_possible(actor, known.inventory, destination, quantity, true)
+                }),
             };
             actions.extend(
                 world
@@ -1130,14 +1380,7 @@ impl Simulation {
         actions
     }
     pub(crate) fn review_property_sharing(&mut self) {
-        let actors = self
-            .host
-            .state
-            .people
-            .iter()
-            .filter(|p| p.id != self.host.state.ruler)
-            .map(|p| p.id)
-            .collect::<Vec<_>>();
+        let actors = self.people().map(|p| p.id).collect::<Vec<_>>();
         for actor in actors {
             let Some(world) = &self.host.state.property else {
                 return;
@@ -1145,21 +1388,18 @@ impl Simulation {
             let Some(area) = self.property_area(actor) else {
                 continue;
             };
-            let needy = self
-                .host
-                .state
-                .decisions
-                .as_ref()
-                .and_then(|_| {
-                    game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                })
-                .is_some_and(|m| {
-                    m.child_signals.values().any(|signal| {
-                        signal.location == Location::AtArea(area) && signal.urgency >= 1_000
-                    })
-                });
+            let needy = game_characters::orchestration::needy_child_present::<Command>(
+                &self.host.storage,
+                actor,
+                area,
+            );
             let actor_facts = self.property_actor_facts(actor);
-            if !world.sharing_eligible(&self.host.storage, actor_facts, needy) {
+            if !world.autonomous_sharing_eligible(
+                &self.host.storage,
+                actor_facts,
+                self.host.state.ruler,
+                needy,
+            ) {
                 continue;
             }
             let recipients = self.property_present(area);
@@ -1294,9 +1534,12 @@ pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
         },
         &PropertyReferenceBindings {
             state,
-            people: state.state.people.iter().map(|person| person.id).collect(),
+            people: state.people().map(|person| person.id).collect(),
             areas: state.state.areas.iter().map(|area| area.id).collect(),
         },
         actions,
     )
 }
+
+#[cfg(test)]
+mod atomic_tests;

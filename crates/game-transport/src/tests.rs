@@ -436,3 +436,67 @@ fn personal_offer_and_support_choices_have_no_family_or_office_inputs() {
         ..support
     }));
 }
+
+#[test]
+fn endpoint_retreat_owner_selects_actual_asymmetric_directed_link() {
+    let point = RoadPosition {
+        from: AreaId(1),
+        to: AreaId(2),
+        progress: SimDuration(1),
+        duration: SimDuration(120_000),
+    };
+    let inward = retreat_with_routes(
+        point,
+        AreaId(1),
+        Some(SimDuration(240_000)),
+        Some(SimDuration(180_000)),
+        SimTime(1),
+    )
+    .unwrap();
+    assert_eq!(
+        inward,
+        retreat(point, AreaId(1), SimDuration(180_000), SimTime(1)).unwrap()
+    );
+    let outward = retreat_with_routes(
+        point,
+        AreaId(2),
+        Some(SimDuration(240_000)),
+        Some(SimDuration(180_000)),
+        SimTime(1),
+    )
+    .unwrap();
+    assert_eq!(
+        outward,
+        retreat(point, AreaId(2), SimDuration(240_000), SimTime(1)).unwrap()
+    );
+    assert_eq!(
+        retreat_with_routes(
+            point,
+            AreaId(1),
+            Some(SimDuration(240_000)),
+            None,
+            SimTime(1)
+        ),
+        Err(Error::NoRoute)
+    );
+    assert_eq!(
+        retreat_with_routes(
+            point,
+            AreaId(2),
+            None,
+            Some(SimDuration(180_000)),
+            SimTime(1)
+        ),
+        Err(Error::NoRoute)
+    );
+    assert_eq!(
+        retreat_with_routes(
+            point,
+            AreaId(3),
+            Some(SimDuration(240_000)),
+            Some(SimDuration(180_000)),
+            SimTime(1)
+        ),
+        Err(Error::NoRoute)
+    );
+}

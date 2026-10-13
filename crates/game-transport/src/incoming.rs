@@ -45,6 +45,63 @@ impl<F: BodyFacts> BodyFacts for IncomingCargo<'_, F> {
     }
 }
 
+impl Runtime {
+    /// Additional cargo must fit the actor's own capacity and every connected
+    /// passenger load. The connected rows are selected once for the search.
+    pub fn carrying_room(
+        &self,
+        store: &game_ecs::Store,
+        facts: &impl BodyFacts,
+        actor: PersonId,
+    ) -> Result<Quantity, Error> {
+        let body = facts.body(actor).ok_or(Error::Unavailable)?;
+        let linked = self.component(store, actor);
+        let rows = groups(store)
+            .filter(|(_, row)| linked.contains(&row.passenger) || !row.bearers.is_disjoint(&linked))
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        let plan = capacity_plan_rows(rows.iter().copied(), facts, None)?;
+        let load = plan
+            .shares
+            .iter()
+            .filter(|((_, bearer), _)| *bearer == actor)
+            .try_fold(0_u64, |total, (_, quantity)| {
+                total.checked_add(quantity.0).ok_or(Error::Overflow)
+            })?;
+        let mut upper = body
+            .capacity
+            .0
+            .saturating_sub(body.cargo.0)
+            .saturating_sub(load);
+        let admits = |quantity: u64| -> Result<bool, Error> {
+            let mut projected = body.clone();
+            projected.cargo.0 = projected
+                .cargo
+                .0
+                .checked_add(quantity)
+                .ok_or(Error::Overflow)?;
+            Ok(
+                capacity_plan_rows(rows.iter().copied(), facts, Some((actor, projected)))?
+                    .overloaded
+                    .is_disjoint(&linked),
+            )
+        };
+        if admits(upper)? {
+            return Ok(Quantity(upper));
+        }
+        let mut lower = 0;
+        while lower < upper {
+            let middle = lower + (upper - lower).div_ceil(2);
+            if admits(middle)? {
+                lower = middle
+            } else {
+                upper = middle - 1
+            }
+        }
+        Ok(Quantity(lower))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +158,52 @@ mod tests {
         let mut disabled = IncomingCargo::new(&store, &facts, None);
         assert!(disabled.admit(Some(PersonId(99)), Quantity(u64::MAX)));
         assert!(facts.reads.borrow().is_empty());
+    }
+    #[test]
+    fn carrying_room_accounts_for_own_cargo_and_coupled_passenger_capacity() {
+        let mut schema = game_ecs::Schema::new();
+        register_components(&mut schema).unwrap();
+        let mut store = game_ecs::Store::with_schema(schema);
+        insert_group(
+            &mut store,
+            PersonId(3),
+            CarryGroup {
+                passenger: PersonId(3),
+                bearers: BTreeSet::from([PersonId(1), PersonId(2)]),
+                anchor: PersonId(1),
+                authority: Authority::Consented,
+                accepted_at: SimTime(0),
+            },
+        )
+        .unwrap();
+        let runtime = Runtime::new(Rules::default()).unwrap();
+        let mut bodies = [1, 2, 3]
+            .into_iter()
+            .map(|actor| {
+                (
+                    PersonId(actor),
+                    Body {
+                        position: Position::Area(AreaId(10)),
+                        mass: Quantity(6_000),
+                        cargo: Quantity(0),
+                        capacity: Quantity(10_000),
+                        can_hold: true,
+                        can_walk: true,
+                        can_bear: true,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            runtime.carrying_room(&store, &bodies, PersonId(1)).unwrap(),
+            Quantity(7_000)
+        );
+        bodies.get_mut(&PersonId(1)).unwrap().cargo = Quantity(10_000);
+        assert_eq!(
+            runtime.carrying_room(&store, &bodies, PersonId(2)).unwrap(),
+            Quantity(4_000)
+        );
+        assert!(transfer_capacity(&store, &bodies, PersonId(2), Quantity(4_000)).unwrap());
+        assert!(!transfer_capacity(&store, &bodies, PersonId(2), Quantity(4_001)).unwrap());
     }
 }

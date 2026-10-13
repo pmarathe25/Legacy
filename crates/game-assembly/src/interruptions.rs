@@ -10,16 +10,6 @@ enum Removal {
     ArmyTalk(armies::Talk),
     ArmyApproach(armies::Approach),
     Social(PersonId, social::Interaction),
-    Enforcement(
-        PersonId,
-        enforcement::Talk,
-        Option<(
-            Box<enforcement::Case>,
-            game_society::enforcement::ComplaintInterruption,
-        )>,
-    ),
-    Restraint(PersonId, force::Restraint),
-    Escape(PersonId, force::Escape),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MetadataStep {
@@ -39,6 +29,12 @@ struct MetadataPlan {
     due: Vec<(SimTime, Vec<Due>)>,
     activities: BTreeMap<PersonId, Activity>,
 }
+struct LiftActivityStamps(BTreeMap<PersonId, Option<(PersonId, SimTime)>>);
+impl game_transport::LiftActionFacts for LiftActivityStamps {
+    fn lifting(&self, actor: PersonId) -> Option<(PersonId, SimTime)> {
+        self.0.get(&actor).copied().flatten()
+    }
+}
 impl MetadataPlan {
     fn current(&mut self, sim: &Simulation, actor: PersonId) -> Option<Activity> {
         let opening = self
@@ -49,16 +45,6 @@ impl MetadataPlan {
             .get(&actor)
             .cloned()
             .or_else(|| opening.clone())
-    }
-    fn idle_if(
-        &mut self,
-        sim: &Simulation,
-        actor: PersonId,
-        predicate: impl FnOnce(&Activity) -> bool,
-    ) {
-        if self.current(sim, actor).as_ref().is_some_and(predicate) {
-            self.activities.insert(actor, Activity::Idle);
-        }
     }
     fn collect(
         sim: &Simulation,
@@ -87,93 +73,124 @@ impl MetadataPlan {
                 care: None,
                 events: Vec::new(),
             };
-            if let Some(w) = &sim.host.state.armies {
-                for talk in w
-                    .talks
-                    .values()
-                    .filter(|t| t.speaker == actor || t.listener == actor)
-                {
+            if sim.host.state.armies.is_some() {
+                let cancellation = game_armies::prepare_interruption_rows(&sim.host.storage, actor);
+                for talk in cancellation.talks {
                     if !removed.insert((0, talk.speaker.0)) {
                         continue;
                     }
-                    plan.idle_if(sim,talk.speaker,|a|matches!(a,Activity::ArmyTalk{completes,..} if *completes==talk.completes));
-                    step.removals.push(Removal::ArmyTalk(talk.clone()));
+                    let stamp = match plan.current(sim, talk.speaker) {
+                        Some(Activity::ArmyTalk { completes, .. }) => {
+                            game_armies::InterruptionActivity::Talk { completes }
+                        }
+                        _ => game_armies::InterruptionActivity::Other,
+                    };
+                    if let Some(id) = game_armies::ArmyInterruption::talk_reset(&talk, stamp) {
+                        plan.activities.insert(id, Activity::Idle);
+                    }
+                    step.removals.push(Removal::ArmyTalk(talk));
                 }
-                if let Some(approach) = w.approaches.get(&actor) {
-                    plan.idle_if(sim, actor, |a| matches!(a, Activity::ArmyApproach { .. }));
-                    step.removals.push(Removal::ArmyApproach(approach.clone()));
+                if let Some(approach) = cancellation.approach {
+                    let stamp = match plan.current(sim, actor) {
+                        Some(Activity::ArmyApproach { .. }) => {
+                            game_armies::InterruptionActivity::Approach
+                        }
+                        _ => game_armies::InterruptionActivity::Other,
+                    };
+                    if let Some(id) =
+                        game_armies::ArmyInterruption::approach_reset(&approach, stamp)
+                    {
+                        plan.activities.insert(id, Activity::Idle);
+                    }
+                    step.removals.push(Removal::ArmyApproach(approach));
                 }
             }
             if let Some(w) = &sim.host.state.realm {
                 let cancellation = w.prepare_cancel_talks(&sim.host.storage, &[actor]);
+                let resets = cancellation.activity_resets(|speaker| {
+                    matches!(plan.current(sim, speaker), Some(Activity::RealmTalk { .. }))
+                });
                 for speaker in cancellation.speakers() {
                     if !removed.insert((1, speaker.0)) {
                         continue;
                     }
-                    if matches!(plan.current(sim, speaker), Some(Activity::RealmTalk { .. })) {
+                    if resets.contains(&speaker) {
                         plan.activities.insert(speaker, Activity::Idle);
                         step.physical_due.insert(speaker);
                     }
                     step.events.push(EventKind::Interrupted { actor: speaker });
                 }
             }
-            if !preserve_transport && sim.host.state.transport.is_some() {
-                for (_, lift) in game_transport::lifts(&sim.host.storage)
-                    .filter(|(_, l)| l.passenger == actor || l.bearers.contains(&actor))
-                {
+
+            if !preserve_transport && let Some(runtime) = &sim.host.state.transport {
+                let cancellation = runtime.prepare_cancel_lifts(&sim.host.storage, &[actor]);
+                for lift in cancellation.result() {
                     if !removed.insert((2, lift.passenger.0)) {
                         continue;
                     }
-                    for bearer in &lift.bearers {
-                        if matches!(plan.current(sim,*bearer),Some(Activity::Lift{passenger,..}) if passenger==lift.passenger)
-                        {
-                            plan.activities.insert(*bearer, Activity::Idle);
-                            step.physical_due.insert(*bearer);
-                        }
+                    let stamps = LiftActivityStamps(
+                        lift.bearers
+                            .iter()
+                            .map(|bearer| {
+                                let stamp = match plan.current(sim, *bearer) {
+                                    Some(Activity::Lift {
+                                        passenger,
+                                        completes,
+                                        ..
+                                    }) => Some((passenger, completes)),
+                                    _ => None,
+                                };
+                                (*bearer, stamp)
+                            })
+                            .collect(),
+                    );
+                    for bearer in
+                        game_transport::prepare_lift_reactions(std::slice::from_ref(lift), &stamps)
+                            .resets()
+                    {
+                        plan.activities.insert(bearer, Activity::Idle);
+                        step.physical_due.insert(bearer);
                     }
                 }
             }
-            if let Some(w) = &sim.host.state.social
-                && let Some(key) = w.participants.get(&actor)
-                && let Some(interaction) = w.interactions.get(key)
+            if sim.host.state.social.is_some()
+                && let Some((key, interaction)) =
+                    game_characters::social::cancellation_interaction(&sim.host.storage, actor)
                 && removed.insert((3, key.0))
             {
                 for id in interaction.actors() {
-                    plan.idle_if(sim, id, |a| {
-                        matches!(
-                            a,
-                            Activity::Social { .. }
-                                | Activity::Instruction { .. }
-                                | Activity::Practice { .. }
-                        )
-                    });
+                    let kind = match plan.current(sim, id) {
+                        Some(Activity::Social { .. }) => {
+                            game_characters::social::SocialActivityKind::Conversation
+                        }
+                        Some(Activity::Instruction { .. }) => {
+                            game_characters::social::SocialActivityKind::Instruction
+                        }
+                        Some(Activity::Practice { .. }) => {
+                            game_characters::social::SocialActivityKind::Practice
+                        }
+                        _ => game_characters::social::SocialActivityKind::Other,
+                    };
+                    if let Some(game_characters::social::ActivityCleanup::Idle { actor }) =
+                        game_characters::social::cleanup_activity(id, kind)
+                    {
+                        plan.activities.insert(actor, Activity::Idle);
+                    }
                     step.physical_due.insert(id);
                 }
                 step.removals
-                    .push(Removal::Social(*key, interaction.clone()));
+                    .push(Removal::Social(key, interaction.clone()));
             }
-            if let Some(w) = &sim.host.state.enforcement
-                && let Some(talk) = w.talks.get(&actor)
-            {
-                let case = game_society::enforcement::complaint_interruption(
-                    sim.host.clock().time,
-                    matches!(talk.conversation, enforcement::Conversation::File),
-                )
-                .map(|change| (Box::new(w.cases[&talk.case].clone()), change));
-                step.removals
-                    .push(Removal::Enforcement(actor, talk.clone(), case));
-            }
-            for effect in health
-                .get(&actor)
-                .into_iter()
-                .flat_map(|effects| effects.iter())
-            {
-                if let game_health::HealthEffect::ClearWork { actor, completes } = effect {
-                    plan.idle_if(
-                        sim,
-                        *actor,
-                        |a| matches!(a,Activity::HealthWork{completes:at,..}if at==completes),
-                    );
+            if let Some(effects) = health.get(&actor) {
+                for id in game_health::cancellation_activity_resets(effects, |id| {
+                    match plan.current(sim, id) {
+                        Some(Activity::HealthWork { completes, .. }) => {
+                            game_health::HealthActivityState::Working { completes }
+                        }
+                        _ => game_health::HealthActivityState::Other,
+                    }
+                }) {
+                    plan.activities.insert(id, Activity::Idle);
                 }
             }
             for talk in missions
@@ -181,23 +198,12 @@ impl MetadataPlan {
                 .into_iter()
                 .flat_map(|effects| effects.iter())
             {
-                plan.idle_if(
-                    sim,
-                    talk.speaker,
-                    |a| matches!(a,Activity::MissionTalk{completes}if *completes==talk.completes),
-                );
-            }
-            if let Some(w) = &sim.host.state.force {
-                if let Some(row) = w.restraints.get(&actor) {
-                    step.removals.push(Removal::Restraint(actor, row.clone()));
-                }
-                for (target, attempt) in w.escapes.iter().filter(|(target, attempt)| {
-                    (**target == actor || attempt.actor == actor) && !attempt.contested
-                }) {
-                    if removed.insert((5, target.0)) {
-                        step.removals
-                            .push(Removal::Escape(*target, attempt.clone()));
-                    }
+                let deadline = match plan.current(sim, talk.speaker) {
+                    Some(Activity::MissionTalk { completes }) => Some(completes),
+                    _ => None,
+                };
+                if let Some(id) = talk.activity_reset(deadline) {
+                    plan.activities.insert(id, Activity::Idle);
                 }
             }
             if let Some(runtime) = &sim.host.state.invocation {
@@ -206,15 +212,19 @@ impl MetadataPlan {
                     plan.activities.insert(id, Activity::Idle);
                 }
             }
-            if let Some(Activity::Lesson {
-                teacher, student, ..
-            }) = plan.current(sim, actor)
-            {
-                for id in [teacher, student] {
-                    plan.idle_if(sim, id, |a| matches!(a, Activity::Lesson { .. }));
-                    step.physical_due.insert(id);
-                }
+            let partners = match plan.current(sim, actor) {
+                Some(Activity::Lesson {
+                    teacher, student, ..
+                }) => Some((teacher, student)),
+                _ => None,
+            };
+            let lesson = game_skills::lesson_interruption(partners, |id| {
+                matches!(plan.current(sim, id), Some(Activity::Lesson { .. }))
+            });
+            for id in lesson.idle {
+                plan.activities.insert(id, Activity::Idle);
             }
+            step.physical_due.extend(lesson.deadlines);
             for effect in property
                 .get(&actor)
                 .into_iter()
@@ -228,7 +238,15 @@ impl MetadataPlan {
                         });
                     }
                     game_property::Effect::ClearTaking { actor } => {
-                        plan.idle_if(sim, *actor, |a| matches!(a, Activity::Take { .. }));
+                        let stamp = match plan.current(sim, *actor) {
+                            Some(Activity::Take { .. }) => {
+                                game_property::CancellationActivity::Taking
+                            }
+                            _ => game_property::CancellationActivity::Other,
+                        };
+                        if let Some(id) = effect.activity_reset(stamp) {
+                            plan.activities.insert(id, Activity::Idle);
+                        }
                         step.physical_due.insert(*actor);
                     }
                     game_property::Effect::ClearReport {
@@ -236,7 +254,15 @@ impl MetadataPlan {
                         completes,
                         interrupted,
                     } => {
-                        plan.idle_if(sim,*sender,|a|matches!(a,Activity::ReportIncident{completes:at,..}if at==completes));
+                        let stamp = match plan.current(sim, *sender) {
+                            Some(Activity::ReportIncident { completes, .. }) => {
+                                game_property::CancellationActivity::Report { completes }
+                            }
+                            _ => game_property::CancellationActivity::Other,
+                        };
+                        if let Some(id) = effect.activity_reset(stamp) {
+                            plan.activities.insert(id, Activity::Idle);
+                        }
                         step.report_due.insert((*sender, *completes));
                         if *interrupted {
                             step.events.push(EventKind::Interrupted { actor: *sender });
@@ -267,13 +293,19 @@ impl MetadataPlan {
                 });
             }
             if sim.host.state.physical.is_some() {
-                if let Some(Activity::Care { child, .. } | Activity::Comfort { child, .. }) =
-                    plan.current(sim, actor)
-                {
-                    step.care = Some(child);
-                }
-                plan.activities.insert(actor, Activity::Idle);
-                step.physical_due.insert(actor);
+                let stamp = match plan.current(sim, actor) {
+                    Some(Activity::Care { child, .. }) => {
+                        game_physiology::InterruptionActivity::Care { child }
+                    }
+                    Some(Activity::Comfort { child, .. }) => {
+                        game_physiology::InterruptionActivity::Comfort { child }
+                    }
+                    _ => game_physiology::InterruptionActivity::Other,
+                };
+                let effect = game_physiology::prepare_activity_interruption(actor, stamp);
+                step.care = effect.care;
+                plan.activities.insert(effect.idle, Activity::Idle);
+                step.physical_due.insert(effect.deadline);
             }
             plan.steps.push(step);
         }
@@ -317,12 +349,51 @@ pub(crate) struct PreparedInterruptions {
     agreements: Option<game_agreements::PreparedReportCancellations>,
     memory: Option<game_invocation::PreparedMemoryEnding>,
     realm: Option<game_realm::PreparedTalkCancellations>,
+    enforcement: Option<game_society::enforcement::PreparedInterruption>,
+    force: Option<game_conflict::force::PreparedChange>,
 }
 impl Simulation {
     pub(crate) fn prepare_interruptions(
         &self,
         actors: &[PersonId],
         preserve: ActivityOwner,
+    ) -> Result<PreparedInterruptions, Error> {
+        self.prepare_interruptions_scoped(
+            actors,
+            preserve,
+            preserve == ActivityOwner::Transport,
+            None,
+        )
+    }
+
+    pub(crate) fn prepare_motion_interruptions(
+        &self,
+        actors: &[PersonId],
+        preserve: ActivityOwner,
+    ) -> Result<PreparedInterruptions, Error> {
+        self.prepare_interruptions_scoped(actors, preserve, true, None)
+    }
+
+    pub(crate) fn prepare_interruptions_after_conception(
+        &self,
+        actors: &[PersonId],
+        preserve: ActivityOwner,
+        completed: &game_lifecycle::PreparedLifecycle,
+    ) -> Result<PreparedInterruptions, Error> {
+        self.prepare_interruptions_scoped(
+            actors,
+            preserve,
+            preserve == ActivityOwner::Transport,
+            Some(completed),
+        )
+    }
+
+    fn prepare_interruptions_scoped(
+        &self,
+        actors: &[PersonId],
+        preserve: ActivityOwner,
+        preserve_transport: bool,
+        completed: Option<&game_lifecycle::PreparedLifecycle>,
     ) -> Result<PreparedInterruptions, Error> {
         let mut seen = BTreeSet::new();
         let actors: Vec<_> = actors.iter().copied().filter(|a| seen.insert(*a)).collect();
@@ -334,22 +405,55 @@ impl Simulation {
             .as_ref()
             .filter(|_| preserve != ActivityOwner::Health)
             .map(|w| w.prepare_cancel_many(&self.host.storage, &actors));
-        let property = self
+        let mut property = self
             .host
             .state
             .property
             .as_ref()
             .filter(|_| preserve != ActivityOwner::Property)
             .map(|w| w.prepare_cancel_many(&self.host.storage, &actors, now));
+        if let Some(change) = &mut property {
+            let incidents = change
+                .effects()
+                .flat_map(|(_, effects)| effects)
+                .filter_map(|effect| {
+                    if let game_property::Effect::TakingInterrupted { incident, .. } = effect {
+                        Some(*incident)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            for id in incidents {
+                let incident = change
+                    .projected_incident(&self.host.storage, id)
+                    .ok_or(Error::Unavailable)?;
+                let observers = self
+                    .property_present(incident.area)
+                    .into_iter()
+                    .map(|actor| self.property_observer_facts(actor, incident))
+                    .collect::<Vec<_>>();
+                change.witness_projected(
+                    self.host
+                        .state
+                        .property
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    &self.host.storage,
+                    id,
+                    now,
+                    &observers,
+                )?;
+            }
+        }
         let requests: Vec<_> = actors
             .iter()
-            .map(|actor| game_lifecycle::InterruptionRequest {
-                actor: *actor,
-                died: false,
-                affected: match self.host.storage.activity(*actor) {
-                    Some(Activity::Conceive { pregnancy, .. }) => vec![*pregnancy],
-                    _ => Vec::new(),
-                },
+            .map(|actor| {
+                let pregnancy = match self.host.storage.activity(*actor) {
+                    Some(Activity::Conceive { pregnancy, .. }) => Some(*pregnancy),
+                    _ => None,
+                };
+                game_lifecycle::InterruptionRequest::for_attempt(*actor, pregnancy, completed)
             })
             .collect();
         let lifecycle = self
@@ -384,15 +488,7 @@ impl Simulation {
             .as_ref()
             .map(|p| p.effects().collect())
             .unwrap_or_default();
-        let metadata = MetadataPlan::collect(
-            self,
-            &actors,
-            &hm,
-            &pm,
-            &lm,
-            &mm,
-            preserve == ActivityOwner::Transport,
-        );
+        let metadata = MetadataPlan::collect(self, &actors, &hm, &pm, &lm, &mm, preserve_transport);
         let genes = self
             .host
             .state
@@ -412,13 +508,28 @@ impl Simulation {
             })
             .unwrap_or_default();
         Ok(PreparedInterruptions {
-            preserve_transport: preserve == ActivityOwner::Transport,
+            force: self
+                .host
+                .state
+                .force
+                .as_ref()
+                .filter(|_| preserve != ActivityOwner::Force)
+                .map(|_| game_conflict::force::prepare_interrupt_many(&self.host.storage, &actors)),
+            enforcement: self
+                .host
+                .state
+                .enforcement
+                .as_ref()
+                .filter(|_| preserve != ActivityOwner::Enforcement)
+                .map(|runtime| runtime.prepare_interruptions(&self.host.storage, &actors, now))
+                .transpose()?,
+            preserve_transport,
             transport: self
                 .host
                 .state
                 .transport
                 .as_ref()
-                .filter(|_| preserve != ActivityOwner::Transport)
+                .filter(|_| !preserve_transport)
                 .map(|runtime| runtime.prepare_cancel_lifts(&self.host.storage, &actors)),
             missions,
             agreements,
@@ -435,12 +546,14 @@ impl Simulation {
                 .state
                 .agriculture
                 .as_ref()
+                .filter(|_| preserve != ActivityOwner::Agriculture)
                 .map(|w| w.prepare_cancel_cultivation(&self.host.storage, &actors)),
             ecology: self
                 .host
                 .state
                 .ecology
                 .as_ref()
+                .filter(|_| preserve != ActivityOwner::Ecology)
                 .map(|w| w.prepare_cancel_gathering(&self.host.storage, &actors)),
             memory: self
                 .host
@@ -626,25 +739,62 @@ impl PreparedInterruptions {
         for (actor, activity) in &metadata.activities {
             batch.insert(StableId(actor.0), activity.clone());
         }
-        if let Some(change) = self.memory {
-            change.stage_into_composed(
-                sim.host
-                    .state
-                    .invocation
-                    .as_ref()
-                    .ok_or(Error::Unavailable)?,
-                store,
-                memory_replacement,
-                batch,
-            )?;
+        let mut guards = Vec::new();
+        if let Some(enforcement) = self.enforcement {
+            guards.push(enforcement.stage(store, batch)?);
         }
-        if let Some(change) = self.health {
-            change.stage_into(
-                sim.host.state.health.as_ref().ok_or(Error::Unavailable)?,
-                store,
-                batch,
-            )?;
+        let force = self
+            .force
+            .map(|change| change.stage_into(store, batch))
+            .transpose()?;
+        for step in &metadata.steps {
+            for removal in &step.removals {
+                let guard = match removal {
+                    Removal::ArmyTalk(talk) => {
+                        Some(game_armies::stage_cancel_talk(store, talk, batch)?)
+                    }
+                    Removal::ArmyApproach(approach) => {
+                        Some(game_armies::stage_cancel_approach(store, approach, batch)?)
+                    }
+                    Removal::Social(leader, interaction) => {
+                        Some(game_characters::social::stage_cancel_interaction(
+                            store,
+                            *leader,
+                            interaction,
+                            batch,
+                        )?)
+                    }
+                };
+                if let Some(guard) = guard {
+                    guards.push(guard);
+                }
+            }
         }
+        let memory = self
+            .memory
+            .map(|change| {
+                change.stage_into_composed(
+                    sim.host
+                        .state
+                        .invocation
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    store,
+                    memory_replacement,
+                    batch,
+                )
+            })
+            .transpose()?;
+        let health = self
+            .health
+            .map(|change| {
+                change.stage_into(
+                    sim.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                    store,
+                    batch,
+                )
+            })
+            .transpose()?;
         let property = self
             .property
             .map(|change| {
@@ -655,25 +805,28 @@ impl PreparedInterruptions {
                 )
             })
             .transpose()?;
-        if let Some(change) = self.lifecycle {
-            change.stage_into(
-                sim.host
-                    .state
-                    .development
-                    .as_ref()
-                    .ok_or(Error::Unavailable)?,
-                store,
-                batch,
-            )?;
-        }
+        let lifecycle = self
+            .lifecycle
+            .map(|change| {
+                change.stage_into(
+                    sim.host
+                        .state
+                        .development
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    store,
+                    batch,
+                )
+            })
+            .transpose()?;
         for change in self.genes {
-            change.stage_into(store, batch)?;
+            guards.push(change.stage_guarded_into(store, batch)?);
         }
         if let Some(change) = self.agriculture {
-            change.stage_into(store, batch)?;
+            guards.push(change.stage_guarded_into(store, batch)?);
         }
         if let Some(change) = self.ecology {
-            change.stage_into(store, batch)?;
+            guards.push(change.stage_guarded_into(store, batch)?);
         }
         let projects = self
             .projects
@@ -715,6 +868,11 @@ impl PreparedInterruptions {
             .transpose()?;
         // Schema admission remains shared with all caller-owner writes.
         Ok(InterruptionFinalization {
+            guards,
+            health,
+            lifecycle,
+            force,
+            memory,
             steps: metadata.steps.into_iter().map(|s| (s.actor, s)).collect(),
             property,
             projects,
@@ -725,6 +883,11 @@ impl PreparedInterruptions {
     }
 }
 pub(crate) struct InterruptionFinalization {
+    guards: Vec<game_ecs::ReadGuard>,
+    health: Option<game_health::HealthCancellationFinalization>,
+    lifecycle: Option<game_lifecycle::LifecycleInterruptionFinalization>,
+    force: Option<game_conflict::force::Receipt>,
+    memory: Option<game_invocation::MemoryEndingReceipt>,
     steps: BTreeMap<PersonId, MetadataStep>,
     transport: Option<game_transport::TransportFinalization<Vec<game_transport::Lift>>>,
     property: Option<game_property::CancellationFinalization>,
@@ -734,6 +897,33 @@ pub(crate) struct InterruptionFinalization {
 }
 impl InterruptionFinalization {
     pub(crate) fn validate_batch(&self, sim: &Simulation, batch: &Batch) -> Result<(), Error> {
+        for guard in &self.guards {
+            guard.validate(&sim.host.storage, batch)?;
+        }
+        if let Some(health) = &self.health {
+            health.validate_batch(
+                sim.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                &sim.host.storage,
+                batch,
+            )?;
+        }
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.validate(&sim.host.storage, batch)?;
+        }
+        if let Some(force) = &self.force {
+            force.validate_batch(&sim.host.storage, batch)?;
+        }
+        if let Some(memory) = &self.memory {
+            memory.validate_batch(&sim.host.storage, batch)?;
+        }
+        if let Some(transport) = &self.transport {
+            transport.validate_batch(&sim.host.storage, batch)?;
+        }
+        if let Some(property) = &self.property {
+            property
+                .validate_runtime(sim.host.state.property.as_ref().ok_or(Error::Unavailable)?)?;
+            property.validate_batch(&sim.host.storage, batch)?;
+        }
         if let Some(guard) = &self.projects {
             guard.validate_batch(
                 sim.host.state.projects.as_ref().ok_or(Error::Unavailable)?,
@@ -751,7 +941,25 @@ impl InterruptionFinalization {
         Ok(())
     }
 
+    pub(crate) fn events_for(&self, actors: &[PersonId]) -> Vec<EventKind> {
+        let mut seen = BTreeSet::new();
+        actors
+            .iter()
+            .filter(|actor| seen.insert(**actor))
+            .filter_map(|actor| self.steps.get(actor))
+            .flat_map(|step| step.events.iter().cloned())
+            .collect()
+    }
+
+    pub(crate) fn finish_actor_metadata(&mut self, sim: &mut Simulation, actor: PersonId) {
+        self.finish_actor_inner(sim, actor, false);
+    }
+
     pub(crate) fn finish_actor(&mut self, sim: &mut Simulation, actor: PersonId) {
+        self.finish_actor_inner(sim, actor, true);
+    }
+
+    fn finish_actor_inner(&mut self, sim: &mut Simulation, actor: PersonId, publish_events: bool) {
         let Some(step) = self.steps.remove(&actor) else {
             return;
         };
@@ -784,47 +992,7 @@ impl InterruptionFinalization {
         }
         for removal in step.removals {
             match removal {
-                Removal::ArmyTalk(t) => {
-                    sim.host
-                        .state
-                        .armies
-                        .as_mut()
-                        .unwrap()
-                        .talks
-                        .remove(&t.speaker);
-                }
-                Removal::ArmyApproach(a) => {
-                    sim.host
-                        .state
-                        .armies
-                        .as_mut()
-                        .unwrap()
-                        .approaches
-                        .remove(&a.actor);
-                }
-                Removal::Social(key, i) => {
-                    let w = sim.host.state.social.as_mut().unwrap();
-                    w.interactions.remove(&key);
-                    for actor in i.actors() {
-                        w.participants.remove(&actor);
-                    }
-                }
-                Removal::Enforcement(actor, talk, case_change) => {
-                    let w = sim.host.state.enforcement.as_mut().unwrap();
-                    w.talks.remove(&actor);
-                    if let Some((_, change)) = case_change {
-                        let case = w.cases.get_mut(&talk.case).unwrap();
-                        case.status = EnforcementStatus::Withdrawn;
-                        case.changed_at = change.changed_at;
-                        case.explanation = change.explanation.into();
-                    }
-                }
-                Removal::Restraint(a, _) => {
-                    sim.host.state.force.as_mut().unwrap().restraints.remove(&a);
-                }
-                Removal::Escape(a, _) => {
-                    sim.host.state.force.as_mut().unwrap().escapes.remove(&a);
-                }
+                Removal::ArmyTalk(_) | Removal::ArmyApproach(_) | Removal::Social(_, _) => {}
             }
         }
         for gestator in step.pregnancies {
@@ -843,8 +1011,10 @@ impl InterruptionFinalization {
             });
         }
         sim.host.state.due.retain(|_, due| !due.is_empty());
-        for event in step.events {
-            sim.emit(event);
+        if publish_events {
+            for event in step.events {
+                sim.emit(event);
+            }
         }
     }
 }

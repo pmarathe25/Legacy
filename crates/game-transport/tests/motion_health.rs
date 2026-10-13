@@ -187,8 +187,8 @@ fn real_putdown_and_owner_health_projection_admit_once_with_all_counters_preserv
                     "accepted".to_owned()
                 },
             );
-            movement.validate_footprint(&batch)?;
-            placement.validate_footprint(&batch)?;
+            movement.validate_footprint(&host.storage, &batch)?;
+            placement.validate_batch(&health, &host.storage, &batch)?;
             host.storage.apply_batch(batch)?;
             host.allocate_id()?;
             Ok((movement, placement))

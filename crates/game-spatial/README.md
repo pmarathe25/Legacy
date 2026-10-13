@@ -2,9 +2,9 @@
 
 `game-spatial` owns plain `Location` components in the host's shared store. An entity occupies an area, travels or stops on a road, or follows a carrier's location. It never keeps a second position ledger.
 
-Carrier resolution follows actual anchor rows and rejects missing anchors or cycles. Batch resolution reads borrowed rows in stable ID order. A road remains in its departure cell until arrival; carried entities use their terminal carrier's cell.
+Carrier resolution follows actual anchor rows and rejects missing anchors or cycles. `resolved_anchor_with` applies the same rules to borrowed owner-prepared projections. Batch resolution reads borrowed rows in stable ID order. A road remains in its departure cell until arrival; carried entities use their terminal carrier's cell.
 
-Intrinsic validation checks identifiers and geometry. Explicit topology and time facts check context. Movement choices, travel speed, physical carrying, consent, and arrival scheduling belong to other features.
+`prepare_location` prepares canonical placement with opening entity and Location witnesses; its guarded stager supports shared reserved entity creation and rejects conflicting final edits. Intrinsic validation checks identifiers and geometry. Explicit topology and time facts check context. Movement choices, travel speed, physical carrying, consent, and arrival scheduling belong to other features.
 
 The common area graph path function uses directed positive-duration roads, checked cumulative costs and stable lexical ties. Characters and Transport bind their own known graphs and interpret the resulting path.
 

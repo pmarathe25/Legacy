@@ -91,3 +91,12 @@ pub fn validate_custody(store: &Store, context: CustodyContext<'_>) -> Result<()
     }
     Ok(())
 }
+
+/// Actual carried placement determines physical control before declared area custody.
+pub fn physical_custodian(store: &Store, inventory: InventoryId) -> Option<PersonId> {
+    let stock = game_cargo::inventory(store, inventory)?;
+    match stock.location {
+        game_cargo::InventoryLocation::Carried(holder) => Some(holder),
+        game_cargo::InventoryLocation::Area(_) => inventory_custodian(store, inventory),
+    }
+}

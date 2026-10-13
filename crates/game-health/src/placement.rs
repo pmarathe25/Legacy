@@ -21,6 +21,20 @@ pub struct PreparedPlacement {
     occupancy: BTreeMap<PersonId, Option<Occupancy>>,
 }
 impl Runtime {
+    /// Coalesce motion's projected shelter placement with receiving death
+    /// removals. Surviving passengers retain their physically valid placement;
+    /// a deceased actor never receives or retains an Occupancy row.
+    pub fn prepare_death_placements(
+        &self,
+        store: &Store,
+        leaving: &[PersonId],
+        placements: &[ShelterPlacement],
+        facts: &impl ShelterPlacementFacts,
+        dying: &[PersonId],
+    ) -> Result<PreparedPlacement, Error> {
+        self.prepare_placements(store, leaving, placements, facts)?
+            .with_deaths(store, dying)
+    }
     pub fn prepare_placements(
         &self,
         store: &Store,
@@ -85,6 +99,26 @@ impl Runtime {
     }
 }
 impl PreparedPlacement {
+    /// Fold death receiver instructions into this owner plan before any rows
+    /// stage. Existing opening witnesses remain intact when a motion target or
+    /// a consulted carrier is also dying; each Occupancy is written once.
+    pub fn with_deaths(mut self, store: &Store, dying: &[PersonId]) -> Result<Self, Error> {
+        for actor in dying.iter().copied().collect::<BTreeSet<_>>() {
+            if actor.0 == 0 {
+                return Err(Error::Unavailable);
+            }
+            let opening = occupancy(store, actor).cloned();
+            if let Some((before, after)) = self.change.occupancy.get_mut(&actor) {
+                if before != &opening {
+                    return Err(Error::Unavailable);
+                }
+                *after = None;
+            } else {
+                self.change.occupancy.insert(actor, (opening, None));
+            }
+        }
+        Ok(self)
+    }
     pub fn effects(&self) -> &[HealthEffect] {
         self.change.effects()
     }
@@ -143,7 +177,7 @@ impl PreparedPlacement {
     ) -> Result<Vec<HealthEffect>, Error> {
         let mut batch = Batch::new();
         let finish = self.stage_into(runtime, store, facts, &mut batch)?;
-        finish.validate_footprint(&batch)?;
+        finish.validate_batch(runtime, store, &batch)?;
         store.apply_batch(batch)?;
         Ok(finish.finish())
     }
@@ -177,6 +211,15 @@ pub struct PlacementFinalization {
     batch_key: game_ecs::BatchKey,
 }
 impl PlacementFinalization {
+    pub fn validate_batch(
+        &self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &Batch,
+    ) -> Result<(), Error> {
+        self.validate_footprint(batch)?;
+        self.finish.validate_batch(runtime, store, batch)
+    }
     pub fn validate_footprint(&self, batch: &Batch) -> Result<(), Error> {
         if self.batch_key != batch.key() {
             return Err(Error::Unavailable);

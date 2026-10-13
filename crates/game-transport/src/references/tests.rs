@@ -113,3 +113,116 @@ fn every_actual_lift_and_every_bearer_action_match_both_directions_and_deadline(
         .insert(PersonId(3), (PersonId(3), SimTime(30_000)));
     assert!(validate_composition(&runtime, &store, &bodies, &references, SimTime(1)).is_err());
 }
+
+struct SaveFacts;
+impl RouteReferences for SaveFacts {
+    fn location(&self, _: PersonId) -> Option<&Location> {
+        None
+    }
+    fn link(&self, _: AreaId, _: AreaId) -> bool {
+        false
+    }
+}
+impl MotionReferences for SaveFacts {
+    fn actors(&self) -> impl Iterator<Item = PersonId> {
+        [PersonId(1), PersonId(2)].into_iter()
+    }
+    fn arrivals(&self) -> impl Iterator<Item = (PersonId, SimTime)> {
+        std::iter::empty()
+    }
+    fn alive(&self, _: PersonId) -> Option<bool> {
+        Some(true)
+    }
+    fn physical_enabled(&self) -> bool {
+        true
+    }
+    fn area_exists(&self, area: AreaId) -> bool {
+        area == AreaId(10)
+    }
+    fn duration(&self, _: AreaId, _: AreaId) -> Option<SimDuration> {
+        None
+    }
+}
+impl TransportReferences for SaveFacts {
+    fn lifting(&self, _: PersonId) -> Option<(PersonId, SimTime)> {
+        None
+    }
+    fn lifters(&self) -> impl Iterator<Item = (PersonId, PersonId, SimTime)> {
+        std::iter::empty()
+    }
+}
+impl MeasuredBodyFacts for SaveFacts {
+    fn measurements(&self, actor: PersonId, _: SimTime) -> Result<BodyMeasurements, Error> {
+        Ok(BodyMeasurements {
+            age: (actor == PersonId(2)).then_some((SimDuration(0), SimDuration(100))),
+            cargo: Quantity(100),
+            capacity: Quantity(100_000),
+            alive: true,
+            health: 100,
+            fatigue: 0,
+            fatigue_limit: 100,
+            independent: actor == PersonId(1),
+            combat_restricted: false,
+            work: CarryWork::Idle,
+            incapacitation: None,
+        })
+    }
+}
+#[test]
+fn public_save_validation_and_body_projection_share_canonical_carrier_rows() {
+    let runtime = Runtime::new(Rules::default()).unwrap();
+    let mut schema = Schema::new();
+    register_components(&mut schema).unwrap();
+    game_spatial::register_components(&mut schema).unwrap();
+    let mut store = Store::with_schema(schema);
+    game_spatial::set_location(&mut store, StableId(1), Location::AtArea(AreaId(10))).unwrap();
+    game_spatial::set_location(
+        &mut store,
+        StableId(2),
+        Location::Carried {
+            carrier: PersonId(1),
+        },
+    )
+    .unwrap();
+    insert_group(
+        &mut store,
+        PersonId(2),
+        CarryGroup {
+            passenger: PersonId(2),
+            anchor: PersonId(1),
+            bearers: BTreeSet::from([PersonId(1)]),
+            authority: Authority::Newborn,
+            accepted_at: SimTime(0),
+        },
+    )
+    .unwrap();
+    let child = runtime
+        .measured_body(&store, PersonId(2), SimTime(0), &SaveFacts)
+        .unwrap();
+    assert_eq!(child.position, Position::Area(AreaId(10)));
+    assert_eq!(child.mass, runtime.rules.newborn_mass);
+    assert_eq!(child.cargo, Quantity(100));
+    assert!(!child.can_walk);
+    assert_eq!(
+        runtime
+            .measured_unplaced_body(
+                &Location::AtArea(AreaId(10)),
+                SimTime(0),
+                SaveFacts.measurements(PersonId(2), SimTime(0)).unwrap()
+            )
+            .unwrap(),
+        child
+    );
+    validate_save(Some(&runtime), &store, &SaveFacts, SimTime(0)).unwrap();
+    assert!(validate_save(None, &store, &SaveFacts, SimTime(0)).is_err());
+    let mut malformed = runtime.clone();
+    malformed.rules.newborn_mass = Quantity(malformed.rules.adult_mass.0 + 1);
+    assert!(matches!(
+        validate_save(Some(&malformed), &store, &SaveFacts, SimTime(0)),
+        Err(Error::InvalidSave(_))
+    ));
+    *game_spatial::location_mut(&mut store, StableId(1)).unwrap() = Location::Carried {
+        carrier: PersonId(2),
+    };
+    assert!(validate_save(Some(&runtime), &store, &SaveFacts, SimTime(0)).is_err());
+}

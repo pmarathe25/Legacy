@@ -37,10 +37,28 @@ impl PreparedWaterCollection {
             batch.insert(StableId(actor.0), after);
         }
     }
-    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+    pub fn stage_into(
+        self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
         self.validate(store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        reads.expect_row::<WaterLot>(StableId(self.inventory.0), self.before_lot.clone());
+        admitted.protect::<WaterLot>(StableId(self.inventory.0));
+        if let Some((actor, before, _)) = &self.knowledge {
+            reads.entity(store, StableId(actor.0));
+            reads.expect_row::<Knowledge>(StableId(actor.0), before.clone());
+            admitted.protect::<Knowledge>(StableId(actor.0));
+        }
+        self.append_writes(batch);
+        reads.bind(store, batch, &admitted)
+    }
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        self.append_writes(&mut batch);
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)
     }
 }

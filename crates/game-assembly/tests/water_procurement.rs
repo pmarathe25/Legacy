@@ -21,27 +21,25 @@ fn a_guardian_collects_and_returns_water_for_a_locally_observed_infant() {
     sim.advance(SimDuration(60_000)).unwrap();
     let child = sim.canonical_state().state.ruler;
     assert_eq!(sim.observe().life_stage, Some(game_api::LifeStage::Infant));
-    let guardians: Vec<_> = sim
-        .canonical_state()
-        .state
-        .lineage
-        .as_ref()
-        .unwrap()
-        .guardians
-        .keys()
-        .copied()
+    let guardians: Vec<_> = game_lineage::guardians(sim.canonical_state().components)
+        .map(|(id, _)| id)
         .collect();
-    for person in sim.canonical_state().state.people.clone() {
-        if person.id != child
-            && game_physiology::body(sim.canonical_state().components, person.id)
+    for person_id in sim
+        .canonical_state()
+        .people()
+        .map(|person| person.id)
+        .collect::<Vec<_>>()
+    {
+        if person_id != child
+            && game_physiology::body(sim.canonical_state().components, person_id)
                 .unwrap()
                 .vitals
                 .alive
         {
-            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+            sim.debug_actor_command(person_id, Command::Cancel).unwrap();
             let mut personality = Personality::restful();
             personality.empathy = 0;
-            sim.debug_set_personality(person.id, personality, Aspiration::Comfort)
+            sim.debug_set_personality(person_id, personality, Aspiration::Comfort)
                 .unwrap();
         }
     }
@@ -203,9 +201,7 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
     sim.initialize_health(HealthRules::human()).unwrap();
     let actor = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| {
             p.role == Role::Citizen
                 && *game_spatial::location(
@@ -217,9 +213,14 @@ fn dry_opening(private: bool, knows_routes: bool) -> (Simulation, PersonId) {
         })
         .unwrap()
         .id;
-    for person in sim.canonical_state().state.people.clone() {
-        sim.debug_actor_command(person.id, Command::Cancel).unwrap();
-        sim.debug_set_personality(person.id, Personality::restful(), Aspiration::Comfort)
+    for person_id in sim
+        .canonical_state()
+        .people()
+        .map(|person| person.id)
+        .collect::<Vec<_>>()
+    {
+        sim.debug_actor_command(person_id, Command::Cancel).unwrap();
+        sim.debug_set_personality(person_id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     let ruler = sim.canonical_state().state.ruler;

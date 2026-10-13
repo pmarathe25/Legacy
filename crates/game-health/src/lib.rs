@@ -47,3 +47,12 @@ mod interval_tests;
 mod owner_storage_tests;
 #[cfg(test)]
 mod storage_tests;
+
+mod availability;
+pub use availability::*;
+
+#[cfg(test)]
+mod migration_tests;
+
+#[cfg(test)]
+mod reaction_tests;

@@ -41,9 +41,14 @@ fn health_fixture() -> Simulation {
     let mut rules = HealthRules::fixture();
     rules.drink_quantity = Quantity(250);
     sim.initialize_health(rules).unwrap();
-    for person in sim.canonical_state().state.people.clone() {
-        sim.debug_actor_command(person.id, Command::Cancel).unwrap();
-        sim.debug_set_personality(person.id, Personality::restful(), Aspiration::Comfort)
+    for person_id in sim
+        .canonical_state()
+        .people()
+        .map(|person| person.id)
+        .collect::<Vec<_>>()
+    {
+        sim.debug_actor_command(person_id, Command::Cancel).unwrap();
+        sim.debug_set_personality(person_id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     sim

@@ -292,3 +292,193 @@ fn unchanged_inputs_remain_guarded_without_creating_default_components() {
     prepared.commit(&runtime, &mut store, |_| true).unwrap();
     assert_eq!(store.snapshot().unwrap(), before);
 }
+
+/// A plain receiving component proves composition without importing assembly
+/// or its public Activity representation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum ReceiverActivity {
+    HealthWork {
+        kind: HealthWorkKind,
+        completes: SimTime,
+    },
+    Idle,
+}
+fn activity_store(reject_deadline: bool) -> Store {
+    let mut schema = Schema::new();
+    register_components(&mut schema).unwrap();
+    if reject_deadline {
+        schema.register::<ReceiverActivity>("test/activity", |row| {
+            if matches!(row, ReceiverActivity::HealthWork { completes, .. } if completes.0 > 30000) { return Err(Error::Unavailable); }
+            Ok(())
+        }).unwrap();
+    } else {
+        schema
+            .register::<ReceiverActivity>("test/activity", |_| Ok(()))
+            .unwrap();
+    }
+    let mut store = Store::with_schema(schema);
+    insert_job(&mut store, medical_job(1)).unwrap();
+    insert_clinical(&mut store, PersonId(1), Clinical::default()).unwrap();
+    store
+        .insert(
+            StableId(1),
+            ReceiverActivity::HealthWork {
+                kind: HealthWorkKind::Treat,
+                completes: SimTime(30000),
+            },
+        )
+        .unwrap();
+    store
+}
+fn stage_received_deadlines(
+    prepared: PreparedInterval,
+    runtime: &Runtime,
+    store: &Store,
+    keep: bool,
+    batch: &mut game_ecs::Batch,
+) -> (IntervalFinalization, game_ecs::ReadGuard) {
+    let mut reads = game_ecs::ReadSet::new();
+    let finish = prepared
+        .stage_into(
+            runtime,
+            store,
+            |_| keep,
+            |actor| match reads.read::<ReceiverActivity>(store, StableId(actor.0)) {
+                Some(ReceiverActivity::HealthWork { kind, .. }) => Some(*kind),
+                _ => None,
+            },
+            batch,
+        )
+        .unwrap();
+    let mut admitted = game_ecs::ReadFootprint::new();
+    for deadline in finish.deadlines() {
+        batch.insert(
+            StableId(deadline.actor.0),
+            ReceiverActivity::HealthWork {
+                kind: deadline.kind,
+                completes: deadline.completes,
+            },
+        );
+        admitted.protect::<ReceiverActivity>(StableId(deadline.actor.0));
+    }
+    let guard = reads.bind(store, batch, &admitted).unwrap();
+    (finish, guard)
+}
+#[test]
+fn interval_and_received_activity_deadline_publish_atomically_under_the_actual_owner_entrypoint() {
+    for rejects in [true, false] {
+        let runtime = Runtime::default();
+        let mut store = activity_store(rejects);
+        let before = store.clone();
+        let prepared = prepare(&runtime, &store, false);
+        let mut batch = game_ecs::Batch::new();
+        let (finish, activity_guard) =
+            stage_received_deadlines(prepared, &runtime, &store, true, &mut batch);
+        assert_eq!(
+            finish.deadlines(),
+            &[WorkDeadlineEffect {
+                actor: PersonId(1),
+                kind: HealthWorkKind::Treat,
+                completes: SimTime(31000)
+            }]
+        );
+        finish.validate_batch(&runtime, &store, &batch).unwrap();
+        activity_guard.validate(&store, &batch).unwrap();
+        let result = store.apply_batch(batch);
+        if rejects {
+            assert_eq!(result, Err(Error::Unavailable));
+            assert_eq!(store, before);
+        } else {
+            result.unwrap();
+            assert_eq!(job(&store, PersonId(1)).unwrap().completes, SimTime(31000));
+            assert_eq!(clinical(&store, PersonId(1)).unwrap().thirst, 1000);
+            assert_eq!(
+                store.get::<ReceiverActivity>(StableId(1)),
+                Some(&ReceiverActivity::HealthWork {
+                    kind: HealthWorkKind::Treat,
+                    completes: SimTime(31000)
+                })
+            );
+        }
+    }
+}
+#[test]
+fn deadline_receiver_guards_concrete_activity_facts_and_later_same_batch_edits() {
+    for canonical in [true, false] {
+        let runtime = Runtime::default();
+        let mut store = activity_store(false);
+        let prepared = prepare(&runtime, &store, false);
+        let mut batch = game_ecs::Batch::new();
+        let (finish, activity_guard) =
+            stage_received_deadlines(prepared, &runtime, &store, true, &mut batch);
+        if canonical {
+            store.insert(StableId(1), ReceiverActivity::Idle).unwrap();
+        } else {
+            batch.insert(StableId(1), ReceiverActivity::Idle);
+        }
+        let before = store.clone();
+        assert_eq!(
+            activity_guard.validate(&store, &batch),
+            Err(Error::Unavailable)
+        );
+        finish.validate_batch(&runtime, &store, &batch).unwrap();
+        assert_eq!(store, before);
+    }
+}
+#[test]
+fn closing_cancellation_never_recreates_a_job_or_stages_its_activity_deadline() {
+    let runtime = Runtime::default();
+    let mut store = activity_store(false);
+    let prepared = prepare(&runtime, &store, false);
+    remove_job(&mut store, PersonId(1)).unwrap();
+    store.insert(StableId(1), ReceiverActivity::Idle).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let (finish, activity_guard) =
+        stage_received_deadlines(prepared, &runtime, &store, false, &mut batch);
+    assert!(finish.deadlines().is_empty());
+    finish.validate_batch(&runtime, &store, &batch).unwrap();
+    activity_guard.validate(&store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert!(job(&store, PersonId(1)).is_none());
+    assert_eq!(
+        store.get::<ReceiverActivity>(StableId(1)),
+        Some(&ReceiverActivity::Idle)
+    );
+    assert_eq!(clinical(&store, PersonId(1)).unwrap().thirst, 1000);
+}
+#[test]
+fn closing_deadlines_include_untracked_new_work_and_guard_new_matching_members() {
+    let runtime = Runtime::default();
+    let mut store = activity_store(false);
+    let prepared = prepare(&runtime, &store, false);
+    insert_job(&mut store, medical_job(99)).unwrap();
+    store
+        .insert(
+            StableId(99),
+            ReceiverActivity::HealthWork {
+                kind: HealthWorkKind::Drink,
+                completes: SimTime(1),
+            },
+        )
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let (finish, activity_guard) =
+        stage_received_deadlines(prepared, &runtime, &store, true, &mut batch);
+    assert_eq!(
+        finish
+            .deadlines()
+            .iter()
+            .map(|deadline| (deadline.actor, deadline.kind, deadline.completes))
+            .collect::<Vec<_>>(),
+        vec![
+            (PersonId(1), HealthWorkKind::Treat, SimTime(31000)),
+            (PersonId(99), HealthWorkKind::Drink, SimTime(30000))
+        ]
+    );
+    activity_guard.validate(&store, &batch).unwrap();
+    batch.insert(StableId(100), medical_job(100));
+    assert_eq!(
+        finish.validate_batch(&runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+}

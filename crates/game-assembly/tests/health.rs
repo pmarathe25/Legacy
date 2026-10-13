@@ -170,12 +170,17 @@ fn public_boiling_option_purifies_real_collected_water_then_drinking_consumes_it
     let mut whole = Simulation::ecology_fixture(67, Execution::default()).unwrap();
     whole.initialize_health(HealthRules::fixture()).unwrap();
     let actor = whole.canonical_state().state.ruler;
-    for person in whole.canonical_state().state.people.clone() {
+    for person_id in whole
+        .canonical_state()
+        .people()
+        .map(|person| person.id)
+        .collect::<Vec<_>>()
+    {
         whole
-            .debug_actor_command(person.id, Command::Cancel)
+            .debug_actor_command(person_id, Command::Cancel)
             .unwrap();
         whole
-            .debug_set_personality(person.id, Personality::restful(), Aspiration::Comfort)
+            .debug_set_personality(person_id, Personality::restful(), Aspiration::Comfort)
             .unwrap();
     }
     let resource = whole

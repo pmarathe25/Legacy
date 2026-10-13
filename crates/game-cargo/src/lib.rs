@@ -6,8 +6,19 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod carried;
+pub use carried::{
+    CarriedDeliveryFacts, binding_stock, carried_destinations, carried_quantities,
+    carried_quantity, carried_quantity_in, carried_quantity_rows, compatible_carried_destination,
+    compatible_carried_destination_in, delivery_cargo,
+};
+
 mod consumption;
-pub use consumption::{PreparedConsumptions, prepare_consumptions};
+pub use consumption::{
+    ConsumptionFacts, PreparedConsumptions, PreparedPortionConsumption, PreparedSpoilage,
+    portion_available, prepare_consumptions, prepare_food_consumption, prepare_portion_consumption,
+    prepare_spoilage,
+};
 
 mod deposit;
 pub use deposit::{
@@ -17,9 +28,10 @@ pub use deposit::{
 
 mod storage;
 pub use storage::{
-    InventoryCreationGuard, PreparedInventoryCreation, insert_inventory, inventories, inventory,
-    inventory_mut, prepare_inventory_creation, prepare_inventory_split, register_components,
-    remove_inventory, validate_storage,
+    InventoryCreationGuard, PreparedForcedSplit, PreparedInventoryCreation,
+    PreparedNewbornInventory, insert_inventory, inventories, inventory, inventory_mut,
+    prepare_forced_split, prepare_inventory_creation, prepare_inventory_split,
+    prepare_newborn_inventory, register_components, remove_inventory, validate_storage,
 };
 #[cfg(test)]
 mod storage_tests;
@@ -27,7 +39,7 @@ mod storage_tests;
 mod planning_projection;
 pub use planning_projection::{
     ActualToolFacts, Reservation, ReservationTotals, ToolAllocations, ToolBodyFacts, ToolSlots,
-    ToolUse,
+    ToolUse, equipment_availability, tool_available,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -365,3 +377,30 @@ pub use transfers::{
 
 mod access;
 pub use access::*;
+
+mod quantities;
+pub use quantities::{
+    QuantityFacts, QuantityOffer, QuantityOperation, quantity_choices, quantity_opportunities,
+};
+
+pub mod save_validation;
+
+/// Cargo owns the distinction between actual area stock and stock held by a
+/// co-present body. Bindings supply resolved location and Transport contact.
+pub fn stock_contact(
+    placement: &InventoryLocation,
+    actor_location: impl FnOnce() -> game_core::Location,
+    holder_contact: impl FnOnce(PersonId) -> bool,
+) -> bool {
+    match placement {
+        InventoryLocation::Area(area) => actor_location() == game_core::Location::AtArea(*area),
+        InventoryLocation::Carried(holder) => holder_contact(*holder),
+    }
+}
+
+pub mod receipt_validation;
+
+/// Usable physical stock requires both Property access and actual contact.
+pub fn stock_usable(accessible: bool, contact: impl FnOnce() -> bool) -> bool {
+    accessible && contact()
+}
