@@ -1,10 +1,16 @@
 //! Generic canonical storage and publication. Scheduling and feature systems
 //! are supplied by composition through the existing game-sim engine.
+pub mod actions;
+
 use game_core::{Error, SimTime};
 use game_ecs::{Batch, ReadGuard, Schema, StableId, Store};
 use game_sim::{Clock, ClockWorld};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+pub mod owner_transaction;
+pub mod scheduling;
+pub use owner_transaction::{DueQueue, OwnerReadTxn, OwnerSystem, OwnerTxn, Registry, Request, RuntimeSlot};
 
 /// Sum a transaction's allocations and publications before any mutation.
 #[derive(Default)]
