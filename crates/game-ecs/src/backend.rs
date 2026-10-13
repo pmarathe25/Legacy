@@ -44,6 +44,9 @@ impl Registration {
     pub(super) fn same_type(&self, other: &Self) -> bool {
         self.component_type == other.component_type
     }
+    pub(super) fn same_registration(&self, other: &Self) -> bool {
+        self.same_type(other) && Arc::ptr_eq(&self.validator, &other.validator)
+    }
     pub(super) fn new<C: Component>(validate: fn(&C) -> Result<(), Error>) -> Self {
         fn initialize<C: Component>(world: &mut World) {
             world.register_component::<Native<C>>();
@@ -275,15 +278,7 @@ impl Storage {
         source: &Self,
         ids: impl IntoIterator<Item = StableId>,
     ) -> Result<(), Error> {
-        if self.projection_members.is_none()
-            || self.schema != source.schema
-            || self.schema.components.iter().any(|(key, registration)| {
-                !Arc::ptr_eq(
-                    &registration.validator,
-                    &source.schema.components[key].validator,
-                )
-            })
-        {
+        if self.projection_members.is_none() || !self.schema.same_registrations(&source.schema) {
             return Err(Error::InvalidConfiguration(
                 "row import requires matching bounded projection schema".into(),
             ));
@@ -322,14 +317,7 @@ impl Storage {
         opening: &Self,
         batch: &mut Batch,
     ) -> Result<(ReadSet, ReadFootprint), Error> {
-        if self.schema != opening.schema
-            || self.schema.components.iter().any(|(key, registration)| {
-                !Arc::ptr_eq(
-                    &registration.validator,
-                    &opening.schema.components[key].validator,
-                )
-            })
-        {
+        if !self.schema.same_registrations(&opening.schema) {
             return Err(Error::InvalidConfiguration(
                 "projection schemas differ".into(),
             ));
@@ -344,37 +332,37 @@ impl Storage {
             .chain(self.ids())
             .collect();
         let mut reads = ReadSet::new();
+        reads.expect_schema(opening.schema.clone());
         let mut writes = ReadFootprint::new();
         // Stage separately so a rejected diff cannot partially change the caller's batch.
         let mut staged = Batch::new();
         for id in ids {
             if opening.contains(id) {
                 reads.expect_entity(id, true);
+            } else if self.contains(id) {
+                reads.expect_exclusive_entity(id);
             } else {
-                if self.contains(id) {
-                    reads.expect_exclusive_entity(id);
-                } else {
-                    reads.expect_entity(id, false);
-                }
+                reads.expect_entity(id, false);
             }
             for registration in opening.schema.components.values() {
-                if let Some(rows) = opening.projection_rows.get(&id) {
-                    if !members.contains(&id) && !rows.contains(&registration.component_type) {
-                        // Partial imports confer no authority over other component keys.
-                        let mut unexpected = Batch::new();
-                        (registration.diff)(
-                            opening,
-                            self,
-                            id,
-                            &mut unexpected,
-                            &mut ReadSet::new(),
-                            &mut ReadFootprint::new(),
-                        );
-                        if unexpected.edit_count(id) != 0 {
-                            return Err(Error::Unavailable);
-                        }
-                        continue;
+                if let Some(rows) = opening.projection_rows.get(&id)
+                    && !members.contains(&id)
+                    && !rows.contains(&registration.component_type)
+                {
+                    // Partial imports confer no authority over other component keys.
+                    let mut unexpected = Batch::new();
+                    (registration.diff)(
+                        opening,
+                        self,
+                        id,
+                        &mut unexpected,
+                        &mut ReadSet::new(),
+                        &mut ReadFootprint::new(),
+                    );
+                    if unexpected.edit_count(id) != 0 {
+                        return Err(Error::Unavailable);
                     }
+                    continue;
                 }
                 (registration.diff)(opening, self, id, &mut staged, &mut reads, &mut writes);
             }

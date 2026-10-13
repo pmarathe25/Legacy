@@ -51,6 +51,18 @@ impl Schema {
     pub fn is_registered<C: Component>(&self) -> bool {
         self.registration::<C>().is_ok()
     }
+    /// Whether both schemas retain the exact same registrations and validators.
+    /// Cloning a schema preserves this affinity; independently registering even
+    /// equal types and keys creates a different configuration. Semantic equality
+    /// remains suitable for comparing restored stores.
+    pub fn same_registrations(&self, other: &Self) -> bool {
+        self.components.len() == other.components.len()
+            && self
+                .components
+                .iter()
+                .zip(&other.components)
+                .all(|((a_key, a), (b_key, b))| a_key == b_key && a.same_registration(b))
+    }
     fn registration<C: Component>(&self) -> Result<&backend::Registration, Error> {
         self.components
             .values()

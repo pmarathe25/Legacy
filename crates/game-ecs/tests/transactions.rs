@@ -487,3 +487,79 @@ fn absent_partial_import_guards_entity_collision_even_without_selected_component
         .unwrap();
     assert!(guard.validate(&source, &batch).is_err());
 }
+
+#[test]
+fn registration_affinity_is_distinct_from_restored_store_value_equality() {
+    let source = fixture();
+    let cloned_schema = source.schema().clone();
+    assert!(source.schema().same_registrations(&cloned_schema));
+    let restored = Store::restore(cloned_schema, source.snapshot().unwrap()).unwrap();
+    assert_eq!(source, restored);
+    assert!(source.schema().same_registrations(restored.schema()));
+
+    // Independently registering the same keys and types preserves semantic
+    // equality, while creating a different immutable registration configuration.
+    let independently_registered = fixture();
+    assert_eq!(source, independently_registered);
+    assert_eq!(source.schema(), independently_registered.schema());
+    assert!(
+        !source
+            .schema()
+            .same_registrations(independently_registered.schema())
+    );
+}
+
+#[test]
+fn projection_guards_reject_changed_validators_before_binding_and_publication() {
+    fn original(row: &u64) -> Result<(), Error> {
+        if *row <= 100 {
+            Ok(())
+        } else {
+            Err(Error::Unavailable)
+        }
+    }
+    fn replacement(row: &u64) -> Result<(), Error> {
+        if *row <= 20 {
+            Ok(())
+        } else {
+            Err(Error::Unavailable)
+        }
+    }
+    let mut schema = Schema::new();
+    schema.register::<u64>("number", original).unwrap();
+    let mut source = Store::with_schema(schema);
+    source.insert_or_spawn(StableId(1), 10_u64).unwrap();
+    let opening = source.project_entities([StableId(1)]).unwrap();
+    let mut preview = opening.clone();
+    preview.insert(StableId(1), 11_u64).unwrap();
+    let mut batch = Batch::new();
+    let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.clone().bind(&source, &batch, &writes).unwrap();
+
+    let mut new_schema = Schema::new();
+    new_schema.register::<u64>("number", replacement).unwrap();
+    let replaced = Store::restore(new_schema, source.snapshot().unwrap()).unwrap();
+    assert_eq!(source, replaced);
+    // Both configurations accept the prospective row. Stale configuration,
+    // rather than row validation failure, must reject the prepared effect.
+    replaced.validate_batch(&batch).unwrap();
+    let before = replaced.snapshot().unwrap();
+    assert_eq!(reads.validate(&replaced), Err(Error::Unavailable));
+    assert!(reads.bind(&replaced, &batch, &writes).is_err());
+    assert_eq!(guard.validate(&replaced, &batch), Err(Error::Unavailable));
+    assert_eq!(replaced.snapshot().unwrap(), before);
+    guard.validate(&source, &batch).unwrap();
+
+    let different_preview = replaced.project_entities([StableId(1)]).unwrap();
+    let mut destination = Batch::new();
+    destination.insert(StableId(9), 9_u64);
+    assert!(
+        different_preview
+            .diff_into(&opening, &mut destination)
+            .is_err()
+    );
+    assert_eq!(
+        destination.edited_entities().collect::<Vec<_>>(),
+        [StableId(9)]
+    );
+}

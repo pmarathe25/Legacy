@@ -1,5 +1,5 @@
 //! Sparse opening witnesses and owner-bound projections of a composed batch.
-use crate::{Batch, BatchKey, Component, ReadFootprint, StableId, Store};
+use crate::{Batch, BatchKey, Component, ReadFootprint, Schema, StableId, Store};
 use game_core::Error;
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -57,6 +57,10 @@ impl ReadSet {
     }
     pub(crate) fn expect_exclusive_entity(&mut self, id: StableId) {
         self.dependencies.push(Arc::new(ExclusiveEntity { id }));
+    }
+    pub(crate) fn expect_schema(&mut self, schema: Schema) {
+        self.dependencies
+            .push(Arc::new(RegistrationWitness { schema }));
     }
     /// Reserve an owner-exclusive new entity shape. At binding, every component
     /// edit at this identity must be a declared insertion. The resulting guard
@@ -169,6 +173,29 @@ impl ReadGuard {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct RegistrationWitness {
+    schema: Schema,
+}
+impl Dependency for RegistrationWitness {
+    fn validate(&self, store: &Store) -> bool {
+        self.schema.same_registrations(store.schema())
+    }
+    fn bind(
+        &self,
+        _store: &Store,
+        _batch: &Batch,
+        _admitted: &ReadFootprint,
+    ) -> Result<Box<dyn Projection>, Error> {
+        Ok(Box::new(self.clone()))
+    }
+}
+impl Projection for RegistrationWitness {
+    fn validate(&self, store: &Store, _batch: &Batch) -> Result<bool, Error> {
+        Ok(self.schema.same_registrations(store.schema()))
     }
 }
 
