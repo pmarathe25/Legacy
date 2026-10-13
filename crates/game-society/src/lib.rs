@@ -22,3 +22,22 @@ mod storage_tests;
 mod proposal_voting_tests;
 
 pub mod projected_publication;
+
+pub mod personal;
+pub mod review;
+
+#[cfg(test)]
+mod institution_enforcement_tests;
+
+pub mod rule_publication;
+#[cfg(test)]
+mod rule_publication_tests;
+
+pub mod personal_receipts;
+
+pub mod personal_completion;
+
+#[cfg(test)]
+mod social_atomic_tests;
+
+pub mod receipt_validation;

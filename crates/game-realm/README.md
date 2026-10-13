@@ -7,3 +7,7 @@ The shared store holds `Commitment`, `PersonalKnowledge`, `Requests`, and `Pendi
 Typed plans recheck admission, remembered foreign work, and selected source rows before staging. Realm and receiving owners append their canonical changes to one batch. Guards bind finalization to that batch and reject conflicting source or recipient writes. The assembly supplies current facts, spatial candidate IDs, counters, and ordered events. Realm filters candidates and chooses behavior; agreements, missions, institutions, and characters apply their own receiving effects.
 
 Production providers are `game-ecs`, `game-cargo`, `game-society`, `game-characters`, `game-agreements`, and `game-missions`, plus shared types from `game-core`. Spatial candidates enter through a factual provider backed by the shared `LocalRoster`. The crate retains no separate location index.
+
+`RealmExecution` binds canonical storage, presence, authority, judgment facts and selected owner operations. Realm owns the observation, reconciliation, expiration and autonomous-review iteration through this port. The same entry points run in native store tests without the assembly.
+
+`prepare_newborn` prepares absent regional knowledge and request rows for the shared birth batch. Its generic guard permits the other owners to create their child components while protecting Realm's personal rows.

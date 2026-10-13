@@ -9,13 +9,70 @@ pub struct InstitutionResourceDemand {
 }
 /// Facts for exactly the unreconciled receipt suffix. Labor-attributed output
 /// already has a cooperation receipt, so raw production cannot add it twice.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaseReceipt {
     Labor { actor: PersonId, site: SiteId },
     Ledger,
     Production { actor: PersonId, site: SiteId },
     Support,
 }
+/// Classify the unreconciled opening receipt suffix for its existing case budget.
+/// This deliberately counts repeated support against opening exclusions: reservation
+/// precedes ordered receiving effects, which may later clear that exclusion.
+pub fn pending_case_receipt_demand(
+    store: &Store,
+    receipts: &[(
+        crate::reactions::SocialReceipt,
+        crate::reactions::SubjectFacts,
+    )],
+) -> Result<u64, Error> {
+    let qualified = receipts
+        .iter()
+        .filter_map(|(receipt, subject)| pending_case_receipt(store, receipt, *subject))
+        .collect::<Vec<_>>();
+    case_receipt_demand(&qualified)
+}
+fn pending_case_receipt(
+    store: &Store,
+    receipt: &crate::reactions::SocialReceipt,
+    subject: crate::reactions::SubjectFacts,
+) -> Option<CaseReceipt> {
+    use crate::reactions::{CooperationTarget, SocialReceipt};
+    let excluded = |actor, source| {
+        crate::storage::exclusions(store, actor).is_some_and(|row| row.stores.contains_key(&source))
+    };
+    match *receipt {
+        SocialReceipt::Performed {
+            actor,
+            target: CooperationTarget::Labor { site, .. },
+            ..
+        } => Some(CaseReceipt::Labor { actor, site }),
+        SocialReceipt::Performed {
+            target: CooperationTarget::Delivery { asset },
+            ..
+        } if asset.area.is_some() => Some(CaseReceipt::Ledger),
+        SocialReceipt::Defaulted { .. } if subject.area.is_some() => Some(CaseReceipt::Ledger),
+        SocialReceipt::Produced {
+            actor,
+            site,
+            custodian: Some(owner),
+            ..
+        } if owner != actor => Some(CaseReceipt::Production { actor, site }),
+        SocialReceipt::Ate { actor, source } | SocialReceipt::SupportReceived { actor, source }
+            if excluded(actor, source) =>
+        {
+            Some(CaseReceipt::Support)
+        }
+        SocialReceipt::Transferred {
+            actor,
+            source,
+            good: Good::Food,
+            destination_holder: Some(holder),
+        } if holder == actor && excluded(actor, source) => Some(CaseReceipt::Support),
+        _ => None,
+    }
+}
+
 pub fn case_receipt_demand(receipts: &[CaseReceipt]) -> Result<u64, Error> {
     let attributed = receipts
         .iter()
@@ -217,5 +274,193 @@ mod tests {
         runtime
             .preflight_rule_deadlines(&store, SimTime(u64::MAX))
             .unwrap();
+    }
+    #[test]
+    fn raw_pending_receipts_preserve_existing_qualification_and_opening_budget() {
+        use crate::reactions::{CaseAsset, CooperationTarget, SocialReceipt, SubjectFacts};
+        let (_, mut store) = crate::policy_fixtures::world();
+        crate::insert_exclusions(
+            &mut store,
+            PersonId(1),
+            crate::Exclusions {
+                stores: BTreeMap::from([(InventoryId(4), CaseId(31))]),
+            },
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        let asset = CaseAsset {
+            area: Some(AreaId(3)),
+            inventory: InventoryId(4),
+            good: Good::Food,
+        };
+        let remote = CaseAsset {
+            area: None,
+            ..asset
+        };
+        let labor = SocialReceipt::Performed {
+            actor: PersonId(1),
+            counterpart: PersonId(2),
+            agreement: AgreementId(30),
+            target: CooperationTarget::Labor {
+                site: SiteId(20),
+                asset: remote,
+            },
+        };
+        let production = SocialReceipt::Produced {
+            actor: PersonId(1),
+            site: SiteId(20),
+            asset,
+            custodian: Some(PersonId(2)),
+        };
+        let cases = [
+            (labor, Some(AreaId(3)), 1),
+            (
+                SocialReceipt::Performed {
+                    actor: PersonId(1),
+                    counterpart: PersonId(2),
+                    agreement: AgreementId(30),
+                    target: CooperationTarget::Delivery { asset },
+                },
+                Some(AreaId(3)),
+                1,
+            ),
+            (
+                SocialReceipt::Performed {
+                    actor: PersonId(1),
+                    counterpart: PersonId(2),
+                    agreement: AgreementId(30),
+                    target: CooperationTarget::Delivery { asset: remote },
+                },
+                Some(AreaId(3)),
+                0,
+            ),
+            (
+                SocialReceipt::Defaulted {
+                    actor: PersonId(1),
+                    counterpart: PersonId(2),
+                    agreement: AgreementId(30),
+                    asset: remote,
+                },
+                Some(AreaId(3)),
+                1,
+            ),
+            (
+                SocialReceipt::Defaulted {
+                    actor: PersonId(1),
+                    counterpart: PersonId(2),
+                    agreement: AgreementId(30),
+                    asset,
+                },
+                None,
+                0,
+            ),
+            (production, Some(AreaId(3)), 1),
+            (
+                SocialReceipt::Produced {
+                    actor: PersonId(1),
+                    site: SiteId(20),
+                    asset,
+                    custodian: Some(PersonId(1)),
+                },
+                Some(AreaId(3)),
+                0,
+            ),
+            (
+                SocialReceipt::Produced {
+                    actor: PersonId(1),
+                    site: SiteId(20),
+                    asset,
+                    custodian: None,
+                },
+                Some(AreaId(3)),
+                0,
+            ),
+            (
+                SocialReceipt::Ate {
+                    actor: PersonId(1),
+                    source: InventoryId(4),
+                },
+                Some(AreaId(3)),
+                1,
+            ),
+            (
+                SocialReceipt::Ate {
+                    actor: PersonId(1),
+                    source: InventoryId(5),
+                },
+                Some(AreaId(3)),
+                0,
+            ),
+            (
+                SocialReceipt::Transferred {
+                    actor: PersonId(1),
+                    source: InventoryId(4),
+                    good: Good::Food,
+                    destination_holder: Some(PersonId(1)),
+                },
+                Some(AreaId(3)),
+                1,
+            ),
+            (
+                SocialReceipt::Transferred {
+                    actor: PersonId(1),
+                    source: InventoryId(4),
+                    good: Good::Food,
+                    destination_holder: Some(PersonId(2)),
+                },
+                Some(AreaId(3)),
+                0,
+            ),
+            (
+                SocialReceipt::Transferred {
+                    actor: PersonId(1),
+                    source: InventoryId(4),
+                    good: Good::Timber,
+                    destination_holder: Some(PersonId(1)),
+                },
+                Some(AreaId(3)),
+                0,
+            ),
+            (
+                SocialReceipt::Transferred {
+                    actor: PersonId(1),
+                    source: InventoryId(4),
+                    good: Good::Food,
+                    destination_holder: None,
+                },
+                Some(AreaId(3)),
+                0,
+            ),
+        ];
+        for (receipt, area, count) in cases {
+            let subject = SubjectFacts {
+                actor: PersonId(1),
+                area,
+                hunger: 300_000,
+            };
+            assert_eq!(
+                pending_case_receipt_demand(&store, &[(receipt, subject)]).unwrap(),
+                count
+            );
+        }
+        let subject = SubjectFacts {
+            actor: PersonId(1),
+            area: Some(AreaId(3)),
+            hunger: 300_000,
+        };
+        assert_eq!(
+            pending_case_receipt_demand(&store, &[(production, subject), (labor, subject)])
+                .unwrap(),
+            1
+        );
+        let support = SocialReceipt::Ate {
+            actor: PersonId(1),
+            source: InventoryId(4),
+        };
+        assert_eq!(
+            pending_case_receipt_demand(&store, &[(support, subject); 3]).unwrap(),
+            3
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
     }
 }

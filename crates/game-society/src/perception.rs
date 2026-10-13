@@ -3,7 +3,7 @@ use crate::institutions::*;
 use game_core::*;
 use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObserverFacts {
     pub actor: PersonId,
     pub area: Option<AreaId>,
@@ -36,6 +36,19 @@ impl<'a> ObservationIndex<'a> {
     }
     fn local(&self, area: AreaId) -> impl Iterator<Item = &ObserverFacts> {
         self.areas.get(&area).into_iter().flatten().copied()
+    }
+    /// Public case attention frontier for a factual roster. Private receipt subjects
+    /// and counterparts are added by the preparation's explicit native input links.
+    pub fn case_observer_frontier(&self, areas: &BTreeSet<AreaId>) -> BTreeSet<PersonId> {
+        areas
+            .iter()
+            .flat_map(|area| {
+                self.local(*area)
+                    .filter(|actor| actor.alive && actor.independent)
+                    .take(64)
+                    .map(|actor| actor.actor)
+            })
+            .collect()
     }
     pub fn case_observers(
         &self,
@@ -162,6 +175,42 @@ impl Runtime {
                 .filter_map(|id| crate::storage::case(store, id).cloned())
                 .collect()
         })
+    }
+    /// Personally remembered views from a producer's admitted closing projection.
+    pub fn institution_views_projected(
+        &self,
+        store: &Store,
+        batch: &Batch,
+        actor: PersonId,
+    ) -> Result<Vec<InstitutionView>, Error> {
+        Ok(batch
+            .projected::<crate::Knowledge>(store, StableId(actor.0))?
+            .map_or_else(Vec::new, |memory| {
+                memory
+                    .institutions
+                    .values()
+                    .rev()
+                    .take(64)
+                    .cloned()
+                    .collect()
+            }))
+    }
+    pub fn social_case_views_projected(
+        &self,
+        store: &Store,
+        batch: &Batch,
+        actor: PersonId,
+    ) -> Result<Vec<SocialCaseView>, Error> {
+        let Some(memory) = batch.projected::<crate::Knowledge>(store, StableId(actor.0))? else {
+            return Ok(Vec::new());
+        };
+        let mut views = Vec::new();
+        for id in memory.cases.iter().rev().take(64) {
+            if let Some(case) = batch.projected::<SocialCaseView>(store, StableId(id.0))? {
+                views.push(case.clone());
+            }
+        }
+        Ok(views)
     }
     pub fn prepare_publication(
         &self,
@@ -325,35 +374,6 @@ pub struct PreparedInstitutionReports {
     before: BTreeMap<InstitutionId, Option<InstitutionView>>,
     after: BTreeMap<InstitutionId, InstitutionView>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InstitutionReportsGuard {
-    key: game_ecs::BatchKey,
-    source: PreparedInstitutionReports,
-}
-impl InstitutionReportsGuard {
-    pub fn validate_source(&self, store: &Store, batch: &Batch) -> Result<(), Error> {
-        self.source.check_source(store)?;
-        self.validate(batch)
-    }
-    pub fn validate(&self, batch: &Batch) -> Result<(), Error> {
-        let edits = batch
-            .edited_ids::<crate::Knowledge>()
-            .filter(|id| id.0 == self.source.actor.0)
-            .count();
-        if self.key != batch.key() || edits != usize::from(!self.source.present) {
-            return Err(Error::Unavailable);
-        }
-        Ok(())
-    }
-    /// Publish only after every owner guard and the shared batch were admitted.
-    pub fn finish(self, store: &mut Store) {
-        let knowledge =
-            crate::knowledge_mut(store, self.source.actor).expect("admitted receiving knowledge");
-        for (id, view) in self.source.after {
-            knowledge.institutions.insert(id, view);
-        }
-    }
-}
 pub fn prepare_institution_reports(
     store: &Store,
     actor: PersonId,
@@ -413,23 +433,32 @@ impl PreparedInstitutionReports {
         }
         Ok(())
     }
-    pub fn stage_into(
+    /// Stage the complete receiving row with the producer, preserving independent
+    /// learning that arrived before staging and guarding the exact merged result.
+    pub fn stage_into_atomic(
         self,
         store: &Store,
         batch: &mut Batch,
-    ) -> Result<InstitutionReportsGuard, Error> {
+    ) -> Result<game_ecs::ReadGuard, Error> {
         self.check_source(store)?;
-        if batch.touches::<crate::Knowledge>(StableId(self.actor.0)) {
+        let id = StableId(self.actor.0);
+        if batch.touches::<crate::Knowledge>(id) {
             return Err(Error::Unavailable);
         }
-        if !self.present {
-            batch.insert(StableId(self.actor.0), crate::Knowledge::default());
+        let mut reads = game_ecs::ReadSet::new();
+        reads.entity(store, id);
+        let mut knowledge = reads
+            .read::<crate::Knowledge>(store, id)
+            .cloned()
+            .unwrap_or_default();
+        let mut writes = game_ecs::ReadFootprint::new();
+        if !self.present || !self.after.is_empty() {
+            for (institution, view) in self.after {
+                knowledge.institutions.insert(institution, view);
+            }
+            batch.insert(id, knowledge);
+            writes.protect::<crate::Knowledge>(id);
         }
-        let guard = InstitutionReportsGuard {
-            key: batch.key(),
-            source: self,
-        };
-        guard.validate_source(store, batch)?;
-        Ok(guard)
+        reads.bind(store, batch, &writes)
     }
 }

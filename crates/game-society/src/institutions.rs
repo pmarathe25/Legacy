@@ -948,72 +948,6 @@ impl Runtime {
             term,
         })
     }
-    /// Records the institution's own grant overlay, not an inventory permission.
-    pub fn apply_access_intent(
-        &self,
-        store: &mut Store,
-        intent: &RuleIntent,
-    ) -> Result<bool, Error> {
-        let RuleIntent::Access {
-            institution,
-            concept,
-            actor,
-            inventory,
-            allowed,
-            ..
-        } = intent
-        else {
-            return Err(Error::Unavailable);
-        };
-        let current = crate::storage::institution(store, institution).ok_or(Error::Unavailable)?;
-        if !current.concepts.contains(concept) {
-            return Err(Error::Unavailable);
-        }
-        let matching=current.concepts.iter().filter(|id|crate::storage::concept(store, *id).is_some_and(|rule|matches!(rule.effect,SocialEffect::Access {inventory:target,..} if target==*inventory))).copied().collect::<Vec<_>>();
-        let current = crate::storage::institution_mut(store, institution).unwrap();
-        if *allowed {
-            return Ok(current.grants.entry(*concept).or_default().insert(*actor));
-        }
-        let mut changed = false;
-        for id in matching {
-            if let Some(people) = current.grants.get_mut(&id) {
-                changed |= people.remove(actor);
-            }
-        }
-        Ok(changed)
-    }
-    pub fn register_duty(
-        &self,
-        store: &mut Store,
-        intent: &RuleIntent,
-        agreement: AgreementId,
-    ) -> Result<(), Error> {
-        let RuleIntent::Duty {
-            institution,
-            concept,
-            actor,
-            ..
-        } = intent
-        else {
-            return Err(Error::Unavailable);
-        };
-        let current =
-            crate::storage::institution_mut(store, institution).ok_or(Error::Unavailable)?;
-        if !current.concepts.contains(concept)
-            || current
-                .applied
-                .get(concept)
-                .is_some_and(|people| people.contains_key(actor))
-        {
-            return Err(Error::Unavailable);
-        }
-        current
-            .applied
-            .entry(*concept)
-            .or_default()
-            .insert(*actor, agreement);
-        Ok(())
-    }
     pub fn prepare_case_learning(
         &self,
         store: &Store,
@@ -1073,6 +1007,33 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn publish_rule(
+        world: &Runtime,
+        store: &mut Store,
+        institution: InstitutionId,
+        intent: RuleIntent,
+        first: u64,
+        at: SimTime,
+        authority: &AuthorityFacts,
+    ) {
+        let application = crate::deliberation::RuleApplications {
+            institution,
+            intents: vec![intent],
+        };
+        let plan = world
+            .prepare_rule_application(store, &application, first, at)
+            .unwrap();
+        let index = crate::perception::ObservationIndex::new(&[]).unwrap();
+        let publications = plan
+            .prepare_publications(world, store, authority, at, &index)
+            .unwrap();
+        let mut batch = Batch::new();
+        let guard = plan
+            .stage_with_publications(world, store, at, publications, &mut batch)
+            .unwrap();
+        guard.validate(world, store, at, &batch).unwrap();
+        store.apply_batch(batch).unwrap();
+    }
     fn fixture() -> (Runtime, Store, AuthorityFacts) {
         let people = BTreeSet::from([PersonId(11), PersonId(12), PersonId(13)]);
         let rule = InstitutionalRule {
@@ -1127,6 +1088,7 @@ mod tests {
         };
         let mut schema = game_ecs::Schema::new();
         crate::storage::register_components(&mut schema).unwrap();
+        game_agreements::register_components(&mut schema).unwrap();
         let mut store = Store::with_schema(schema);
         insert_concept(&mut store, ConceptId(3), Concept { rule }).unwrap();
         insert_institution(&mut store, institution.id, institution).unwrap();
@@ -1350,9 +1312,21 @@ mod tests {
                 .applied
                 .is_empty()
         );
-        world
-            .register_duty(&mut store, &intent, AgreementId(50))
-            .unwrap();
+        publish_rule(
+            &world,
+            &mut store,
+            i.id,
+            intent,
+            50,
+            SimTime(60_000),
+            &authority,
+        );
+        assert_eq!(
+            game_agreements::obligation(&store, ObligationId(51))
+                .unwrap()
+                .agreement,
+            AgreementId(50)
+        );
         assert!(
             world
                 .rule_intent(&store, &i, 1, &input, &authority, true, SimTime(120_000))
@@ -1376,7 +1350,10 @@ mod tests {
         let intent = world
             .rule_intent(&store, &i, 0, &input, &authority, true, SimTime(0))
             .unwrap();
-        assert!(world.apply_access_intent(&mut store, &intent).unwrap());
+        publish_rule(&world, &mut store, i.id, intent, 50, SimTime(0), &authority);
+        assert!(
+            crate::institution(&store, i.id).unwrap().grants[&ConceptId(3)].contains(&PersonId(12))
+        );
         assert!(world.allows_access(&store, PersonId(12), InventoryId(20), &authority));
         authority.alive.clear();
         assert!(!world.allows_access(&store, PersonId(12), InventoryId(20), &authority));

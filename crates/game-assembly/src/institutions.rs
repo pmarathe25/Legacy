@@ -7,6 +7,114 @@ use game_society::institutions::{
 };
 pub use game_society::institutions::{Institution, RuleProposal, Runtime};
 
+fn bind_institution_enforcement_event(event: game_society::enforcement::Event) -> EventKind {
+    use game_society::enforcement::Event;
+    match event {
+        Event::EnforcementPolicyChanged {
+            institution,
+            office,
+        } => EventKind::EnforcementPolicyChanged {
+            institution,
+            office,
+        },
+        Event::EnforcementDecided {
+            case,
+            judgment,
+            proposer,
+        } => EventKind::EnforcementDecided {
+            case,
+            judgment,
+            proposer,
+        },
+        Event::EnforcementFiling {
+            case,
+            actor,
+            recipient,
+        } => EventKind::EnforcementFiling {
+            case,
+            actor,
+            recipient,
+        },
+        Event::EnforcementResponded {
+            case,
+            actor,
+            comply,
+        } => EventKind::EnforcementResponded {
+            case,
+            actor,
+            comply,
+        },
+        Event::EnforcementFiled {
+            case,
+            actor,
+            institution,
+        } => EventKind::EnforcementFiled {
+            case,
+            actor,
+            institution,
+        },
+        Event::EnforcementReported {
+            case,
+            sender,
+            recipient,
+        } => EventKind::EnforcementReported {
+            case,
+            sender,
+            recipient,
+        },
+        Event::EnforcementDispatched {
+            case,
+            actor,
+            mission,
+        } => EventKind::EnforcementDispatched {
+            case,
+            actor,
+            mission,
+        },
+        Event::EnforcementOutcome { case, status } => {
+            EventKind::EnforcementOutcome { case, status }
+        }
+    }
+}
+fn bind_institution_realm_event(event: game_realm::RealmEvent) -> EventKind {
+    use game_realm::RealmEvent;
+    match event {
+        RealmEvent::Proposed {
+            commitment,
+            actor,
+            revision,
+        } => EventKind::RealmProposed {
+            commitment,
+            actor,
+            revision,
+        },
+        RealmEvent::Ratified {
+            commitment,
+            revision,
+            institution,
+            proposal,
+            adopted,
+        } => EventKind::RealmRatified {
+            commitment,
+            revision,
+            institution,
+            proposal,
+            adopted,
+        },
+        RealmEvent::WorkRequested { key, actor } => EventKind::RealmWorkRequested { key, actor },
+        RealmEvent::Reported {
+            commitment,
+            sender,
+            recipient,
+        } => EventKind::RealmReported {
+            commitment,
+            sender,
+            recipient,
+        },
+        RealmEvent::Interrupted { actor } => EventKind::Interrupted { actor },
+    }
+}
+
 struct InstitutionalVotingKnowledge<'a> {
     stocks: &'a BTreeMap<InventoryId, StockKnowledge>,
     store: &'a game_ecs::Store,
@@ -32,7 +140,7 @@ impl Simulation {
             version: 1,
             debug_fixture: true,
         };
-        let owner = sim.host.state.people[3].id;
+        let owner = sim.person_at(3).id;
         let area = sim.host.state.areas[0].id;
         let stocks: Vec<_> = game_cargo::inventories(&sim.host.storage)
             .filter(|(_, row)| {
@@ -58,10 +166,10 @@ impl Simulation {
         sim.host.state.institutions = Some(Runtime {
             last_event: sim.host.next_event() - 1,
         });
-        for person in &sim.host.state.people {
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
             game_society::insert_knowledge(
                 &mut sim.host.storage,
-                person.id,
+                person_id,
                 game_society::Knowledge::default(),
             )?;
         }
@@ -69,26 +177,22 @@ impl Simulation {
     }
 
     pub(crate) fn social_area(&self, actor: PersonId) -> Result<AreaId, Error> {
-        let p = self
-            .person_index
-            .get(&actor)
-            .map(|i| &self.host.state.people[*i])
-            .ok_or(Error::Unavailable)?;
-        if !self.independent(actor)
-            || self.combat_restricts(actor)
-            || !self.host.state.physical.as_ref().is_some_and(|_| {
-                game_physiology::body(&self.host.storage, actor)
-                    .is_some_and(|body| body.vitals.alive)
-            })
-        {
-            return Err(Error::Unavailable);
-        }
-        match *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
-            .ok_or(Error::Unavailable)?
-        {
-            Location::AtArea(area) => Ok(area),
-            _ => Err(Error::Unavailable),
-        }
+        self.person_index.get(&actor).ok_or(Error::Unavailable)?;
+        game_society::review::social_area(game_society::review::SocialAreaFacts {
+            area: match game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)) {
+                Some(Location::AtArea(area)) => Some(*area),
+                _ => None,
+            },
+            independent: self.independent(actor),
+            combat_restricted: self.combat_restricts(actor),
+            alive: self
+                .host
+                .state
+                .physical
+                .as_ref()
+                .and_then(|_| game_physiology::body(&self.host.storage, actor))
+                .is_some_and(|body| body.vitals.alive),
+        })
     }
 
     pub fn institution_view(&self, actor: PersonId) -> Vec<InstitutionView> {
@@ -126,15 +230,200 @@ impl Simulation {
             .state
             .institutions
             .as_ref()
+            .ok_or(Error::Unavailable)?
+            .clear_learning(&mut self.host.storage, actor, values, precedents)
+    }
+
+    /// The public command and its pending institutional receipts share one admission.
+    pub(crate) fn routed_institution_command(
+        &mut self,
+        actor: PersonId,
+        action: &InstitutionAction,
+    ) -> Result<(), Error> {
+        let area = self.social_area(actor)?;
+        self.preflight_institutions()?;
+        let world = self
+            .host
+            .state
+            .institutions
+            .as_ref()
             .ok_or(Error::Unavailable)?;
-        let m =
-            game_society::knowledge_mut(&mut self.host.storage, actor).ok_or(Error::Unavailable)?;
-        if values {
-            m.values.clear();
+        let references = world.command_references(&self.host.storage, actor, action)?;
+        let positional = self.realm_positional_membership()?;
+        let mut extra = references
+            .people
+            .iter()
+            .map(|id| game_ecs::StableId(id.0))
+            .collect::<BTreeSet<_>>();
+        extra.extend(references.stocks.iter().map(|id| game_ecs::StableId(id.0)));
+        extra.extend(references.sites.iter().map(|id| game_ecs::StableId(id.0)));
+        let mut affected = BTreeSet::new();
+        let case_action = matches!(
+            action,
+            InstitutionAction::HearCase { .. } | InstitutionAction::TellCase { .. }
+        );
+        let mut enforcement_observation = false;
+        let publications = if case_action {
+            if let InstitutionAction::HearCase {
+                institution, case, ..
+            } = action
+            {
+                affected.insert(*institution);
+                extra.insert(game_ecs::StableId(case.0));
+                let current = game_society::institution(&self.host.storage, *institution)
+                    .ok_or(Error::Unavailable)?;
+                let roster = self.social_observer_facts();
+                let index = game_society::perception::ObservationIndex::new(&roster)?;
+                let authority = self.institution_authority_facts(current);
+                let refusal = world.case_command_record(&self.host.storage, action, self.time());
+                let observers = refusal
+                    .as_ref()
+                    .map(|case| index.case_observers(case, false))
+                    .transpose()?
+                    .unwrap_or_default();
+                extra.extend(observers.keys().map(|id| game_ecs::StableId(id.0)));
+                let case_plan = world.prepare_case_command(
+                    &self.host.storage,
+                    action,
+                    game_society::case_commands::CaseCommandFacts {
+                        actor,
+                        area,
+                        now: self.time(),
+                        recipient_area: None,
+                        authority: &authority,
+                        refusal: refusal.map(|_| CaseId(self.host.next_id())),
+                        refusal_observers: &observers,
+                    },
+                )?;
+                let publications = case_plan.prepare_publications(
+                    world,
+                    &self.host.storage,
+                    &authority,
+                    self.time(),
+                    &index,
+                )?;
+                extra.extend(
+                    publications
+                        .iter()
+                        .flat_map(|p| p.recipients())
+                        .map(|id| game_ecs::StableId(id.0)),
+                );
+            } else if let InstitutionAction::TellCase { case, .. } = action {
+                extra.insert(game_ecs::StableId(case.0));
+            }
+            None
+        } else {
+            let plan = self.prepare_institution_transition(actor, area, action)?;
+            enforcement_observation = plan.effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    CommandEffect::ExternalOutcome {
+                        outcome: RuleProposalStatus::Adopted,
+                        change: InstitutionChange::EnforcementPolicy { .. }
+                            | InstitutionChange::Adjudicate { .. },
+                        ..
+                    }
+                )
+            });
+            let publications = self.prepare_institution_publications(&plan, &positional)?;
+            for publication in &publications {
+                affected.insert(publication.institution());
+            }
+            extra.extend(
+                publications
+                    .iter()
+                    .flat_map(|p| p.recipients())
+                    .map(|id| game_ecs::StableId(id.0)),
+            );
+            for id in &affected {
+                extra.extend(
+                    plan.publication_authority_people(&self.host.storage, *id)?
+                        .into_iter()
+                        .map(|id| game_ecs::StableId(id.0)),
+                );
+            }
+            Some(publications)
+        };
+        match action {
+            InstitutionAction::Join { institution }
+            | InstitutionAction::Decline { institution }
+            | InstitutionAction::Leave { institution }
+            | InstitutionAction::SupportOffice { institution, .. }
+            | InstitutionAction::Propose { institution, .. }
+            | InstitutionAction::HearCase { institution, .. } => {
+                affected.insert(*institution);
+            }
+            InstitutionAction::Vote { proposal, .. } => {
+                affected.insert(
+                    game_society::proposal(&self.host.storage, *proposal)
+                        .ok_or(Error::Unavailable)?
+                        .institution,
+                );
+                extra.insert(game_ecs::StableId(proposal.0));
+            }
+            _ => {}
         }
-        if precedents {
-            m.cases.clear();
+        extra.extend(affected.iter().map(|id| game_ecs::StableId(id.0)));
+        extra.extend(
+            game_realm::commitments(&self.host.storage)
+                .flat_map(|(_, commitment)| &commitment.revisions)
+                .flat_map(|revision| revision.pending.values())
+                .map(|row| game_ecs::StableId(row.actor.0)),
+        );
+        let origin = game_ecs::Batch::new();
+        let mut context = self.prepare_physical_maintenance_context(&origin, &[])?;
+        context.include_institution_source(self, &affected);
+        if enforcement_observation {
+            context.include_enforcement_observation();
         }
+        let contacts = self.physical_maintenance_contacts(&origin)?;
+        let followups = self.prepare_source_followups_with_context(
+            None,
+            &origin,
+            0,
+            0,
+            extra,
+            &context,
+            |preview| {
+                if case_action {
+                    preview.institution_command(actor, action)
+                } else {
+                    let people = context.enforcement_people(preview);
+                    let assaults = context.enforcement_assaults(preview);
+                    preview.execute_institution_transition_prepared(
+                        actor,
+                        area,
+                        action,
+                        &positional,
+                        publications,
+                        Some(&people),
+                        Some(&contacts),
+                        Some(&assaults),
+                    )
+                }
+            },
+            |preview| {
+                let mut batch = game_ecs::Batch::new();
+                let receipt = preview.prepare_physical_institution_maintenance_with_context(
+                    &context,
+                    &mut batch,
+                    &[],
+                    0,
+                )?;
+                receipt.validate(preview, &batch)?;
+                let mut transaction =
+                    game_world::Transaction::new(preview.host.transaction_opening(), batch);
+                transaction.ids = receipt.ids;
+                transaction.events = receipt.events.clone();
+                transaction.guards = receipt.guards();
+                preview.host.commit_transaction(transaction)?;
+                receipt.finish(preview);
+                preview.host.bump_revision(1)
+            },
+        )?;
+        let (transaction, finish) = followups.into_transaction(self)?;
+        self.host.commit_transaction(transaction)?;
+        finish.finish(self);
         Ok(())
     }
 
@@ -193,20 +482,36 @@ impl Simulation {
                 refusal_observers: &observers,
             },
         )?;
-        let effects = plan.commit(
-            self.host.state.institutions.as_ref().unwrap(),
-            &mut self.host.storage,
-        )?;
-        if let Some((case, subject)) = effects.recorded {
-            self.host.allocate_ids(1)?;
-            self.emit(EventKind::SocialCaseRecorded {
-                case,
-                actor: subject,
-            });
+        let opening = self.host.transaction_opening();
+        let now = self.time();
+        let publications =
+            plan.prepare_publications(w, &self.host.storage, &authority, now, &index)?;
+        let positional = self.realm_positional_membership()?;
+        let regional =
+            self.prepare_realm_institution_reaction(&publications, Vec::new(), false, &positional)?;
+        let mut batch = game_ecs::Batch::new();
+        let publication =
+            plan.stage_with_publications(w, &self.host.storage, now, publications, &mut batch)?;
+        let regional = regional
+            .map(|plan| {
+                plan.stage_into(
+                    &self.host.storage,
+                    publication.publication_guard(),
+                    &mut batch,
+                )
+            })
+            .transpose()?;
+        publication.validate(w, &self.host.storage, now, &batch)?;
+        if let Some(regional) = &regional {
+            regional.validate(&batch)?;
         }
-        if let Some(institution) = effects.publish {
-            self.publish_institution(institution);
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        if let Some((case, actor)) = publication.effects.recorded {
+            transaction.ids = 1;
+            transaction.events = vec![EventKind::SocialCaseRecorded { case, actor }];
         }
+        transaction.guards.push(publication.row_guard());
+        self.host.commit_transaction(transaction)?;
         Ok(())
     }
 
@@ -241,90 +546,19 @@ impl Simulation {
         let Some(world) = &self.host.state.institutions else {
             return Ok(Default::default());
         };
-        use game_society::institutions::CaseReceipt;
-        let mut receipts = Vec::new();
-        for event in self.host.events().iter().skip(world.last_event as usize) {
-            let receipt = match event.event {
-                EventKind::ObligationPerformed {
-                    obligation, actor, ..
-                } => match game_agreements::obligation(&self.host.storage, obligation)
-                    .unwrap()
-                    .term
-                {
-                    AgreementTerm::Labor { site, .. } => Some(CaseReceipt::Labor { actor, site }),
-                    AgreementTerm::Delivery { destination, .. }
-                        if self
-                            .inventory_area(
-                                game_cargo::inventory(&self.host.storage, destination)
-                                    .expect("inventory exists"),
-                            )
-                            .is_some() =>
-                    {
-                        Some(CaseReceipt::Ledger)
-                    }
-                    _ => None,
-                },
-                EventKind::ObligationDefaulted { obligation } => {
-                    let term = &game_agreements::obligation(&self.host.storage, obligation)
-                        .unwrap()
-                        .term;
-                    (matches!(
-                        term,
-                        AgreementTerm::Labor { .. } | AgreementTerm::Delivery { .. }
-                    ) && matches!(
-                        *game_spatial::location(
-                            &self.host.storage,
-                            game_ecs::StableId(
-                                (self.host.state.people[self.person_index[&term.parties()[0]]].id)
-                                    .0
-                            )
-                        )
-                        .expect("location exists"),
-                        Location::AtArea(_)
-                    ))
-                    .then_some(CaseReceipt::Ledger)
-                }
-                EventKind::Produced {
-                    actor,
-                    site,
-                    output,
-                    ..
-                } if game_property::inventory_custodian(&self.host.storage, output)
-                    .is_some_and(|owner| owner != actor) =>
-                {
-                    Some(CaseReceipt::Production { actor, site })
-                }
-                EventKind::Ate { actor, source, .. }
-                    if game_society::exclusions(&self.host.storage, actor)
-                        .is_some_and(|stores| stores.stores.contains_key(&source)) =>
-                {
-                    Some(CaseReceipt::Support)
-                }
-                EventKind::Transferred {
-                    actor,
-                    source,
-                    destination,
-                    ..
-                } if game_cargo::inventory(&self.host.storage, source)
-                    .expect("inventory exists")
-                    .good
-                    == Good::Food
-                    && game_cargo::inventory(&self.host.storage, destination)
-                        .expect("inventory exists")
-                        .location
-                        == InventoryLocation::Carried(actor)
-                    && game_society::exclusions(&self.host.storage, actor)
-                        .is_some_and(|stores| stores.stores.contains_key(&source)) =>
-                {
-                    Some(CaseReceipt::Support)
-                }
-                _ => None,
-            };
-            if let Some(receipt) = receipt {
-                receipts.push(receipt);
-            }
-        }
-        let pending = game_society::institutions::case_receipt_demand(&receipts)?;
+        let receipts = self
+            .host
+            .events_since(world.last_event)
+            .iter()
+            .filter_map(|event| self.social_receipt(&event.event).transpose())
+            .map(|receipt| {
+                let receipt = receipt?;
+                let actor = game_society::review::receipt_actor(&receipt);
+                Ok((receipt, self.case_subject_facts(actor)))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let pending =
+            game_society::institutions::pending_case_receipt_demand(&self.host.storage, &receipts)?;
         world.closing_resource_demand(
             &self.host.storage,
             population,
@@ -339,17 +573,7 @@ impl Simulation {
         &self,
         i: &Institution,
     ) -> game_society::institutions::AuthorityFacts {
-        let needed = i
-            .charter
-            .offices
-            .iter()
-            .map(|o| o.holder)
-            .chain(
-                i.office_support
-                    .values()
-                    .flat_map(|people| people.iter().copied()),
-            )
-            .collect::<BTreeSet<_>>();
+        let needed = game_society::review::authority_people(i);
         game_society::institutions::AuthorityFacts {
             alive: needed
                 .into_iter()
@@ -363,12 +587,6 @@ impl Simulation {
                 })
                 .collect(),
         }
-    }
-    pub(crate) fn subjects(&self, i: &Institution, subjects: &Subjects) -> BTreeSet<PersonId> {
-        i.subjects(subjects, &self.institution_authority_facts(i))
-    }
-    pub(crate) fn office_effective(&self, i: &Institution, office: &OfficeMandate) -> bool {
-        i.office_effective(office, &self.institution_authority_facts(i))
     }
     pub(crate) fn institution_allows_access(
         &self,
@@ -388,10 +606,7 @@ impl Simulation {
     }
 
     fn social_observer_facts(&self) -> Vec<game_society::perception::ObserverFacts> {
-        self.host
-            .state
-            .people
-            .iter()
+        self.people()
             .map(|person| {
                 let area = match game_spatial::location(
                     &self.host.storage,
@@ -489,24 +704,6 @@ impl Simulation {
             &index,
         )
     }
-    pub(crate) fn publish_institution(&mut self, id: InstitutionId) {
-        let roster = self.social_observer_facts();
-        let index = game_society::perception::ObservationIndex::new(&roster)
-            .expect("unique observer roster");
-        let world = self.host.state.institutions.as_ref().unwrap();
-        let authority = self.institution_authority_facts(
-            game_society::institution(&self.host.storage, id).expect("validated Society reference"),
-        );
-        let publication = world
-            .prepare_publication(&self.host.storage, id, &authority, self.time(), &index)
-            .expect("known institution");
-        publication
-            .commit(
-                self.host.state.institutions.as_ref().unwrap(),
-                &mut self.host.storage,
-            )
-            .expect("immediate publication guard");
-    }
     fn institution_reference_facts(&self, request: &ReferenceRequest) -> ReferenceFacts {
         ReferenceFacts {
             people: request
@@ -552,14 +749,6 @@ impl Simulation {
                 })
                 .collect(),
         }
-    }
-    pub(crate) fn validate_subjects(&self, subjects: &Subjects, offices: &[OfficeMandate]) -> bool {
-        let request = ReferenceRequest {
-            people: subjects.named.clone(),
-            ..Default::default()
-        };
-        self.institution_reference_facts(&request)
-            .validate_subjects(subjects, offices)
     }
     pub(crate) fn prepare_institution_transition(
         &self,
@@ -676,6 +865,23 @@ impl Simulation {
         action: &InstitutionAction,
         positional: &BTreeMap<AreaId, Vec<PersonId>>,
     ) -> Result<(), Error> {
+        self.execute_institution_transition_prepared(
+            actor, area, action, positional, None, None, None, None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn execute_institution_transition_prepared(
+        &mut self,
+        actor: PersonId,
+        area: AreaId,
+        action: &InstitutionAction,
+        positional: &BTreeMap<AreaId, Vec<PersonId>>,
+        publications: Option<Vec<game_society::projected_publication::PreparedCommandPublication>>,
+        enforcement_people: Option<&[game_society::enforcement::PersonFacts]>,
+        agreement_contacts: Option<&game_agreements::ContactSet>,
+        enforcement_assaults: Option<&[game_society::enforcement::WitnessedAssault]>,
+    ) -> Result<(), Error> {
+        let opening = self.host.transaction_opening();
         let plan = self.prepare_institution_transition(actor, area, action)?;
         let external_ids = plan
             .effects
@@ -730,32 +936,35 @@ impl Simulation {
                 outcome,
                 change,
             } = effect
-            {
-                match change {
+                && matches!(
+                    change,
                     InstitutionChange::RatifyRegional { .. }
-                    | InstitutionChange::AuthorizeRegionalPassage { .. } => {
-                        if let Some((change, event)) =
-                            self.prepare_realm_outcome(*institution, *proposal, *outcome)?
-                        {
-                            regional_plans.push(change);
-                            regional_events.push((*institution, *proposal, event));
-                        }
-                        self.ensure_event_capacity(1)?;
-                    }
-                    _ => self.preflight_enforcement_adoption(*institution, *proposal)?,
+                        | InstitutionChange::AuthorizeRegionalPassage { .. }
+                )
+            {
+                if let Some((change, event)) =
+                    self.prepare_realm_outcome(*institution, *proposal, *outcome)?
+                {
+                    regional_plans.push(change);
+                    regional_events.push((*institution, *proposal, event));
                 }
+                self.ensure_event_capacity(1)?;
             }
         }
         plan.verify(&self.host.storage)?;
         let effects = plan.effects.clone();
-        let next_id = plan.next_id;
+        let mut next_id = plan.next_id;
+        let opening_plan = plan.clone();
         if let Some(funding) = &funding {
             funding.check(&game_agreements::Ledger::new(&self.host.storage))?;
         }
         let observe = effects
             .iter()
             .any(|e| matches!(e, CommandEffect::ObserveRegional));
-        let publications = self.prepare_institution_publications(&plan, positional)?;
+        let publications = publications.map_or_else(
+            || self.prepare_institution_publications(&plan, positional),
+            Ok,
+        )?;
         let regional = self.prepare_realm_institution_reaction(
             &publications,
             regional_plans,
@@ -772,43 +981,96 @@ impl Simulation {
         let regional_guard = regional
             .map(|p| p.stage_into(&self.host.storage, &publication_guard, &mut batch))
             .transpose()?;
-        if let Some(funding) = funding {
-            funding.stage(&mut batch);
+        let funding_guard = funding
+            .as_ref()
+            .map(|funding| funding.stage_into(&self.host.storage, &mut batch))
+            .transpose()?;
+        let mut enforcement_publications = BTreeMap::new();
+        for effect in &effects {
+            if let CommandEffect::ExternalOutcome {
+                proposal,
+                outcome: RuleProposalStatus::Adopted,
+                change,
+                ..
+            } = effect
+                && matches!(
+                    change,
+                    InstitutionChange::EnforcementPolicy { .. }
+                        | InstitutionChange::Adjudicate { .. }
+                )
+            {
+                let proposal_row = batch
+                    .projected::<RuleProposal>(&self.host.storage, game_ecs::StableId(proposal.0))?
+                    .cloned()
+                    .ok_or(Error::Unavailable)?;
+                let count = Self::enforcement_change_ids(change);
+                let judgment = (count > 0).then_some(JudgmentId(next_id));
+                next_id = next_id.checked_add(count).ok_or(Error::Overflow)?;
+                let receiver = game_society::enforcement::prepare_adoption(
+                    &self.host.storage,
+                    self.time(),
+                    &proposal_row,
+                    judgment,
+                )?;
+                let receiver = receiver.stage(&self.host.storage, &mut batch)?;
+                enforcement_publications.insert(*proposal, receiver);
+            }
         }
+        let enforcement_observation = if enforcement_publications.is_empty() {
+            None
+        } else {
+            let receipts = enforcement_publications.values().collect::<Vec<_>>();
+            Some(self.prepare_institution_enforcement_observation(
+                &mut batch,
+                &receipts,
+                enforcement_people,
+                enforcement_assaults,
+            )?)
+        };
+        opening_plan.verify(&self.host.storage)?;
         publication_guard.validate(&batch)?;
         if let Some(guard) = regional_guard {
             guard.validate(&batch)?;
         }
-        self.host.storage.apply_batch(batch)?;
-        self.host.allocate_ids(
-            (next_id)
-                .checked_sub(self.host.next_id())
-                .ok_or(Error::Overflow)?,
-        )?;
+        if let Some(guard) = &funding_guard {
+            guard.validate(&self.host.storage, &batch)?;
+        }
+        for receiver in enforcement_publications.values() {
+            receiver.validate(&self.host.storage, &batch)?;
+        }
+        if let Some(observation) = &enforcement_observation {
+            observation.validate(
+                self.host.state.enforcement.as_ref(),
+                &self.host.storage,
+                &batch,
+            )?;
+        }
+        let mut events = Vec::new();
+        let mut enforcement_changed = false;
         for effect in effects {
-            match effect {
+            let event = match effect {
                 CommandEffect::Funding { agreement, .. } => {
-                    self.emit(EventKind::AgreementActivated { agreement })
+                    Some(EventKind::AgreementActivated { agreement })
                 }
                 CommandEffect::Proposed {
                     institution,
                     proposer,
-                } => self.emit(EventKind::InstitutionProposed {
+                } => Some(EventKind::InstitutionProposed {
                     institution,
                     proposer,
                 }),
                 CommandEffect::Founded { institution } => {
-                    self.emit(EventKind::InstitutionFounded { institution })
+                    Some(EventKind::InstitutionFounded { institution })
                 }
                 CommandEffect::Left { institution, actor } => {
-                    self.emit(EventKind::InstitutionLeft { institution, actor })
+                    Some(EventKind::InstitutionLeft { institution, actor })
                 }
                 CommandEffect::OfficeSupportChanged {
                     institution,
                     office,
                     actor,
                     support,
-                } => self.emit(EventKind::OfficeSupportChanged {
+                } => Some(EventKind::OfficeSupportChanged {
                     institution,
                     office,
                     actor,
@@ -817,80 +1079,283 @@ impl Simulation {
                 CommandEffect::Changed {
                     institution,
                     proposal,
-                } => self.emit(EventKind::InstitutionChanged {
+                } => Some(EventKind::InstitutionChanged {
                     institution,
                     proposal,
                 }),
                 CommandEffect::ExternalOutcome {
                     institution,
                     proposal,
-                    outcome: _,
                     change,
-                } => match change {
-                    InstitutionChange::RatifyRegional { .. }
-                    | InstitutionChange::AuthorizeRegionalPassage { .. } => {
-                        if let Some((_, _, event)) = regional_events
+                    ..
+                } => {
+                    if matches!(
+                        change,
+                        InstitutionChange::RatifyRegional { .. }
+                            | InstitutionChange::AuthorizeRegionalPassage { .. }
+                    ) {
+                        regional_events
                             .iter()
                             .find(|(i, p, _)| *i == institution && *p == proposal)
-                        {
-                            self.publish_realm_event(event.clone());
-                        }
-                    }
-                    _ => self.adopt_enforcement_change(institution, proposal)?,
-                },
-                CommandEffect::Publish { .. } => {}
-                CommandEffect::ObserveRegional => {
-                    let through = self.host.next_event() - 1;
-                    if let Some(world) = self.host.state.realm.as_mut() {
-                        world.last_event = through;
+                            .map(|(_, _, event)| bind_institution_realm_event(event.clone()))
+                    } else {
+                        let receipt = enforcement_publications
+                            .remove(&proposal)
+                            .ok_or(Error::Unavailable)?;
+                        enforcement_changed = true;
+                        receipt.finish().map(bind_institution_enforcement_event)
                     }
                 }
+                CommandEffect::Publish { .. } | CommandEffect::ObserveRegional => None,
+            };
+            if let Some(event) = event {
+                events.push(event);
             }
+        }
+        let agreement_receivers = funding
+            .as_ref()
+            .map(|funding| match agreement_contacts {
+                Some(contacts) => self.stage_agreement_receivers_with_contacts(
+                    actor, funding, &events, &mut batch, contacts,
+                ),
+                None => self.stage_agreement_receivers(actor, funding, &events, &mut batch),
+            })
+            .transpose()?;
+        publication_guard.validate(&batch)?;
+        if let Some(guard) = &funding_guard {
+            guard.validate(&self.host.storage, &batch)?;
+        }
+        if let Some(receivers) = &agreement_receivers {
+            receivers.validate(self, &batch)?;
+        }
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.ids = next_id
+            .checked_sub(self.host.next_id())
+            .ok_or(Error::Overflow)?;
+        transaction.events = events;
+        if let Some(guard) = funding_guard {
+            transaction.guards.push(guard);
+        }
+        if let Some(receivers) = &agreement_receivers {
+            transaction.guards.extend(receivers.guards.iter().cloned());
+        }
+        self.host.commit_transaction(transaction)?;
+        if let Some(receivers) = agreement_receivers {
+            receivers.finish(self);
+        }
+        let through = self.host.next_event() - 1;
+        if observe && let Some(world) = self.host.state.realm.as_mut() {
+            world.last_event = through;
+        }
+        if enforcement_changed {
+            self.host.state.enforcement = Some(
+                enforcement_observation
+                    .expect("prepared enforcement observation")
+                    .finish(through),
+            );
         }
         Ok(())
     }
 
-    fn institutional_agreement(
+    fn prepare_institution_enforcement_observation(
+        &self,
+        batch: &mut game_ecs::Batch,
+        receipts: &[&game_society::enforcement::AdoptionPublication],
+        supplied: Option<&[game_society::enforcement::PersonFacts]>,
+        supplied_assaults: Option<&[game_society::enforcement::WitnessedAssault]>,
+    ) -> Result<game_society::enforcement::ObservationPublication, Error> {
+        use game_society::enforcement::{AdoptionObservationFacts, PersonFacts};
+        let mut reads = game_ecs::ReadSet::new();
+        reads.membership::<game_characters::Person>(&self.host.storage, |_, _| true);
+        let mut people = Vec::new();
+        if let Some(supplied) = supplied {
+            people.extend_from_slice(supplied);
+        } else {
+            for person in self.people() {
+                let id = game_ecs::StableId(person.id.0);
+                reads.read::<game_characters::Person>(&self.host.storage, id);
+                let body = reads.read::<game_physiology::Body>(&self.host.storage, id);
+                let location = reads.read::<Location>(&self.host.storage, id);
+                if let (Some(body), Some(location)) = (body, location) {
+                    people.push(PersonFacts {
+                        id: person.id,
+                        inventory: person.inventory,
+                        location: location.clone(),
+                        vitals: body.vitals.clone(),
+                        independent: self.independent(person.id),
+                        combat_restricted: self.combat_restricts(person.id),
+                    });
+                }
+            }
+        }
+        let encounters = self
+            .host
+            .events()
+            .iter()
+            .filter_map(|event| {
+                if let EventKind::Struck { encounter, .. } = event.event {
+                    Some(encounter)
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        for encounter in encounters {
+            reads.read::<game_conflict::Encounter>(
+                &self.host.storage,
+                game_ecs::StableId(encounter.0),
+            );
+        }
+        let assaults = supplied_assaults.map_or_else(
+            || self.enforcement_assault_facts(),
+            |assaults| assaults.to_vec(),
+        );
+        game_society::enforcement::stage_adoption_observation(
+            &self.host.storage,
+            batch,
+            receipts,
+            AdoptionObservationFacts {
+                now: self.time(),
+                people: &people,
+                assaults: &assaults,
+                last_event: self
+                    .host
+                    .state
+                    .enforcement
+                    .as_ref()
+                    .map(|world| world.last_event),
+            },
+            reads,
+        )
+    }
+
+    fn commit_institution_rule_application(
         &mut self,
-        institution: InstitutionId,
-        term: AgreementTerm,
-    ) -> Result<AgreementId, Error> {
-        self.reserve_social_ids(2)?;
-        let agreement = AgreementId(self.host.next_id());
-        let obligation = ObligationId(self.host.next_id().checked_add(1).ok_or(Error::Overflow)?);
-        let next_id = self.host.next_id().checked_add(2).ok_or(Error::Overflow)?;
-        let plan = game_agreements::Ledger::new(&self.host.storage).prepare_institutional_duties(
-            &[game_agreements::InstitutionDuty {
-                institution,
-                agreement,
-                obligation,
-                term,
-            }],
-            self.host.clock().time,
+        application: &game_society::deliberation::RuleApplications,
+        positional: &BTreeMap<AreaId, Vec<PersonId>>,
+    ) -> Result<(), Error> {
+        use game_society::rule_publication::RuleApplicationEffect;
+        let opening = self.host.transaction_opening();
+        let now = self.time();
+        let runtime = self
+            .host
+            .state
+            .institutions
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        let plan = runtime.prepare_rule_application(
+            &self.host.storage,
+            application,
+            opening.next_id,
+            now,
         )?;
-        plan.commit(&mut self.host.storage)?;
-        self.host.allocate_ids(
-            (next_id)
-                .checked_sub(self.host.next_id())
-                .ok_or(Error::Overflow)?,
+        let effects = plan.effects.clone();
+        let next_id = plan.next_id;
+        let agreements = plan.agreement_transition().cloned();
+        let people = plan.publication_people(
+            positional
+                .get(&plan.institution().charter.jurisdiction)
+                .into_iter()
+                .flatten()
+                .copied(),
+        );
+        let roster = self.social_observer_facts_for(people);
+        let index = game_society::perception::ObservationIndex::new(&roster)?;
+        let authority = self.institution_authority_facts(plan.institution());
+        let publications =
+            plan.prepare_publications(runtime, &self.host.storage, &authority, now, &index)?;
+        let regional =
+            self.prepare_realm_institution_reaction(&publications, Vec::new(), false, positional)?;
+        let mut batch = game_ecs::Batch::new();
+        let publication = plan.stage_with_publications(
+            runtime,
+            &self.host.storage,
+            now,
+            publications,
+            &mut batch,
         )?;
-        self.emit(EventKind::AgreementActivated { agreement });
-        Ok(agreement)
+        let regional = regional
+            .map(|plan| {
+                plan.stage_into(
+                    &self.host.storage,
+                    publication.publication_guard(),
+                    &mut batch,
+                )
+            })
+            .transpose()?;
+        publication.validate(runtime, &self.host.storage, now, &batch)?;
+        if let Some(regional) = &regional {
+            regional.validate(&batch)?;
+        }
+        let mut events = Vec::new();
+        for effect in effects {
+            match effect {
+                RuleApplicationEffect::Access {
+                    institution,
+                    index,
+                    actor,
+                } => events.push(EventKind::InstitutionRuleApplied {
+                    institution,
+                    rule: index,
+                    actor,
+                    agreement: None,
+                }),
+                RuleApplicationEffect::Duty {
+                    institution,
+                    index,
+                    actor,
+                    agreement,
+                } => {
+                    events.push(EventKind::AgreementActivated { agreement });
+                    events.push(EventKind::InstitutionRuleApplied {
+                        institution,
+                        rule: index,
+                        actor,
+                        agreement: Some(agreement),
+                    });
+                }
+            }
+        }
+        let agreement_receivers = agreements
+            .as_ref()
+            .map(|agreements| {
+                let actor = events
+                    .iter()
+                    .find_map(|event| match event {
+                        EventKind::InstitutionRuleApplied {
+                            actor,
+                            agreement: Some(_),
+                            ..
+                        } => Some(*actor),
+                        _ => None,
+                    })
+                    .ok_or(Error::Unavailable)?;
+                self.stage_agreement_receivers(actor, agreements, &events, &mut batch)
+            })
+            .transpose()?;
+        publication.validate(runtime, &self.host.storage, now, &batch)?;
+        if let Some(receivers) = &agreement_receivers {
+            receivers.validate(self, &batch)?;
+        }
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.ids = next_id
+            .checked_sub(self.host.next_id())
+            .ok_or(Error::Overflow)?;
+        transaction.events = events;
+        transaction.guards = publication.row_guards();
+        if let Some(receivers) = &agreement_receivers {
+            transaction.guards.extend(receivers.guards.iter().cloned());
+        }
+        self.host.commit_transaction(transaction)?;
+        if let Some(receivers) = agreement_receivers {
+            receivers.finish(self);
+        }
+        Ok(())
     }
 
     fn apply_institution_rules(&mut self) -> Result<(), Error> {
         let world = self.host.state.institutions.as_ref().unwrap();
-        let holders = game_society::institutions(&self.host.storage)
-            .map(|(_, row)| row)
-            .filter(|institution| institution.status == InstitutionStatus::Active)
-            .flat_map(|institution| {
-                institution
-                    .charter
-                    .offices
-                    .iter()
-                    .map(|office| office.holder)
-            })
-            .collect::<BTreeSet<_>>();
+        let holders = game_society::review::office_holders(&self.host.storage, true);
         let speakers = holders
             .iter()
             .map(|actor| game_society::deliberation::RuleSpeaker {
@@ -906,10 +1371,7 @@ impl Simulation {
             })
             .collect::<Vec<_>>();
         let locations = self
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .filter_map(|person| {
                 self.social_area(person.id)
                     .ok()
@@ -929,55 +1391,9 @@ impl Simulation {
             &locations,
             self.time(),
         )?;
+        let positional = self.realm_positional_membership()?;
         for application in applications {
-            for intent in application.intents {
-                match &intent {
-                    game_society::institutions::RuleIntent::Access {
-                        institution,
-                        index,
-                        actor,
-                        ..
-                    } => {
-                        if self
-                            .host
-                            .state
-                            .institutions
-                            .as_mut()
-                            .unwrap()
-                            .apply_access_intent(&mut self.host.storage, &intent)?
-                        {
-                            self.emit(EventKind::InstitutionRuleApplied {
-                                institution: *institution,
-                                rule: *index,
-                                actor: *actor,
-                                agreement: None,
-                            });
-                        }
-                    }
-                    game_society::institutions::RuleIntent::Duty {
-                        institution,
-                        index,
-                        actor,
-                        term,
-                        ..
-                    } => {
-                        let agreement = self.institutional_agreement(*institution, term.clone())?;
-                        self.host
-                            .state
-                            .institutions
-                            .as_mut()
-                            .unwrap()
-                            .register_duty(&mut self.host.storage, &intent, agreement)?;
-                        self.emit(EventKind::InstitutionRuleApplied {
-                            institution: *institution,
-                            rule: *index,
-                            actor: *actor,
-                            agreement: Some(agreement),
-                        });
-                    }
-                }
-            }
-            self.publish_institution(application.institution);
+            self.commit_institution_rule_application(&application, &positional)?;
         }
         Ok(())
     }
@@ -999,113 +1415,34 @@ impl Simulation {
         reaction: game_society::reactions::CaseReaction,
         index: &game_society::perception::ObservationIndex<'_>,
     ) -> Result<CaseId, Error> {
-        self.reserve_social_ids(1)?;
+        let opening = self.host.transaction_opening();
+        let id = CaseId(opening.next_id);
         let observers = index.case_observers(&reaction.case, reaction.public)?;
-        let actor = reaction.case.subject;
-        let id = CaseId(self.host.allocate_id()?.0);
-        self.host
+        let runtime = self
+            .host
             .state
             .institutions
-            .as_mut()
-            .unwrap()
-            .commit_case_reaction(&mut self.host.storage, reaction, id, &observers)?;
-        self.emit(EventKind::SocialCaseRecorded { case: id, actor });
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        let plan = runtime.prepare_case_reaction(&self.host.storage, reaction, id, &observers)?;
+        let mut batch = game_ecs::Batch::new();
+        let publication = plan.stage_into(runtime, &self.host.storage, self.time(), &mut batch)?;
+        publication.validate(runtime, &self.host.storage, self.time(), &batch)?;
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.ids = 1;
+        transaction.events = vec![EventKind::SocialCaseRecorded {
+            case: publication.case,
+            actor: publication.actor,
+        }];
+        transaction.guards.push(publication.row_guard());
+        self.host.commit_transaction(transaction)?;
         Ok(id)
     }
-    fn social_receipt(&self, event: &EventKind) -> Option<game_society::reactions::SocialReceipt> {
-        use game_society::reactions::{CaseAsset, CooperationTarget, SocialReceipt};
-        let asset = |inventory: InventoryId, area: Option<AreaId>| {
-            let stock =
-                game_cargo::inventory(&self.host.storage, inventory).expect("receipt stock exists");
-            CaseAsset {
-                area,
-                inventory,
-                good: stock.good,
-            }
-        };
-        let target = |term: &AgreementTerm| match *term {
-            AgreementTerm::Labor { site, .. } => {
-                let site =
-                    game_workshop::site(&self.host.storage, site).expect("receipt site exists");
-                Some(CooperationTarget::Labor {
-                    site: site.id,
-                    asset: asset(site.output, Some(site.area)),
-                })
-            }
-            AgreementTerm::Delivery { destination, .. } => {
-                let stock = game_cargo::inventory(&self.host.storage, destination)
-                    .expect("receipt stock exists");
-                Some(CooperationTarget::Delivery {
-                    asset: asset(destination, self.inventory_area(stock)),
-                })
-            }
-            _ => None,
-        };
-        match *event {
-            EventKind::ObligationPerformed {
-                obligation, actor, ..
-            } => {
-                let obligation =
-                    &game_agreements::obligation(&self.host.storage, obligation).unwrap();
-                Some(SocialReceipt::Performed {
-                    actor,
-                    counterpart: obligation.term.parties()[1],
-                    agreement: obligation.agreement,
-                    target: target(&obligation.term)?,
-                })
-            }
-            EventKind::ObligationDefaulted { obligation } => {
-                let obligation =
-                    &game_agreements::obligation(&self.host.storage, obligation).unwrap();
-                let asset = match target(&obligation.term)? {
-                    CooperationTarget::Labor { asset, .. }
-                    | CooperationTarget::Delivery { asset } => asset,
-                };
-                Some(SocialReceipt::Defaulted {
-                    actor: obligation.term.parties()[0],
-                    counterpart: obligation.term.parties()[1],
-                    agreement: obligation.agreement,
-                    asset,
-                })
-            }
-            EventKind::Produced {
-                actor,
-                site,
-                output,
-                ..
-            } => {
-                let site =
-                    game_workshop::site(&self.host.storage, site).expect("receipt site exists");
-                Some(SocialReceipt::Produced {
-                    actor,
-                    site: site.id,
-                    asset: asset(output, Some(site.area)),
-                    custodian: game_property::inventory_custodian(&self.host.storage, output),
-                })
-            }
-            EventKind::Ate { actor, source, .. } => Some(SocialReceipt::Ate { actor, source }),
-            EventKind::Transferred {
-                actor,
-                source,
-                destination,
-                ..
-            } => {
-                let stock = game_cargo::inventory(&self.host.storage, source)
-                    .expect("receipt stock exists");
-                let destination = game_cargo::inventory(&self.host.storage, destination)
-                    .expect("receipt stock exists");
-                Some(SocialReceipt::Transferred {
-                    actor,
-                    source,
-                    good: stock.good,
-                    destination_holder: match destination.location {
-                        InventoryLocation::Carried(actor) => Some(actor),
-                        _ => None,
-                    },
-                })
-            }
-            _ => None,
-        }
+    fn social_receipt(
+        &self,
+        event: &EventKind,
+    ) -> Result<Option<game_society::reactions::SocialReceipt>, Error> {
+        self.social_receipt_projected(&game_ecs::Batch::new(), event)
     }
     pub(crate) fn reconcile_institutions(&mut self) -> Result<(), Error> {
         let Some(world) = &self.host.state.institutions else {
@@ -1113,37 +1450,19 @@ impl Simulation {
         };
         let cursor = world.last_event;
         let last = self.host.next_event() - 1;
-        if game_society::knowledges(&self.host.storage).count() != self.host.state.people.len() {
-            for person in &self.host.state.people {
-                if game_society::knowledge(&self.host.storage, person.id).is_none() {
-                    game_society::insert_knowledge(
-                        &mut self.host.storage,
-                        person.id,
-                        game_society::Knowledge::default(),
-                    )?;
-                }
-            }
-        }
+        let actors = self.person_ids.clone();
+        game_society::review::initialize_knowledge(&mut self.host.storage, actors)?;
         let receipts = self
             .host
-            .events()
+            .events_since(cursor)
             .iter()
-            .skip(cursor as usize)
-            .filter_map(|event| self.social_receipt(&event.event))
-            .collect::<Vec<_>>();
+            .filter_map(|event| self.social_receipt(&event.event).transpose())
+            .collect::<Result<Vec<_>, Error>>()?;
         let receipt_index = game_society::reactions::ReceiptIndex::new(&receipts);
         let roster = self.social_observer_facts();
         let witnesses = game_society::perception::ObservationIndex::new(&roster)?;
         for receipt in receipts {
-            use game_society::reactions::SocialReceipt;
-            let actor = match receipt {
-                SocialReceipt::Performed { actor, .. }
-                | SocialReceipt::Produced { actor, .. }
-                | SocialReceipt::Defaulted { actor, .. }
-                | SocialReceipt::SupportReceived { actor, .. }
-                | SocialReceipt::Ate { actor, .. }
-                | SocialReceipt::Transferred { actor, .. } => actor,
-            };
+            let actor = game_society::review::receipt_actor(&receipt);
             let subject = self.case_subject_facts(actor);
             if let Some(reaction) = self
                 .host
@@ -1167,25 +1486,16 @@ impl Simulation {
     }
     fn observe_exclusions(&mut self) -> Result<(), Error> {
         let world = self.host.state.institutions.as_ref().unwrap();
-        let mut reactions = Vec::new();
-        for (actor, _) in game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
-        {
-            let Ok(area) = self.social_area(actor) else {
-                continue;
-            };
-            let mut subject = self.case_subject_facts(actor);
-            subject.area = Some(area);
-            reactions.extend(
-                world.exclusion_reactions(
-                    &self.host.storage,
-                    subject,
-                    &game_characters::decisions::stocks(&self.host.storage, actor)
-                        .expect("stock knowledge exists")
-                        .known,
-                    self.time(),
-                ),
-            );
-        }
+        let facts = game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
+            .map(|(actor, _)| game_society::review::ExclusionFacts {
+                subject: self.case_subject_facts(actor),
+                available_area: self.social_area(actor).ok(),
+                known_stocks: &game_characters::decisions::stocks(&self.host.storage, actor)
+                    .expect("stock knowledge exists")
+                    .known,
+            })
+            .collect::<Vec<_>>();
+        let reactions = world.observed_exclusions(&self.host.storage, &facts, self.time());
         let roster = self.social_observer_facts();
         let witnesses = game_society::perception::ObservationIndex::new(&roster)?;
         for reaction in reactions {
@@ -1222,16 +1532,7 @@ impl Simulation {
     }
     fn hear_known_cases(&mut self) -> Result<(), Error> {
         let world = self.host.state.institutions.as_ref().unwrap();
-        let holders = game_society::institutions(&self.host.storage)
-            .map(|(_, row)| row)
-            .flat_map(|institution| {
-                institution
-                    .charter
-                    .offices
-                    .iter()
-                    .map(|office| office.holder)
-            })
-            .collect::<BTreeSet<_>>();
+        let holders = game_society::review::office_holders(&self.host.storage, false);
         let actors = holders
             .into_iter()
             .map(|actor| game_society::deliberation::HearingActor {
@@ -1266,11 +1567,7 @@ impl Simulation {
         self.reconcile_institutions()?;
         self.observe_exclusions()?;
         let w = self.host.state.institutions.as_ref().unwrap();
-        let founders = game_society::institutions(&self.host.storage)
-            .map(|(_, row)| row)
-            .filter(|row| row.status == InstitutionStatus::Proposed)
-            .flat_map(|row| row.charter.founders.iter().copied())
-            .collect::<BTreeSet<_>>();
+        let founders = game_society::review::formation_voters(&self.host.storage);
         let knowledge = founders
             .into_iter()
             .map(|actor| (actor, self.institutional_vote_knowledge(actor)))
@@ -1281,10 +1578,7 @@ impl Simulation {
             .collect::<Vec<_>>();
         let mut replies = w.formation_replies(&self.host.storage, &facts)?;
         let voters = self
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .map(|person| (person.id, self.institutional_vote_knowledge(person.id)))
             .collect::<Vec<_>>();
         let voter_facts = voters
@@ -1297,9 +1591,7 @@ impl Simulation {
                 .collect(),
         };
         let requests = w.proposal_vote_requests(&self.host.storage, &authority, &voter_facts)?;
-        let proposers = game_society::proposals(&self.host.storage)
-            .map(|(_, p)| p.proposer)
-            .collect::<BTreeSet<_>>()
+        let proposers = game_society::review::proposal_proposers(&self.host.storage)
             .into_iter()
             .map(|actor| game_society::proposal_voting::ProposerFacts {
                 actor,
@@ -1416,10 +1708,7 @@ impl Simulation {
             DiscoveryFacts, FailureHandling, LivelihoodSite, Recruit,
         };
         let roster = self
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .map(|person| Recruit {
                 actor: person.id,
                 area: self.social_area(person.id).ok(),
@@ -1427,17 +1716,8 @@ impl Simulation {
                 citizen: person.role == Role::Citizen,
             })
             .collect::<Vec<_>>();
-        let mut by_area = BTreeMap::<AreaId, Vec<Recruit>>::new();
-        for person in &roster {
-            if let Some(area) = person.area {
-                by_area.entry(area).or_default().push(*person);
-            }
-        }
-        for person in &roster {
-            let actor = person.actor;
-            let Some(area) = person.area else {
-                continue;
-            };
+        let index = game_society::review::DiscoveryIndex::new(&roster);
+        for (actor, area) in index.actors() {
             let knowledge = self.institutional_vote_knowledge(actor);
             let voter = self.institutional_vote_facts(actor, &knowledge);
             let sites =
@@ -1451,7 +1731,7 @@ impl Simulation {
                         accessible: site.access,
                     })
                     .collect::<Vec<_>>();
-            let recruits = by_area.get(&area).map_or(&[][..], Vec::as_slice);
+            let recruits = index.recruits(area);
             let world = self.host.state.institutions.as_ref().unwrap();
             let request =
                 world.discovery_references(&self.host.storage, actor, area, &sites, recruits);
@@ -1539,7 +1819,7 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     }
     s.state.agreements.as_ref().ok_or_else(fail)?;
     let request = runtime.validation_references(s.components);
-    let people = s.state.people.iter().map(|p| p.id).collect::<BTreeSet<_>>();
+    let people = s.people().map(|p| p.id).collect::<BTreeSet<_>>();
     let areas = s.state.areas.iter().map(|a| a.id).collect::<BTreeSet<_>>();
     let references = ReferenceFacts {
         people: request.people.intersection(&people).copied().collect(),
@@ -1584,17 +1864,17 @@ mod closing_resource_tests {
     use super::*;
     fn many_defaults() -> Simulation {
         let mut sim = Simulation::institution_fixture(61, Execution::default()).unwrap();
-        for person in sim.host.state.people.clone() {
-            sim.debug_actor_command(person.id, Command::Cancel).unwrap();
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            sim.debug_actor_command(person_id, Command::Cancel).unwrap();
             sim.debug_set_personality(
-                person.id,
+                person_id,
                 decisions::Personality::restful(),
                 decisions::Aspiration::Comfort,
             )
             .unwrap();
         }
         let debtor = sim.host.state.ruler;
-        let creditor = sim.host.state.people[3].id;
+        let creditor = sim.person_at(3).id;
         let area = sim.host.state.areas[0].id;
         let source = game_cargo::inventories(&sim.host.storage)
             .map(|(_, row)| row)
@@ -1679,7 +1959,7 @@ mod closing_resource_tests {
                 .next()
                 .is_none()
         );
-        assert_eq!(sim.host.state.people.len(), 15);
+        assert_eq!(sim.people().len(), 15);
         let before = sim.canonical_snapshot().unwrap();
         assert_eq!(sim.advance(SimDuration(1)), Err(Error::Overflow));
         assert!(
@@ -1756,5 +2036,547 @@ mod closing_resource_tests {
                 .all(|obligation| obligation.defaulted)
         );
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod agreement_receiver_tests {
+    use super::*;
+
+    fn strict_receiver_schema() -> Result<game_ecs::Schema, Error> {
+        strict_receiver_schema_with_case_rejection(false)
+    }
+    fn strict_receiver_schema_with_case_rejection(
+        reject_cases: bool,
+    ) -> Result<game_ecs::Schema, Error> {
+        let mut schema = game_ecs::Schema::new();
+        game_cargo::register_components(&mut schema)?;
+        game_characters::register_people(&mut schema)?;
+        game_agriculture::register_components(&mut schema)?;
+        game_physiology::register_components(&mut schema)?;
+        game_workshop::register_components(&mut schema)?;
+        game_skills::register_components(&mut schema)?;
+        game_armies::register_components(&mut schema)?;
+        game_conflict::register_components(&mut schema)?;
+        game_conflict::force::register_components(&mut schema)?;
+        game_lineage::register_components(&mut schema)?;
+        game_health::register_components(&mut schema)?;
+        game_lifecycle::register_components(&mut schema)?;
+        game_property::register_components(&mut schema)?;
+        game_projects::register_components(&mut schema)?;
+        game_invocation::register_components(&mut schema)?;
+        game_missions::register_components(&mut schema)?;
+        schema.register::<game_agreements::Agreement>(
+            "agreements/agreement",
+            game_agreements::Agreement::validate,
+        )?;
+        schema.register::<game_agreements::Obligation>(
+            "agreements/obligation",
+            game_agreements::Obligation::validate,
+        )?;
+        schema.register::<game_agreements::Amendment>(
+            "agreements/amendment",
+            game_agreements::Amendment::validate,
+        )?;
+        schema.register::<game_agreements::Knowledge>("agreements/knowledge", |knowledge| {
+            knowledge.validate()?;
+            if !knowledge.agreements.is_empty() {
+                return Err(Error::InvalidConfiguration(
+                    "strict institution Agreement receiver".into(),
+                ));
+            }
+            Ok(())
+        })?;
+        schema.register::<game_agreements::Requests>("agreements/requests", |_| Ok(()))?;
+        schema.register::<game_agreements::PendingWork>("agreements/pending_work", |work| {
+            if work.millis == 0 {
+                return Err(Error::InvalidConfiguration("zero agreement work".into()));
+            }
+            Ok(())
+        })?;
+        schema.register::<game_agreements::PendingReport>(
+            "agreements/report",
+            game_agreements::PendingReport::validate,
+        )?;
+        game_realm::register_components(&mut schema)?;
+        game_invocation::register_memory_components::<game_api::Command>(&mut schema)?;
+        game_transport::register_components(&mut schema)?;
+        if reject_cases {
+            schema.register::<Institution>("society/institution", Institution::validate_shape)?;
+            schema.register::<RuleProposal>("society/proposal", |_| Ok(()))?;
+            schema.register::<game_society::Concept>("society/concept", |row| {
+                game_society::validate_rule_shape(&row.rule)
+            })?;
+            schema.register::<SocialCaseView>("society/case", SocialCaseView::validate_shape)?;
+            schema.register::<game_society::Knowledge>("society/knowledge", |row| {
+                row.validate_shape()?;
+                if !row.cases.is_empty() {
+                    return Err(Error::InvalidConfiguration(
+                        "strict pending case receiver".into(),
+                    ));
+                }
+                Ok(())
+            })?;
+            schema.register::<game_society::Requests>("society/requests", |_| Ok(()))?;
+            schema.register::<game_society::Exclusions>("society/exclusions", |_| Ok(()))?;
+            schema.register::<game_society::Hearing>("society/hearing", |_| Ok(()))?;
+        } else {
+            game_society::register_components(&mut schema)?;
+        }
+
+        game_society::enforcement::register_components(&mut schema)?;
+        game_characters::decisions::register_minds::<game_api::Command>(&mut schema)?;
+        game_characters::social::register_components(&mut schema)?;
+        game_genetics::register_components(&mut schema)?;
+        game_physiology::traits::register_components(&mut schema)?;
+        game_characters::temperament::register_components(&mut schema)?;
+        game_spatial::register_components(&mut schema)?;
+        game_environment::register_components(&mut schema)?;
+        game_ecology::register_components(&mut schema)?;
+        game_land::register_components(&mut schema)?;
+        schema.register::<game_api::Activity>("coordination/activity", |_| Ok(()))?;
+
+        Ok(schema)
+    }
+    fn fixture() -> (Simulation, PersonId, PersonId, AreaId, SiteId, InventoryId) {
+        let sim = Simulation::institution_fixture(17, Execution::default()).unwrap();
+        let actor = sim.host.state.ruler;
+        let recipient = sim.person_at(3).id;
+        let area = sim.host.state.areas[0].id;
+        let site = game_workshop::sites(&sim.host.storage)
+            .find(|(_, site)| site.area == area)
+            .unwrap()
+            .0;
+        let source = game_cargo::inventories(&sim.host.storage)
+            .find(|(_, stock)| {
+                stock.location == InventoryLocation::Area(area) && stock.good == Good::Food
+            })
+            .unwrap()
+            .0;
+        assert!(
+            game_agreements::knowledges(&sim.host.storage)
+                .all(|(_, knowledge)| knowledge.agreements.is_empty())
+        );
+        (sim, actor, recipient, area, site, source)
+    }
+    fn charter(
+        actor: PersonId,
+        recipient: PersonId,
+        area: AreaId,
+        site: SiteId,
+        source: InventoryId,
+        rules: Vec<InstitutionalRule>,
+        contributions: Vec<AgreementTerm>,
+    ) -> InstitutionCharter {
+        InstitutionCharter {
+            purpose: "Receiver atomicity".into(),
+            jurisdiction: area,
+            founders: BTreeSet::from([actor, recipient]),
+            open_membership: false,
+            procedure: DecisionProcedure {
+                proposers: Subjects::members(),
+                voters: Subjects::members(),
+                minimum_support: 2,
+            },
+            offices: vec![OfficeMandate {
+                slot: 0,
+                holder: actor,
+                inventories: BTreeSet::from([source]),
+                sites: BTreeSet::from([site]),
+                powers: BTreeSet::from([OfficePower::Labor, OfficePower::Delivery]),
+                minimum_support: 2,
+            }],
+            rules,
+            contributions,
+            evidence: BTreeSet::new(),
+        }
+    }
+    fn reject_new_knowledge(sim: &mut Simulation) {
+        let restored = game_ecs::Store::restore(
+            strict_receiver_schema().unwrap(),
+            sim.host.storage.snapshot().unwrap(),
+        )
+        .unwrap();
+        sim.host.storage = restored.into();
+    }
+    #[test]
+    fn successful_funding_receivers_know_the_new_duty_and_track_the_full_origin_cursor() {
+        let (mut sim, actor, recipient, area, site, source) = fixture();
+        let destination = sim
+            .debug_add_inventory(
+                Good::Food,
+                InventoryLocation::Area(area),
+                Quantity(0),
+                Quantity(10_000),
+                BTreeSet::from([actor, recipient]),
+            )
+            .unwrap();
+        let action = InstitutionAction::Found {
+            charter: charter(
+                actor,
+                recipient,
+                area,
+                site,
+                source,
+                Vec::new(),
+                vec![AgreementTerm::Delivery {
+                    debtor: actor,
+                    creditor: recipient,
+                    source,
+                    destination,
+                    quantity: Quantity(1_000),
+                    deadline: SimTime(600_000),
+                }],
+            ),
+            origin: None,
+        };
+        sim.execute_institution_transition(actor, area, &action)
+            .unwrap();
+        let institution = game_society::institutions(&sim.host.storage)
+            .next()
+            .unwrap()
+            .0;
+        let action = InstitutionAction::Join { institution };
+        let plan = sim
+            .prepare_institution_transition(recipient, area, &action)
+            .unwrap();
+        assert!(
+            plan.effects
+                .iter()
+                .any(|effect| matches!(effect, CommandEffect::Funding { .. }))
+        );
+        let opening_event = sim.host.next_event();
+        sim.execute_institution_transition(recipient, area, &action)
+            .unwrap();
+        let agreement = game_agreements::agreements(&sim.host.storage)
+            .next()
+            .unwrap()
+            .0;
+        for person in [actor, recipient] {
+            assert_eq!(
+                game_agreements::known_agreement(&sim.host.storage, person, agreement)
+                    .unwrap()
+                    .status,
+                AgreementStatus::Active
+            );
+        }
+        assert_eq!(
+            sim.host
+                .state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .last_observation_event,
+            sim.host.next_event() - 1
+        );
+        let actual = sim
+            .host
+            .events()
+            .iter()
+            .filter(|event| event.sequence >= opening_event)
+            .map(|event| &event.event)
+            .collect::<Vec<_>>();
+        assert!(
+            actual
+                .iter()
+                .any(|event| matches!(event, EventKind::AgreementActivated { .. }))
+        );
+        assert!(
+            actual.len() > 1,
+            "observer cursor includes the joint institution events"
+        );
+    }
+    #[test]
+    fn funding_receiver_rejection_preserves_native_origin_events_ids_and_all_cursors() {
+        let (mut sim, actor, recipient, area, site, source) = fixture();
+        let destination = sim
+            .debug_add_inventory(
+                Good::Food,
+                InventoryLocation::Area(area),
+                Quantity(0),
+                Quantity(10_000),
+                BTreeSet::from([actor, recipient]),
+            )
+            .unwrap();
+        let action = InstitutionAction::Found {
+            charter: charter(
+                actor,
+                recipient,
+                area,
+                site,
+                source,
+                Vec::new(),
+                vec![AgreementTerm::Delivery {
+                    debtor: actor,
+                    creditor: recipient,
+                    source,
+                    destination,
+                    quantity: Quantity(1_000),
+                    deadline: SimTime(600_000),
+                }],
+            ),
+            origin: None,
+        };
+        sim.execute_institution_transition(actor, area, &action)
+            .unwrap();
+        let institution = game_society::institutions(&sim.host.storage)
+            .next()
+            .unwrap()
+            .0;
+        let action = InstitutionAction::Join { institution };
+        let plan = sim
+            .prepare_institution_transition(recipient, area, &action)
+            .unwrap();
+        assert!(
+            plan.effects
+                .iter()
+                .any(|effect| matches!(effect, CommandEffect::Funding { .. }))
+        );
+        reject_new_knowledge(&mut sim);
+        let opening = sim.canonical_snapshot().unwrap();
+        assert_eq!(
+            sim.execute_institution_transition(recipient, area, &action),
+            Err(Error::InvalidConfiguration(
+                "strict institution Agreement receiver".into()
+            ))
+        );
+        assert_eq!(sim.canonical_snapshot().unwrap(), opening);
+    }
+    #[test]
+    fn rule_duty_receiver_rejection_preserves_institution_agreements_cases_and_cursors() {
+        let (mut sim, actor, recipient, area, site, source) = fixture();
+        let rule = InstitutionalRule {
+            subjects: Subjects::named(actor),
+            when: RuleExpression::Fact(SocialCondition::Local),
+            effect: SocialEffect::Labor {
+                site,
+                millis: 60_000,
+                beneficiary: Beneficiary::Person(recipient),
+                due_after: SimDuration(600_000),
+            },
+            authority: 0,
+        };
+        sim.execute_institution_transition(
+            actor,
+            area,
+            &InstitutionAction::Found {
+                charter: charter(actor, recipient, area, site, source, vec![rule], Vec::new()),
+                origin: None,
+            },
+        )
+        .unwrap();
+        let institution = game_society::institutions(&sim.host.storage)
+            .next()
+            .unwrap()
+            .0;
+        sim.execute_institution_transition(
+            recipient,
+            area,
+            &InstitutionAction::Join { institution },
+        )
+        .unwrap();
+        let concept = game_society::institution(&sim.host.storage, institution)
+            .unwrap()
+            .concepts[0];
+        let application = game_society::deliberation::RuleApplications {
+            institution,
+            intents: vec![game_society::institutions::RuleIntent::Duty {
+                institution,
+                concept,
+                index: 0,
+                actor,
+                term: AgreementTerm::Labor {
+                    debtor: actor,
+                    creditor: recipient,
+                    site,
+                    millis: 60_000,
+                    deadline: SimTime(600_000),
+                },
+            }],
+        };
+        let plan = sim
+            .host
+            .state
+            .institutions
+            .as_ref()
+            .unwrap()
+            .prepare_rule_application(
+                &sim.host.storage,
+                &application,
+                sim.host.next_id(),
+                sim.time(),
+            )
+            .unwrap();
+        assert!(plan.agreement_transition().is_some());
+        reject_new_knowledge(&mut sim);
+        let opening = sim.canonical_snapshot().unwrap();
+        let positional = sim.realm_positional_membership().unwrap();
+        assert_eq!(
+            sim.commit_institution_rule_application(&application, &positional),
+            Err(Error::InvalidConfiguration(
+                "strict institution Agreement receiver".into()
+            ))
+        );
+        assert_eq!(sim.canonical_snapshot().unwrap(), opening);
+    }
+    #[test]
+    fn routed_institution_receiver_failure_rolls_back_foundation_and_pending_receipts() {
+        let (mut sim, actor, recipient, area, site, source) = fixture();
+        let case = CaseId(sim.host.allocate_id().unwrap().0);
+        let now = sim.time();
+        game_society::insert_case(
+            &mut sim.host.storage,
+            case,
+            SocialCaseView {
+                id: case,
+                kind: SocialCaseKind::Exclusion,
+                subject: actor,
+                counterpart: recipient,
+                area,
+                inventory: Some(source),
+                good: Good::Food,
+                need_band: 0,
+                reciprocal: false,
+                outcome: SocialOutcome::Unresolved,
+                observed_at: now,
+            },
+        )
+        .unwrap();
+        game_society::insert_exclusions(
+            &mut sim.host.storage,
+            actor,
+            game_society::Exclusions {
+                stores: BTreeMap::from([(source, case)]),
+            },
+        )
+        .unwrap();
+        sim.host
+            .append_many(vec![EventKind::Ate {
+                actor,
+                source,
+                quantity: Quantity(1),
+            }])
+            .unwrap();
+        let action = InstitutionAction::Found {
+            charter: charter(actor, recipient, area, site, source, vec![], vec![]),
+            origin: None,
+        };
+        let strict = game_ecs::Store::restore(
+            strict_receiver_schema_with_case_rejection(true).unwrap(),
+            sim.host.storage.snapshot().unwrap(),
+        )
+        .unwrap();
+        sim.host.storage = strict.into();
+        let before = sim.host.snapshot().unwrap();
+        let before_clock = sim.host.clock();
+        let before_cursors = (
+            sim.host.state.institutions.as_ref().unwrap().last_event,
+            sim.host
+                .state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .last_observation_event,
+        );
+        assert_eq!(
+            sim.routed_institution_command(actor, &action),
+            Err(Error::InvalidConfiguration(
+                "strict pending case receiver".into()
+            ))
+        );
+        assert_eq!(sim.host.snapshot().unwrap(), before);
+        assert_eq!(sim.host.clock(), before_clock);
+        assert_eq!(
+            (
+                sim.host.state.institutions.as_ref().unwrap().last_event,
+                sim.host
+                    .state
+                    .agreements
+                    .as_ref()
+                    .unwrap()
+                    .last_observation_event
+            ),
+            before_cursors
+        );
+        assert!(
+            game_society::institutions(&sim.host.storage)
+                .next()
+                .is_none()
+        );
+        assert_eq!(
+            game_society::exclusions(&sim.host.storage, actor)
+                .unwrap()
+                .stores
+                .get(&source),
+            Some(&case)
+        );
+    }
+    #[test]
+    fn routed_institution_preserves_source_then_receiving_event_order_and_single_revision() {
+        let (mut sim, actor, recipient, area, site, source) = fixture();
+        let case = CaseId(sim.host.allocate_id().unwrap().0);
+        let now = sim.time();
+        game_society::insert_case(
+            &mut sim.host.storage,
+            case,
+            SocialCaseView {
+                id: case,
+                kind: SocialCaseKind::Exclusion,
+                subject: actor,
+                counterpart: recipient,
+                area,
+                inventory: Some(source),
+                good: Good::Food,
+                need_band: 0,
+                reciprocal: false,
+                outcome: SocialOutcome::Unresolved,
+                observed_at: now,
+            },
+        )
+        .unwrap();
+        game_society::insert_exclusions(
+            &mut sim.host.storage,
+            actor,
+            game_society::Exclusions {
+                stores: BTreeMap::from([(source, case)]),
+            },
+        )
+        .unwrap();
+        sim.host
+            .append_many(vec![EventKind::Ate {
+                actor,
+                source,
+                quantity: Quantity(1),
+            }])
+            .unwrap();
+        let before = sim.host.transaction_opening();
+        sim.routed_institution_command(
+            actor,
+            &InstitutionAction::Found {
+                charter: charter(actor, recipient, area, site, source, vec![], vec![]),
+                origin: None,
+            },
+        )
+        .unwrap();
+        let events = sim.host.events_since(before.next_event - 1);
+        assert!(matches!(
+            events.first().unwrap().event,
+            EventKind::InstitutionProposed { .. }
+        ));
+        assert!(matches!(
+            events.last().unwrap().event,
+            EventKind::SocialCaseRecorded { .. }
+        ));
+        assert_eq!(sim.host.clock().revision, before.clock.revision + 1);
+        assert_eq!(
+            sim.host.state.institutions.as_ref().unwrap().last_event,
+            events.last().unwrap().sequence - 1
+        );
+        assert!(
+            !game_society::exclusions(&sim.host.storage, actor)
+                .unwrap()
+                .stores
+                .contains_key(&source)
+        );
     }
 }

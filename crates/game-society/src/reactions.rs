@@ -5,24 +5,26 @@ use game_ecs::{Batch, StableId, Store};
 use std::collections::{BTreeMap, BTreeSet};
 mod receipt_batch;
 pub use receipt_batch::*;
+mod publication;
+pub use publication::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SubjectFacts {
     pub actor: PersonId,
     pub area: Option<AreaId>,
     pub hunger: u64,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CaseAsset {
     pub area: Option<AreaId>,
     pub inventory: InventoryId,
     pub good: Good,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CooperationTarget {
     Labor { site: SiteId, asset: CaseAsset },
     Delivery { asset: CaseAsset },
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SocialReceipt {
     Performed {
         actor: PersonId,
@@ -56,6 +58,42 @@ pub enum SocialReceipt {
         good: Good,
         destination_holder: Option<PersonId>,
     },
+}
+/// Factual receipt links required by a bounded native receiving projection.
+pub fn receipt_people(receipt: &SocialReceipt) -> BTreeSet<PersonId> {
+    match *receipt {
+        SocialReceipt::Performed {
+            actor, counterpart, ..
+        }
+        | SocialReceipt::Defaulted {
+            actor, counterpart, ..
+        } => BTreeSet::from([actor, counterpart]),
+        SocialReceipt::Produced {
+            actor, custodian, ..
+        } => [Some(actor), custodian].into_iter().flatten().collect(),
+        SocialReceipt::Transferred {
+            actor,
+            destination_holder,
+            ..
+        } => [Some(actor), destination_holder]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SocialReceipt::SupportReceived { actor, .. } | SocialReceipt::Ate { actor, .. } => {
+            BTreeSet::from([actor])
+        }
+    }
+}
+pub fn receipt_asset(receipt: &SocialReceipt) -> Option<CaseAsset> {
+    match *receipt {
+        SocialReceipt::Performed { target, .. } => Some(match target {
+            CooperationTarget::Labor { asset, .. } | CooperationTarget::Delivery { asset } => asset,
+        }),
+        SocialReceipt::Produced { asset, .. } | SocialReceipt::Defaulted { asset, .. } => {
+            Some(asset)
+        }
+        _ => None,
+    }
 }
 pub struct ReceiptIndex {
     attributable: BTreeSet<(PersonId, SiteId)>,
@@ -350,58 +388,16 @@ impl Runtime {
     pub fn stage_case_reaction(
         &self,
         store: &Store,
-        mut reaction: CaseReaction,
+        reaction: CaseReaction,
         id: CaseId,
         observers: &BTreeMap<PersonId, u16>,
         batch: &mut Batch,
     ) -> Result<(), Error> {
-        if id.0 == 0
-            || crate::storage::case(store, id).is_some()
-            || reaction
-                .concept
-                .is_some_and(|concept| !crate::storage::concept(store, concept).is_some())
-            || reaction
-                .exclusion_guard
-                .is_some_and(|(actor, source, before)| {
-                    crate::storage::exclusions(store, actor)
-                        .and_then(|rows| rows.stores.get(&source))
-                        .copied()
-                        != before
-                })
-        {
-            return Err(Error::Unavailable);
-        }
-        if let Some((actor, source)) = reaction.clear_exclusion
-            && crate::storage::exclusions(store, actor)
-                .and_then(|rows| rows.stores.get(&source))
-                .and_then(|id| crate::storage::case(store, id))
-                .is_none_or(|case| {
-                    case.subject != reaction.case.subject
-                        || case.inventory != reaction.case.inventory
-                        || case.area != reaction.case.area
-                })
-        {
-            return Err(Error::Unavailable);
-        }
-        reaction.case.id = id;
-        let learning =
-            self.prepare_case_learning(store, reaction.case, reaction.concept, observers)?;
-        learning.stage_into(store, batch)?;
-        if let Some((actor, source)) = reaction.clear_exclusion {
-            let mut row = crate::storage::exclusions(store, actor)
-                .ok_or(Error::Unavailable)?
-                .clone();
-            row.stores.remove(&source);
-            batch.insert(StableId(actor.0), row);
-        }
-        if let Some((actor, source)) = reaction.set_exclusion {
-            let mut row = crate::storage::exclusions(store, actor)
-                .cloned()
-                .unwrap_or_default();
-            row.stores.insert(source, id);
-            batch.insert(StableId(actor.0), row);
-        }
-        Ok(())
+        let at = reaction.case.observed_at;
+        let publication = self
+            .prepare_case_reaction(store, reaction, id, observers)?
+            .stage_into(self, store, at, batch)?;
+        publication.validate(self, store, at, batch)
     }
     pub fn commit_case_reaction(
         &self,
@@ -410,8 +406,12 @@ impl Runtime {
         id: CaseId,
         observers: &BTreeMap<PersonId, u16>,
     ) -> Result<(), Error> {
+        let at = reaction.case.observed_at;
         let mut batch = Batch::new();
-        self.stage_case_reaction(store, reaction, id, observers, &mut batch)?;
+        let publication = self
+            .prepare_case_reaction(store, reaction, id, observers)?
+            .stage_into(self, store, at, &mut batch)?;
+        publication.validate(self, store, at, &batch)?;
         store.apply_batch(batch)
     }
 }

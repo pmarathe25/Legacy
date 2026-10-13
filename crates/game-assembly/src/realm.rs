@@ -57,25 +57,20 @@ impl game_realm::Presence for RealmBindings<'_> {
                 self.sim.host.storage.activity(actor),
                 Some(Activity::Idle | Activity::Rest)
             ),
-            foreign_talking: self.sim.host.state.armies.as_ref().is_some_and(|w| {
-                w.talks
-                    .values()
-                    .any(|t| t.speaker == actor || t.listener == actor)
-            }) || self
-                .sim
-                .host
-                .state
-                .missions
-                .as_ref()
-                .is_some_and(|w| w.actor_talking(&self.sim.host.storage, actor))
-                || self.sim.property_actor_talking(actor)
+            foreign_talking: self.sim.host.state.armies.is_some()
+                && game_armies::talks(&self.sim.host.storage)
+                    .any(|(_, talk)| talk.speaker == actor || talk.listener == actor)
                 || self
                     .sim
                     .host
                     .state
-                    .social
+                    .missions
                     .as_ref()
-                    .is_some_and(|w| w.participants.contains_key(&actor)),
+                    .is_some_and(|w| w.actor_talking(&self.sim.host.storage, actor))
+                || self.sim.property_actor_talking(actor)
+                || self.sim.host.state.social.as_ref().is_some_and(|_| {
+                    game_characters::social::participant(&self.sim.host.storage, actor).is_some()
+                }),
             controlled: actor == self.sim.host.state.ruler,
             past_life_controlled: self.sim.past_life_controls_actor(actor),
         })
@@ -126,17 +121,10 @@ impl Simulation {
             debug_fixture: true,
         };
         let a = sim.host.state.ruler;
-        let av = sim.host.state.people[3].id;
-        let b = sim.host.state.people[4].id;
-        let bv = sim.host.state.people[5].id;
-        for actor in sim
-            .host
-            .state
-            .people
-            .iter()
-            .map(|p| p.id)
-            .collect::<Vec<_>>()
-        {
+        let av = sim.person_at(3).id;
+        let b = sim.person_at(4).id;
+        let bv = sim.person_at(5).id;
+        for actor in sim.people().map(|p| p.id).collect::<Vec<_>>() {
             sim.debug_set_personality(
                 actor,
                 decisions::Personality::restful(),
@@ -145,11 +133,8 @@ impl Simulation {
             sim.interrupt_actor_activity(actor);
         }
         for actor in [b, bv] {
-            *game_spatial::location_mut(
-                &mut sim.host.storage,
-                game_ecs::StableId((sim.host.state.people[sim.person_index[&actor]].id).0),
-            )
-            .expect("location exists") = Location::AtArea(AreaId(3));
+            *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId((actor).0))
+                .expect("location exists") = Location::AtArea(AreaId(3));
         }
         let food_a = sim.debug_add_inventory(
             Good::Food,
@@ -331,43 +316,7 @@ impl Simulation {
             })
     }
     pub(crate) fn publish_realm_event(&mut self, event: RealmEvent) {
-        self.emit(match event {
-            RealmEvent::Proposed {
-                commitment,
-                actor,
-                revision,
-            } => EventKind::RealmProposed {
-                commitment,
-                actor,
-                revision,
-            },
-            RealmEvent::Ratified {
-                commitment,
-                revision,
-                institution,
-                proposal,
-                adopted,
-            } => EventKind::RealmRatified {
-                commitment,
-                revision,
-                institution,
-                proposal,
-                adopted,
-            },
-            RealmEvent::WorkRequested { key, actor } => {
-                EventKind::RealmWorkRequested { key, actor }
-            }
-            RealmEvent::Reported {
-                commitment,
-                sender,
-                recipient,
-            } => EventKind::RealmReported {
-                commitment,
-                sender,
-                recipient,
-            },
-            RealmEvent::Interrupted { actor } => EventKind::Interrupted { actor },
-        });
+        self.emit(realm_event(event));
     }
     pub(crate) fn realm_command(&mut self, actor: PersonId, action: &Action) -> Result<(), Error> {
         let positional = self.realm_positional_membership()?;
@@ -491,7 +440,9 @@ impl Simulation {
                     .or_default()
                     .push(Due::Physical(actor));
             }
-            Action::RequestWork { key } => self.realm_request_work(actor, *key, &positional)?,
+            Action::RequestWork { key } => {
+                return self.realm_request_work(actor, *key, &positional, 1);
+            }
         }
         self.host
             .bump_revision(1)
@@ -537,7 +488,8 @@ impl Simulation {
             .expect("validated frozen regional report");
         let mut batch = game_ecs::Batch::new();
         let (talk_guard, realm_guard) = plan
-            .stage_into(
+            .stage_into_guarded(
+                world,
                 &self.host.storage,
                 now,
                 &RealmBindings {
@@ -551,31 +503,31 @@ impl Simulation {
         let guards = receiving
             .map(|(institutions, stocks)| {
                 Ok::<_, Error>((
-                    institutions.stage_into(&self.host.storage, &mut batch)?,
+                    institutions.stage_into_atomic(&self.host.storage, &mut batch)?,
                     stocks.stage_into(&self.host.storage, &mut batch)?,
                 ))
             })
             .transpose()
             .expect("fresh receiving memories");
         talk_guard
-            .validate(&batch)
+            .validate(world, &self.host.storage, &batch)
             .expect("regional report footprint");
         if let Some(g) = realm_guard {
             g.validate(&batch).expect("regional knowledge footprint");
         }
         if let Some((a, b)) = &guards {
-            a.validate_source(&self.host.storage, &batch)
+            a.validate(&self.host.storage, &batch)
                 .expect("institutional report footprint");
             b.validate(&batch).expect("stock report footprint");
         }
-        self.host
-            .storage
-            .apply_batch(batch)
-            .expect("admitted regional report");
+        let mut transaction = game_world::Transaction::new(self.host.transaction_opening(), batch);
         if let Some((institutions, _)) = guards {
-            institutions.finish(&mut self.host.storage);
+            transaction.guards.push(institutions);
         }
-        self.publish_realm_event(event);
+        transaction.events.push(realm_event(event));
+        self.host
+            .commit_transaction(transaction)
+            .expect("admitted regional report");
     }
     pub(crate) fn realm_actor_busy(&self, actor: PersonId) -> bool {
         self.host
@@ -584,51 +536,12 @@ impl Simulation {
             .as_ref()
             .is_some_and(|w| w.actor_busy(&self.host.storage, actor))
     }
-    pub(crate) fn interrupt_realm(&mut self, actor: PersonId) {
-        let Some(world) = self.host.state.realm.as_ref() else {
-            return;
-        };
-        let plan = world.prepare_cancel_talks(&self.host.storage, &[actor]);
-        let speakers = plan.speakers().collect::<Vec<_>>();
-        let events = plan.events.clone();
-        let mut batch = game_ecs::Batch::new();
-        let guard = plan
-            .stage_into(&self.host.storage, &mut batch, None)
-            .expect("fresh regional interruption");
-        for speaker in &speakers {
-            if matches!(
-                self.host.storage.activity(*speaker),
-                Some(Activity::RealmTalk { .. })
-            ) {
-                batch.insert(game_ecs::StableId(speaker.0), Activity::Idle);
-            }
-        }
-        guard
-            .validate(&batch)
-            .expect("regional interruption footprint");
-        self.host
-            .storage
-            .apply_batch(batch)
-            .expect("admitted regional interruption");
-        for speaker in speakers {
-            for due in self.host.state.due.values_mut() {
-                due.retain(|d| *d != Due::Physical(speaker));
-            }
-        }
-        for event in events {
-            self.publish_realm_event(event);
-        }
-    }
     pub(crate) fn validate_realm_change(
         &self,
         i: &institutions::Institution,
         change: &InstitutionChange,
     ) -> Result<(), Error> {
-        if !matches!(
-            change,
-            InstitutionChange::RatifyRegional { .. }
-                | InstitutionChange::AuthorizeRegionalPassage { .. }
-        ) {
+        if !game_realm::regional_change(change) {
             return Ok(());
         }
         self.host
@@ -646,11 +559,7 @@ impl Simulation {
         proposing: bool,
     ) -> bool {
         let positional = BTreeMap::new();
-        if !matches!(
-            change,
-            InstitutionChange::RatifyRegional { .. }
-                | InstitutionChange::AuthorizeRegionalPassage { .. }
-        ) {
+        if !game_realm::regional_change(change) {
             return true;
         }
         self.host.state.realm.as_ref().is_some_and(|w| {
@@ -681,42 +590,24 @@ impl Simulation {
         let Some(world) = self.host.state.realm.as_ref() else {
             return Ok(None);
         };
-        world
-            .native_outcome(
-                &self.host.storage,
-                institution,
-                proposal,
-                status,
-                self.time(),
-            )?
-            .map(|(plan, event)| {
-                let area = game_society::institution(&self.host.storage, institution)
-                    .ok_or(Error::Unavailable)?
-                    .charter
-                    .jurisdiction;
-                let revision = plan.revision_number().ok_or(Error::Unavailable)?;
-                Ok((
-                    plan.publish_decision(
-                        &self.host.storage,
-                        revision,
-                        institution,
-                        area,
-                        self.time(),
-                        &RealmBindings {
-                            sim: self,
-                            positional: &positional,
-                        },
-                    )?,
-                    event,
-                ))
-            })
-            .transpose()
+        world.prepare_published_native_outcome(
+            &self.host.storage,
+            institution,
+            proposal,
+            status,
+            self.time(),
+            &RealmBindings {
+                sim: self,
+                positional: &positional,
+            },
+        )
     }
     fn realm_request_work(
         &mut self,
         actor: PersonId,
         key: TermKey,
         positional: &BTreeMap<AreaId, Vec<PersonId>>,
+        revisions: u64,
     ) -> Result<(), Error> {
         let world = self.host.state.realm.as_ref().ok_or(Error::Unavailable)?;
         let plan = world.prepare_work::<Command>(
@@ -747,8 +638,15 @@ impl Simulation {
                 plan.bind(owner)?
                     .stage_into(world, &self.host.storage, &context, &mut batch)?;
             guard.validate(&batch)?;
-            self.host.storage.apply_batch(batch)?;
-            self.publish_realm_event(RealmEvent::WorkRequested { key, actor });
+            let mut transaction =
+                game_world::Transaction::new(self.host.transaction_opening(), batch);
+            // Existing backing returns before the inner command revision;
+            // public dispatch contributes its already-preflighted revision.
+            transaction.revisions = 0;
+            transaction
+                .events
+                .push(EventKind::RealmWorkRequested { key, actor });
+            self.host.commit_transaction(transaction)?;
             return Ok(());
         }
         match plan.request().clone() {
@@ -774,15 +672,14 @@ impl Simulation {
                     0,
                 )?;
                 let publication = self.prepare_realm_agreement_publication(foreign)?;
-                let trust = game_characters::decisions::PreparedTrustReactions::prepare_defaults::<
-                    Command,
-                >(
-                    &self.host.storage,
-                    publication
-                        .default_knowledge()
-                        .iter()
-                        .map(|effect| (effect.observer, effect.debtor)),
-                )?;
+                let trust =
+                    game_characters::receivers::prepare_default_knowledge_reactions::<Command>(
+                        &self.host.storage,
+                        publication
+                            .default_knowledge()
+                            .iter()
+                            .map(|effect| (effect.observer, effect.debtor)),
+                    )?;
                 let mut batch = game_ecs::Batch::new();
                 let finish = publication.stage_into(
                     &self.host.storage,
@@ -800,18 +697,26 @@ impl Simulation {
                     &finish,
                     &mut batch,
                 )?;
+                let trust_guard = trust.stage_into(&self.host.storage, &mut batch)?;
                 finish.validate_batch(&batch)?;
                 guard.validate(&batch)?;
-                let trust_finish =
-                    trust.prepare_finalization::<Command>(&self.host.storage, &batch)?;
-                trust_finish.validate_batch(&self.host.storage, &batch)?;
-                self.host.storage.apply_batch(batch)?;
+                trust_guard.validate(&self.host.storage, &batch)?;
+                let mut transaction =
+                    game_world::Transaction::new(self.host.transaction_opening(), batch);
+                transaction.ids = next
+                    .checked_sub(self.host.next_id())
+                    .ok_or(Error::Overflow)?;
+                transaction.revisions = revisions;
+                transaction.guards.push(trust_guard);
+                transaction.events = events
+                    .into_iter()
+                    .map(agreements::agreement_event)
+                    .collect();
+                transaction
+                    .events
+                    .push(EventKind::RealmWorkRequested { key, actor });
+                self.host.commit_transaction(transaction)?;
                 finish.finish(self.host.state.agreements.as_mut().unwrap());
-                trust_finish.finish(&mut self.host.storage);
-                self.host
-                    .allocate_ids(next - self.host.next_id())
-                    .expect("preflighted regional agreement allocation");
-                self.publish_agreement_events(events);
             }
             Request::Protection { patrol, .. } => {
                 let action = MissionAction::Propose { proposal: patrol };
@@ -851,14 +756,20 @@ impl Simulation {
                 let guard = regional.stage_into(world, &self.host.storage, &context, &mut batch)?;
                 publication_guard.validate_batch(&batch)?;
                 guard.validate(&batch)?;
-                self.host.storage.apply_batch(batch)?;
+                let mut transaction =
+                    game_world::Transaction::new(self.host.transaction_opening(), batch);
+                transaction.ids = next
+                    .checked_sub(self.host.next_id())
+                    .ok_or(Error::Overflow)?;
+                transaction.revisions = revisions;
+                transaction.events = events.into_iter().map(missions::mission_event).collect();
+                transaction
+                    .events
+                    .push(EventKind::RealmWorkRequested { key, actor });
+                self.host.commit_transaction(transaction)?;
                 finish.finish(self.host.state.missions.as_mut().unwrap());
-                self.host
-                    .allocate_ids(next - self.host.next_id())
-                    .expect("preflighted regional mission allocation");
                 self.mission_membership
                     .register_created(&self.host.storage, created);
-                self.publish_mission_effects(events, BTreeSet::new());
             }
             Request::Passage { institution, .. } => {
                 let action = InstitutionAction::Propose {
@@ -905,16 +816,22 @@ impl Simulation {
                 )?;
                 publication_guard.validate(&batch)?;
                 guard.validate(&batch)?;
-                self.host.storage.apply_batch(batch)?;
-                self.host
-                    .allocate_ids(next - self.host.next_id())
-                    .expect("preflighted regional passage allocation");
-                let through = self.host.next_event() - 1;
-                self.host.state.realm.as_mut().unwrap().last_event = through;
+                let cursor = world.prepare_event_cursor(self.host.next_event() - 1)?;
+                cursor.validate(world)?;
+                let mut transaction =
+                    game_world::Transaction::new(self.host.transaction_opening(), batch);
+                transaction.ids = next
+                    .checked_sub(self.host.next_id())
+                    .ok_or(Error::Overflow)?;
+                transaction.revisions = revisions;
+                transaction
+                    .events
+                    .push(EventKind::RealmWorkRequested { key, actor });
+                self.host.commit_transaction(transaction)?;
+                cursor.finish(self.host.state.realm.as_mut().unwrap());
             }
             Request::Ratification { .. } => return Err(Error::Unavailable),
         }
-        self.publish_realm_event(RealmEvent::WorkRequested { key, actor });
         Ok(())
     }
     pub(crate) fn prepare_realm_institution_reaction(
@@ -960,7 +877,7 @@ impl Simulation {
                 .expect("body exists")
                 .vitals
                 .hunger,
-            hunger_exempt: self.host.state.people[self.person_index[&actor]].hunger_exempt,
+            hunger_exempt: self.person_at(self.person_index[&actor]).hunger_exempt,
             meal_relief: rules.meal_relief,
             meal_size: rules.meal_size,
             hydration_urgency: self.observed_hydration_urgency(actor),
@@ -977,44 +894,18 @@ impl Simulation {
         let Some(world) = self.host.state.realm.as_ref() else {
             return Ok(());
         };
+        let cursor = world.prepare_event_cursor(self.host.next_event() - 1)?;
+        cursor.validate(world)?;
         if !world.has_commitments(&self.host.storage) {
-            self.host.state.realm.as_mut().unwrap().last_event = self.host.next_event() - 1;
+            cursor.finish(self.host.state.realm.as_mut().unwrap());
             return Ok(());
         }
         let positional = self.realm_positional_membership()?;
-        let now = self.time();
-        let observation = world.prepare_observation(
-            &self.host.storage,
-            now,
-            &RealmBindings {
-                sim: self,
-                positional: &positional,
-            },
-        )?;
-        let mut batch = game_ecs::Batch::new();
-        let guard = game_realm::stage_changes(observation, &self.host.storage, &mut batch)?;
-        guard.validate(&batch)?;
-        self.host.storage.apply_batch(batch)?;
-        let ledger = game_realm::Ledger::new(&self.host.storage);
-        let plans = ledger
-            .reconciliation_ids()
-            .into_iter()
-            .map(|id| {
-                ledger.prepare_reconciliation(
-                    id,
-                    now,
-                    &RealmBindings {
-                        sim: self,
-                        positional: &positional,
-                    },
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut batch = game_ecs::Batch::new();
-        let guard = game_realm::stage_changes(plans, &self.host.storage, &mut batch)?;
-        guard.validate(&batch)?;
-        self.host.storage.apply_batch(batch)?;
-        self.host.state.realm.as_mut().unwrap().last_event = self.host.next_event() - 1;
+        game_realm::observe_realm::<Command>(&mut RealmExecution {
+            simulation: self,
+            positional: &positional,
+        })?;
+        cursor.finish(self.host.state.realm.as_mut().unwrap());
         Ok(())
     }
     pub(crate) fn available_realm_commands(&self, actor: PersonId) -> Vec<Command> {
@@ -1053,74 +944,20 @@ impl Simulation {
             BTreeMap::new()
         };
         self.observe_realm()?;
-        let Some(world) = self.host.state.realm.as_ref() else {
+        if self.host.state.realm.is_none() {
             return Ok(());
-        };
-        let now = self.time();
-        let plans = world
-            .expiry_ids(&self.host.storage, now)
-            .into_iter()
-            .map(|id| game_realm::Ledger::new(&self.host.storage).prepare_expire(id, now))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut batch = game_ecs::Batch::new();
-        let guard = game_realm::stage_changes(plans, &self.host.storage, &mut batch)?;
-        guard.validate(&batch)?;
-        self.host.storage.apply_batch(batch)?;
-        for actor in self.person_index.keys().copied().collect::<Vec<_>>() {
-            let authority = self.realm_authority(actor, &[]);
-            let context = game_realm::RealmContext {
-                now,
-                authority: &authority,
-                presence: &RealmBindings {
-                    sim: self,
-                    positional: &positional,
-                },
-            };
-            let Some(mut plan) = self
-                .host
-                .state
-                .realm
-                .as_ref()
-                .unwrap()
-                .prepare_review::<Command>(
-                    &self.host.storage,
-                    actor,
-                    &context,
-                    &self.realm_judgment(actor),
-                )
-            else {
-                continue;
-            };
-            while let Some(choice) = plan.next_attempt() {
-                let result = match choice {
-                    game_realm::ReviewChoice::Ratify {
-                        institution,
-                        change,
-                    } => self.execute_institution_transition_with_positions(
-                        actor,
-                        self.social_area(actor)?,
-                        &InstitutionAction::Propose {
-                            institution,
-                            change,
-                        },
-                        &positional,
-                    ),
-                    game_realm::ReviewChoice::Work { key } => {
-                        self.realm_request_work(actor, key, &positional)
-                    }
-                };
-                plan.receive_result(result.is_ok());
-            }
-            game_realm::insert_requests(&mut self.host.storage, actor, plan.reconsideration)?;
         }
-        Ok(())
+        game_realm::review_realm::<Command>(&mut RealmExecution {
+            simulation: self,
+            positional: &positional,
+        })
     }
     pub(crate) fn realm_allocation_bound(&self) -> u64 {
         self.host
             .state
             .realm
             .as_ref()
-            .map_or(0, |w| w.allocation_bound(self.host.state.people.len()))
+            .map_or(0, |w| w.allocation_bound(self.people().len()))
     }
     pub(crate) fn realm_boundary(&self, limit: SimTime) -> SimTime {
         self.host.state.realm.as_ref().map_or(limit, |w| {
@@ -1165,5 +1002,100 @@ impl Simulation {
                 positional: &positional,
             },
         )
+    }
+}
+
+struct RealmExecution<'a> {
+    simulation: &'a mut Simulation,
+    positional: &'a BTreeMap<AreaId, Vec<PersonId>>,
+}
+impl game_realm::RealmExecution<Command> for RealmExecution<'_> {
+    fn runtime(&self) -> &World {
+        self.simulation.host.state.realm.as_ref().unwrap()
+    }
+    fn store(&self) -> &game_ecs::Store {
+        &self.simulation.host.storage
+    }
+    fn store_mut(&mut self) -> &mut game_ecs::Store {
+        &mut self.simulation.host.storage
+    }
+    fn now(&self) -> SimTime {
+        self.simulation.time()
+    }
+    fn presence(&self) -> impl game_realm::Presence {
+        RealmBindings {
+            sim: self.simulation,
+            positional: self.positional,
+        }
+    }
+    fn authority(&self, actor: PersonId) -> game_society::institutions::AuthorityFacts {
+        self.simulation.realm_authority(actor, &[])
+    }
+    fn judgment(&self, actor: PersonId) -> game_realm::JudgmentFacts<'_> {
+        self.simulation.realm_judgment(actor)
+    }
+    fn execute_choice(
+        &mut self,
+        actor: PersonId,
+        choice: game_realm::ReviewChoice,
+    ) -> Result<(), Error> {
+        match choice {
+            game_realm::ReviewChoice::Ratify {
+                institution,
+                change,
+            } => self
+                .simulation
+                .execute_institution_transition_with_positions(
+                    actor,
+                    self.simulation.social_area(actor)?,
+                    &InstitutionAction::Propose {
+                        institution,
+                        change,
+                    },
+                    self.positional,
+                ),
+            game_realm::ReviewChoice::Work { key } => {
+                self.simulation
+                    .realm_request_work(actor, key, self.positional, 0)
+            }
+        }
+    }
+}
+
+fn realm_event(event: RealmEvent) -> EventKind {
+    match event {
+        RealmEvent::Proposed {
+            commitment,
+            actor,
+            revision,
+        } => EventKind::RealmProposed {
+            commitment,
+            actor,
+            revision,
+        },
+        RealmEvent::Ratified {
+            commitment,
+            revision,
+            institution,
+            proposal,
+            adopted,
+        } => EventKind::RealmRatified {
+            commitment,
+            revision,
+            institution,
+            proposal,
+            adopted,
+        },
+        RealmEvent::WorkRequested { key, actor } => EventKind::RealmWorkRequested { key, actor },
+        RealmEvent::Reported {
+            commitment,
+            sender,
+            recipient,
+        } => EventKind::RealmReported {
+            commitment,
+            sender,
+            recipient,
+        },
+        RealmEvent::Interrupted { actor } => EventKind::Interrupted { actor },
     }
 }

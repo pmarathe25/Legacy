@@ -150,6 +150,88 @@ pub struct PreparedTransition {
     pub notices: Vec<TransitionNotice>,
 }
 impl PreparedTransition {
+    pub(crate) fn projected_agreement<'a>(
+        &'a self,
+        store: &'a Store,
+        id: AgreementId,
+    ) -> Option<&'a Agreement> {
+        self.agreements
+            .iter()
+            .find(|row| row.id == id)
+            .map(|row| &row.after)
+            .or_else(|| agreement(store, id))
+    }
+    pub(crate) fn projected_obligation<'a>(
+        &'a self,
+        store: &'a Store,
+        id: ObligationId,
+    ) -> Option<&'a Obligation> {
+        self.obligations
+            .iter()
+            .find(|row| row.id == id)
+            .map(|row| &row.after)
+            .or_else(|| obligation(store, id))
+    }
+    pub(crate) fn projected_amendment<'a>(
+        &'a self,
+        store: &'a Store,
+        id: AmendmentId,
+    ) -> Option<&'a Amendment> {
+        self.amendments
+            .iter()
+            .find(|row| row.id == id)
+            .map(|row| &row.after)
+            .or_else(|| amendment(store, id))
+    }
+    pub(crate) fn projected_amendments<'a>(
+        &'a self,
+        store: &'a Store,
+        id: AgreementId,
+    ) -> Vec<&'a Amendment> {
+        let mut rows: BTreeMap<_, _> = amendments(store)
+            .filter(|(_, row)| row.agreement == id)
+            .collect();
+        for patch in &self.amendments {
+            if patch.after.agreement == id {
+                rows.insert(patch.id, &patch.after);
+            }
+        }
+        rows.into_values().collect()
+    }
+    pub(crate) fn write_footprint(&self) -> game_ecs::ReadFootprint {
+        let mut writes = game_ecs::ReadFootprint::new();
+        for row in &self.agreements {
+            writes.protect::<Agreement>(StableId(row.id.0));
+        }
+        for row in &self.obligations {
+            writes.protect::<Obligation>(StableId(row.id.0));
+        }
+        for row in &self.amendments {
+            writes.protect::<Amendment>(StableId(row.id.0));
+        }
+        for (id, _) in &self.pending {
+            writes.protect::<PendingWork>(StableId(id.0));
+        }
+        writes
+    }
+    pub fn publication_people(
+        &self,
+        store: &Store,
+        events: &[ObservationEvent],
+    ) -> BTreeSet<PersonId> {
+        let mut people = observation_people(store, events);
+        for row in &self.agreements {
+            people.extend(row.after.parties.iter().copied());
+            people.insert(row.after.proposer);
+        }
+        for row in &self.amendments {
+            people.insert(row.after.proposer);
+        }
+        for row in &self.obligations {
+            people.extend(row.after.term.parties());
+        }
+        people
+    }
     pub fn created_agreements(&self) -> impl Iterator<Item = AgreementId> + '_ {
         self.agreements
             .iter()
@@ -236,10 +318,100 @@ impl PreparedTransition {
     }
     /// The coordinator first checks this patch and preflights every actual
     /// permission/event/ID effect. This operation owns only agreement records.
-    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
+    pub fn stage_into(
+        &self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
         self.check(&Ledger::new(store))?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        macro_rules! protect {
+            ($rows:expr, $ty:ty) => {
+                for row in $rows {
+                    let id = StableId(row.id.0);
+                    reads.expect_row::<$ty>(id, row.before.clone());
+                    if batch.touches::<$ty>(id) {
+                        return Err(Error::Unavailable);
+                    }
+                    admitted.protect::<$ty>(id);
+                    if row.before.is_none() {
+                        reads.entity(store, id);
+                    }
+                }
+            };
+        }
+        protect!(&self.agreements, Agreement);
+        protect!(&self.amendments, Amendment);
+        protect!(&self.obligations, Obligation);
+        for (id, value) in &self.pending {
+            let id = StableId(id.0);
+            reads.expect_row(id, Some(PendingWork { millis: *value }));
+            if batch.touches::<PendingWork>(id) {
+                return Err(Error::Unavailable);
+            }
+            admitted.protect::<PendingWork>(id);
+        }
+        if self.flushed_work_ids.is_some() {
+            reads.membership::<PendingWork>(store, |_, _| true);
+        }
+        if let Some((agreement, revision, _)) = &self.revision_peers {
+            let (agreement, revision) = (*agreement, *revision);
+            reads.membership::<Amendment>(store, move |_, row| {
+                row.agreement == agreement && row.base_revision == revision
+            });
+        }
+        self.stage(batch);
+        reads.bind(store, batch, &admitted)
+    }
+    pub(crate) fn guard_staged(
+        &self,
+        store: &Store,
+        batch: &Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.check(&Ledger::new(store))?;
+        let mut reads = game_ecs::ReadSet::new();
+        macro_rules! guard_rows {
+            ($rows:expr, $ty:ty) => {
+                for row in $rows {
+                    let id = StableId(row.id.0);
+                    reads.expect_row::<$ty>(id, row.before.clone());
+                    if row.before.is_none() {
+                        reads.entity(store, id);
+                    }
+                    if batch.projected::<$ty>(store, id)? != Some(&row.after) {
+                        return Err(Error::Unavailable);
+                    }
+                }
+            };
+        }
+        guard_rows!(&self.agreements, Agreement);
+        guard_rows!(&self.obligations, Obligation);
+        guard_rows!(&self.amendments, Amendment);
+        for (id, value) in &self.pending {
+            reads.expect_row(StableId(id.0), Some(PendingWork { millis: *value }));
+            if batch
+                .projected::<PendingWork>(store, StableId(id.0))?
+                .is_some()
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        if self.flushed_work_ids.is_some() {
+            reads.membership::<PendingWork>(store, |_, _| true);
+        }
+        if let Some((agreement, revision, _)) = &self.revision_peers {
+            let (agreement, revision) = (*agreement, *revision);
+            reads.membership::<Amendment>(store, move |_, row| {
+                row.agreement == agreement && row.base_revision == revision
+            });
+        }
+        reads.bind(store, batch, &self.write_footprint())
+    }
+    pub fn commit(self, store: &mut Store) -> Result<(), Error> {
         let mut batch = Batch::new();
-        self.stage(&mut batch);
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)
     }
     /// The caller retains the opening checks and applies this exact sparse patch

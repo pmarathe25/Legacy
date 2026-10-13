@@ -209,6 +209,22 @@ pub struct ReportReplacement {
     key: game_ecs::BatchKey,
     sender: PersonId,
     before: Option<PendingReport>,
+    after: PendingReport,
+}
+impl ReportReplacement {
+    pub fn read_guard(&self, store: &Store, batch: &Batch) -> Result<game_ecs::ReadGuard, Error> {
+        let id = StableId(self.sender.0);
+        if batch.key() != self.key
+            || batch.projected::<PendingReport>(store, id)? != Some(&self.after)
+        {
+            return Err(Error::Unavailable);
+        }
+        let mut reads = game_ecs::ReadSet::new();
+        reads.expect_row(id, self.before.clone());
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<PendingReport>(id);
+        reads.bind(store, batch, &admitted)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportBatchGuard {
@@ -270,6 +286,7 @@ impl PreparedReportStart {
             key: batch.key(),
             sender: self.after.sender,
             before: self.before,
+            after: self.after.clone(),
         };
         batch.insert(StableId(self.after.sender.0), self.after);
         Ok(replacement)

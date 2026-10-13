@@ -430,28 +430,30 @@ fn real_institutional_labor_and_remembered_contribution_change_later_founder_res
     let RuleIntent::Duty {
         institution,
         concept,
-        ref term,
         ..
     } = intent
     else {
         panic!("labor rule creates a duty")
     };
-    game_agreements::Ledger::new(&store)
-        .prepare_institutional_duties(
-            &[game_agreements::InstitutionDuty {
-                institution,
-                agreement: AgreementId(40),
-                obligation: ObligationId(41),
-                term: term.clone(),
-            }],
-            SimTime(0),
-        )
-        .unwrap()
-        .commit(&mut store)
+    let application = crate::deliberation::RuleApplications {
+        institution,
+        intents: vec![intent],
+    };
+    let prepared = society
+        .prepare_rule_application(&store, &application, 40, SimTime(0))
         .unwrap();
-    society
-        .register_duty(&mut store, &intent, AgreementId(40))
+    let observation = crate::perception::ObservationIndex::new(&[]).unwrap();
+    let publications = prepared
+        .prepare_publications(&society, &store, &authority, SimTime(0), &observation)
         .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = prepared
+        .stage_with_publications(&society, &store, SimTime(0), publications, &mut batch)
+        .unwrap();
+    guard
+        .validate(&society, &store, SimTime(0), &batch)
+        .unwrap();
+    store.apply_batch(batch).unwrap();
     game_agreements::Ledger::new(&store)
         .prepare_labor(
             SimTime(0),

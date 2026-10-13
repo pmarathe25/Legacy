@@ -18,6 +18,7 @@ pub struct CaseCommandEffects {
     pub publish: Option<InstitutionId>,
     pub recorded: Option<(CaseId, PersonId)>,
 }
+#[derive(Clone)]
 enum CaseChange {
     Hear {
         institution: InstitutionId,
@@ -29,7 +30,10 @@ enum CaseChange {
         recipient: PersonId,
     },
 }
+#[derive(Clone)]
 pub struct PreparedCaseCommand {
+    runtime: Runtime,
+    at: SimTime,
     actor: PersonId,
     case: SocialCaseView,
     before_institution: Option<Institution>,
@@ -145,6 +149,8 @@ impl Runtime {
                     None
                 };
                 Ok(PreparedCaseCommand {
+                    runtime: self.clone(),
+                    at: facts.now,
                     actor: facts.actor,
                     case: case.clone(),
                     before_institution: Some(current.clone()),
@@ -172,6 +178,8 @@ impl Runtime {
                 let memory =
                     crate::storage::knowledge(store, recipient).ok_or(Error::Unavailable)?;
                 Ok(PreparedCaseCommand {
+                    runtime: self.clone(),
+                    at: facts.now,
                     actor: facts.actor,
                     case: case.clone(),
                     before_institution: None,
@@ -228,6 +236,9 @@ impl PreparedCaseCommand {
         store: &Store,
         batch: &mut Batch,
     ) -> Result<CaseCommandEffects, Error> {
+        if world != &self.runtime {
+            return Err(Error::Unavailable);
+        }
         self.verify(store)?;
         match self.change {
             CaseChange::Tell { recipient } => {
@@ -273,11 +284,214 @@ impl PreparedCaseCommand {
         }
     }
     pub fn commit(self, world: &Runtime, store: &mut Store) -> Result<CaseCommandEffects, Error> {
+        let at = self.at;
         let mut batch = Batch::new();
-        let effects = self.stage_into(world, store, &mut batch)?;
+        let publication = self.stage_with_publications(world, store, at, Vec::new(), &mut batch)?;
+        publication.validate(world, store, at, &batch)?;
         store.apply_batch(batch)?;
-        Ok(effects)
+        Ok(publication.effects)
     }
 }
+impl PreparedCaseCommand {
+    fn projected_institution(&self) -> Option<Institution> {
+        let mut row = self.before_institution.clone()?;
+        if let CaseChange::Hear {
+            grant: Some((concept, actors)),
+            ..
+        } = &self.change
+        {
+            row.grants.insert(*concept, actors.clone());
+        }
+        Some(row)
+    }
+    pub fn prepare_publications(
+        &self,
+        world: &Runtime,
+        store: &Store,
+        authority: &AuthorityFacts,
+        at: SimTime,
+        index: &crate::perception::ObservationIndex<'_>,
+    ) -> Result<Vec<crate::projected_publication::PreparedCommandPublication>, Error> {
+        if world != &self.runtime || at != self.at {
+            return Err(Error::Unavailable);
+        }
+        self.verify(store)?;
+        Ok(self
+            .projected_institution()
+            .map(|institution| {
+                world.projected_publication(
+                    store,
+                    &institution,
+                    crate::projected_publication::current_proposals(store, institution.id),
+                    authority,
+                    at,
+                    index,
+                )
+            })
+            .into_iter()
+            .collect())
+    }
+    pub fn stage_with_publications(
+        self,
+        world: &Runtime,
+        store: &Store,
+        at: SimTime,
+        publications: Vec<crate::projected_publication::PreparedCommandPublication>,
+        batch: &mut Batch,
+    ) -> Result<CaseCommandPublication, Error> {
+        if world != &self.runtime || at != self.at {
+            return Err(Error::Unavailable);
+        }
+        self.verify(store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        reads.read::<SocialCaseView>(store, StableId(self.case.id.0));
+        reads.read::<Knowledge>(store, StableId(self.actor.0));
+        if let Some((recipient, _)) = self.recipient_knows {
+            reads.read::<Knowledge>(store, StableId(recipient.0));
+        }
+        if let Some(before) = &self.before_institution {
+            reads.read::<Institution>(store, StableId(before.id.0));
+            reads.read::<Hearing>(store, StableId(self.case.id.0));
+            for concept in &before.concepts {
+                reads.read::<Concept>(store, StableId(concept.0));
+            }
+        }
+        if let CaseChange::Hear {
+            refusal: Some((id, _, observers)),
+            ..
+        } = &self.change
+        {
+            reads.exclusive_entity(store, StableId(id.0))?;
+            for observer in observers.keys() {
+                reads.read::<Knowledge>(store, StableId(observer.0));
+            }
+        }
+        let projected = self.projected_institution();
+        let runtime = self.runtime.clone();
+        let mut own = Batch::new();
+        let effects = self.stage_into(world, store, &mut own)?;
+        let mut after = own
+            .insertions::<Knowledge>()
+            .map(|(id, row)| (PersonId(id.0), row.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut instances = own
+            .insertions::<Institution>()
+            .map(|(id, _)| InstitutionId(id.0))
+            .collect::<BTreeSet<_>>();
+        let mut preserved = BTreeSet::new();
+        let mut readonly = BTreeSet::new();
+        for publication in &publications {
+            publication.verify(store)?;
+            if projected.as_ref() != Some(&publication.institution)
+                || publication.source_proposals != publication.projected_proposals
+            {
+                return Err(Error::Unavailable);
+            }
+            let institution = publication.institution.id;
+            reads.membership::<RuleProposal>(store, move |_, row| row.institution == institution);
+            for proposal in &publication.source_proposals {
+                reads.read::<RuleProposal>(store, StableId(proposal.id.0));
+            }
+            if instances.contains(&institution) {
+                if publication.source.as_ref() == Some(&publication.institution) {
+                    preserved.insert(institution);
+                }
+            } else {
+                readonly.insert(institution);
+            }
+            for (actor, _) in &publication.before {
+                let opening = reads
+                    .read::<Knowledge>(store, StableId(actor.0))
+                    .cloned()
+                    .unwrap_or_default();
+                after
+                    .entry(*actor)
+                    .or_insert(opening)
+                    .institutions
+                    .insert(institution, publication.view.clone());
+            }
+        }
+        let mut writes = game_ecs::ReadFootprint::new();
+        macro_rules! stage {
+            ($row:ty) => {
+                for (id, row) in own.insertions::<$row>() {
+                    if batch.touches::<$row>(id) {
+                        return Err(Error::Unavailable);
+                    }
+                    reads.read::<$row>(store, id);
+                    writes.protect::<$row>(id);
+                    batch.insert(id, row.clone());
+                }
+            };
+        }
+        stage!(Institution);
+        stage!(Hearing);
+        stage!(SocialCaseView);
+        let recipients = after.keys().copied().collect();
+        for (actor, row) in after {
+            let id = StableId(actor.0);
+            if batch.touches::<Knowledge>(id) {
+                return Err(Error::Unavailable);
+            }
+            reads.read::<Knowledge>(store, id);
+            writes.protect::<Knowledge>(id);
+            batch.insert(id, row);
+        }
+        instances.extend(
+            publications
+                .iter()
+                .filter(|publication| {
+                    batch.touches::<Institution>(StableId(publication.institution.id.0))
+                })
+                .map(|publication| publication.institution.id),
+        );
+        let publication_guard = crate::projected_publication::CommandPublicationGuard::new(
+            batch,
+            recipients,
+            &publications,
+            instances,
+            preserved,
+            readonly,
+        );
+        publication_guard.validate(batch)?;
+        Ok(CaseCommandPublication {
+            runtime,
+            at,
+            rows: reads.bind(store, batch, &writes)?,
+            publications: publication_guard,
+            effects,
+        })
+    }
+}
+impl CaseCommandPublication {
+    pub fn validate(
+        &self,
+        world: &Runtime,
+        store: &Store,
+        at: SimTime,
+        batch: &Batch,
+    ) -> Result<(), Error> {
+        if world != &self.runtime || at != self.at {
+            return Err(Error::Unavailable);
+        }
+        self.rows.validate(store, batch)?;
+        self.publications.validate(batch)
+    }
+    pub fn publication_guard(&self) -> &crate::projected_publication::CommandPublicationGuard {
+        &self.publications
+    }
+    pub fn row_guard(&self) -> game_ecs::ReadGuard {
+        self.rows.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests;
+
+pub struct CaseCommandPublication {
+    runtime: Runtime,
+    at: SimTime,
+    rows: game_ecs::ReadGuard,
+    publications: crate::projected_publication::CommandPublicationGuard,
+    pub effects: CaseCommandEffects,
+}

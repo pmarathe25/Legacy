@@ -394,9 +394,10 @@ pub fn observation_people(store: &Store, events: &[ObservationEvent]) -> BTreeSe
 pub struct PreparedKnowledge {
     before: BTreeMap<PersonId, Option<Knowledge>>,
     after: BTreeMap<PersonId, Knowledge>,
-    agreements: BTreeMap<AgreementId, Agreement>,
-    obligations: BTreeMap<ObligationId, Obligation>,
-    amendments: BTreeMap<AmendmentId, Amendment>,
+    agreements: BTreeMap<AgreementId, Option<Agreement>>,
+    obligations: BTreeMap<ObligationId, Option<Obligation>>,
+    amendments: BTreeMap<AmendmentId, Option<Amendment>>,
+    amendment_membership: BTreeMap<AgreementId, BTreeSet<AmendmentId>>,
     membership: Option<BTreeSet<PersonId>>,
     pub effects: Vec<NewDefaultKnowledge>,
 }
@@ -409,15 +410,22 @@ impl PreparedKnowledge {
             || self
                 .agreements
                 .iter()
-                .any(|(id, row)| agreement(store, *id) != Some(row))
+                .any(|(id, row)| agreement(store, *id) != row.as_ref())
             || self
                 .obligations
                 .iter()
-                .any(|(id, row)| obligation(store, *id) != Some(row))
+                .any(|(id, row)| obligation(store, *id) != row.as_ref())
             || self
                 .amendments
                 .iter()
-                .any(|(id, row)| amendment(store, *id) != Some(row))
+                .any(|(id, row)| amendment(store, *id) != row.as_ref())
+            || self.amendment_membership.iter().any(|(id, expected)| {
+                amendments(store)
+                    .filter(|(_, row)| row.agreement == *id)
+                    .map(|(id, _)| id)
+                    .collect::<BTreeSet<_>>()
+                    != *expected
+            })
             || self.membership.as_ref().is_some_and(|ids| {
                 knowledges(store).map(|(id, _)| id).collect::<BTreeSet<_>>() != *ids
             })
@@ -440,30 +448,130 @@ impl PreparedKnowledge {
         }
         Ok(())
     }
+    pub fn stage_guarded_into(
+        &self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.stage_projected(store, batch, game_ecs::ReadFootprint::new())
+    }
+    fn stage_projected(
+        &self,
+        store: &Store,
+        batch: &mut Batch,
+        mut admitted: game_ecs::ReadFootprint,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.check(store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        for (id, row) in &self.before {
+            reads.expect_row(StableId(id.0), row.clone());
+        }
+        for (id, row) in &self.agreements {
+            reads.expect_row(StableId(id.0), row.clone());
+        }
+        for (id, row) in &self.obligations {
+            reads.expect_row(StableId(id.0), row.clone());
+        }
+        for (id, row) in &self.amendments {
+            reads.expect_row(StableId(id.0), row.clone());
+        }
+        if self.membership.is_some() {
+            reads.membership::<Knowledge>(store, |_, _| true);
+        }
+        for id in self.amendment_membership.keys() {
+            let id = *id;
+            reads.membership::<Amendment>(store, move |_, row| row.agreement == id);
+        }
+        for id in self.after.keys() {
+            admitted.protect::<Knowledge>(StableId(id.0));
+        }
+        self.stage_into(store, batch)?;
+        reads.bind(store, batch, &admitted)
+    }
     pub fn commit(self, store: &mut Store) -> Result<Vec<NewDefaultKnowledge>, Error> {
         let mut batch = Batch::new();
-        self.stage_into(store, &mut batch)?;
+        let guard = self.stage_guarded_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(self.effects)
     }
 }
+#[derive(Clone, Copy)]
+enum KnowledgeProjection<'a> {
+    Transition(&'a PreparedTransition),
+    Reconciliation(&'a PreparedReconciliation),
+}
 struct KnowledgeWriter<'a> {
     store: &'a Store,
+    projection: Option<KnowledgeProjection<'a>>,
     plan: PreparedKnowledge,
 }
 impl<'a> KnowledgeWriter<'a> {
     fn new(store: &'a Store) -> Self {
         Self {
             store,
+            projection: None,
             plan: PreparedKnowledge {
                 before: BTreeMap::new(),
                 after: BTreeMap::new(),
                 agreements: BTreeMap::new(),
                 obligations: BTreeMap::new(),
                 amendments: BTreeMap::new(),
+                amendment_membership: BTreeMap::new(),
                 membership: None,
                 effects: Vec::new(),
             },
+        }
+    }
+    fn projected(store: &'a Store, transition: &'a PreparedTransition) -> Self {
+        let mut writer = Self::new(store);
+        writer.projection = Some(KnowledgeProjection::Transition(transition));
+        writer
+    }
+    fn reconciled(store: &'a Store, reconciliation: &'a PreparedReconciliation) -> Self {
+        let mut writer = Self::new(store);
+        writer.projection = Some(KnowledgeProjection::Reconciliation(reconciliation));
+        writer
+    }
+    fn actual_agreement(&self, id: AgreementId) -> Option<&Agreement> {
+        match self.projection {
+            Some(KnowledgeProjection::Transition(projection)) => {
+                projection.projected_agreement(self.store, id)
+            }
+            Some(KnowledgeProjection::Reconciliation(projection)) => {
+                projection.projected_agreement(self.store, id)
+            }
+            None => agreement(self.store, id),
+        }
+    }
+    fn actual_obligation(&self, id: ObligationId) -> Option<&Obligation> {
+        match self.projection {
+            Some(KnowledgeProjection::Transition(projection)) => {
+                projection.projected_obligation(self.store, id)
+            }
+            Some(KnowledgeProjection::Reconciliation(projection)) => {
+                projection.projected_obligation(self.store, id)
+            }
+            None => obligation(self.store, id),
+        }
+    }
+    fn actual_amendment(&self, id: AmendmentId) -> Option<&Amendment> {
+        match self.projection {
+            Some(KnowledgeProjection::Transition(projection)) => {
+                projection.projected_amendment(self.store, id)
+            }
+            _ => amendment(self.store, id),
+        }
+    }
+    fn actual_amendments(&self, id: AgreementId) -> Vec<&Amendment> {
+        match self.projection {
+            Some(KnowledgeProjection::Transition(projection)) => {
+                projection.projected_amendments(self.store, id)
+            }
+            _ => amendments(self.store)
+                .filter(|(_, row)| row.agreement == id)
+                .map(|(_, row)| row)
+                .collect(),
         }
     }
     fn read(&mut self, actor: PersonId) -> Option<&Knowledge> {
@@ -517,20 +625,77 @@ impl<'a> KnowledgeWriter<'a> {
         actor: PersonId,
         id: AgreementId,
     ) -> Option<AgreementView> {
-        let actual = agreement(self.store, id)?;
+        let actual = self.actual_agreement(id)?.clone();
         self.plan
             .agreements
             .entry(id)
-            .or_insert_with(|| actual.clone());
+            .or_insert_with(|| agreement(self.store, id).cloned());
+        let mut facts = Vec::new();
         for id in &actual.obligations {
-            if let Some(row) = obligation(self.store, *id) {
-                self.plan
-                    .obligations
-                    .entry(*id)
-                    .or_insert_with(|| row.clone());
-            }
+            let row = self.actual_obligation(*id)?.clone();
+            self.plan
+                .obligations
+                .entry(*id)
+                .or_insert_with(|| obligation(self.store, *id).cloned());
+            facts.push(ObligationView {
+                accrued: row.accrued,
+                share_remainder: row.share_remainder,
+                share_scale: row.share_scale,
+                id: *id,
+                term: row.term.clone(),
+                performed: row.performed,
+                defaulted: row.defaulted,
+                cargo: if row.term.parties()[0] == actor {
+                    row.cargo.clone()
+                } else {
+                    BTreeMap::new()
+                },
+                observed_at: now,
+                learned_at: now,
+                source: Some(KnowledgeSource::Observed(actor)),
+            });
         }
-        actual_snapshot(self.store, now, actor, id)
+        self.plan.amendment_membership.entry(id).or_insert_with(|| {
+            amendments(self.store)
+                .filter(|(_, row)| row.agreement == id)
+                .map(|(id, _)| id)
+                .collect()
+        });
+        let changes = self
+            .actual_amendments(id)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut change_views = Vec::new();
+        for row in changes {
+            self.plan
+                .amendments
+                .entry(row.id)
+                .or_insert_with(|| amendment(self.store, row.id).cloned());
+            change_views.push(AmendmentView {
+                id: row.id,
+                proposer: row.proposer,
+                replacements: row.replacements.clone(),
+                votes: row.votes.clone(),
+                status: row.status,
+                base_revision: row.base_revision,
+            });
+        }
+        Some(AgreementView {
+            id: actual.id,
+            proposer: actual.proposer,
+            parties: actual.parties,
+            accepted: actual.accepted,
+            status: actual.status,
+            terms: actual.terms,
+            obligations: facts,
+            procedure: actual.procedure,
+            amendments: change_views,
+            revision: actual.revision,
+            observed_at: now,
+            learned_at: now,
+            source: Some(KnowledgeSource::Observed(actor)),
+        })
     }
     fn notice(&mut self, now: SimTime, actor: PersonId, id: AgreementId) {
         let Some(view) = self.snapshot(now, actor, id) else {
@@ -576,11 +741,14 @@ impl<'a> KnowledgeWriter<'a> {
         let Some(area) = contact_area(presence, speaker) else {
             return Ok(());
         };
-        let actual = agreement(self.store, id).ok_or(Error::Unavailable)?;
+        let actual = self
+            .actual_agreement(id)
+            .cloned()
+            .ok_or(Error::Unavailable)?;
         self.plan
             .agreements
             .entry(id)
-            .or_insert_with(|| actual.clone());
+            .or_insert_with(|| agreement(self.store, id).cloned());
         for actor in actual
             .parties
             .iter()
@@ -589,12 +757,12 @@ impl<'a> KnowledgeWriter<'a> {
         {
             self.notice(now, actor, id);
             if let Some(change) = change
-                && let Some(row) = amendment(self.store, change)
+                && let Some(row) = self.actual_amendment(change).cloned()
             {
                 self.plan
                     .amendments
                     .entry(change)
-                    .or_insert_with(|| row.clone());
+                    .or_insert_with(|| amendment(self.store, change).cloned());
                 let learned = AmendmentView {
                     id: row.id,
                     proposer: row.proposer,
@@ -628,13 +796,13 @@ impl<'a> KnowledgeWriter<'a> {
         at: SimTime,
         presence: &impl Presence,
     ) {
-        let Some(actual) = obligation(self.store, id).cloned() else {
+        let Some(actual) = self.actual_obligation(id).cloned() else {
             return;
         };
         self.plan
             .obligations
             .entry(id)
-            .or_insert_with(|| actual.clone());
+            .or_insert_with(|| obligation(self.store, id).cloned());
         let area = contact_area(presence, performer);
         for actor in self.actors() {
             let known = self
@@ -697,7 +865,46 @@ pub struct PreparedObservation {
     before: u64,
     after: u64,
 }
+pub struct ObservationFinalization {
+    before: Runtime,
+    cursor: u64,
+    guard: game_ecs::ReadGuard,
+}
+impl ObservationFinalization {
+    pub fn read_guard(&self) -> game_ecs::ReadGuard {
+        self.guard.clone()
+    }
+    pub fn validate(&self, runtime: &Runtime, store: &Store, batch: &Batch) -> Result<(), Error> {
+        if runtime != &self.before {
+            return Err(Error::Unavailable);
+        }
+        self.guard.validate(store, batch)
+    }
+    pub fn finish(self, runtime: &mut Runtime) {
+        runtime.last_observation_event = self.cursor;
+    }
+}
 impl PreparedObservation {
+    pub fn default_knowledge(&self) -> &[NewDefaultKnowledge] {
+        &self.knowledge.effects
+    }
+    pub fn stage_into(
+        self,
+        store: &Store,
+        runtime: &Runtime,
+        batch: &mut Batch,
+    ) -> Result<ObservationFinalization, Error> {
+        if runtime.last_observation_event != self.before {
+            return Err(Error::Unavailable);
+        }
+        let guard = self.knowledge.stage_guarded_into(store, batch)?;
+        Ok(ObservationFinalization {
+            before: runtime.clone(),
+            cursor: self.after,
+            guard,
+        })
+    }
+
     pub fn commit(
         self,
         store: &mut Store,
@@ -742,7 +949,8 @@ fn prepare_observations_from(
                 proposer,
             } if event.at == now => writer.local(now, agreement, proposer, None, presence)?,
             ObservationKind::Activated { agreement } if event.at == now => {
-                let proposer = crate::agreement(store, agreement)
+                let proposer = writer
+                    .actual_agreement(agreement)
                     .ok_or(Error::Unavailable)?
                     .proposer;
                 writer.local(now, agreement, proposer, None, presence)?;
@@ -755,7 +963,8 @@ fn prepare_observations_from(
                 performer,
             } => writer.observe(now, obligation, performer, event.at, presence),
             ObservationKind::Defaulted { obligation } => {
-                let actor = crate::obligation(store, obligation)
+                let actor = writer
+                    .actual_obligation(obligation)
                     .ok_or(Error::Unavailable)?
                     .term
                     .parties()[0];
@@ -776,12 +985,12 @@ fn prepare_observations_from(
                 if fact.term.parties()[0] != actor {
                     continue;
                 }
-                if let Some(actual) = obligation(store, fact.id) {
+                if let Some(actual) = writer.actual_obligation(fact.id).cloned() {
                     writer
                         .plan
                         .obligations
                         .entry(fact.id)
-                        .or_insert_with(|| actual.clone());
+                        .or_insert_with(|| obligation(store, fact.id).cloned());
                     if actual.term == fact.term
                         && (fact.performed != actual.performed
                             || fact.defaulted != actual.defaulted
@@ -977,5 +1186,253 @@ impl ProposalPublicationFinalization {
     }
     pub fn finish(self, runtime: &mut Runtime) {
         runtime.last_observation_event = self.cursor;
+    }
+}
+
+/// Every transition's explicit notices and chronological event observations use
+/// the owner's sparse closing record projection before canonical publication.
+pub struct PreparedTransitionPublication {
+    transition: PreparedTransition,
+    observation: PreparedObservation,
+    before: Runtime,
+}
+pub struct TransitionPublicationFinalization {
+    before: Runtime,
+    cursor: u64,
+    origin: game_ecs::ReadGuard,
+    knowledge: game_ecs::ReadGuard,
+}
+impl PreparedTransitionPublication {
+    pub fn default_knowledge(&self) -> &[NewDefaultKnowledge] {
+        &self.observation.knowledge.effects
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare(
+        transition: PreparedTransition,
+        store: &Store,
+        runtime: &Runtime,
+        now: SimTime,
+        cursor: u64,
+        prior_events: &[ObservationEvent],
+        speaker: PersonId,
+        presence: &impl Presence,
+    ) -> Result<Self, Error> {
+        transition.check(&Ledger::new(store))?;
+        if cursor < runtime.last_observation_event {
+            return Err(Error::Unavailable);
+        }
+        let observation = {
+            let mut writer = KnowledgeWriter::projected(store, &transition);
+            writer.plan.membership = Some(knowledges(store).map(|(id, _)| id).collect());
+            // Preserve the old publication order: explicit notices precede the
+            // observation scan over pending events followed by these new events.
+            for notice in &transition.notices {
+                writer.local(now, notice.agreement, speaker, notice.amendment, presence)?;
+            }
+            let mut events = prior_events.to_vec();
+            events.extend(transition.events.iter().filter_map(|event| {
+                let kind = match *event {
+                    TransitionEvent::Proposed {
+                        agreement,
+                        proposer,
+                    } => ObservationKind::Proposed {
+                        agreement,
+                        proposer,
+                    },
+                    TransitionEvent::Activated { agreement } => {
+                        ObservationKind::Activated { agreement }
+                    }
+                    TransitionEvent::Rejected { agreement, actor } => {
+                        ObservationKind::Rejected { agreement, actor }
+                    }
+                    TransitionEvent::Performed {
+                        obligation, actor, ..
+                    } => ObservationKind::Obligation {
+                        obligation,
+                        performer: actor,
+                    },
+                    TransitionEvent::Amended { .. } => return None,
+                };
+                Some(ObservationEvent { at: now, kind })
+            }));
+            prepare_observations_from(writer, runtime, now, cursor, &events, presence)?
+        };
+        Ok(Self {
+            transition,
+            observation,
+            before: runtime.clone(),
+        })
+    }
+    pub fn stage_into(
+        self,
+        store: &Store,
+        runtime: &Runtime,
+        batch: &mut Batch,
+    ) -> Result<TransitionPublicationFinalization, Error> {
+        if runtime != &self.before {
+            return Err(Error::Unavailable);
+        }
+        let footprint = self.transition.write_footprint();
+        let origin = self.transition.stage_into(store, batch)?;
+        let knowledge = self
+            .observation
+            .knowledge
+            .stage_projected(store, batch, footprint)?;
+        Ok(TransitionPublicationFinalization {
+            before: self.before,
+            cursor: self.observation.after,
+            origin,
+            knowledge,
+        })
+    }
+    pub fn stage_after_transition(
+        self,
+        store: &Store,
+        runtime: &Runtime,
+        batch: &mut Batch,
+    ) -> Result<TransitionPublicationFinalization, Error> {
+        if runtime != &self.before {
+            return Err(Error::Unavailable);
+        }
+        let footprint = self.transition.write_footprint();
+        let origin = self.transition.guard_staged(store, batch)?;
+        let knowledge = self
+            .observation
+            .knowledge
+            .stage_projected(store, batch, footprint)?;
+        Ok(TransitionPublicationFinalization {
+            before: self.before,
+            cursor: self.observation.after,
+            origin,
+            knowledge,
+        })
+    }
+    pub fn commit(self, store: &mut Store, runtime: &mut Runtime) -> Result<(), Error> {
+        let mut batch = Batch::new();
+        let finish = self.stage_into(store, runtime, &mut batch)?;
+        finish.validate(runtime, store, &batch)?;
+        store.apply_batch(batch)?;
+        finish.finish(runtime);
+        Ok(())
+    }
+}
+impl TransitionPublicationFinalization {
+    pub fn read_guards(&self) -> [game_ecs::ReadGuard; 2] {
+        [self.origin.clone(), self.knowledge.clone()]
+    }
+    pub fn validate(&self, runtime: &Runtime, store: &Store, batch: &Batch) -> Result<(), Error> {
+        if runtime != &self.before {
+            return Err(Error::Unavailable);
+        }
+        self.origin.validate(store, batch)?;
+        self.knowledge.validate(store, batch)
+    }
+    pub fn finish(self, runtime: &mut Runtime) {
+        runtime.last_observation_event = self.cursor;
+    }
+}
+
+/// Physical receipt reconciliation and the resulting dated observations are a
+/// single owner projection over an already prepared material source batch.
+pub struct PreparedReconciledPublication {
+    reconciliation: PreparedReconciliation,
+    observation: PreparedObservation,
+    before: Runtime,
+}
+pub struct ReconciledPublicationFinalization {
+    before: Runtime,
+    receipt_cursor: u64,
+    observation_cursor: u64,
+    ledger: game_ecs::ReadGuard,
+    knowledge: game_ecs::ReadGuard,
+}
+impl PreparedReconciledPublication {
+    pub fn default_knowledge(&self) -> &[NewDefaultKnowledge] {
+        &self.observation.knowledge.effects
+    }
+    pub fn events(&self) -> &[ReconciliationEvent] {
+        &self.reconciliation.events
+    }
+    pub fn prepare(
+        reconciliation: PreparedReconciliation,
+        store: &Store,
+        runtime: &Runtime,
+        now: SimTime,
+        cursor: u64,
+        prior_and_source_events: &[ObservationEvent],
+        presence: &impl Presence,
+    ) -> Result<Self, Error> {
+        reconciliation.check(store, runtime)?;
+        if cursor < runtime.last_observation_event {
+            return Err(Error::Unavailable);
+        }
+        let observation = {
+            let mut writer = KnowledgeWriter::reconciled(store, &reconciliation);
+            writer.plan.membership = Some(knowledges(store).map(|(id, _)| id).collect());
+            let mut events = prior_and_source_events.to_vec();
+            events.extend(reconciliation.events.iter().map(|event| ObservationEvent {
+                at: now,
+                kind: match *event {
+                    ReconciliationEvent::Accrued {
+                        obligation, actor, ..
+                    }
+                    | ReconciliationEvent::Performed {
+                        obligation, actor, ..
+                    } => ObservationKind::Obligation {
+                        obligation,
+                        performer: actor,
+                    },
+                    ReconciliationEvent::Defaulted { obligation } => {
+                        ObservationKind::Defaulted { obligation }
+                    }
+                },
+            }));
+            prepare_observations_from(writer, runtime, now, cursor, &events, presence)?
+        };
+        Ok(Self {
+            reconciliation,
+            observation,
+            before: runtime.clone(),
+        })
+    }
+    pub fn stage_into(
+        self,
+        store: &Store,
+        runtime: &Runtime,
+        batch: &mut Batch,
+    ) -> Result<ReconciledPublicationFinalization, Error> {
+        if runtime != &self.before {
+            return Err(Error::Unavailable);
+        }
+        let footprint = self.reconciliation.write_footprint();
+        let receipt_cursor = self.reconciliation.cursor_after();
+        let ledger = self.reconciliation.stage_into(store, runtime, batch)?;
+        let knowledge = self
+            .observation
+            .knowledge
+            .stage_projected(store, batch, footprint)?;
+        Ok(ReconciledPublicationFinalization {
+            before: self.before,
+            receipt_cursor,
+            observation_cursor: self.observation.after,
+            ledger,
+            knowledge,
+        })
+    }
+}
+impl ReconciledPublicationFinalization {
+    pub fn read_guards(&self) -> [game_ecs::ReadGuard; 2] {
+        [self.ledger.clone(), self.knowledge.clone()]
+    }
+    pub fn validate(&self, runtime: &Runtime, store: &Store, batch: &Batch) -> Result<(), Error> {
+        if runtime != &self.before {
+            return Err(Error::Unavailable);
+        }
+        self.ledger.validate(store, batch)?;
+        self.knowledge.validate(store, batch)
+    }
+    pub fn finish(self, runtime: &mut Runtime) {
+        runtime.last_event = self.receipt_cursor;
+        runtime.last_observation_event = self.observation_cursor;
     }
 }

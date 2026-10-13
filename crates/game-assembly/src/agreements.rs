@@ -263,23 +263,272 @@ impl game_agreements::DutyFacts<Command> for AgreementBindings<'_> {
         }
     }
 }
+pub(crate) struct PhysicalAgreementMaintenance {
+    opening: game_world::TransactionOpening,
+    before: Option<game_agreements::Runtime>,
+    finish: Option<game_agreements::ReconciledPublicationFinalization>,
+    events: Vec<EventKind>,
+    guards: Vec<game_ecs::ReadGuard>,
+    contacts: game_agreements::ContactSet,
+    people: BTreeSet<PersonId>,
+    source_contacts: Option<game_agreements::ContactSet>,
+}
+impl PhysicalAgreementMaintenance {
+    pub(crate) fn events(&self) -> &[EventKind] {
+        &self.events
+    }
+    pub(crate) fn guards(&self) -> Vec<game_ecs::ReadGuard> {
+        self.guards.clone()
+    }
+    pub(crate) fn validate(
+        &self,
+        simulation: &Simulation,
+        batch: &game_ecs::Batch,
+    ) -> Result<(), Error> {
+        if self.opening != simulation.host.transaction_opening()
+            || simulation.host.state.agreements != self.before
+        {
+            return Err(Error::Unavailable);
+        }
+        if simulation
+            .maintenance_agreement_contacts(
+                batch,
+                self.people.iter().copied(),
+                self.source_contacts.as_ref(),
+            )?
+            .0
+            != self.contacts.0
+        {
+            return Err(Error::Unavailable);
+        }
+        if let Some(finish) = &self.finish {
+            finish.validate(
+                simulation
+                    .host
+                    .state
+                    .agreements
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?,
+                &simulation.host.storage,
+                batch,
+            )?;
+        }
+        for guard in &self.guards {
+            guard.validate(&simulation.host.storage, batch)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn finish(self, simulation: &mut Simulation) {
+        if let Some(finish) = self.finish {
+            finish.finish(simulation.host.state.agreements.as_mut().unwrap());
+        }
+    }
+}
+fn reconciliation_event(event: game_agreements::ReconciliationEvent) -> EventKind {
+    match event {
+        game_agreements::ReconciliationEvent::Accrued {
+            obligation,
+            actor,
+            quantity,
+        } => EventKind::ObligationAccrued {
+            obligation,
+            actor,
+            quantity,
+        },
+        game_agreements::ReconciliationEvent::Performed {
+            obligation,
+            actor,
+            quantity,
+        } => EventKind::ObligationPerformed {
+            obligation,
+            actor,
+            quantity,
+        },
+        game_agreements::ReconciliationEvent::Defaulted { obligation } => {
+            EventKind::ObligationDefaulted { obligation }
+        }
+    }
+}
+fn observation_event(kind: &EventKind, at: SimTime) -> Option<game_agreements::ObservationEvent> {
+    use game_agreements::ObservationKind as O;
+    let kind = match *kind {
+        EventKind::AgreementProposed {
+            agreement,
+            proposer,
+        } => O::Proposed {
+            agreement,
+            proposer,
+        },
+        EventKind::AgreementActivated { agreement } => O::Activated { agreement },
+        EventKind::AgreementRejected { agreement, actor } => O::Rejected { agreement, actor },
+        EventKind::ObligationAccrued {
+            obligation, actor, ..
+        }
+        | EventKind::ObligationPerformed {
+            obligation, actor, ..
+        } => O::Obligation {
+            obligation,
+            performer: actor,
+        },
+        EventKind::ObligationDefaulted { obligation } => O::Defaulted { obligation },
+        _ => return None,
+    };
+    Some(game_agreements::ObservationEvent { at, kind })
+}
+fn physical_receipt(
+    kind: &EventKind,
+    at: SimTime,
+    store: &game_ecs::Store,
+    batch: &game_ecs::Batch,
+) -> Result<Option<game_agreements::Receipt>, Error> {
+    use game_agreements::ReceiptKind as R;
+    let kind = match *kind {
+        EventKind::Produced {
+            actor,
+            site,
+            output,
+            quantity,
+        } => R::Produced {
+            actor,
+            site,
+            good: batch
+                .projected::<game_cargo::Inventory>(store, game_ecs::StableId(output.0))?
+                .ok_or(Error::Unavailable)?
+                .good,
+            quantity,
+        },
+        EventKind::CropHarvested {
+            actor,
+            field,
+            food,
+            seed,
+        } => R::Harvested {
+            actor,
+            field,
+            food,
+            seed,
+        },
+        EventKind::Transferred {
+            actor,
+            source,
+            destination,
+            quantity,
+        } => R::Transferred {
+            actor,
+            source,
+            destination,
+            quantity,
+        },
+        EventKind::Cared {
+            source, quantity, ..
+        }
+        | EventKind::Ate {
+            source, quantity, ..
+        }
+        | EventKind::Consumed {
+            source, quantity, ..
+        } => R::Lost { source, quantity },
+        EventKind::Spoiled {
+            inventory,
+            quantity,
+        } => R::Lost {
+            source: inventory,
+            quantity,
+        },
+        EventKind::ProjectCompleted { .. } => R::ProjectCompleted,
+        _ => return Ok(None),
+    };
+    Ok(Some(game_agreements::Receipt { at, kind }))
+}
+
+pub(crate) struct StagedAgreementPublication {
+    pub(crate) opening: game_world::TransactionOpening,
+    pub(crate) ids: u64,
+    pub(crate) events: Vec<EventKind>,
+    pub(crate) guards: Vec<game_ecs::ReadGuard>,
+    observation: game_agreements::TransitionPublicationFinalization,
+    contacts: game_agreements::ContactSet,
+    people: BTreeSet<PersonId>,
+    source_contacts: Option<game_agreements::ContactSet>,
+}
+impl StagedAgreementPublication {
+    pub(crate) fn validate(
+        &self,
+        simulation: &Simulation,
+        batch: &game_ecs::Batch,
+    ) -> Result<(), Error> {
+        if self.opening != simulation.host.transaction_opening() {
+            return Err(Error::Unavailable);
+        }
+        if simulation
+            .maintenance_agreement_contacts(
+                batch,
+                self.people.iter().copied(),
+                self.source_contacts.as_ref(),
+            )?
+            .0
+            != self.contacts.0
+        {
+            return Err(Error::Unavailable);
+        }
+        self.observation.validate(
+            simulation
+                .host
+                .state
+                .agreements
+                .as_ref()
+                .ok_or(Error::Unavailable)?,
+            &simulation.host.storage,
+            batch,
+        )?;
+        for guard in &self.guards {
+            guard.validate(&simulation.host.storage, batch)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn finish(self, simulation: &mut Simulation) {
+        self.observation
+            .finish(simulation.host.state.agreements.as_mut().unwrap());
+    }
+}
+pub(crate) fn agreement_event(event: game_agreements::TransitionEvent) -> EventKind {
+    use game_agreements::TransitionEvent;
+    match event {
+        TransitionEvent::Proposed {
+            agreement,
+            proposer,
+        } => EventKind::AgreementProposed {
+            agreement,
+            proposer,
+        },
+        TransitionEvent::Activated { agreement } => EventKind::AgreementActivated { agreement },
+        TransitionEvent::Rejected { agreement, actor } => {
+            EventKind::AgreementRejected { agreement, actor }
+        }
+        TransitionEvent::Amended {
+            agreement,
+            amendment,
+        } => EventKind::AgreementAmended {
+            agreement,
+            amendment,
+        },
+        TransitionEvent::Performed {
+            obligation,
+            actor,
+            quantity,
+        } => EventKind::ObligationPerformed {
+            obligation,
+            actor,
+            quantity,
+        },
+    }
+}
+
 pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
     let Some(runtime) = &s.state.agreements else {
-        if game_agreements::agreements(s.components).next().is_some()
-            || game_agreements::obligations(s.components).next().is_some()
-            || game_agreements::amendments(s.components).next().is_some()
-            || game_agreements::knowledges(s.components).next().is_some()
-            || game_agreements::request_rows(s.components).next().is_some()
-            || game_agreements::reports(s.components).next().is_some()
-            || game_agreements::pending_works(s.components)
-                .next()
-                .is_some()
-        {
-            return Err(Error::InvalidSave("orphan agreement components".into()));
-        }
-        return Ok(());
+        return game_agreements::validate_absent(s.components);
     };
-    let people = s.state.people.iter().map(|row| row.id).collect();
+    let people = s.people().map(|row| row.id).collect();
     game_agreements::validate_runtime(
         s.components,
         runtime,
@@ -291,13 +540,18 @@ pub(crate) fn validate(s: &CanonicalState) -> Result<(), Error> {
         },
         &AgreementAssets(s),
     )?;
-    for (actor, activity) in s.components.activities() {
-        let row = game_agreements::report(s.components, actor);
-        if matches!(activity,Activity::ReportAgreement{..}) != row.is_some()
-            || row.is_some_and(|r|!matches!(activity,Activity::ReportAgreement{completes}if *completes==r.completes)){
-            return Err(Error::InvalidSave("agreement report activity mismatch".into()));
-        }
-    }
+    game_agreements::validate_report_activities(
+        s.components,
+        s.components
+            .activities()
+            .map(|(actor, activity)| game_agreements::ReportActivityFact {
+                actor,
+                reporting_until: match activity {
+                    Activity::ReportAgreement { completes } => Some(*completes),
+                    _ => None,
+                },
+            }),
+    )?;
     Ok(())
 }
 impl Simulation {
@@ -311,10 +565,7 @@ impl Simulation {
         let local = sim.host.state.areas[0].id;
         let ruler = sim.host.state.ruler;
         let citizen = sim
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .find(|p| {
                 p.role == Role::Citizen
                     && *game_spatial::location(&sim.host.storage, game_ecs::StableId((p.id).0))
@@ -380,6 +631,78 @@ impl Simulation {
                 .collect(),
         )
     }
+    fn projected_agreement_contacts(
+        &self,
+        batch: &game_ecs::Batch,
+        ids: impl IntoIterator<Item = PersonId>,
+    ) -> Result<game_agreements::ContactSet, Error> {
+        let mut contacts = BTreeMap::new();
+        for actor in ids {
+            if !self.person_index.contains_key(&actor) {
+                continue;
+            }
+            let entity = game_ecs::StableId(actor.0);
+            let Some(body) =
+                batch.projected::<game_physiology::Body>(&self.host.storage, entity)?
+            else {
+                continue;
+            };
+            let life = batch.projected::<game_lifecycle::Life>(&self.host.storage, entity)?;
+            let activity = batch.projected::<Activity>(&self.host.storage, entity)?;
+            let location = batch.projected::<Location>(&self.host.storage, entity)?;
+            contacts.insert(
+                actor,
+                game_agreements::ContactFacts {
+                    alive: body.vitals.alive,
+                    health: body.vitals.health,
+                    independent: game_lifecycle::independent(
+                        life.map(|life| life.stage),
+                        self.host.state.development.is_some(),
+                    ),
+                    in_combat: self.host.state.physical.is_some()
+                        && matches!(activity, Some(Activity::Combat { .. })),
+                    area: match location {
+                        Some(Location::AtArea(area)) => Some(*area),
+                        _ => None,
+                    },
+                },
+            );
+        }
+        Ok(game_agreements::ContactSet(contacts))
+    }
+    pub(crate) fn physical_maintenance_contacts(
+        &self,
+        batch: &game_ecs::Batch,
+    ) -> Result<game_agreements::ContactSet, Error> {
+        self.projected_agreement_contacts(batch, self.person_ids.iter().copied())
+    }
+    fn maintenance_agreement_contacts(
+        &self,
+        batch: &game_ecs::Batch,
+        ids: impl IntoIterator<Item = PersonId>,
+        source: Option<&game_agreements::ContactSet>,
+    ) -> Result<game_agreements::ContactSet, Error> {
+        let ids = ids.into_iter().collect::<BTreeSet<_>>();
+        let Some(source) = source else {
+            return self.projected_agreement_contacts(batch, ids);
+        };
+        let mut contacts = source
+            .0
+            .iter()
+            .filter(|(id, _)| ids.contains(id))
+            .map(|(id, facts)| (*id, *facts))
+            .collect::<BTreeMap<_, _>>();
+        let local = ids
+            .iter()
+            .filter(|id| self.person_index.contains_key(id))
+            .copied()
+            .collect::<Vec<_>>();
+        for id in &local {
+            contacts.remove(id);
+        }
+        contacts.extend(self.projected_agreement_contacts(batch, local)?.0);
+        Ok(game_agreements::ContactSet(contacts))
+    }
     fn apply_agreement_learning(&mut self, effects: Vec<game_agreements::NewDefaultKnowledge>) {
         for effect in effects {
             game_characters::decisions::learn_defaults::<Command>(
@@ -390,37 +713,14 @@ impl Simulation {
         }
     }
 
-    fn local_agreement_notice(
-        &mut self,
-        id: AgreementId,
-        speaker: PersonId,
-        change: Option<AmendmentId>,
-    ) {
-        let Some(row) = game_agreements::agreement(&self.host.storage, id) else {
-            return;
-        };
-        let contacts = self.agreement_contacts(row.parties.iter().copied().chain([speaker]));
-        let now = self.host.clock().time;
-        let effects = game_agreements::local_notice(
-            &mut self.host.storage,
-            now,
-            id,
-            speaker,
-            change,
-            &contacts,
-        )
-        .expect("validated local notice");
-        self.apply_agreement_learning(effects);
-    }
     pub(crate) fn agreement_observation_events(&self) -> Vec<game_agreements::ObservationEvent> {
         use game_agreements::ObservationKind as O;
         let Some(runtime) = &self.host.state.agreements else {
             return vec![];
         };
         self.host
-            .events()
+            .events_since(runtime.last_observation_event)
             .iter()
-            .skip(runtime.last_observation_event as usize)
             .filter_map(|e| {
                 let kind = match e.event {
                     EventKind::AgreementProposed {
@@ -495,13 +795,15 @@ impl Simulation {
         .expect("validated agreement observation");
         self.apply_agreement_learning(effects);
     }
-    pub(crate) fn start_agreement_report(
+    fn start_agreement_report_with_revision(
         &mut self,
         sender: PersonId,
         recipient: PersonId,
         id: AgreementId,
+        origin_revision: u64,
     ) -> Result<(), Error> {
-        self.host.preflight_records(0, 0, 1)?;
+        let revisions = origin_revision.checked_add(1).ok_or(Error::Overflow)?;
+        self.host.preflight_records(0, 0, revisions)?;
         let facts = game_agreements::ReportFacts {
             sender_under_care: self.care_index.contains_key(&sender),
             recipient_idle_or_rest: matches!(
@@ -539,16 +841,73 @@ impl Simulation {
             &final_activities,
             &replacement,
         )?;
+        let events = finish.events_for(&[sender]);
+        let observation = if origin_revision > 0 {
+            let runtime = self
+                .host
+                .state
+                .agreements
+                .as_ref()
+                .ok_or(Error::Unavailable)?;
+            let prior = self.agreement_observation_events();
+            let people = game_agreements::observation_people(&self.host.storage, &prior);
+            let contacts = self.projected_agreement_contacts(&batch, people.iter().copied())?;
+            let cursor = (self.host.next_event() - 1)
+                .checked_add(u64::try_from(events.len()).map_err(|_| Error::Overflow)?)
+                .ok_or(Error::Overflow)?;
+            let plan = game_agreements::prepare_observations(
+                &self.host.storage,
+                runtime,
+                now,
+                cursor,
+                &prior,
+                &contacts,
+            )?;
+            let trust = game_characters::receivers::prepare_default_knowledge_reactions::<Command>(
+                &self.host.storage,
+                plan.default_knowledge()
+                    .iter()
+                    .map(|effect| (effect.observer, effect.debtor)),
+            )?;
+            let observation = plan.stage_into(&self.host.storage, runtime, &mut batch)?;
+            let trust = trust.stage_into(&self.host.storage, &mut batch)?;
+            Some((observation, trust, people, contacts))
+        } else {
+            None
+        };
         finish.validate_batch(self, &batch)?;
-        self.host.storage.apply_batch(batch)?;
-        finish.finish_actor(self, sender);
+        let mut guards = vec![replacement.read_guard(&self.host.storage, &batch)?];
+        if let Some((observation, trust, people, contacts)) = &observation {
+            if self
+                .projected_agreement_contacts(&batch, people.iter().copied())?
+                .0
+                != contacts.0
+            {
+                return Err(Error::Unavailable);
+            }
+            observation.validate(
+                self.host.state.agreements.as_ref().unwrap(),
+                &self.host.storage,
+                &batch,
+            )?;
+            trust.validate(&self.host.storage, &batch)?;
+            guards.extend([observation.read_guard(), trust.clone()]);
+        }
+        let mut transaction = game_world::Transaction::new(self.host.transaction_opening(), batch);
+        transaction.revisions = revisions;
+        transaction.events = events;
+        transaction.guards = guards;
+        self.host.commit_transaction(transaction)?;
+        finish.finish_actor_metadata(self, sender);
+        if let Some((observation, _, _, _)) = observation {
+            observation.finish(self.host.state.agreements.as_mut().unwrap());
+        }
         self.host
             .state
             .due
             .entry(completes)
             .or_default()
             .push(Due::Physical(sender));
-        self.host.bump_revision(1)?;
         Ok(())
     }
     pub(crate) fn complete_agreement_report(&mut self, sender: PersonId) {
@@ -631,6 +990,14 @@ impl Simulation {
         actor: PersonId,
         action: &AgreementAction,
     ) -> Result<(), Error> {
+        self.agreement_command_with_revision(actor, action, 0)
+    }
+    pub(crate) fn agreement_command_with_revision(
+        &mut self,
+        actor: PersonId,
+        action: &AgreementAction,
+        origin_revision: u64,
+    ) -> Result<(), Error> {
         self.agreement_actor_area(actor)?;
         self.reserve_agreement_ids(0)?;
         self.host
@@ -643,7 +1010,12 @@ impl Simulation {
             recipient,
         } = action
         {
-            return self.start_agreement_report(actor, *recipient, *agreement);
+            return self.start_agreement_report_with_revision(
+                actor,
+                *recipient,
+                *agreement,
+                origin_revision,
+            );
         }
         let requirements =
             game_agreements::Ledger::new(&self.host.storage).transition_requirements(action)?;
@@ -660,7 +1032,7 @@ impl Simulation {
         self.reserve_agreement_ids(next - self.host.next_id())?;
         let prepared = game_agreements::Ledger::new(&self.host.storage)
             .prepare_transition(actor, action, &facts, &ids)?;
-        self.apply_prepared_agreement(actor, prepared, next)
+        self.apply_prepared_agreement_with_revision(actor, prepared, next, origin_revision)
     }
     pub(crate) fn prepare_agreement_command(
         &self,
@@ -735,24 +1107,201 @@ impl Simulation {
             .prepare_service_commitment(&accepted, &facts, &ids)?;
         Ok((prepared, next))
     }
-    pub(crate) fn apply_prepared_agreement(
+    pub(crate) fn physical_maintenance_agreement_inputs(
+        &self,
+        batch: &game_ecs::Batch,
+        prefix: &[EventKind],
+    ) -> Result<game_agreements::MaintenanceInputs, Error> {
+        let mut receipts = Vec::new();
+        let mut observations = self.agreement_observation_events();
+        if let Some(runtime) = self.host.state.agreements.as_ref() {
+            for event in self.host.events_since(runtime.last_event).iter() {
+                if let Some(receipt) =
+                    physical_receipt(&event.event, event.at, &self.host.storage, batch)?
+                {
+                    receipts.push(receipt);
+                }
+            }
+        }
+        for event in prefix {
+            if let Some(receipt) = physical_receipt(event, self.time(), &self.host.storage, batch)?
+            {
+                receipts.push(receipt);
+            }
+            if let Some(observation) = observation_event(event, self.time()) {
+                observations.push(observation);
+            }
+        }
+        Ok(game_agreements::maintenance_inputs(
+            &self.host.storage,
+            &receipts,
+            &observations,
+            &AgreementBindings(self),
+        ))
+    }
+    pub(crate) fn prepare_physical_agreement_maintenance(
+        &self,
+        batch: &mut game_ecs::Batch,
+        prefix: &[EventKind],
+    ) -> Result<PhysicalAgreementMaintenance, Error> {
+        self.prepare_physical_agreement_maintenance_from(batch, prefix, None, None)
+    }
+    pub(crate) fn prepare_physical_agreement_maintenance_with_context(
+        &self,
+        batch: &mut game_ecs::Batch,
+        prefix: &[EventKind],
+        source_contacts: &game_agreements::ContactSet,
+        inputs: &game_agreements::MaintenanceInputs,
+    ) -> Result<PhysicalAgreementMaintenance, Error> {
+        self.prepare_physical_agreement_maintenance_from(
+            batch,
+            prefix,
+            Some(source_contacts),
+            Some(inputs),
+        )
+    }
+    fn prepare_physical_agreement_maintenance_from(
+        &self,
+        batch: &mut game_ecs::Batch,
+        prefix: &[EventKind],
+        source_contacts: Option<&game_agreements::ContactSet>,
+        source_inputs: Option<&game_agreements::MaintenanceInputs>,
+    ) -> Result<PhysicalAgreementMaintenance, Error> {
+        let opening = self.host.transaction_opening();
+        let Some(runtime) = self.host.state.agreements.as_ref() else {
+            return Ok(PhysicalAgreementMaintenance {
+                opening,
+                before: None,
+                finish: None,
+                events: Vec::new(),
+                guards: Vec::new(),
+                contacts: game_agreements::ContactSet(BTreeMap::new()),
+                people: BTreeSet::new(),
+                source_contacts: source_contacts.cloned(),
+            });
+        };
+        let source_cursor = (self.host.next_event() - 1)
+            .checked_add(u64::try_from(prefix.len()).map_err(|_| Error::Overflow)?)
+            .ok_or(Error::Overflow)?;
+        let mut receipts = Vec::new();
+        for event in self.host.events_since(runtime.last_event).iter() {
+            if let Some(receipt) =
+                physical_receipt(&event.event, event.at, &self.host.storage, batch)?
+            {
+                receipts.push(receipt);
+            }
+        }
+        for event in prefix {
+            if let Some(receipt) = physical_receipt(event, self.time(), &self.host.storage, batch)?
+            {
+                receipts.push(receipt);
+            }
+        }
+        let reconciliation = if let Some(inputs) = source_inputs {
+            game_agreements::prepare_reconciliation_projected(
+                &self.host.storage,
+                runtime,
+                self.time(),
+                source_cursor,
+                &receipts,
+                inputs,
+                batch,
+            )?
+        } else {
+            game_agreements::prepare_reconciliation_projected(
+                &self.host.storage,
+                runtime,
+                self.time(),
+                source_cursor,
+                &receipts,
+                &AgreementBindings(self),
+                batch,
+            )?
+        };
+        let events = reconciliation
+            .events
+            .iter()
+            .copied()
+            .map(reconciliation_event)
+            .collect::<Vec<_>>();
+        let observer_cursor = source_cursor
+            .checked_add(u64::try_from(events.len()).map_err(|_| Error::Overflow)?)
+            .ok_or(Error::Overflow)?;
+        let mut observations = self.agreement_observation_events();
+        observations.extend(
+            prefix
+                .iter()
+                .filter_map(|event| observation_event(event, self.time())),
+        );
+        let mut all_observations = observations.clone();
+        all_observations.extend(
+            events
+                .iter()
+                .filter_map(|event| observation_event(event, self.time())),
+        );
+        let people = game_agreements::observation_people(&self.host.storage, &all_observations);
+        let contacts =
+            self.maintenance_agreement_contacts(batch, people.iter().copied(), source_contacts)?;
+        let publication = game_agreements::PreparedReconciledPublication::prepare(
+            reconciliation,
+            &self.host.storage,
+            runtime,
+            self.time(),
+            observer_cursor,
+            &observations,
+            &contacts,
+        )?;
+        let trust = game_characters::receivers::prepare_default_knowledge_reactions::<Command>(
+            &self.host.storage,
+            publication
+                .default_knowledge()
+                .iter()
+                .map(|effect| (effect.observer, effect.debtor)),
+        )?;
+        let finish = publication.stage_into(&self.host.storage, runtime, batch)?;
+        let mut guards = finish.read_guards().into_iter().collect::<Vec<_>>();
+        guards.push(trust.stage_into(&self.host.storage, batch)?);
+        Ok(PhysicalAgreementMaintenance {
+            opening,
+            before: Some(runtime.clone()),
+            finish: Some(finish),
+            events,
+            guards,
+            contacts,
+            people,
+            source_contacts: source_contacts.cloned(),
+        })
+    }
+
+    fn apply_prepared_agreement_with_revision(
         &mut self,
         actor: PersonId,
         prepared: game_agreements::PreparedTransition,
         next: u64,
+        revisions: u64,
     ) -> Result<(), Error> {
         let mut batch = game_ecs::Batch::new();
-        self.stage_prepared_agreement(&prepared, next, &mut batch)?;
-        self.host.storage.apply_batch(batch)?;
-        self.publish_prepared_agreement(actor, prepared, next)
+        let staged = self.stage_prepared_agreement(actor, &prepared, next, &mut batch)?;
+        staged.validate(self, &batch)?;
+        let mut transaction = game_world::Transaction::new(staged.opening.clone(), batch);
+        transaction.ids = staged.ids;
+        transaction.revisions = revisions;
+        transaction.events = staged.events.clone();
+        transaction.guards = staged.guards.clone();
+        self.host.commit_transaction(transaction)?;
+        staged.finish(self);
+        Ok(())
     }
     pub(crate) fn stage_prepared_agreement(
         &self,
+        actor: PersonId,
         prepared: &game_agreements::PreparedTransition,
         next: u64,
         batch: &mut game_ecs::Batch,
-    ) -> Result<(), Error> {
-        next.checked_sub(self.host.next_id())
+    ) -> Result<StagedAgreementPublication, Error> {
+        let opening = self.host.transaction_opening();
+        let ids = next
+            .checked_sub(self.host.next_id())
             .ok_or(Error::Overflow)?;
         prepared.check(&game_agreements::Ledger::new(&self.host.storage))?;
         self.ensure_event_capacity(prepared.events.len())?;
@@ -796,74 +1345,169 @@ impl Simulation {
             .filter(|_| !plots.is_empty())
             .map(|r| r.prepare_site_access(&self.host.storage, &plots))
             .transpose()?;
-        prepared.stage(batch);
-        cargo.stage(batch);
-        if let Some(p) = &agriculture {
-            p.stage(batch);
-        }
-        if let Some(p) = &ecology {
-            p.stage(batch);
-        }
-        Ok(())
-    }
-    pub(crate) fn publish_prepared_agreement(
-        &mut self,
-        actor: PersonId,
-        prepared: game_agreements::PreparedTransition,
-        next: u64,
-    ) -> Result<(), Error> {
-        let events = prepared.events;
-        let notices = prepared.notices;
-        self.host.allocate_ids(
-            (next)
-                .checked_sub(self.host.next_id())
-                .ok_or(Error::Overflow)?,
+        let prior_events = self.agreement_observation_events();
+        let mut people = prepared.publication_people(&self.host.storage, &prior_events);
+        people.insert(actor);
+        let cursor = (self.host.next_event() - 1)
+            .checked_add(u64::try_from(prepared.events.len()).map_err(|_| Error::Overflow)?)
+            .ok_or(Error::Overflow)?;
+        let contacts = self.projected_agreement_contacts(batch, people.iter().copied())?;
+        let publication = game_agreements::PreparedTransitionPublication::prepare(
+            prepared.clone(),
+            &self.host.storage,
+            self.host
+                .state
+                .agreements
+                .as_ref()
+                .ok_or(Error::Unavailable)?,
+            self.time(),
+            cursor,
+            &prior_events,
+            actor,
+            &contacts,
         )?;
-        self.publish_agreement_events(events);
-        for notice in notices {
-            self.local_agreement_notice(notice.agreement, actor, notice.amendment);
+        let trust = game_characters::receivers::prepare_default_knowledge_reactions::<Command>(
+            &self.host.storage,
+            publication
+                .default_knowledge()
+                .iter()
+                .map(|effect| (effect.observer, effect.debtor)),
+        )?;
+        let observation = publication.stage_into(
+            &self.host.storage,
+            self.host
+                .state
+                .agreements
+                .as_ref()
+                .ok_or(Error::Unavailable)?,
+            batch,
+        )?;
+        let mut guards = observation.read_guards().into_iter().collect::<Vec<_>>();
+        guards.push(trust.stage_into(&self.host.storage, batch)?);
+        if let Some(skills) = self.stage_agreement_skill_events(prepared, batch)? {
+            guards.push(skills.into_guard(
+                self.host.state.skills.as_ref().ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                batch,
+            )?);
         }
-        self.observe_agreement_events();
-        Ok(())
+        guards.push(cargo.stage_into(&self.host.storage, batch)?);
+        if let Some(p) = &agriculture {
+            guards.push(
+                p.stage_into(
+                    self.host
+                        .state
+                        .agriculture
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    &self.host.storage,
+                    batch,
+                )?,
+            );
+        }
+        if let Some(p) = ecology {
+            guards.push(p.stage_into(
+                self.host.state.ecology.as_ref().ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                batch,
+            )?);
+        }
+        Ok(StagedAgreementPublication {
+            opening,
+            ids,
+            events: prepared
+                .events
+                .iter()
+                .cloned()
+                .map(agreement_event)
+                .collect(),
+            guards,
+            observation,
+            contacts,
+            people,
+            source_contacts: None,
+        })
     }
-    pub(crate) fn publish_agreement_events(
-        &mut self,
-        events: Vec<game_agreements::TransitionEvent>,
-    ) {
-        use game_agreements::TransitionEvent;
-        for event in events {
-            self.emit(match event {
-                TransitionEvent::Proposed {
-                    agreement,
-                    proposer,
-                } => EventKind::AgreementProposed {
-                    agreement,
-                    proposer,
-                },
-                TransitionEvent::Activated { agreement } => {
-                    EventKind::AgreementActivated { agreement }
-                }
-                TransitionEvent::Rejected { agreement, actor } => {
-                    EventKind::AgreementRejected { agreement, actor }
-                }
-                TransitionEvent::Amended {
-                    agreement,
-                    amendment,
-                } => EventKind::AgreementAmended {
-                    agreement,
-                    amendment,
-                },
-                TransitionEvent::Performed {
-                    obligation,
-                    actor,
-                    quantity,
-                } => EventKind::ObligationPerformed {
-                    obligation,
-                    actor,
-                    quantity,
-                },
-            });
+    /// Receiving effects for an origin whose Agreement rows are already staged.
+    /// The caller supplies the complete event order of the joint publication.
+    pub(crate) fn stage_agreement_receivers(
+        &self,
+        actor: PersonId,
+        prepared: &game_agreements::PreparedTransition,
+        events: &[EventKind],
+        batch: &mut game_ecs::Batch,
+    ) -> Result<StagedAgreementPublication, Error> {
+        self.stage_agreement_receivers_from(actor, prepared, events, batch, None)
+    }
+    pub(crate) fn stage_agreement_receivers_with_contacts(
+        &self,
+        actor: PersonId,
+        prepared: &game_agreements::PreparedTransition,
+        events: &[EventKind],
+        batch: &mut game_ecs::Batch,
+        contacts: &game_agreements::ContactSet,
+    ) -> Result<StagedAgreementPublication, Error> {
+        self.stage_agreement_receivers_from(actor, prepared, events, batch, Some(contacts))
+    }
+    fn stage_agreement_receivers_from(
+        &self,
+        actor: PersonId,
+        prepared: &game_agreements::PreparedTransition,
+        events: &[EventKind],
+        batch: &mut game_ecs::Batch,
+        source_contacts: Option<&game_agreements::ContactSet>,
+    ) -> Result<StagedAgreementPublication, Error> {
+        let runtime = self
+            .host
+            .state
+            .agreements
+            .as_ref()
+            .ok_or(Error::Unavailable)?;
+        let prior_events = self.agreement_observation_events();
+        let mut people = prepared.publication_people(&self.host.storage, &prior_events);
+        people.insert(actor);
+        let contacts =
+            self.maintenance_agreement_contacts(batch, people.iter().copied(), source_contacts)?;
+        let cursor = (self.host.next_event() - 1)
+            .checked_add(u64::try_from(events.len()).map_err(|_| Error::Overflow)?)
+            .ok_or(Error::Overflow)?;
+        let publication = game_agreements::PreparedTransitionPublication::prepare(
+            prepared.clone(),
+            &self.host.storage,
+            runtime,
+            self.time(),
+            cursor,
+            &prior_events,
+            actor,
+            &contacts,
+        )?;
+        let trust = game_characters::receivers::prepare_default_knowledge_reactions::<Command>(
+            &self.host.storage,
+            publication
+                .default_knowledge()
+                .iter()
+                .map(|effect| (effect.observer, effect.debtor)),
+        )?;
+        let observation = publication.stage_after_transition(&self.host.storage, runtime, batch)?;
+        let mut guards = observation.read_guards().into_iter().collect::<Vec<_>>();
+        guards.push(trust.stage_into(&self.host.storage, batch)?);
+        if let Some(skills) = self.stage_agreement_skill_events(prepared, batch)? {
+            guards.push(skills.into_guard(
+                self.host.state.skills.as_ref().ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                batch,
+            )?);
         }
+        Ok(StagedAgreementPublication {
+            opening: self.host.transaction_opening(),
+            ids: 0,
+            events: events.to_vec(),
+            guards,
+            observation,
+            contacts,
+            people,
+            source_contacts: source_contacts.cloned(),
+        })
     }
     fn reserve_agreement_ids(&self, count: u64) -> Result<(), Error> {
         self.host
@@ -896,7 +1540,7 @@ impl Simulation {
         };
         let mut receipts = Vec::new();
         let mut direct = outputs.len() as u64;
-        for event in self.host.events().iter().skip(world.last_event as usize) {
+        for event in self.host.events_since(world.last_event).iter() {
             match event.event {
                 EventKind::Transferred {
                     actor,
@@ -1022,45 +1666,6 @@ impl Simulation {
     pub(crate) fn next_agreement_deadline(&self) -> Option<SimTime> {
         game_agreements::next_deadline(&self.host.storage, self.host.clock().time)
     }
-    pub(crate) fn record_agreement_labor_batch(
-        &mut self,
-        from: SimTime,
-        to: SimTime,
-        assignments: &[game_agreements::WorkAssignment],
-    ) -> Result<(), Error> {
-        game_agreements::Ledger::new(&self.host.storage)
-            .prepare_labor(from, to, assignments)?
-            .commit(&mut self.host.storage)
-    }
-    pub(crate) fn record_agreement_work(&mut self, actor: PersonId, site: SiteId, elapsed: u64) {
-        let now = self.host.clock().time;
-        self.record_agreement_labor_batch(
-            SimTime(now.0 - elapsed),
-            now,
-            &[game_agreements::WorkAssignment {
-                actor,
-                target: game_agreements::WorkTarget::Site(site),
-            }],
-        )
-        .expect("preflight eligible site work");
-    }
-    pub(crate) fn record_agreement_construction(
-        &mut self,
-        actor: PersonId,
-        project: ProjectId,
-        elapsed: u64,
-    ) {
-        let now = self.host.clock().time;
-        self.record_agreement_labor_batch(
-            SimTime(now.0 - elapsed),
-            now,
-            &[game_agreements::WorkAssignment {
-                actor,
-                target: game_agreements::WorkTarget::Project(project),
-            }],
-        )
-        .expect("preflight eligible construction work");
-    }
     pub(crate) fn reconcile_agreements(&mut self) -> Result<(), Error> {
         use game_agreements::ReceiptKind as R;
         let Some(runtime) = &self.host.state.agreements else {
@@ -1068,9 +1673,8 @@ impl Simulation {
         };
         let receipts = self
             .host
-            .events()
+            .events_since(runtime.last_event)
             .iter()
-            .skip(runtime.last_event as usize)
             .filter_map(|e| {
                 let kind = match e.event {
                     EventKind::Produced {
@@ -1244,52 +1848,36 @@ impl Simulation {
             let fertility = game_ecology::knowledge(&self.host.storage, actor)
                 .and_then(|known| known.known_plots.get(&site))
                 .map(|plot| plot.soil_fertility);
-            let remembered_plan = self
+            let remembered_plan = self.host.state.projects.as_ref().is_some_and(|_| {
+                game_projects::remembered_farm_plan(&self.host.storage, actor, site)
+            });
+            let planned = game_agriculture::known_food_share(
+                self.host.state.agriculture.as_ref(),
+                fertility,
+                remembered_plan,
+                numerator,
+                denominator,
+            )?;
+            let remembered_established = self.host.state.projects.as_ref().is_some_and(|_| {
+                game_projects::remembered_established_site(&self.host.storage, actor, site)
+            });
+            let locally_established = self
                 .host
                 .state
-                .projects
+                .agriculture
                 .as_ref()
-                .and_then(|_| {
-                    game_projects::knowledge(&self.host.storage, actor).map(|row| &row.projects)
-                })
-                .is_some_and(|known| {
-                    known
-                        .values()
-                        .any(|plan| matches!(plan.kind,ProjectKind::Farm {plot,..} if plot==site))
+                .zip(game_spatial::location(
+                    &self.host.storage,
+                    game_ecs::StableId(actor.0),
+                ))
+                .is_some_and(|(owner, location)| {
+                    owner.local_field(&self.host.storage, site, location)
                 });
-            let planned = if let Some(fertility) = fertility.filter(|_| remembered_plan) {
-                let agriculture = self
-                    .host
-                    .state
-                    .agriculture
-                    .as_ref()
-                    .ok_or(Error::Unavailable)?;
-                let crop = &agriculture.catalog.crops[&agriculture.catalog.default_crop];
-                Some(game_agriculture::projected_food_share(
-                    crop,
-                    fertility,
-                    numerator,
-                    denominator,
-                )?)
-            } else {
-                None
-            };
-            let established = self
-                .host
-                .state
-                .projects
-                .as_ref()
-                .and_then(|_| {
-                    game_projects::knowledge(&self.host.storage, actor).map(|row| &row.enterprises)
-                })
-                .is_some_and(|known| known.values().any(|enterprise| enterprise.site == site))
-                || self.host.state.agriculture.as_ref().is_some_and(|world| {
-                    world.field(&self.host.storage, site).is_some_and(|field| {
-                        game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
-                            == Some(&Location::AtArea(field.area))
-                    })
-                });
-            let prospect = game_agreements::share_prospect(planned, established);
+            let prospect = game_agreements::share_prospect_from_sources(
+                planned,
+                remembered_established,
+                locally_established,
+            );
             shares.insert((site, numerator, denominator), prospect);
         }
         let area = self.agreement_actor_area(actor).ok();
@@ -1390,6 +1978,58 @@ impl Simulation {
 #[cfg(test)]
 mod share_tests {
     use super::*;
+    #[test]
+    fn routed_agreement_revision_is_admitted_before_native_publication() {
+        let mut sim = Simulation::agreement_fixture(7, Execution::default()).unwrap();
+        let actor = sim.host.state.ruler;
+        let area = sim.agreement_actor_area(actor).unwrap();
+        let partner = sim
+            .people()
+            .find(|person| {
+                person.id != actor && sim.agreement_actor_area(person.id).ok() == Some(area)
+            })
+            .unwrap()
+            .id;
+        let stock = game_cargo::inventories(&sim.host.storage)
+            .find(|(_, stock)| stock.access.contains(&actor))
+            .unwrap()
+            .0;
+        let action = AgreementAction::Propose {
+            parties: BTreeSet::from([actor, partner]),
+            terms: vec![AgreementTerm::Access {
+                grantor: actor,
+                grantee: partner,
+                inventory: stock,
+                allowed: true,
+            }],
+            procedure: None,
+        };
+        let mut clock = sim.host.clock();
+        clock.revision = u64::MAX;
+        sim.host.publish_clock(clock);
+        let before = sim.host.storage.snapshot().unwrap();
+        let opening = sim.host.transaction_opening();
+        assert_eq!(
+            sim.agreement_command_with_revision(actor, &action, 1),
+            Err(Error::Overflow)
+        );
+        assert_eq!(sim.host.storage.snapshot().unwrap(), before);
+        assert_eq!(sim.host.transaction_opening(), opening);
+        clock.revision = 0;
+        sim.host.publish_clock(clock);
+        sim.agreement_command_with_revision(actor, &action, 1)
+            .unwrap();
+        assert_eq!(sim.host.clock().revision, 1);
+        assert_eq!(
+            sim.host
+                .state
+                .agreements
+                .as_ref()
+                .unwrap()
+                .last_observation_event,
+            sim.host.next_event() - 1
+        );
+    }
     #[test]
     fn changing_future_fraction_retains_the_fraction_already_owed() {
         let (amount, remainder, scale) = game_agreements::accrue_share(0, 0, 0, 1, 3, 1).unwrap();

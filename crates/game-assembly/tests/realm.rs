@@ -11,7 +11,7 @@ fn command(sim: &mut Simulation, c: Command) {
     .unwrap();
 }
 fn actor(sim: &Simulation, n: usize) -> PersonId {
-    sim.canonical_state().state.people[n].id
+    sim.canonical_state().person_at(n).id
 }
 fn travel(sim: &mut Simulation, p: PersonId, to: AreaId) {
     if p == sim.canonical_state().state.ruler {
@@ -209,7 +209,7 @@ fn ratify(
         RuleProposalStatus::Adopted
     );
 }
-fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
+fn ready_to_request(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     let (mut sim, c) = fixture(seed);
     let ruler = sim.canonical_state().state.ruler;
     let id = propose(&mut sim, &c);
@@ -279,6 +279,10 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     assert_eq!(sim.canonical_snapshot().unwrap(), before);
     travel(&mut sim, c.bv, AreaId(1));
     report(&mut sim, c.bv, ruler, id);
+    (sim, c, id, agreement)
+}
+fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
+    let (mut sim, c, id, agreement) = ready_to_request(seed);
     command(
         &mut sim,
         Command::Realm {
@@ -308,14 +312,123 @@ fn ready(seed: u64) -> (Simulation, Context, RealmCommitmentId, AgreementId) {
     (sim, c, id, agreement)
 }
 #[test]
+fn first_work_request_binds_existing_delivery_without_allocation_and_publishes_once() {
+    let (mut sim, _, commitment, agreement) = ready_to_request(42);
+    let actor = sim.canonical_state().state.ruler;
+    let before = sim.canonical_snapshot().unwrap();
+    let revision = sim.observe().revision;
+    let existing = game_agreements::agreement(sim.canonical_state().components, agreement)
+        .unwrap()
+        .clone();
+    let known = game_agreements::view(sim.canonical_state().components, actor);
+    let Term::Delivery { term, .. } =
+        &game_realm::commitment(sim.canonical_state().components, commitment)
+            .unwrap()
+            .current()
+            .proposal
+            .terms[0]
+    else {
+        panic!("delivery fixture")
+    };
+    assert!(
+        known.iter().any(|row| row.id == agreement
+            && row.parties == BTreeSet::from(term.parties())
+            && row.terms.contains(term)
+            && !matches!(
+                row.status,
+                AgreementStatus::Rejected | AgreementStatus::Withdrawn
+            )),
+        "existing delivery must match {term:?}: {existing:?}; known: {known:?}"
+    );
+    let mut pending = game_realm::commitment(sim.canonical_state().components, commitment)
+        .unwrap()
+        .current()
+        .pending
+        .clone();
+    pending.insert(
+        0,
+        game_realm::PendingWork {
+            actor,
+            owner: game_realm::PendingOwner::Agreement(agreement),
+        },
+    );
+    sim.debug_actor_command(
+        actor,
+        Command::Realm {
+            action: RealmAction::RequestWork {
+                key: TermKey {
+                    commitment,
+                    revision: 0,
+                    index: 0,
+                },
+            },
+        },
+    )
+    .unwrap();
+    let after = sim.canonical_snapshot().unwrap();
+    assert_eq!(after.next_id, before.next_id);
+    assert_eq!(after.next_event, before.next_event + 1);
+    assert_eq!(sim.observe().revision, revision + 1);
+    assert_eq!(
+        game_agreements::agreement(sim.canonical_state().components, agreement).unwrap(),
+        &existing,
+    );
+    assert_eq!(
+        game_realm::commitment(sim.canonical_state().components, commitment)
+            .unwrap()
+            .current()
+            .pending,
+        pending,
+    );
+    assert!(matches!(
+        after.events.last().unwrap().event,
+        EventKind::RealmWorkRequested { actor: published_actor, key }
+            if published_actor == actor && key.commitment == commitment && key.index == 0
+    ));
+    let saved = sim.save().unwrap();
+    assert_eq!(
+        sim.debug_actor_command(
+            actor,
+            Command::Realm {
+                action: RealmAction::RequestWork {
+                    key: TermKey {
+                        commitment,
+                        revision: 0,
+                        index: 0,
+                    },
+                },
+            },
+        ),
+        Err(Error::Unavailable),
+    );
+    assert_eq!(sim.save().unwrap(), saved);
+    assert_eq!(sim.observe().revision, revision + 1);
+    assert_eq!(
+        sim.debug_actor_command(
+            actor,
+            Command::Realm {
+                action: RealmAction::RequestWork {
+                    key: TermKey {
+                        commitment,
+                        revision: 1,
+                        index: 0,
+                    },
+                },
+            },
+        ),
+        Err(Error::Unavailable),
+    );
+    assert_eq!(sim.save().unwrap(), saved);
+    assert_eq!(sim.observe().revision, revision + 1);
+}
+
+#[test]
 fn two_settlements_ratify_and_actual_hauling_fulfills_only_the_goods_delivered() {
     let (mut sim, c, id, agreement) = ready(41);
     let ruler = sim.canonical_state().state.ruler;
     let cargo = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == ruler)
         .unwrap()
         .inventory;
@@ -810,7 +923,7 @@ fn native_realm_and_stocks_save51_have_one_authority_and_pending_report_replays(
         .map(String::as_str)
         .collect::<Vec<_>>();
     assert_eq!(runtime_keys, ["last_event", "rules"]);
-    let people = json["state"]["state"]["people"].as_array().unwrap().len();
+    let people = columns["characters/person"].as_array().unwrap().len();
     assert_eq!(
         columns["characters/stocks"].as_array().unwrap().len(),
         people
@@ -843,7 +956,7 @@ fn native_realm_and_stocks_reject_shadow_orphan_identity_shape_and_future_dates(
     let (sim, ruler, id) = pending_report_fixture();
     let bytes = sim.save().unwrap();
     let base: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let inventory = sim.canonical_state().state.people[0].inventory.0;
+    let inventory = sim.canonical_state().person_at(0).inventory.0;
     for failure in 0..18 {
         let mut json = base.clone();
         match failure {
@@ -961,12 +1074,7 @@ impl game_realm::Presence for NativeReportPresence<'_> {
             == game_spatial::resolve(store, game_ecs::StableId(b.0)).unwrap()
     }
     fn people(&self) -> impl Iterator<Item = PersonId> {
-        self.0
-            .canonical_state()
-            .state
-            .people
-            .iter()
-            .map(|person| person.id)
+        self.0.people().map(|person| person.id)
     }
     fn local_people(&self, _: AreaId) -> impl Iterator<Item = PersonId> {
         std::iter::empty()
@@ -1017,9 +1125,7 @@ fn native_report_completion_late_body_or_activity_edits_fail_without_publication
         .stage_into(state.components, at, &presence, Activity::Idle, &mut batch)
         .unwrap();
     let other = state
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id != recipient && p.id != speaker)
         .unwrap()
         .id;

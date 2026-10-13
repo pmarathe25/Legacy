@@ -478,3 +478,36 @@ impl Runtime {
         store.count::<Commitment>() > 0
     }
 }
+
+pub fn regional_change(change: &InstitutionChange) -> bool {
+    matches!(
+        change,
+        InstitutionChange::RatifyRegional { .. }
+            | InstitutionChange::AuthorizeRegionalPassage { .. }
+    )
+}
+impl Runtime {
+    pub fn prepare_published_native_outcome(
+        &self,
+        store: &Store,
+        institution: InstitutionId,
+        proposal: RuleProposalId,
+        status: RuleProposalStatus,
+        now: SimTime,
+        presence: &impl Presence,
+    ) -> Result<Option<(PreparedChange, RealmEvent)>, Error> {
+        self.native_outcome(store, institution, proposal, status, now)?
+            .map(|(plan, event)| {
+                let area = game_society::institution(store, institution)
+                    .ok_or(Error::Unavailable)?
+                    .charter
+                    .jurisdiction;
+                let revision = plan.revision_number().ok_or(Error::Unavailable)?;
+                Ok((
+                    plan.publish_decision(store, revision, institution, area, now, presence)?,
+                    event,
+                ))
+            })
+            .transpose()
+    }
+}

@@ -1,8 +1,9 @@
 use game_api::*;
 use game_assembly::{Execution, InventoryLocation, Simulation};
+use game_society::enforcement;
 use std::collections::BTreeSet;
 fn actor(sim: &Simulation, index: usize) -> PersonId {
-    sim.canonical_state().state.people[index].id
+    sim.canonical_state().person_at(index).id
 }
 fn court(sim: &Simulation) -> InstitutionId {
     game_society::institutions(sim.canonical_state().components)
@@ -41,9 +42,7 @@ fn theft(sim: &mut Simulation) -> IncidentId {
         .id;
     let destination = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == target)
         .unwrap()
         .inventory;
@@ -72,13 +71,8 @@ fn file(sim: &mut Simulation, incident: IncidentId) -> EnforcementCaseId {
     )
     .unwrap();
     sim.advance(MINUTE).unwrap();
-    *sim.canonical_state()
-        .state
-        .enforcement
-        .as_ref()
-        .unwrap()
-        .cases
-        .keys()
+    enforcement::cases(sim.canonical_state().components)
+        .map(|(id, _)| id)
         .last()
         .unwrap()
 }
@@ -129,13 +123,9 @@ fn unreported_distant_taking_does_not_summon_officers_and_unknown_evidence_is_in
     assert_eq!(sim.canonical_snapshot().unwrap(), before);
     let incident = theft(&mut sim);
     assert!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
-            .unwrap()
-            .cases
-            .is_empty()
+        enforcement::cases(sim.canonical_state().components)
+            .next()
+            .is_none()
     );
     assert!(
         game_missions::missions(sim.canonical_state().components)
@@ -150,22 +140,16 @@ fn unreported_distant_taking_does_not_summon_officers_and_unknown_evidence_is_in
     );
     let case = file(&mut sim, incident);
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
+        enforcement::memory(sim.canonical_state().components, judge)
             .unwrap()
-            .known[&judge][&case]
+            .known[&case]
             .status,
         EnforcementStatus::Pending
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
+        enforcement::memory(sim.canonical_state().components, judge)
             .unwrap()
-            .known[&judge][&case]
+            .known[&case]
             .contact
             .as_ref()
             .is_some_and(|c| c.area == AreaId(3))
@@ -229,13 +213,8 @@ fn an_officer_can_refuse_a_funded_order_without_physical_capture_or_spending() {
     sim.debug_enforcement_action(judge, EnforcementAction::Dispatch { case, proposal })
         .unwrap();
     sim.advance(MINUTE).unwrap();
-    let mission = sim
-        .canonical_state()
-        .state
-        .enforcement
-        .as_ref()
+    let mission = enforcement::case(sim.canonical_state().components, case)
         .unwrap()
-        .cases[&case]
         .mission
         .unwrap();
     assert!(
@@ -246,13 +225,9 @@ fn an_officer_can_refuse_a_funded_order_without_physical_capture_or_spending() {
             .all(|p| p.status == CompanionStatus::Refused)
     );
     assert!(
-        sim.canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .is_empty()
+        game_conflict::captivities(sim.canonical_state().components)
+            .next()
+            .is_none()
     );
     assert_eq!(
         game_cargo::inventory(sim.canonical_state().components, source)
@@ -269,17 +244,13 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
     let institution = court(&sim);
     let source = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == judge)
         .unwrap()
         .inventory;
     let destination = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == filer)
         .unwrap()
         .inventory;
@@ -326,14 +297,8 @@ fn removing_a_political_office_preserves_personal_control_assets_and_existing_de
     )
     .unwrap();
     sim.advance(MINUTE).unwrap();
-    let case = *sim
-        .canonical_state()
-        .state
-        .enforcement
-        .as_ref()
-        .unwrap()
-        .cases
-        .keys()
+    let case = enforcement::cases(sim.canonical_state().components)
+        .map(|(id, _)| id)
         .last()
         .unwrap();
     let assets = game_cargo::inventory(sim.canonical_state().components, source)
@@ -450,13 +415,9 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     sim.debug_enforcement_action(judge, EnforcementAction::Dispatch { case, proposal })
         .unwrap();
     assert!(
-        sim.canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .is_empty()
+        game_conflict::captivities(sim.canonical_state().components)
+            .next()
+            .is_none()
     );
     assert_eq!(
         *game_spatial::location(
@@ -467,13 +428,8 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
         Location::AtArea(AreaId(1))
     );
     sim.advance(MINUTE).unwrap();
-    let mission = sim
-        .canonical_state()
-        .state
-        .enforcement
-        .as_ref()
+    let mission = enforcement::case(sim.canonical_state().components, case)
         .unwrap()
-        .cases[&case]
         .mission
         .unwrap();
     assert_eq!(
@@ -494,9 +450,7 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     };
     let cargo = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == judge)
         .unwrap()
         .inventory;
@@ -548,36 +502,17 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
         sim.advance(MINUTE).unwrap();
     }
     for _ in 0..15 {
-        if sim
-            .canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .contains_key(&target)
-        {
+        if game_conflict::captivity(sim.canonical_state().components, target).is_some() {
             break;
         }
         sim.advance(MINUTE).unwrap();
     }
-    let captive = sim
-        .canonical_state()
-        .state
-        .combat
-        .as_ref()
-        .unwrap()
-        .captivity
-        .get(&target)
+    let captive = game_conflict::captivity(sim.canonical_state().components, target)
         .unwrap_or_else(|| {
             panic!(
                 "not captured: mission={:#?}, target={:#?}, recent events={:#?}",
                 game_missions::mission(sim.canonical_state().components, mission).unwrap(),
-                sim.canonical_state()
-                    .state
-                    .people
-                    .iter()
-                    .find(|p| p.id == target),
+                sim.canonical_state().people().find(|p| p.id == target),
                 sim.canonical_state()
                     .events
                     .iter()
@@ -607,15 +542,7 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     ));
     let remaining = until.0 - sim.canonical_state().time.0;
     sim.advance(SimDuration(remaining - 1)).unwrap();
-    assert!(
-        sim.canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .contains_key(&target)
-    );
+    assert!(game_conflict::captivity(sim.canonical_state().components, target).is_some());
     let mut restored = Simulation::load(
         &sim.save().unwrap(),
         Execution {
@@ -633,27 +560,11 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
             restored.advance(SimDuration(duration)).unwrap();
         }
         assert_eq!(restored.canonical_state(), sim.canonical_state());
-        if !sim
-            .canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .contains_key(&target)
-        {
+        if !game_conflict::captivity(sim.canonical_state().components, target).is_some() {
             break;
         }
     }
-    assert!(
-        !sim.canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .contains_key(&target)
-    );
+    assert!(!game_conflict::captivity(sim.canonical_state().components, target).is_some());
     assert!(sim.canonical_state().events.iter().any(|e| e.at >= until
         && matches!(e.event,EventKind::Released {actor,target:t} if actor==officer && t==target)));
     assert_eq!(
@@ -664,22 +575,15 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     );
     sim.advance(SimDuration(300_000)).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
+        enforcement::case(sim.canonical_state().components, case)
             .unwrap()
-            .cases[&case]
             .status,
         EnforcementStatus::Completed
     );
     assert_ne!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
+        enforcement::memory(sim.canonical_state().components, judge)
             .unwrap()
-            .known[&judge][&case]
+            .known[&case]
             .status,
         EnforcementStatus::Completed
     );
@@ -694,22 +598,16 @@ fn a_willing_funded_officer_uses_actual_supplies_travel_binding_and_release() {
     .unwrap();
     sim.advance(MINUTE).unwrap();
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
+        enforcement::memory(sim.canonical_state().components, judge)
             .unwrap()
-            .known[&judge][&case]
+            .known[&case]
             .status,
         EnforcementStatus::Completed
     );
     assert_eq!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
+        enforcement::memory(sim.canonical_state().components, judge)
             .unwrap()
-            .known[&judge][&case]
+            .known[&case]
             .source,
         KnowledgeSource::Reported(officer)
     );
@@ -750,35 +648,22 @@ fn command_time_assault_is_seen_locally_and_arriving_later_does_not_create_a_wit
             .sequence;
         let strike = EventId(strike);
         assert!(
-            sim.canonical_state()
-                .state
-                .enforcement
-                .as_ref()
+            enforcement::memory(sim.canonical_state().components, witness)
                 .unwrap()
-                .assaults[&witness]
+                .assaults
                 .contains_key(&strike)
         );
         assert!(
-            !sim.canonical_state()
-                .state
-                .enforcement
-                .as_ref()
-                .unwrap()
-                .assaults
-                .get(&remote)
+            !enforcement::memory(sim.canonical_state().components, remote)
+                .map(|memory| &memory.assaults)
                 .is_some_and(|k| k.contains_key(&strike))
         );
         sim.advance(SimDuration(6_000)).unwrap();
     }
     travel(&mut sim, remote, AreaId(1));
     assert!(
-        sim.canonical_state()
-            .state
-            .enforcement
-            .as_ref()
-            .unwrap()
-            .assaults
-            .get(&remote)
+        enforcement::memory(sim.canonical_state().components, remote)
+            .map(|memory| &memory.assaults)
             .is_none_or(|k| k.is_empty())
     );
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();

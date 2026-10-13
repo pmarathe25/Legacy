@@ -3,6 +3,23 @@ use crate::*;
 use game_core::*;
 use game_ecs::{Batch, BatchKey, Component, ReadFootprint, StableId, Store};
 use std::collections::BTreeSet;
+pub trait TalkActivityFacts<C: Component> {
+    fn report(&self, activity: &C) -> Option<TalkActivity>;
+}
+pub struct TalkActivityPublication {
+    runtime: Runtime,
+    guard: game_ecs::ReadGuard,
+    talk: TalkBatchGuard,
+}
+impl TalkActivityPublication {
+    pub fn validate(&self, runtime: &Runtime, store: &Store, batch: &Batch) -> Result<(), Error> {
+        if runtime != &self.runtime {
+            return Err(Error::Unavailable);
+        }
+        self.talk.validate(batch)?;
+        self.guard.validate(store, batch)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportReplacement {
     key: BatchKey,
@@ -102,10 +119,58 @@ impl PreparedTalkStart {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedTalkCancellations {
+    runtime: Runtime,
+    actors: Vec<PersonId>,
     before: Vec<(PersonId, PendingTalk)>,
     pub events: Vec<RealmEvent>,
 }
 impl PreparedTalkCancellations {
+    /// Realm interruptions clear any current Realm speech variant, including a
+    /// changed deadline. The binding supplies only the factual variant stamp.
+    pub fn activity_resets(&self, mut is_report: impl FnMut(PersonId) -> bool) -> Vec<PersonId> {
+        self.before
+            .iter()
+            .filter_map(|(speaker, _)| is_report(*speaker).then_some(*speaker))
+            .collect()
+    }
+    pub fn stage_into_with_activities<C: Component>(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        facts: &impl TalkActivityFacts<C>,
+        idle: C,
+        batch: &mut Batch,
+    ) -> Result<TalkActivityPublication, Error> {
+        if runtime != &self.runtime {
+            return Err(Error::Unavailable);
+        }
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = ReadFootprint::new();
+        let actors = self.actors.clone();
+        reads.membership::<PendingTalk>(store, move |speaker, talk| {
+            actors.contains(&PersonId(speaker.0)) || actors.contains(&talk.recipient)
+        });
+        for (id, before) in &self.before {
+            let id = StableId(id.0);
+            reads.expect_row(id, Some(before.clone()));
+            let activity = reads.read::<C>(store, id);
+            if activity.is_some_and(|activity| facts.report(activity).is_some()) {
+                if batch.touches::<C>(id) {
+                    return Err(Error::Unavailable);
+                }
+                batch.insert(id, idle.clone());
+                admitted.protect::<C>(id);
+            }
+            admitted.protect::<PendingTalk>(id);
+        }
+        let expected_runtime = self.runtime.clone();
+        let talk = self.stage_into(store, batch, None)?;
+        Ok(TalkActivityPublication {
+            runtime: expected_runtime,
+            guard: reads.bind(store, batch, &admitted)?,
+            talk,
+        })
+    }
     pub fn speakers(&self) -> impl Iterator<Item = PersonId> + '_ {
         self.before.iter().map(|(id, _)| *id)
     }
@@ -158,6 +223,7 @@ pub struct ReportReception {
 }
 #[derive(Clone, Debug)]
 pub struct PreparedTalkCompletion<C: Component> {
+    runtime: Runtime,
     before: PendingTalk,
     at: SimTime,
     speaker: Option<ActorFacts>,
@@ -171,6 +237,52 @@ pub struct PreparedTalkCompletion<C: Component> {
     pub event: RealmEvent,
 }
 impl<C: Component> PreparedTalkCompletion<C> {
+    pub fn stage_into_guarded(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        now: SimTime,
+        presence: &impl Presence<Activity = C>,
+        idle_activity: C,
+        batch: &mut Batch,
+    ) -> Result<(TalkActivityPublication, Option<RealmBatchGuard>), Error> {
+        if runtime != &self.runtime {
+            return Err(Error::Unavailable);
+        }
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = ReadFootprint::new();
+        let speaker = StableId(self.before.speaker.0);
+        reads.expect_row(speaker, Some(self.before.clone()));
+        reads.expect_row(speaker, self.activity_before.clone());
+        reads.expect_row(
+            StableId(self.before.recipient.0),
+            self.recipient_activity_before.clone(),
+        );
+        admitted.protect::<PendingTalk>(speaker);
+        admitted.protect::<C>(speaker);
+        if let Some(change) = &self.change {
+            if let Some(before) = &change.before {
+                reads.expect_row(StableId(change.id.0), Some(before.clone()));
+            }
+            if change.after.is_some() {
+                admitted.protect::<Commitment>(StableId(change.id.0));
+            }
+            for patch in &change.knowledge {
+                reads.read::<PersonalKnowledge>(store, StableId(patch.actor.0));
+                admitted.protect::<PersonalKnowledge>(StableId(patch.actor.0));
+            }
+        }
+        let expected_runtime = self.runtime.clone();
+        let (talk, realm) = self.stage_into(store, now, presence, idle_activity, batch)?;
+        Ok((
+            TalkActivityPublication {
+                runtime: expected_runtime,
+                guard: reads.bind(store, batch, &admitted)?,
+                talk,
+            },
+            realm,
+        ))
+    }
     pub fn stage_into(
         self,
         store: &Store,
@@ -229,7 +341,12 @@ impl Runtime {
             .iter()
             .map(|(speaker, _)| RealmEvent::Interrupted { actor: *speaker })
             .collect();
-        PreparedTalkCancellations { before, events }
+        PreparedTalkCancellations {
+            runtime: self.clone(),
+            actors: actors.to_vec(),
+            before,
+            events,
+        }
     }
     pub fn prepare_report_start(
         &self,
@@ -340,6 +457,7 @@ impl Runtime {
             .get::<P::Activity>(StableId(before.recipient.0))
             .cloned();
         Ok(PreparedTalkCompletion {
+            runtime: self.clone(),
             before,
             at: now,
             speaker: speaker_facts,

@@ -399,3 +399,13 @@ pub fn speaker_fact_requests(actor: PersonId, terms: &[AgreementTerm]) -> BTreeS
         .map(|[speaker, _]| speaker)
         .collect()
 }
+
+/// A remembered enterprise and a locally established field are independent
+/// factual evidence that a promised production site is established.
+pub fn share_prospect_from_sources(
+    planned: Option<u128>,
+    remembered_established: bool,
+    locally_established: bool,
+) -> ShareProspect {
+    share_prospect(planned, remembered_established || locally_established)
+}

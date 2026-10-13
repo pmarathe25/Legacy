@@ -367,6 +367,9 @@ struct ObligationPatch {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedLabor {
+    assignments: Vec<WorkAssignment>,
+    obligation_members: BTreeSet<ObligationId>,
+    pending_before: BTreeMap<ObligationId, Option<PendingWork>>,
     patches: Vec<ObligationPatch>,
     pending: BTreeMap<ObligationId, (u64, u64)>,
     statuses: BTreeMap<AgreementId, AgreementStatus>,
@@ -401,9 +404,18 @@ impl Ledger<'_> {
         to: SimTime,
         assignments: &[WorkAssignment],
     ) -> Result<PreparedLabor, Error> {
+        self.prepare_labor_selected(from, to, assignments, false)
+    }
+    fn prepare_labor_selected(
+        &self,
+        from: SimTime,
+        to: SimTime,
+        assignments: &[WorkAssignment],
+        allow_distinct_targets: bool,
+    ) -> Result<PreparedLabor, Error> {
         let elapsed = to.0.checked_sub(from.0).ok_or(Error::Overflow)?;
         let mut actors = BTreeSet::new();
-        if assignments.iter().any(|a| !actors.insert(a.actor)) {
+        if !allow_distinct_targets && assignments.iter().any(|a| !actors.insert(a.actor)) {
             return Err(Error::Unavailable);
         }
         let mut assignments = assignments.to_vec();
@@ -415,6 +427,9 @@ impl Ledger<'_> {
             )
         });
         let mut plan = PreparedLabor {
+            assignments: assignments.clone(),
+            obligation_members: BTreeSet::new(),
+            pending_before: BTreeMap::new(),
             patches: Vec::new(),
             pending: BTreeMap::new(),
             statuses: BTreeMap::new(),
@@ -451,6 +466,8 @@ impl Ledger<'_> {
                 let Some(requested) = requested else {
                     continue;
                 };
+                plan.obligation_members.insert(old.id);
+                plan.read_obligations.insert(old.id, old.clone());
                 let outstanding = requested
                     .checked_sub(old.performed)
                     .ok_or(Error::Unavailable)?;
@@ -465,6 +482,10 @@ impl Ledger<'_> {
                 let mut new = old.clone();
                 new.performed = new.performed.checked_add(credit).ok_or(Error::Overflow)?;
                 let pending = self.pending_work().get(&old.id).copied().unwrap_or(0);
+                plan.pending_before.insert(
+                    old.id,
+                    self.store.get::<PendingWork>(StableId(old.id.0)).cloned(),
+                );
                 plan.pending.insert(
                     old.id,
                     (pending, pending.checked_add(credit).ok_or(Error::Overflow)?),
@@ -523,42 +544,9 @@ impl Ledger<'_> {
 impl PreparedLabor {
     /// Reject a stale plan before changing any owned ledger record.
     pub fn commit(self, store: &mut Store) -> Result<(), Error> {
-        let state = Ledger::new(store);
-        if self
-            .agreements_before
-            .iter()
-            .any(|(id, old)| state.agreements().get(id) != Some(old))
-            || self
-                .read_obligations
-                .iter()
-                .any(|(id, old)| state.obligations().get(id) != Some(old))
-            || self
-                .patches
-                .iter()
-                .any(|p| state.obligations().get(&p.before.id) != Some(&p.before))
-            || self
-                .pending
-                .iter()
-                .any(|(id, (old, _))| state.pending_work().get(id).copied().unwrap_or(0) != *old)
-            || self
-                .statuses
-                .keys()
-                .any(|id| !state.agreements().contains_key(id))
-        {
-            return Err(Error::Unavailable);
-        }
         let mut batch = Batch::new();
-        for patch in self.patches {
-            batch.insert(StableId(patch.after.id.0), patch.after);
-        }
-        for (id, (_, millis)) in self.pending {
-            batch.insert(StableId(id.0), PendingWork { millis });
-        }
-        for (id, status) in self.statuses {
-            let mut after = agreement(store, id).unwrap().clone();
-            after.status = status;
-            batch.insert(StableId(id.0), after);
-        }
+        let guard = self.stage_into(store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)
     }
 }
@@ -1210,7 +1198,9 @@ pub use judgments::*;
 mod knowledge;
 pub use knowledge::*;
 
+mod receipt_validation;
 mod receipts;
+pub use receipt_validation::*;
 pub use receipts::*;
 
 mod communications;
@@ -1238,3 +1228,8 @@ mod native_flow_tests;
 
 mod queries;
 pub use queries::*;
+
+mod interval_labor;
+pub use interval_labor::*;
+mod maintenance_inputs;
+pub use maintenance_inputs::*;

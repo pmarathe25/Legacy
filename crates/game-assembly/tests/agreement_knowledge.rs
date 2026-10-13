@@ -9,9 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 fn quiet(sim: &mut Simulation) {
     let actors: Vec<_> = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .filter(|p| p.id != sim.canonical_state().state.ruler)
         .map(|p| p.id)
         .collect();
@@ -38,9 +36,7 @@ fn sim() -> Simulation {
 }
 fn citizen(sim: &Simulation) -> PersonId {
     sim.canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.role == Role::Citizen)
         .unwrap()
         .id
@@ -501,7 +497,7 @@ fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
     let mut sim = Simulation::property_fixture(1, Execution::default()).unwrap();
     quiet(&mut sim);
     let ruler = sim.canonical_state().state.ruler;
-    let guardian = sim.canonical_state().state.people[1].id;
+    let guardian = sim.canonical_state().person_at(1).id;
     sim.submit(Submission {
         caller_sequence: 1,
         command: Command::Engage { target: guardian },
@@ -552,13 +548,5 @@ fn a_bound_conscious_guardian_can_accept_but_cannot_physically_work() {
         sim.debug_actor_command(guardian, Command::Work { site })
             .is_err()
     );
-    assert!(
-        sim.canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .contains_key(&guardian)
-    );
+    assert!(game_conflict::captivity(sim.canonical_state().components, guardian).is_some());
 }

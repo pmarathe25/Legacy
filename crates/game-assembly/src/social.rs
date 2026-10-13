@@ -2,21 +2,14 @@
 //! teacher's remembered information and mastery; family intent is a conversation,
 //! not marriage, custody, title, or permanent consent to conception.
 use crate::*;
+#[cfg(test)]
+use game_characters::social::pair;
 
-use game_characters::social::{ConversationInput, Temperament, UpbringingEvidence, pair};
+use game_characters::social::{self as personal, ConversationInput, Temperament};
 pub use game_characters::social::{Development, Interaction, Offer, Rules, World};
 
-fn temperament(personality: &decisions::Personality) -> Temperament {
-    Temperament {
-        discipline: personality.discipline,
-        ambition: personality.ambition,
-        sociability: personality.sociability,
-        hedonism: personality.hedonism,
-        empathy: personality.empathy,
-    }
-}
 fn baseline(personality: &decisions::Personality, current: decisions::Aspiration) -> Development {
-    Development::baseline(temperament(personality), current)
+    Development::baseline(Temperament::from_personality(personality), current)
         .expect("validated personal temperament")
 }
 impl Simulation {
@@ -30,80 +23,67 @@ impl Simulation {
                 "invalid social development rules or missing human domains".into(),
             ));
         }
-        let development =
-            game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
-                .map(|(id, mind)| {
-                    let mut record = baseline(&mind.personality, mind.dream);
-                    record.next_choice = self.host.clock().time;
-                    (id, record)
-                })
-                .collect();
+        let records = game_characters::decisions::minds::<game_api::Command>(&self.host.storage)
+            .map(|(id, mind)| {
+                let mut record = baseline(&mind.personality, mind.dream);
+                record.next_choice = self.host.clock().time;
+                (
+                    id,
+                    personal::Personal {
+                        development: record,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        for (id, row) in records {
+            personal::insert_personal(&mut self.host.storage, id, row)?;
+        }
         self.host.state.social = Some(World {
             rules,
-            development,
             last_review: self.host.clock().time,
-            ..World::default()
         });
         Ok(())
     }
     pub(crate) fn social_family_intent(&self, first: PersonId, second: PersonId) -> bool {
-        self.host
-            .state
-            .social
-            .as_ref()
-            .is_none_or(|world| world.family_intent.contains(&pair(first, second)))
+        self.host.state.social.as_ref().is_none_or(|_| {
+            personal::personal(&self.host.storage, first)
+                .is_some_and(|row| row.family_intent.contains(&second))
+        })
     }
     fn social_adult(&self, actor: PersonId) -> bool {
-        self.host
-            .state
-            .development
-            .as_ref()
-            .and_then(|_| game_lifecycle::life(&self.host.storage, actor))
-            .is_some_and(|life| matches!(life.stage, LifeStage::Adult | LifeStage::Elder))
+        personal::adult_stage(
+            self.host
+                .state
+                .development
+                .as_ref()
+                .and_then(|_| game_lifecycle::life(&self.host.storage, actor))
+                .map(|life| life.stage),
+        )
     }
     fn social_speech(&self, actor: PersonId) -> bool {
-        self.person_index.get(&actor).is_some_and(|index| {
-            matches!(
-                *game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[*index].id).0)
-                )
-                .expect("location exists"),
-                Location::AtArea(_)
-            )
-        }) && self.independent(actor)
-            && !self.in_combat(actor)
-            && self
-                .host
-                .state
-                .physical
-                .as_ref()
-                .and_then(|_| game_physiology::body(&self.host.storage, actor))
-                .is_some_and(|body| {
-                    body.vitals.alive
-                        && body.vitals.health > 0
-                        && matches!(
-                            self.host.storage.activity(actor),
-                            Some(Activity::Idle | Activity::Rest)
-                        )
-                })
-            && !self.care_index.contains_key(&actor)
-            && self.conversation_actor_available(actor)
-    }
-    fn social_local_pair(&self, first: PersonId, second: PersonId) -> bool {
-        first != second
-            && self.social_speech(first)
-            && self.social_speech(second)
-            && *game_spatial::location(
-                &self.host.storage,
-                game_ecs::StableId((self.host.state.people[self.person_index[&first]].id).0),
-            )
-            .expect("location exists")
-                == *game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[self.person_index[&second]].id).0),
-                )
-                .expect("location exists")
+        let body = self
+            .host
+            .state
+            .physical
+            .as_ref()
+            .and_then(|_| game_physiology::body(&self.host.storage, actor));
+        personal::can_speak(personal::SpeechFacts {
+            stationary: matches!(
+                game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)),
+                Some(Location::AtArea(_))
+            ),
+            independent: self.independent(actor),
+            in_combat: self.in_combat(actor),
+            alive: body.is_some_and(|body| body.vitals.alive),
+            health: body.map_or(0, |body| body.vitals.health),
+            idle_or_rest: matches!(
+                self.host.storage.activity(actor),
+                Some(Activity::Idle | Activity::Rest)
+            ),
+            receiving_care: self.care_index.contains_key(&actor),
+            conversation_available: self.conversation_actor_available(actor),
+        })
     }
     fn relationship(&self, first: PersonId, second: PersonId) -> decisions::Relationship {
         game_characters::decisions::mind::<game_api::Command>(&self.host.storage, first)
@@ -116,44 +96,75 @@ impl Simulation {
                 trust: 0,
             })
     }
-    fn conversation_willing(
+    fn social_person_facts(
         &self,
-        recipient: PersonId,
+        actor: PersonId,
         sender: PersonId,
-        topic: SocialTopic,
-    ) -> bool {
-        let mind =
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, recipient)
-                .unwrap();
-        let relation = self.relationship(recipient, sender);
-        let body = game_physiology::body(&self.host.storage, recipient).expect("body exists");
-        let physical = self.body_rules(recipient);
-        game_characters::social::conversation_willing(
-            topic,
-            ConversationInput {
-                temperament: temperament(&mind.personality),
+    ) -> game_society::personal::PersonFacts {
+        let mind = game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
+            .expect("mind exists");
+        let relation = self.relationship(actor, sender);
+        let body = game_physiology::body(&self.host.storage, actor).expect("body exists");
+        let rules = self.body_rules(actor);
+        let quantity = self
+            .host
+            .state
+            .social
+            .as_ref()
+            .map_or(Quantity(0), |world| world.rules.practice_material);
+        game_society::personal::PersonFacts {
+            actor,
+            area: match game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)) {
+                Some(Location::AtArea(area)) => Some(*area),
+                _ => None,
+            },
+            speech: self.social_speech(actor),
+            adult: self.social_adult(actor),
+            practical: self.social_practical_actor(actor),
+            tool: self.social_tool(actor),
+            materials: [Good::Timber, Good::Seed, Good::Herb]
+                .into_iter()
+                .filter_map(|good| {
+                    self.social_material(actor, good, quantity)
+                        .map(|id| (good, id))
+                })
+                .collect(),
+            farming_access: self.host.state.agriculture.as_ref().is_some_and(|runtime| {
+                runtime.fields(&self.host.storage).any(|(_, field)| {
+                    Some(&Location::AtArea(field.area))
+                        == game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0))
+                        && field.access.contains(&actor)
+                })
+            }),
+            routes: mind.routes.clone(),
+            practice: game_skills::skills(&self.host.storage, actor)
+                .map(|row| {
+                    row.records
+                        .iter()
+                        .map(|(skill, progress)| (*skill, progress.practice_ms))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            empathy: mind.personality.empathy,
+            patience: mind.personality.patience,
+            affection: relation.affection,
+            trust: relation.trust,
+            conversation: Some(ConversationInput {
+                temperament: Temperament::from_personality(&mind.personality),
                 affection: relation.affection,
                 trust: relation.trust,
                 hunger: body.vitals.hunger,
-                meal_relief: physical.meal_relief,
+                meal_relief: rules.meal_relief,
                 fatigue: body.vitals.fatigue,
-                fatigue_limit: physical.fatigue_limit,
-                recipient_adult: self.social_adult(recipient),
+                fatigue_limit: rules.fatigue_limit,
+                recipient_adult: self.social_adult(actor),
                 sender_adult: self.social_adult(sender),
                 recipient_aspiration: mind.dream,
-                chosen_companionship: self
-                    .host
-                    .state
-                    .social
-                    .as_ref()
-                    .unwrap()
-                    .companionship
-                    .contains(&pair(recipient, sender)),
+                chosen_companionship: false,
                 visible_disruption: self.invocation_social_penalty(sender),
-            },
-        )
+            }),
+        }
     }
-
     fn social_refusal(
         &mut self,
         actor: PersonId,
@@ -163,24 +174,13 @@ impl Simulation {
         let owner_now = self.host.clock().time;
         self.host.preflight_records(0, 0, 1)?;
         self.ensure_event_capacity(1)?;
-        self.host
-            .state
-            .social
-            .as_mut()
-            .unwrap()
-            .approaches
-            .entry(actor)
-            .or_default()
-            .insert(recipient, owner_now);
-        self.host
-            .state
-            .social
-            .as_mut()
-            .unwrap()
-            .development
-            .get_mut(&actor)
-            .unwrap()
-            .explanation = reason.into();
+        self.host.state.social.as_ref().unwrap().refuse(
+            &mut self.host.storage,
+            actor,
+            recipient,
+            owner_now,
+            reason,
+        )?;
         self.emit(EventKind::SocialRefused {
             actor,
             recipient,
@@ -189,29 +189,40 @@ impl Simulation {
         self.host.bump_revision(1)?;
         Ok(())
     }
+    fn social_stock_facts(&self, actor: PersonId) -> Vec<game_society::personal::StockFacts> {
+        game_characters::decisions::stocks(&self.host.storage, actor)
+            .into_iter()
+            .flat_map(|row| row.known.values())
+            .filter_map(|known| {
+                game_cargo::inventory(&self.host.storage, known.inventory).map(|stock| {
+                    game_society::personal::StockFacts {
+                        inventory: stock.id,
+                        known_good: known.good,
+                        known_quantity: known.quantity,
+                        known_accessible: known.accessible,
+                        actual_good: stock.good,
+                        actual_quantity: stock.quantity,
+                        area: self.inventory_area(stock),
+                        accessible: self.has_stock_access(actor, stock),
+                        tool_available: self.tool_available_for(actor, stock.id),
+                    }
+                })
+            })
+            .collect()
+    }
     fn social_tool(&self, actor: PersonId) -> Option<InventoryId> {
-        game_characters::decisions::stocks(&self.host.storage, actor)?
-            .known
-            .values()
-            .filter(|known| {
-                known.good == Good::Tool && known.accessible && known.quantity.0 >= 1_000
-            })
-            .find_map(|known| {
-                game_cargo::inventory(&self.host.storage, known.inventory)
-                    .filter(|stock| {
-                        self.has_stock_access(actor, stock)
-                            && self.tool_available_for(actor, stock.id)
-                    })
-                    .map(|stock| stock.id)
-            })
+        game_society::personal::select_tool(self.social_stock_facts(actor))
+    }
+    fn social_practical_facts(&self, actor: PersonId) -> personal::PracticalFacts {
+        personal::PracticalFacts {
+            combat_restricted: self.combat_restricts(actor),
+            fatigue: game_physiology::body(&self.host.storage, actor)
+                .map_or(u64::MAX, |body| body.vitals.fatigue),
+            fatigue_limit: self.body_rules(actor).fatigue_limit,
+        }
     }
     pub(crate) fn social_practical_actor(&self, actor: PersonId) -> bool {
-        if self.host.state.physical.is_none() {
-            return false;
-        }
-        !self.combat_restricts(actor)
-            && game_physiology::body(&self.host.storage, actor)
-                .is_some_and(|body| body.vitals.fatigue < self.body_rules(actor).fatigue_limit)
+        personal::can_practice(self.social_practical_facts(actor))
     }
     fn social_material(
         &self,
@@ -219,27 +230,16 @@ impl Simulation {
         good: Good,
         quantity: Quantity,
     ) -> Option<InventoryId> {
-        let Location::AtArea(area) = *game_spatial::location(
-            &self.host.storage,
-            game_ecs::StableId((self.host.state.people[*self.person_index.get(&actor)?].id).0),
-        )
-        .expect("location exists") else {
-            return None;
+        let area = match game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)) {
+            Some(Location::AtArea(area)) => Some(*area),
+            _ => None,
         };
-        game_characters::decisions::stocks(&self.host.storage, actor)?
-            .known
-            .values()
-            .filter(|known| known.good == good && known.accessible && known.quantity >= quantity)
-            .find_map(|known| {
-                game_cargo::inventory(&self.host.storage, known.inventory)
-                    .filter(|stock| {
-                        stock.good == good
-                            && stock.quantity >= quantity
-                            && self.inventory_area(stock) == Some(area)
-                            && self.has_stock_access(actor, stock)
-                    })
-                    .map(|stock| stock.id)
-            })
+        game_society::personal::select_material(
+            self.social_stock_facts(actor),
+            area,
+            good,
+            quantity,
+        )
     }
     pub(crate) fn start_social(
         &mut self,
@@ -249,1157 +249,709 @@ impl Simulation {
         let owner_now = self.host.clock().time;
         self.host.preflight_records(0, 0, 1)?;
         let world = self.host.state.social.as_ref().ok_or(Error::Unavailable)?;
-        if !self.social_speech(actor) || !world.development.contains_key(&actor) {
+        if !self.person_index.contains_key(&actor) {
             return Err(Error::Unavailable);
         }
-        let rules = world.rules.clone();
-        let mut materials = None;
-        let interaction = match action {
-            SocialAction::Talk { partner, topic } => {
-                if !self.social_local_pair(actor, partner)
-                    || topic == SocialTopic::FamilyPlans
-                        && (!self.social_adult(actor) || !self.social_adult(partner))
-                {
-                    return Err(Error::Unavailable);
-                }
-                if !self.conversation_willing(partner, actor, topic) {
-                    return self.social_refusal(
-                        actor,
-                        partner,
-                        "They prefer not to discuss this now",
-                    );
-                }
-                Interaction::Talk {
-                    first: actor,
-                    second: partner,
-                    topic,
-                    completes: SimTime(
-                        owner_now
-                            .0
-                            .checked_add(rules.conversation.0)
-                            .ok_or(Error::Overflow)?,
-                    ),
-                }
-            }
-            SocialAction::Learn { teacher, topic } => {
-                if !self.social_local_pair(actor, teacher)
-                    || topic == InstructionTopic::Skill(Skill::Invocation)
-                {
-                    return Err(Error::Unavailable);
-                }
-                let mind = &game_characters::decisions::mind::<game_api::Command>(
-                    &self.host.storage,
-                    teacher,
-                )
-                .unwrap();
-                let relation = self.relationship(teacher, actor);
-                if i32::from(mind.personality.empathy + mind.personality.patience) / 2
-                    + relation.affection
-                    + relation.trust
-                    < 400
-                {
-                    return self.social_refusal(
-                        actor,
-                        teacher,
-                        "They prefer to spend their time elsewhere",
-                    );
-                }
-                let mut tool = None;
-                let mastery_cap = match topic {
-                    InstructionTopic::Routes => {
-                        if mind.routes.is_empty() {
-                            return self.social_refusal(
-                                actor,
-                                teacher,
-                                "They do not know routes to teach",
-                            );
-                        }
-                        0
-                    }
-                    InstructionTopic::Skill(skill) => {
-                        let Some(progress) = self
-                            .host
-                            .state
-                            .skills
-                            .as_ref()
-                            .and_then(|_| game_skills::skills(&self.host.storage, teacher))
-                            .map(|row| &row.records)
-                            .and_then(|r| r.get(&skill))
-                        else {
-                            return self.social_refusal(
-                                actor,
-                                teacher,
-                                "They have no experience of that skill",
-                            );
-                        };
-                        if progress.practice_ms == 0 {
-                            return self.social_refusal(
-                                actor,
-                                teacher,
-                                "They have no experience of that skill",
-                            );
-                        }
-                        if matches!(
-                            skill,
-                            Skill::Craft | Skill::Farming | Skill::Medicine | Skill::Combat
-                        ) {
-                            if !self.social_practical_actor(actor)
-                                || !self.social_practical_actor(teacher)
-                            {
-                                return Err(Error::Unavailable);
-                            }
-                            if skill == Skill::Combat {
-                                return Err(Error::Unavailable);
-                            }
-                            if matches!(skill, Skill::Craft | Skill::Farming) {
-                                tool = Some(self.social_tool(teacher).ok_or(Error::Unavailable)?);
-                            }
-                            let good = match skill {
-                                Skill::Craft => Good::Timber,
-                                Skill::Farming => Good::Seed,
-                                _ => Good::Herb,
-                            };
-                            if skill == Skill::Farming
-                                && !self.host.state.agriculture.as_ref().is_some_and(|w| {
-                                    w.fields(&self.host.storage).map(|(_, value)| value).any(
-                                        |field| {
-                                            field.area
-                                                == match *game_spatial::location(
-                                                    &self.host.storage,
-                                                    game_ecs::StableId(
-                                                        (self.host.state.people
-                                                            [self.person_index[&teacher]]
-                                                            .id)
-                                                            .0,
-                                                    ),
-                                                )
-                                                .expect("location exists")
-                                                {
-                                                    Location::AtArea(a) => a,
-                                                    _ => unreachable!(),
-                                                }
-                                                && field.access.contains(&teacher)
-                                        },
-                                    )
-                                })
-                            {
-                                return Err(Error::Unavailable);
-                            }
-                            materials = Some((
-                                teacher,
-                                self.social_material(teacher, good, rules.practice_material)
-                                    .ok_or(Error::Unavailable)?,
-                                rules.practice_material,
-                            ));
-                        }
-                        progress.practice_ms
-                    }
-                };
-                Interaction::Instruction {
-                    teacher,
-                    student: actor,
-                    topic,
-                    routes: if topic == InstructionTopic::Routes {
-                        mind.routes.clone()
-                    } else {
-                        BTreeMap::new()
-                    },
-                    mastery_cap,
-                    tool,
-                    completes: SimTime(
-                        owner_now
-                            .0
-                            .checked_add(rules.instruction.0)
-                            .ok_or(Error::Overflow)?,
-                    ),
-                }
-            }
-            SocialAction::Practice { skill } => {
-                // Real craft trials consume timber and occupy a toolkit. Other
-                // skills use their ordinary production, care, or social actions.
-                if skill != Skill::Craft || !self.social_practical_actor(actor) {
-                    return Err(Error::Unavailable);
-                }
-                let tool = self.social_tool(actor).ok_or(Error::Unavailable)?;
-                let source = self
-                    .social_material(actor, Good::Timber, rules.practice_material)
-                    .ok_or(Error::Unavailable)?;
-                materials = Some((actor, source, rules.practice_material));
-                Interaction::Practice {
-                    actor,
-                    skill,
-                    tool,
-                    completes: SimTime(
-                        owner_now
-                            .0
-                            .checked_add(rules.practice.0)
-                            .ok_or(Error::Overflow)?,
-                    ),
-                }
-            }
+        let facts = self.social_person_facts(actor, actor);
+        let partner = match action {
+            SocialAction::Talk { partner, .. } => Some(partner),
+            SocialAction::Learn { teacher, .. } => Some(teacher),
+            SocialAction::Practice { .. } => None,
         };
-        interaction
-            .completes()
-            .0
-            .checked_add(rules.review.0)
-            .ok_or(Error::Overflow)?;
-        self.ensure_event_capacity(1)?;
-        if let Interaction::Talk { second, .. } = interaction {
-            self.host
-                .state
-                .social
-                .as_mut()
-                .unwrap()
-                .approaches
-                .entry(actor)
-                .or_default()
-                .insert(second, owner_now);
+        if partner.is_some_and(|id| !self.person_index.contains_key(&id)) {
+            return Err(Error::Unavailable);
         }
+        let partner = partner.map(|id| self.social_person_facts(id, actor));
+        let decision = game_society::personal::prepare_start(
+            world,
+            &self.host.storage,
+            &facts,
+            partner.as_ref(),
+            action,
+            owner_now,
+        )?;
+        let (interaction, materials) = match decision {
+            game_society::personal::StartDecision::Refused { recipient, reason } => {
+                return self.social_refusal(actor, recipient, reason);
+            }
+            game_society::personal::StartDecision::Started {
+                interaction,
+                materials,
+                ..
+            } => (interaction, materials),
+        };
+        let opening = self.host.transaction_opening();
         let actors = interaction.actors();
         let completes = interaction.completes();
-        if let Some((worker, source, quantity)) = materials {
-            game_cargo::inventory_mut(&mut self.host.storage, source)
-                .unwrap()
-                .quantity
-                .0 -= quantity.0;
-            self.emit(EventKind::Consumed {
-                actor: worker,
+        let final_activities = interaction
+            .activity_bindings()
+            .into_iter()
+            .map(|(actor, activity)| (actor, bind_personal_activity(activity)))
+            .collect::<BTreeMap<_, _>>();
+        let start = world.prepare_start(&self.host.storage, actor, interaction, owner_now)?;
+        let interruptions =
+            self.prepare_interruptions(&actors, commands::ActivityOwner::Physical)?;
+        let consumption = materials
+            .map(|(_, source, quantity)| {
+                game_cargo::prepare_consumptions(&self.host.storage, &[(source, quantity)])
+            })
+            .transpose()?;
+        let mut batch = game_ecs::Batch::new();
+        let start = start.stage_into(world, &self.host.storage, owner_now, &mut batch)?;
+        let consumption = consumption
+            .map(|plan| plan.stage_guarded_into(&self.host.storage, &mut batch))
+            .transpose()?;
+        let mut finish = interruptions.stage_into(self, &mut batch, &final_activities)?;
+        start.validate(world, &self.host.storage, owner_now, &batch)?;
+        if let Some(consumption) = &consumption {
+            consumption.validate(&self.host.storage, &batch)?;
+        }
+        finish.validate_batch(self, &batch)?;
+        let mut events = materials
+            .map(|(actor, source, quantity)| EventKind::Consumed {
+                actor,
                 source,
                 quantity,
-            });
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        events.extend(finish.events_for(&actors));
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.events = events;
+        transaction.revisions = 1;
+        transaction.guards.push(start.row_guard());
+        if let Some(consumption) = consumption {
+            transaction.guards.push(consumption);
         }
-        for id in &actors {
-            self.interrupt_actor_activity(*id);
-            let activity = match interaction {
-                Interaction::Talk {
-                    first,
-                    second,
-                    topic,
-                    ..
-                } => Activity::Social {
-                    partner: if *id == first { second } else { first },
-                    topic,
-                    completes,
-                },
-                Interaction::Instruction {
-                    teacher,
-                    student,
-                    topic,
-                    ..
-                } => Activity::Instruction {
-                    teacher,
-                    student,
-                    topic,
-                    completes,
-                },
-                Interaction::Practice { skill, tool, .. } => Activity::Practice {
-                    skill,
-                    tool: Some(tool),
-                    completes,
-                },
-            };
-            *self.host.storage.activity_mut(*id).unwrap() = activity;
+        self.host.commit_transaction(transaction)?;
+        for actor in &actors {
+            finish.finish_actor_metadata(self, *actor);
+        }
+        for actor in actors {
             self.host
                 .state
                 .due
                 .entry(completes)
                 .or_default()
-                .push(Due::Physical(*id));
-            self.host
-                .state
-                .social
-                .as_mut()
-                .unwrap()
-                .participants
-                .insert(*id, actor);
+                .push(Due::Physical(actor));
         }
-        let world = self.host.state.social.as_mut().unwrap();
-        for id in actors {
-            let record = world.development.get_mut(&id).unwrap();
-            record.next_choice = SimTime(
-                completes
-                    .0
-                    .checked_add(rules.review.0)
-                    .ok_or(Error::Overflow)?,
-            );
-            record.explanation = "I chose to spend time in this conversation or practice".into();
-        }
-        world.interactions.insert(actor, interaction);
-        self.host.bump_revision(1)?;
         Ok(())
     }
     pub(crate) fn social_activity_is_practical(&self, actor: PersonId) -> bool {
-        let Some(world) = &self.host.state.social else {
-            return false;
-        };
-        let interaction = world
-            .participants
-            .get(&actor)
-            .and_then(|key| world.interactions.get(key));
-        matches!(
-            interaction,
-            Some(
-                Interaction::Practice { .. }
-                    | Interaction::Instruction {
-                        topic: InstructionTopic::Skill(
-                            Skill::Craft | Skill::Farming | Skill::Medicine | Skill::Combat
-                        ),
-                        ..
-                    }
-            )
-        )
+        personal::participant(&self.host.storage, actor)
+            .and_then(|key| personal::interaction(&self.host.storage, key))
+            .is_some_and(personal::interaction_is_practical)
     }
     pub(crate) fn social_selected_tool(&self, actor: PersonId) -> Option<InventoryId> {
-        let world = self.host.state.social.as_ref()?;
-        match world.interactions.get(world.participants.get(&actor)?)? {
-            Interaction::Instruction { teacher, tool, .. } if *teacher == actor => *tool,
-            Interaction::Practice { tool, .. } => Some(*tool),
-            _ => None,
-        }
-    }
-    fn social_interaction_valid(&self, interaction: &Interaction) -> bool {
-        let actors = interaction.actors();
-        if actors.iter().any(|actor| {
-            !game_physiology::body(&self.host.storage, *actor)
-                .expect("body exists")
-                .vitals
-                .alive
-                || game_physiology::body(&self.host.storage, *actor)
-                    .expect("body exists")
-                    .vitals
-                    .health
-                    == 0
-                || self.in_combat(*actor)
-        }) {
-            return false;
-        }
-        let location = game_spatial::location(
-            &self.host.storage,
-            game_ecs::StableId((self.host.state.people[self.person_index[&actors[0]]].id).0),
+        personal::selected_tool(
+            personal::interaction(
+                &self.host.storage,
+                personal::participant(&self.host.storage, actor)?,
+            )?,
+            actor,
         )
-        .expect("location exists");
-        if !matches!(location, Location::AtArea(_))
-            || actors.iter().any(|actor| {
-                game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[self.person_index[actor]].id).0),
-                )
-                .expect("location exists")
-                    != location
-            })
-        {
-            return false;
-        }
-        if actors.iter().any(|actor| {
-            self.social_activity_is_practical(*actor) && !self.social_practical_actor(*actor)
-        }) {
-            return false;
-        }
-        let user = match interaction {
-            Interaction::Instruction {
-                teacher,
-                tool: Some(_),
-                ..
-            } => Some(*teacher),
-            Interaction::Practice { actor, .. } => Some(*actor),
-            _ => None,
-        };
-        if let Some(user) = user {
-            let Some(tool) = self.social_selected_tool(user) else {
-                return false;
-            };
-            if !self.tool_available_for(user, tool)
-                || actors
-                    .iter()
-                    .any(|actor| !self.social_practical_actor(*actor))
-            {
-                return false;
-            }
-        }
-        true
     }
-    pub(crate) fn social_practice_deltas(&self, next: SimTime) -> Vec<skills::PracticeDelta> {
-        let Some(world) = &self.host.state.social else {
-            return Vec::new();
-        };
-        let mut deltas = Vec::new();
-        for interaction in world.interactions.values() {
-            if !self.social_interaction_valid(interaction) {
-                continue;
-            }
-            let elapsed = next
-                .0
-                .min(interaction.completes().0)
-                .saturating_sub(self.host.clock().time.0);
-            let entries = match *interaction {
-                Interaction::Talk { first, second, .. } => vec![
-                    (first, Skill::Negotiation, None),
-                    (second, Skill::Negotiation, None),
-                ],
-                Interaction::Instruction {
-                    teacher,
-                    student,
-                    topic: InstructionTopic::Skill(skill),
-                    mastery_cap,
-                    ..
-                } => vec![
-                    (student, skill, Some(mastery_cap)),
-                    (teacher, Skill::Leadership, None),
-                ],
-                Interaction::Instruction { teacher, .. } => {
-                    vec![(teacher, Skill::Leadership, None)]
-                }
-                Interaction::Practice { actor, skill, .. } => vec![(actor, skill, None)],
-            };
-            for (actor, skill, cap) in entries {
-                deltas.push(skills::PracticeDelta {
+    fn social_readiness_facts(
+        &self,
+        interaction: &Interaction,
+    ) -> (Vec<personal::InteractionActorFacts>, bool) {
+        let facts = interaction
+            .actors()
+            .into_iter()
+            .map(|actor| {
+                let body = game_physiology::body(&self.host.storage, actor);
+                personal::InteractionActorFacts {
                     actor,
-                    skill,
-                    milliseconds: elapsed,
-                    mastery_cap: cap,
-                });
-            }
-        }
-        deltas
+                    area: match game_spatial::location(
+                        &self.host.storage,
+                        game_ecs::StableId(actor.0),
+                    ) {
+                        Some(Location::AtArea(area)) => Some(*area),
+                        _ => None,
+                    },
+                    alive: body.is_some_and(|body| body.vitals.alive),
+                    health: body.map_or(0, |body| body.vitals.health),
+                    in_combat: self.in_combat(actor),
+                    practical: self.social_practical_facts(actor),
+                }
+            })
+            .collect::<Vec<_>>();
+        let tool_available = personal::interaction_tool(interaction)
+            .is_none_or(|(user, tool)| self.tool_available_for(user, tool));
+        (facts, tool_available)
     }
-    pub(crate) fn interrupt_social(&mut self, actor: PersonId) {
-        let Some(world) = &mut self.host.state.social else {
-            return;
+    pub(crate) fn social_interaction_valid(&self, interaction: &Interaction) -> bool {
+        let (facts, tool_available) = self.social_readiness_facts(interaction);
+        personal::interaction_ready(interaction, &facts, tool_available)
+    }
+    pub(crate) fn try_interrupt_social(&mut self, actor: PersonId) -> Result<(), Error> {
+        let Some(world) = self.host.state.social.as_ref() else {
+            return Ok(());
         };
-        let Some(key) = world.participants.get(&actor).copied() else {
-            return;
+        let Some(interaction) = personal::participant(&self.host.storage, actor)
+            .and_then(|leader| personal::interaction(&self.host.storage, leader))
+        else {
+            return Ok(());
         };
-        let Some(interaction) = world.interactions.remove(&key) else {
-            return;
+        let kinds = interaction
+            .actors()
+            .into_iter()
+            .map(|actor| {
+                self.host
+                    .storage
+                    .activity(actor)
+                    .map(|activity| (actor, bind_social_activity_kind(activity)))
+                    .ok_or(Error::Unavailable)
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let Some(plan) =
+            world.prepare_interruption::<Activity>(&self.host.storage, actor, &kinds)?
+        else {
+            return Ok(());
         };
-        let actors = interaction.actors();
-        for id in &actors {
-            world.participants.remove(id);
-        }
-        for id in actors {
-            if matches!(
-                *self.host.storage.activity(id).expect("activity exists"),
-                Activity::Social { .. } | Activity::Instruction { .. } | Activity::Practice { .. }
-            ) {
-                *self.host.storage.activity_mut(id).expect("activity exists") = Activity::Idle;
-            }
+        let mut batch = game_ecs::Batch::new();
+        let publication = plan.stage_into(&self.host.storage, &mut batch, Activity::Idle)?;
+        publication.validate(&self.host.storage, &batch)?;
+        let mut transaction = game_world::Transaction::new(self.host.transaction_opening(), batch);
+        transaction.guards = publication.row_guards();
+        self.host.commit_transaction(transaction)?;
+        for actor in publication.actors {
             for due in self.host.state.due.values_mut() {
-                due.retain(|due| !matches!(due,Due::Physical(actor)if *actor==id));
+                due.retain(|due| !matches!(due,Due::Physical(current) if *current==actor));
             }
         }
         self.host.state.due.retain(|_, events| !events.is_empty());
+        Ok(())
     }
-    pub(crate) fn reconcile_social(&mut self) {
-        let interrupted: Vec<_> = self
-            .host
-            .state
-            .social
-            .as_ref()
-            .into_iter()
-            .flat_map(|world| world.interactions.iter())
-            .filter(|(_, interaction)| !self.social_interaction_valid(interaction))
-            .map(|(actor, _)| *actor)
-            .collect();
+    pub(crate) fn reconcile_social(&mut self) -> Result<(), Error> {
+        let facts = personal::interactions(&self.host.storage)
+            .map(|(leader, interaction)| {
+                let (actors, tool_available) = self.social_readiness_facts(interaction);
+                personal::ReconciliationFacts {
+                    leader,
+                    actors,
+                    tool_available,
+                }
+            })
+            .collect::<Vec<_>>();
+        let interrupted = personal::interrupted_interactions(&self.host.storage, &facts);
         for actor in interrupted {
-            self.interrupt_social(actor);
+            self.try_interrupt_social(actor)?;
         }
+        Ok(())
     }
-    pub(crate) fn complete_social(&mut self, actor: PersonId) {
-        let Some(world) = &self.host.state.social else {
-            return;
+    pub(crate) fn complete_social(&mut self, actor: PersonId) -> Result<(), Error> {
+        use game_society::personal::Completion;
+        let Some(world) = self.host.state.social.as_ref() else {
+            return Ok(());
         };
-        let Some(interaction) = world
-            .participants
-            .get(&actor)
-            .and_then(|key| world.interactions.get(key))
-            .cloned()
-        else {
-            return;
+        let now = self.time();
+        let opening = self.host.transaction_opening();
+        let can_progress = personal::participant(&self.host.storage, actor)
+            .and_then(|leader| personal::interaction(&self.host.storage, leader))
+            .is_some_and(|interaction| self.social_interaction_valid(interaction));
+        let (effect, prepared, minds) = game_society::personal::prepare_completion::<
+            game_api::Command,
+        >(
+            world, &self.host.storage, actor, now, can_progress
+        )?;
+        let Some(prepared) = prepared else {
+            return match effect {
+                Completion::Interrupted => self.try_interrupt_social(actor),
+                _ => Ok(()),
+            };
         };
-        if interaction.completes() != self.host.clock().time {
-            return;
-        }
-        if !self.social_interaction_valid(&interaction) {
-            self.interrupt_social(actor);
-            return;
-        }
-        match interaction {
-            Interaction::Talk {
+        let interaction = prepared.interaction();
+        let kinds = interaction
+            .actors()
+            .into_iter()
+            .map(|actor| {
+                self.host
+                    .storage
+                    .activity(actor)
+                    .map(|activity| (actor, bind_social_activity_kind(activity)))
+                    .ok_or(Error::Unavailable)
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let cleanup = world
+            .prepare_interruption::<Activity>(&self.host.storage, actor, &kinds)?
+            .ok_or(Error::Unavailable)?;
+        let event = match effect {
+            Completion::Socialized {
                 first,
                 second,
                 topic,
-                ..
-            } => {
-                let effect = self
-                    .host
-                    .state
-                    .social
-                    .as_mut()
-                    .unwrap()
-                    .finish_conversation(first, second, topic)
-                    .expect("validated paired conversation");
-                for (id, other) in [(effect.first, effect.second), (effect.second, effect.first)] {
-                    let relationship = game_characters::decisions::mind_mut::<game_api::Command>(
-                        &mut self.host.storage,
-                        id,
-                    )
-                    .unwrap()
-                    .relationships
-                    .entry(other)
-                    .or_insert(decisions::Relationship {
-                        affection: 0,
-                        trust: 0,
-                    });
-                    relationship.affection =
-                        (relationship.affection + effect.affection_gain).min(1_000);
-                    relationship.trust = (relationship.trust + effect.trust_gain).min(1_000);
-                }
-                self.emit(EventKind::Socialized {
-                    first,
-                    second,
-                    topic,
-                });
-            }
-            Interaction::Instruction {
+            } => EventKind::Socialized {
+                first,
+                second,
+                topic,
+            },
+            Completion::Instructed {
                 teacher,
                 student,
                 topic,
-                routes,
-                ..
-            } => {
-                if topic == InstructionTopic::Routes {
-                    let remembered =
-                        &mut game_characters::decisions::mind_mut::<game_api::Command>(
-                            &mut self.host.storage,
-                            student,
-                        )
-                        .unwrap()
-                        .routes;
-                    for (area, neighbors) in routes {
-                        remembered.entry(area).or_default().extend(neighbors);
+            } => EventKind::InstructionCompleted {
+                teacher,
+                student,
+                topic,
+            },
+            Completion::Practiced { actor, skill } => EventKind::PracticeCompleted { actor, skill },
+            Completion::Waiting | Completion::Interrupted => return Err(Error::Unavailable),
+        };
+        let mut batch = game_ecs::Batch::new();
+        let cleanup = cleanup.stage_into(&self.host.storage, &mut batch, Activity::Idle)?;
+        let personal =
+            prepared.stage_with_cleanup(world, &self.host.storage, now, &mut batch, &cleanup)?;
+        let mut guards = cleanup.row_guards();
+        guards.push(personal.row_guard());
+        if let (Some(temperament), Some(genes)) =
+            (&self.host.state.temperament, &self.host.state.genetics)
+        {
+            let experience = match &event {
+                EventKind::Socialized { first, second, .. } => {
+                    game_characters::temperament::ExperienceEvent::Company {
+                        first: *first,
+                        second: *second,
                     }
                 }
-                self.host
-                    .state
-                    .social
-                    .as_mut()
-                    .unwrap()
-                    .learned
-                    .entry(student)
-                    .or_default()
-                    .insert((teacher, topic));
-                self.emit(EventKind::InstructionCompleted {
-                    teacher,
-                    student,
-                    topic,
-                });
-            }
-            Interaction::Practice { actor, skill, .. } => {
-                self.emit(EventKind::PracticeCompleted { actor, skill })
+                EventKind::InstructionCompleted {
+                    teacher, student, ..
+                } => game_characters::temperament::ExperienceEvent::Guidance {
+                    teacher: *teacher,
+                    student: *student,
+                },
+                EventKind::PracticeCompleted { actor, .. } => {
+                    game_characters::temperament::ExperienceEvent::Practice { actor: *actor }
+                }
+                _ => return Err(Error::Unavailable),
+            };
+            let source = genes.allele_source(&self.host.storage);
+            let traits = temperament
+                .prepare_event::<game_api::Command>(&self.host.storage, experience, &source)?
+                .fold_minds(&self.host.storage, minds)?
+                .stage_into(temperament, &self.host.storage, &mut batch, &source)?;
+            traits.validate(temperament, &self.host.storage, &batch, &source)?;
+            guards.extend(traits.row_guards().iter().cloned());
+        } else {
+            guards.push(minds.stage_into(&self.host.storage, &mut batch)?);
+        }
+        personal.validate(world, &self.host.storage, now, &batch)?;
+        cleanup.validate(&self.host.storage, &batch)?;
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.events = vec![event];
+        transaction.guards = guards;
+        self.host.commit_transaction(transaction)?;
+        for actor in cleanup.actors {
+            for due in self.host.state.due.values_mut() {
+                due.retain(|due| !matches!(due,Due::Physical(current) if *current==actor));
             }
         }
-        self.interrupt_social(actor);
+        self.host.state.due.retain(|_, events| !events.is_empty());
+        Ok(())
     }
     pub(crate) fn social_boundary(&self, next: SimTime) -> SimTime {
-        let Some(world) = &self.host.state.social else {
-            return next;
-        };
-        SimTime(
-            next.0.min(
-                world
-                    .last_review
-                    .0
-                    .saturating_add(world.rules.review.0)
-                    .max(self.host.clock().time.0 + 1),
-            ),
-        )
+        self.host.state.social.as_ref().map_or(next, |world| {
+            game_society::personal::next_boundary(world, self.host.clock().time, next)
+        })
     }
-    pub(crate) fn on_social_event(&mut self, kind: &EventKind) {
-        if self.host.state.social.is_none() {
-            return;
-        }
-        match *kind {
+    fn bind_personal_receipt(
+        &self,
+        kind: &EventKind,
+    ) -> Result<Option<game_society::personal::PersonalReceipt>, Error> {
+        use game_society::personal::{BirthWitness, PersonalReceipt};
+        let receipt = match *kind {
             EventKind::Born { child, .. } => {
-                // Biological traits are authored by the separate genetic model.
-                // Social learning neither copies them from a caregiver nor
-                // changes an inherited genotype.
-                let personality = game_characters::decisions::mind::<game_api::Command>(
-                    &self.host.storage,
-                    child,
-                )
-                .unwrap()
-                .personality
-                .clone();
-                let mut record = baseline(&personality, decisions::Aspiration::Comfort);
-                record.next_choice = self.host.clock().time;
-                self.host
-                    .state
-                    .social
-                    .as_mut()
-                    .unwrap()
-                    .development
-                    .insert(child, record);
-                let location = (*game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[self.person_index[&child]].id).0),
-                )
-                .expect("location exists"))
-                .clone();
-                let witnesses: Vec<_> = self
-                    .host
-                    .state
-                    .people
-                    .iter()
-                    .filter(|person| {
-                        person.id != child
-                            && *game_spatial::location(
-                                &self.host.storage,
-                                game_ecs::StableId((person.id).0),
-                            )
-                            .expect("location exists")
-                                == location
-                            && game_physiology::body(&self.host.storage, person.id)
-                                .expect("body exists")
-                                .vitals
-                                .alive
+                let location =
+                    game_spatial::location(&self.host.storage, game_ecs::StableId(child.0));
+                let witnesses = self
+                    .people()
+                    .map(|person| BirthWitness {
+                        actor: person.id,
+                        same_location: game_spatial::location(
+                            &self.host.storage,
+                            game_ecs::StableId(person.id.0),
+                        ) == location,
+                        alive: game_physiology::body(&self.host.storage, person.id)
+                            .is_some_and(|body| body.vitals.alive),
                     })
-                    .map(|person| person.id)
                     .collect();
-                for witness in witnesses {
-                    self.host
-                        .state
-                        .social
-                        .as_mut()
-                        .unwrap()
-                        .observe(witness, UpbringingEvidence::WitnessedBirth);
+                PersonalReceipt::Born {
+                    child,
+                    temperament: Temperament::from_personality(
+                        &game_characters::decisions::mind::<game_api::Command>(
+                            &self.host.storage,
+                            child,
+                        )
+                        .ok_or(Error::Unavailable)?
+                        .personality,
+                    ),
+                    witnesses,
                 }
             }
             EventKind::Cared {
                 caregiver, child, ..
-            } => {
-                let world = self.host.state.social.as_mut().unwrap();
-                world.observe(child, UpbringingEvidence::ReceivedCare);
-                world.observe(caregiver, UpbringingEvidence::GaveCare);
-            }
+            } => PersonalReceipt::Cared { caregiver, child },
             EventKind::Comforted { caregiver, child } => {
-                let world = self.host.state.social.as_mut().unwrap();
-                world.observe(child, UpbringingEvidence::ReceivedComfort);
-                world.observe(caregiver, UpbringingEvidence::GaveComfort);
+                PersonalReceipt::Comforted { caregiver, child }
             }
             EventKind::Practiced {
                 actor, interest, ..
-            } => self
-                .host
-                .state
-                .social
-                .as_mut()
-                .unwrap()
-                .observe(actor, UpbringingEvidence::Played(interest)),
-            EventKind::Produced { actor, .. } | EventKind::PracticeCompleted { actor, .. } => self
-                .host
-                .state
-                .social
-                .as_mut()
-                .unwrap()
-                .observe(actor, UpbringingEvidence::Produced),
+            } => PersonalReceipt::Played { actor, interest },
+            EventKind::Produced { actor, .. } | EventKind::PracticeCompleted { actor, .. } => {
+                PersonalReceipt::Produced { actor }
+            }
             EventKind::InstructionCompleted {
                 teacher, student, ..
-            } => {
-                let world = self.host.state.social.as_mut().unwrap();
-                world.observe(student, UpbringingEvidence::ReceivedInstruction);
-                world.observe(teacher, UpbringingEvidence::GaveInstruction);
-            }
+            } => PersonalReceipt::Instructed { teacher, student },
             EventKind::Socialized {
                 first,
                 second,
                 topic,
-            } => {
-                let world = self.host.state.social.as_mut().unwrap();
-                for actor in [first, second] {
-                    world.observe(actor, UpbringingEvidence::Conversation(topic));
-                }
-            }
-            _ => {}
+            } => PersonalReceipt::Socialized {
+                first,
+                second,
+                topic,
+            },
+            _ => return Ok(None),
+        };
+        Ok(Some(receipt))
+    }
+    pub(crate) fn prepare_social_receipts(
+        &self,
+        events: &[EventKind],
+    ) -> Result<Option<game_society::personal::PreparedPersonalReceipts>, Error> {
+        let Some(world) = self.host.state.social.as_ref() else {
+            return Ok(None);
+        };
+        let receipts = events
+            .iter()
+            .filter_map(|event| self.bind_personal_receipt(event).transpose())
+            .collect::<Result<Vec<_>, _>>()?;
+        if receipts.is_empty() {
+            return Ok(None);
         }
+        game_society::personal::prepare_receipts(world, &self.host.storage, receipts, self.time())
+            .map(Some)
+    }
+    fn receive_social_event(&mut self, kind: &EventKind) -> Result<(), Error> {
+        let now = self.time();
+        if let Some(plan) = self.prepare_social_receipts(std::slice::from_ref(kind))? {
+            plan.commit(
+                self.host.state.social.as_ref().unwrap(),
+                &mut self.host.storage,
+                now,
+            )?;
+        }
+        Ok(())
+    }
+    pub(crate) fn on_social_event(&mut self, kind: &EventKind) {
+        self.receive_social_event(kind)
+            .expect("validated personal receipt");
     }
 
+    fn social_speaker_facts(&self) -> Vec<game_society::personal::SpeakerFacts> {
+        self.people()
+            .map(|person| {
+                let mind = game_characters::decisions::mind::<game_api::Command>(
+                    &self.host.storage,
+                    person.id,
+                )
+                .expect("mind exists");
+                game_society::personal::SpeakerFacts {
+                    actor: person.id,
+                    area: match game_spatial::location(
+                        &self.host.storage,
+                        game_ecs::StableId(person.id.0),
+                    ) {
+                        Some(Location::AtArea(area)) => Some(*area),
+                        _ => None,
+                    },
+                    speech: self.social_speech(person.id),
+                    guardian: person.role == Role::Guardian,
+                    autonomous: person.id != self.host.state.ruler,
+                    adult: self.social_adult(person.id),
+                    offers_teaching: mind.offers_teaching(),
+                    knows_routes: !mind.routes.is_empty(),
+                    practice: game_skills::skills(&self.host.storage, person.id)
+                        .map(|row| {
+                            row.records
+                                .iter()
+                                .map(|(skill, progress)| (*skill, progress.practice_ms))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }
+            })
+            .collect()
+    }
     pub(crate) fn review_social(&mut self) -> Result<(), Error> {
-        let owner_now = self.host.clock().time;
+        let now = self.host.clock().time;
         let Some(world) = &self.host.state.social else {
             return Ok(());
         };
-        if owner_now.0 < world.last_review.0.saturating_add(world.rules.review.0) {
+        if !game_society::personal::review_due(&world.rules, world.last_review, now)? {
             return Ok(());
         }
-        owner_now
-            .0
-            .checked_add(world.rules.review.0)
-            .ok_or(Error::Overflow)?;
-        self.host.state.social.as_mut().unwrap().last_review = owner_now;
-        // Thinking about learned aims does not require a free physical action
-        // slot. Teaching, caregiving or travel cannot indefinitely freeze a
-        // developing person's aspirations behind an action cooldown.
-        let agency: Vec<_> = self
-            .host
-            .state
-            .social
-            .as_ref()
-            .unwrap()
-            .development
-            .keys()
-            .map(|actor| {
-                let control = if *actor == self.host.state.ruler {
-                    decisions::Control::Manual
-                } else if self.host.state.people[self.person_index[actor]].role == Role::Guardian {
-                    decisions::Control::Delegated
-                } else {
-                    decisions::Control::Autonomous
-                };
-                (*actor, control, self.independent(*actor))
-            })
-            .collect();
-        let social = self.host.state.social.as_ref().unwrap();
-        for (actor, control, independent) in agency {
-            let vitals = game_physiology::body(&self.host.storage, actor)
-                .expect("body exists")
-                .vitals
-                .clone();
-            game_characters::decisions::mind_mut::<game_api::Command>(
-                &mut self.host.storage,
+        let margin = world.rules.aspiration_margin;
+        let facts = personal::personals(&self.host.storage)
+            .map(|(actor, _)| game_society::personal::AspirationFacts {
                 actor,
-            )
-            .unwrap()
-            .develop_aspiration(
-                &social.development[&actor],
-                control,
-                independent,
-                &vitals,
-                social.rules.aspiration_margin,
-            );
-        }
-
-        // These are deliberate local declarations of teaching availability.
-        // Distant remembered offers remain dated; no query refreshes them.
-        let speakers: Vec<_> = self
-            .host
-            .state
-            .people
-            .iter()
-            .filter(|person| self.social_speech(person.id) && person.role != Role::Guardian)
-            .map(|person| person.id)
-            .collect();
-        let mut local: BTreeMap<AreaId, Vec<PersonId>> = BTreeMap::new();
-        let mut declarations: BTreeMap<AreaId, Vec<Offer>> = BTreeMap::new();
-        for teacher in &speakers {
-            let Location::AtArea(area) = *game_spatial::location(
-                &self.host.storage,
-                game_ecs::StableId((self.host.state.people[self.person_index[teacher]].id).0),
-            )
-            .expect("location exists") else {
-                continue;
-            };
-            local.entry(area).or_default().push(*teacher);
-            let mind = &game_characters::decisions::mind::<game_api::Command>(
-                &self.host.storage,
-                *teacher,
-            )
-            .unwrap();
-            if !mind.offers_teaching() {
-                continue;
-            }
-            let mut topics = BTreeSet::new();
-            if !mind.routes.is_empty() {
-                topics.insert(InstructionTopic::Routes);
-            }
-            if let Some(records) = self
-                .host
-                .state
-                .skills
-                .as_ref()
-                .and_then(|_| game_skills::skills(&self.host.storage, *teacher))
-                .map(|row| &row.records)
-            {
-                for (skill, progress) in records {
-                    if progress.practice_ms > 0
-                        && !matches!(skill, Skill::Invocation | Skill::Combat)
-                    {
-                        topics.insert(InstructionTopic::Skill(*skill));
-                    }
-                }
-            }
-            if !topics.is_empty() {
-                declarations.entry(area).or_default().push(Offer {
-                    teacher: *teacher,
-                    topics,
-                    area,
-                    heard_at: owner_now,
-                });
-            }
-        }
-        for observers in local.values_mut() {
-            observers.sort();
-        }
-        for offers in declarations.values_mut() {
-            offers.sort_by_key(|offer| offer.teacher);
-        }
-        for observer in &speakers {
-            let Location::AtArea(area) = *game_spatial::location(
-                &self.host.storage,
-                game_ecs::StableId((self.host.state.people[self.person_index[observer]].id).0),
-            )
-            .expect("location exists") else {
-                continue;
-            };
-            let Some(declared) = declarations.get(&area) else {
-                continue;
-            };
-            // Attention and remembered offers are bounded. Stable person/time
-            // rotation lets a crowded area's different speakers be heard over
-            // subsequent reviews without all-pairs storage or off-screen facts.
-            let offset = (observer.0.wrapping_add(
-                owner_now.0 / self.host.state.social.as_ref().unwrap().rules.review.0,
-            ) % declared.len() as u64) as usize;
-            for offer in declared
-                .iter()
-                .cycle()
-                .skip(offset)
-                .take(declared.len().min(64))
-            {
-                if offer.teacher != *observer {
-                    self.host.state.social.as_mut().unwrap().remember_offer(
-                        *observer,
-                        offer.clone(),
-                        owner_now,
-                    )?;
-                }
-            }
-        }
-
+                is_current_ruler: actor == self.host.state.ruler,
+                role: self.person_at(self.person_index[&actor]).role,
+                independent: self.independent(actor),
+                vitals: game_physiology::body(&self.host.storage, actor)
+                    .expect("body exists")
+                    .vitals
+                    .clone(),
+            })
+            .collect::<Vec<_>>();
+        game_society::personal::develop_aspirations::<game_api::Command>(
+            &mut self.host.storage,
+            &facts,
+            margin,
+        );
+        self.host.state.social.as_mut().unwrap().last_review = now;
+        let roster = self.social_speaker_facts();
+        game_society::personal::publish_teaching_offers(
+            self.host.state.social.as_ref().unwrap(),
+            &mut self.host.storage,
+            &roster,
+            now,
+        )?;
+        let speakers = game_society::personal::review_speakers(&roster, &self.host.storage, now);
+        let mut speaker_index = game_society::personal::SpeakerIndex::new(roster);
         for actor in speakers {
-            if actor == self.host.state.ruler || !self.social_speech(actor) {
+            if !speaker_index.can_choose(&self.host.storage, actor, now) {
                 continue;
             }
             let world = self.host.state.social.as_ref().unwrap();
-            let record = &world.development[&actor];
-            if record.next_choice > owner_now {
-                continue;
-            }
-            let mind =
-                &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, actor)
-                    .unwrap();
-            let Location::AtArea(area) = *game_spatial::location(
+            let chosen = speaker_index.choose(
+                world,
                 &self.host.storage,
-                game_ecs::StableId((self.host.state.people[self.person_index[&actor]].id).0),
-            )
-            .expect("location exists") else {
-                continue;
-            };
-            let nearby = &local[&area];
-            let offset = (actor.0 % nearby.len() as u64) as usize;
-            let family_peers = nearby
-                .iter()
-                .cycle()
-                .skip(offset)
-                .take(nearby.len().min(64))
-                .filter(|partner| {
-                    **partner != self.host.state.ruler
-                        && self.social_local_pair(actor, **partner)
-                        && self.social_adult(**partner)
-                })
-                .copied()
-                .collect();
-            let available_teachers = world
-                .offers
-                .get(&actor)
-                .into_iter()
-                .flat_map(|offers| offers.keys())
-                .filter(|teacher| {
-                    **teacher != self.host.state.ruler && self.social_local_pair(actor, **teacher)
-                })
-                .copied()
-                .collect();
-            let own_levels = [
-                Skill::Craft,
-                Skill::Farming,
-                Skill::Medicine,
-                Skill::Negotiation,
-                Skill::Leadership,
-            ]
-            .into_iter()
-            .map(|skill| (skill, self.own_skill_level(actor, skill)))
-            .collect();
-            let choice = game_characters::social::ChoiceFacts {
-                actor,
-                now: owner_now,
-                autonomous: actor != self.host.state.ruler,
-                can_speak: self.social_speech(actor),
-                adult: self.social_adult(actor),
-                family_peers,
-                available_teachers,
-                own_levels,
-                can_practice_craft: self.social_tool(actor).is_some()
-                    && self
-                        .social_material(actor, Good::Timber, world.rules.practice_material)
-                        .is_some(),
-                companionship_partner: self
-                    .host
-                    .state
-                    .people
-                    .iter()
-                    .find(|person| {
-                        person.id != self.host.state.ruler
-                            && self.social_local_pair(actor, person.id)
-                    })
-                    .map(|person| person.id),
-            };
-            let chosen = world.choose_personal(mind, &choice);
+                game_society::personal::PersonalChoice {
+                    actor,
+                    mind: game_characters::decisions::mind::<game_api::Command>(
+                        &self.host.storage,
+                        actor,
+                    )
+                    .expect("mind exists"),
+                    now,
+                    levels: [
+                        Skill::Craft,
+                        Skill::Farming,
+                        Skill::Medicine,
+                        Skill::Negotiation,
+                        Skill::Leadership,
+                    ]
+                    .into_iter()
+                    .map(|skill| (skill, self.own_skill_level(actor, skill)))
+                    .collect(),
+                    craft: game_society::personal::CraftAvailability {
+                        tool: self.social_tool(actor),
+                        timber: self.social_material(
+                            actor,
+                            Good::Timber,
+                            world.rules.practice_material,
+                        ),
+                    },
+                },
+            );
             if let Some(action) = chosen {
+                let partner = match action {
+                    SocialAction::Talk { partner, .. } => Some(partner),
+                    SocialAction::Learn { teacher, .. } => Some(teacher),
+                    _ => None,
+                };
                 match self.start_social(actor, action) {
                     Ok(()) | Err(Error::Unavailable) => {}
                     Err(error) => return Err(error),
+                }
+                speaker_index.set_speech(actor, self.social_speech(actor));
+                if let Some(partner) = partner {
+                    speaker_index.set_speech(partner, self.social_speech(partner));
                 }
             }
             self.host
                 .state
                 .social
-                .as_mut()
+                .as_ref()
                 .unwrap()
-                .finish_personal_choice(actor, owner_now)?;
+                .finish_personal_choice(&mut self.host.storage, actor, now)?;
         }
         Ok(())
     }
     pub(crate) fn available_social_commands(&self, actor: PersonId) -> Vec<Command> {
-        if self.host.state.social.is_none() || !self.social_speech(actor) {
+        let Some(world) = self.host.state.social.as_ref() else {
+            return Vec::new();
+        };
+        if !self.social_speech(actor) {
             return Vec::new();
         }
-        let mut commands = Vec::new();
-        for person in &self.host.state.people {
-            if !self.social_local_pair(actor, person.id) {
-                continue;
-            }
-            commands.push(Command::Social {
-                action: SocialAction::Talk {
-                    partner: person.id,
-                    topic: SocialTopic::Companionship,
-                },
-            });
-            if self.social_adult(actor) && self.social_adult(person.id) {
-                commands.push(Command::Social {
-                    action: SocialAction::Talk {
-                        partner: person.id,
-                        topic: SocialTopic::FamilyPlans,
-                    },
-                });
-            }
-        }
-        for offer in self
-            .host
-            .state
-            .social
-            .as_ref()
-            .unwrap()
-            .offers
-            .get(&actor)
-            .into_iter()
-            .flat_map(|offers| offers.values())
-        {
-            if self.social_local_pair(actor, offer.teacher) {
-                for topic in &offer.topics {
-                    commands.push(Command::Social {
-                        action: SocialAction::Learn {
-                            teacher: offer.teacher,
-                            topic: *topic,
-                        },
-                    });
-                }
-            }
-        }
-        if !self.combat_restricts(actor)
-            && self.social_tool(actor).is_some()
-            && self
-                .social_material(
-                    actor,
-                    Good::Timber,
-                    self.host
-                        .state
-                        .social
-                        .as_ref()
-                        .unwrap()
-                        .rules
-                        .practice_material,
-                )
-                .is_some()
-        {
-            commands.push(Command::Social {
-                action: SocialAction::Practice {
-                    skill: Skill::Craft,
-                },
-            });
-        }
-        commands
+        let facts = self.social_person_facts(actor, actor);
+        let roster = self
+            .people()
+            .map(|person| self.social_person_facts(person.id, actor))
+            .collect::<Vec<_>>();
+        game_society::personal::available_actions(
+            world,
+            &self.host.storage,
+            &facts,
+            &roster,
+            self.combat_restricts(actor),
+        )
+        .into_iter()
+        .map(|action| Command::Social { action })
+        .collect()
     }
     pub(crate) fn social_view(&self, actor: PersonId) -> Option<SocialView> {
-        self.host.state.social.as_ref()?.view(actor)
+        self.host
+            .state
+            .social
+            .as_ref()?
+            .view(&self.host.storage, actor)
     }
 }
 
+fn bind_personal_activity(activity: personal::SocialActivity) -> Activity {
+    match activity {
+        personal::SocialActivity::Conversation {
+            partner,
+            topic,
+            completes,
+        } => Activity::Social {
+            partner,
+            topic,
+            completes,
+        },
+        personal::SocialActivity::Instruction {
+            teacher,
+            student,
+            topic,
+            completes,
+        } => Activity::Instruction {
+            teacher,
+            student,
+            topic,
+            completes,
+        },
+        personal::SocialActivity::Practice {
+            skill,
+            tool,
+            completes,
+        } => Activity::Practice {
+            skill,
+            tool: Some(tool),
+            completes,
+        },
+    }
+}
+fn bind_social_activity_kind(activity: &Activity) -> personal::SocialActivityKind {
+    match activity {
+        Activity::Social { .. } => personal::SocialActivityKind::Conversation,
+        Activity::Instruction { .. } => personal::SocialActivityKind::Instruction,
+        Activity::Practice { .. } => personal::SocialActivityKind::Practice,
+        _ => personal::SocialActivityKind::Other,
+    }
+}
+
+fn bind_social_activity(activity: &Activity) -> game_society::personal::BoundActivity {
+    use game_society::personal::BoundActivity;
+    match *activity {
+        Activity::Social {
+            partner,
+            topic,
+            completes,
+        } => BoundActivity::Talk {
+            partner,
+            topic,
+            completes,
+        },
+        Activity::Instruction {
+            teacher,
+            student,
+            topic,
+            completes,
+        } => BoundActivity::Instruction {
+            teacher,
+            student,
+            topic,
+            completes,
+        },
+        Activity::Practice {
+            skill,
+            tool,
+            completes,
+        } => BoundActivity::Practice {
+            skill,
+            tool,
+            completes,
+        },
+        _ => BoundActivity::Other,
+    }
+}
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
     let Some(world) = &state.state.social else {
         return Ok(());
     };
-    game_characters::social::validate_local(world, state.time)?;
-    let fail = || Error::InvalidSave("inconsistent social development".into());
-    state.state.physical.as_ref().ok_or_else(fail)?;
-    state.state.decisions.as_ref().ok_or_else(fail)?;
-    let people: BTreeMap<_, _> = state
-        .state
-        .people
-        .iter()
-        .map(|person| (person.id, person))
+    let mut deadlines = BTreeMap::<PersonId, BTreeSet<SimTime>>::new();
+    for (at, entries) in &state.state.due {
+        for entry in entries {
+            if let Due::Physical(actor) = entry {
+                deadlines.entry(*actor).or_default().insert(*at);
+            }
+        }
+    }
+    let actors = state
+        .components
+        .activities()
+        .map(|(actor, activity)| {
+            let body = game_physiology::body(state.components, actor);
+            (
+                actor,
+                game_society::personal::ActorReference {
+                    has_mind: game_characters::decisions::mind::<game_api::Command>(
+                        state.components,
+                        actor,
+                    )
+                    .is_some(),
+                    alive: body.is_some_and(|body| body.vitals.alive),
+                    area: match game_spatial::location(
+                        state.components,
+                        game_ecs::StableId(actor.0),
+                    ) {
+                        Some(Location::AtArea(area)) => Some(*area),
+                        _ => None,
+                    },
+                    activity: Some(bind_social_activity(activity)),
+                    physical_deadlines: deadlines.remove(&actor).unwrap_or_default(),
+                },
+            )
+        })
         .collect();
-    if world.development.len() != people.len() {
-        return Err(fail());
-    }
-    for actor in world.development.keys() {
-        if !people.contains_key(actor)
-            || game_characters::decisions::mind::<game_api::Command>(state.components, *actor)
-                .is_none()
-        {
-            return Err(fail());
-        }
-    }
-    for offers in world.offers.values() {
-        if offers
-            .values()
-            .any(|offer| !state.state.areas.iter().any(|area| area.id == offer.area))
-        {
-            return Err(fail());
-        }
-    }
-    let participants = &world.participants;
-    for interaction in world.interactions.values() {
-        let actors = interaction.actors();
-        for actor in &actors {
-            let person = people.get(actor).ok_or_else(fail)?;
-            let body = game_physiology::body(state.components, *actor).ok_or_else(fail)?;
-            if !body.vitals.alive
-                || !matches!(
-                    *game_spatial::location(state.components, game_ecs::StableId((person.id).0))
-                        .expect("location exists"),
-                    Location::AtArea(_)
-                )
-                || *game_spatial::location(state.components, game_ecs::StableId((person.id).0))
-                    .expect("location exists")
-                    != *game_spatial::location(state.components, game_ecs::StableId((actors[0]).0))
-                        .ok_or_else(fail)?
-            {
-                return Err(fail());
-            }
-            let activity = match *interaction {
-                Interaction::Talk {
-                    first,
-                    second,
-                    topic,
-                    completes,
-                } => Activity::Social {
-                    partner: if *actor == first { second } else { first },
-                    topic,
-                    completes,
-                },
-                Interaction::Instruction {
-                    teacher,
-                    student,
-                    topic,
-                    completes,
-                    ..
-                } => Activity::Instruction {
-                    teacher,
-                    student,
-                    topic,
-                    completes,
-                },
-                Interaction::Practice {
-                    skill,
-                    tool,
-                    completes,
-                    ..
-                } => Activity::Practice {
-                    skill,
-                    tool: Some(tool),
-                    completes,
-                },
-            };
-            if state.components.activity(*actor).ok_or_else(fail)? != &activity
-                || !state
-                    .state
-                    .due
-                    .get(&interaction.completes())
-                    .is_some_and(|due| due.contains(&Due::Physical(*actor)))
-            {
-                return Err(fail());
-            }
-        }
-        match interaction {
-            Interaction::Instruction {
-                topic,
-                routes,
-                mastery_cap,
-                tool,
-                ..
-            } => {
-                if *topic == InstructionTopic::Skill(Skill::Invocation)
-                    || *mastery_cap
-                        > state
-                            .state
-                            .skills
-                            .as_ref()
-                            .map_or(0, |w| w.rules.per_level.0 * u64::from(w.rules.max_level))
-                {
-                    return Err(fail());
-                }
-                if *topic != InstructionTopic::Routes && !routes.is_empty() {
-                    return Err(fail());
-                }
-                for (area, neighbors) in routes {
-                    if !state.state.areas.iter().any(|record| record.id == *area)
-                        || neighbors.iter().any(|(neighbor, duration)| {
-                            !state
-                                .state
-                                .areas
-                                .iter()
-                                .any(|record| record.id == *neighbor)
-                                || duration.0 == 0
-                        })
-                    {
-                        return Err(fail());
-                    }
-                }
-                if tool.is_some_and(|tool| {
-                    game_cargo::inventory(state.components, tool)
-                        .is_none_or(|stock| stock.good != Good::Tool)
-                }) {
-                    return Err(fail());
-                }
-            }
-            Interaction::Practice { tool, .. }
-                if game_cargo::inventory(state.components, *(tool))
-                    .is_none_or(|stock| stock.good != Good::Tool) =>
-            {
-                return Err(fail());
-            }
-            _ => {}
-        }
-    }
-    for (actor, activity) in state.components.activities() {
-        if matches!(
-            activity,
-            Activity::Social { .. } | Activity::Instruction { .. } | Activity::Practice { .. }
-        ) && !participants.contains_key(&actor)
-        {
-            return Err(fail());
-        }
-    }
-    Ok(())
+    game_society::personal::validate_context(
+        world,
+        state.components,
+        state.time,
+        &game_society::personal::ValidationFacts {
+            human_domains: state.state.physical.is_some() && state.state.decisions.is_some(),
+            people: state.people().map(|person| person.id).collect(),
+            areas: state.state.areas.iter().map(|area| area.id).collect(),
+            actors,
+            stocks: game_cargo::inventories(state.components)
+                .map(|(id, row)| (id, row.good))
+                .collect(),
+            practice_per_level: state
+                .state
+                .skills
+                .as_ref()
+                .map_or(0, |runtime| runtime.rules.per_level.0),
+            maximum_level: state
+                .state
+                .skills
+                .as_ref()
+                .map_or(0, |runtime| runtime.rules.max_level),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1415,10 +967,10 @@ mod tests {
         )
         .unwrap();
         let village = sim.host.state.areas[0].id;
-        for person in &mut sim.host.state.people {
-            *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId((person.id).0))
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId((person_id).0))
                 .expect("location exists") = Location::AtArea(village);
-            game_transport::replace_route(&mut sim.host.storage, person.id, Vec::new())
+            game_transport::replace_route(&mut sim.host.storage, person_id, Vec::new())
                 .expect("actor route");
         }
         sim.host
@@ -1428,7 +980,7 @@ mod tests {
             .for_each(|due| due.retain(|entry| !matches!(entry, Due::Arrive(_) | Due::Age(_))));
         let rules = &mut sim.host.state.development.as_mut().unwrap().rules;
         rules.lifespan = SimDuration(5_000_000);
-        let ids: Vec<_> = sim.host.state.people.iter().map(|p| p.id).collect();
+        let ids: Vec<_> = sim.people().map(|p| p.id).collect();
         for actor in &ids {
             sim.schedule_age(*actor);
         }
@@ -1562,8 +1114,8 @@ mod tests {
     #[test]
     fn ordinary_guidance_is_coupled_timed_and_transmits_only_frozen_remembered_routes() {
         let mut sim = fixture(1);
-        let teacher = sim.host.state.people[3].id;
-        let student = sim.host.state.people[4].id;
+        let teacher = sim.person_at(3).id;
+        let student = sim.person_at(4).id;
         let village = sim.host.state.areas[0].id;
         let farm = sim.host.state.areas[1].id;
         let forest = sim.host.state.areas[2].id;
@@ -1614,7 +1166,7 @@ mod tests {
     #[test]
     fn practical_trials_use_real_materials_and_partial_time_survives_cancellation() {
         let mut sim = fixture(1);
-        let actor = sim.host.state.people[3].id;
+        let actor = sim.person_at(3).id;
         // Local observation is acquired through the ordinary simulation review.
         sim.advance(SimDuration(1)).unwrap();
         cancel(&mut sim, actor);
@@ -1679,8 +1231,8 @@ mod tests {
     #[test]
     fn real_tool_removal_interrupts_a_trial_without_later_ghost_practice() {
         let mut sim = fixture(1);
-        let actor = sim.host.state.people[3].id;
-        let carrier = sim.host.state.people[4].id;
+        let actor = sim.person_at(3).id;
+        let carrier = sim.person_at(4).id;
         sim.host.state.social.as_mut().unwrap().rules.practice = SimDuration(180_000);
         sim.advance(SimDuration(1)).unwrap();
         cancel(&mut sim, actor);
@@ -1703,15 +1255,7 @@ mod tests {
         )
         .unwrap();
         sim.advance(MINUTE).unwrap();
-        assert!(
-            sim.host
-                .state
-                .social
-                .as_ref()
-                .unwrap()
-                .interactions
-                .is_empty()
-        );
+        assert!(personal::interactions(&sim.host.storage).next().is_none());
         let learned = game_skills::skills(&sim.host.storage, actor)
             .unwrap()
             .records[&Skill::Craft]
@@ -1736,8 +1280,8 @@ mod tests {
     #[test]
     fn unsupported_or_impossible_requests_are_inert_and_refusals_are_actual_answers() {
         let mut sim = fixture(1);
-        let actor = sim.host.state.people[3].id;
-        let recipient = sim.host.state.people[4].id;
+        let actor = sim.person_at(3).id;
+        let recipient = sim.person_at(4).id;
         let before = sim.canonical_snapshot().unwrap();
         assert_eq!(
             sim.start_social(
@@ -1784,8 +1328,8 @@ mod tests {
     #[test]
     fn ordinary_children_remember_chosen_care_and_reach_their_own_adult_family_decisions() {
         let mut sim = fixture(1);
-        let first = sim.host.state.people[3].id;
-        let second = sim.host.state.people[4].id;
+        let first = sim.person_at(3).id;
+        let second = sim.person_at(4).id;
         let child = actual_birth(&mut sim, first, second);
         assert!(
             game_characters::decisions::mind::<game_api::Command>(&sim.host.storage, child)
@@ -1801,7 +1345,13 @@ mod tests {
         );
         // Ordinary voluntary caregivers support this child through actual meals.
         sim.advance(SimDuration(660_000)).unwrap();
-        assert!(sim.host.state.social.as_ref().unwrap().development[&child].experiences > 0);
+        assert!(
+            personal::personal(&sim.host.storage, child)
+                .unwrap()
+                .development
+                .experiences
+                > 0
+        );
         assert_eq!(
             game_lifecycle::life(&sim.host.storage, child)
                 .unwrap()
@@ -1819,7 +1369,7 @@ mod tests {
                 .unwrap()
                 .caregivers
                 .iter()
-                .any(|id| sim.host.state.people[sim.person_index[id]].role == Role::Citizen)
+                .any(|id| sim.person_at(sim.person_index[id]).role == Role::Citizen)
         );
         validate(&sim.canonical_state()).unwrap();
         let restored = Simulation::load(
@@ -1836,8 +1386,8 @@ mod tests {
     fn ordinary_interactions_are_save_chunk_worker_and_query_independent() {
         fn run(workers: usize, chunked: bool) -> Simulation {
             let mut sim = fixture(workers);
-            let first = sim.host.state.people[3].id;
-            let second = sim.host.state.people[4].id;
+            let first = sim.person_at(3).id;
+            let second = sim.person_at(4).id;
             social(
                 &mut sim,
                 first,
@@ -1904,8 +1454,8 @@ mod generations {
         )
         .unwrap();
         let parents = [
-            (sim.host.state.people[3].id, sim.host.state.people[4].id),
-            (sim.host.state.people[5].id, sim.host.state.people[6].id),
+            (sim.person_at(3).id, sim.person_at(4).id),
+            (sim.person_at(5).id, sim.person_at(6).id),
         ];
         let mut children = Vec::new();
         // These additional adults begin this fixture with their own intention;
@@ -1924,13 +1474,9 @@ mod generations {
             mind.personality.hedonism = 400;
             let mut record = baseline(&mind.personality, mind.dream);
             record.next_choice = sim.host.clock().time;
-            sim.host
-                .state
-                .social
-                .as_mut()
+            personal::personal_mut(&mut sim.host.storage, actor)
                 .unwrap()
-                .development
-                .insert(actor, record);
+                .development = record;
         }
         for (gestator, partner) in parents {
             let already_chosen = game_lifecycle::all_pregnancies(&sim.host.storage)
@@ -2077,7 +1623,9 @@ mod generations {
                 decisions::Aspiration::Parenthood,
                 "child {child:?} at {:?}: {:?}, body {:?}",
                 sim.host.clock().time,
-                sim.host.state.social.as_ref().unwrap().development[child],
+                personal::personal(&sim.host.storage, *child)
+                    .unwrap()
+                    .development,
                 *sim.host.storage.activity(*child).expect("body exists"),
             );
             // Institutional rights may emerge independently; personal access

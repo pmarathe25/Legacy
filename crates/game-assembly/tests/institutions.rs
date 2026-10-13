@@ -14,13 +14,7 @@ fn fixture(workers: usize) -> Simulation {
         },
     )
     .unwrap();
-    let people: Vec<_> = sim
-        .canonical_state()
-        .state
-        .people
-        .iter()
-        .map(|p| p.id)
-        .collect();
+    let people: Vec<_> = sim.canonical_state().people().map(|p| p.id).collect();
     for actor in people {
         sim.debug_set_personality(actor, Personality::restful(), Aspiration::Comfort)
             .unwrap();
@@ -41,7 +35,7 @@ fn ruler(sim: &Simulation) -> PersonId {
     sim.canonical_state().state.ruler
 }
 fn owner(sim: &Simulation) -> PersonId {
-    sim.canonical_state().state.people[3].id
+    sim.canonical_state().person_at(3).id
 }
 fn food(sim: &Simulation) -> InventoryId {
     game_cargo::inventories(sim.canonical_state().components)
@@ -265,7 +259,7 @@ fn withdrawing_support_removes_office_power_without_removing_the_person() {
     .unwrap();
     assert!(!can_eat(&sim));
     assert!(!sim.institution_view(ruler(&sim))[0].offices[0].effective);
-    assert_eq!(sim.canonical_state().state.people[0].role, Role::Ruler);
+    assert_eq!(sim.canonical_state().person_at(0).role, Role::Ruler);
     assert_eq!(sim.canonical_state().state.ruler, ruler(&sim));
     command(&mut sim, Command::Rest).unwrap();
     sim.debug_institution_action(
@@ -294,7 +288,7 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
     let source = food(&sim);
     let actor = ruler(&sim);
     let recipient = owner(&sim);
-    let cargo = sim.canonical_state().state.people[0].inventory;
+    let cargo = sim.canonical_state().person_at(0).inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -368,7 +362,7 @@ fn founding_contributions_are_debt_until_physical_delivery_and_survive_exit() {
 #[test]
 fn actual_contribution_teaches_a_value_that_changes_a_later_vote() {
     let mut sim = fixture(1);
-    let worker = sim.canonical_state().state.people[4].id;
+    let worker = sim.canonical_state().person_at(4).id;
     let beneficiary = owner(&sim);
     let actor = ruler(&sim);
     let site = site(&sim);
@@ -436,9 +430,9 @@ fn actual_contribution_teaches_a_value_that_changes_a_later_vote() {
 fn a_relevant_known_case_changes_judgment_and_an_unknown_case_cannot() {
     let mut sim = fixture(1);
     let owner = owner(&sim);
-    let previous = sim.canonical_state().state.people[4].id;
-    let subject = sim.canonical_state().state.people[5].id;
-    let judge = sim.canonical_state().state.people[1].id;
+    let previous = sim.canonical_state().person_at(4).id;
+    let subject = sim.canonical_state().person_at(5).id;
+    let judge = sim.canonical_state().person_at(1).id;
     let source = food(&sim);
     sim.debug_set_personality(
         owner,
@@ -600,7 +594,7 @@ fn invalid_scope_is_inert_and_new_factions_require_their_own_consent() {
     let mut invalid = charter(&sim, vec![rule.clone()]);
     invalid.offices[0]
         .inventories
-        .insert(sim.canonical_state().state.people[4].inventory);
+        .insert(sim.canonical_state().person_at(4).inventory);
     let before = sim.canonical_snapshot().unwrap();
     assert!(
         action(

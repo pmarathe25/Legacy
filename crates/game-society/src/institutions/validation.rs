@@ -438,7 +438,20 @@ impl Runtime {
                 request.change(&proposal.change);
                 Some(proposal.institution)
             }
-            _ => return Err(Error::Unavailable),
+            InstitutionAction::HearCase {
+                institution, case, ..
+            } => {
+                let case = crate::storage::case(store, case).ok_or(Error::Unavailable)?;
+                request.people.extend([case.subject, case.counterpart]);
+                Some(*institution)
+            }
+            InstitutionAction::TellCase { recipient, case } => {
+                let case = crate::storage::case(store, case).ok_or(Error::Unavailable)?;
+                request
+                    .people
+                    .extend([*recipient, case.subject, case.counterpart]);
+                None
+            }
         };
         if let Some(id) = institution {
             let institution = crate::storage::institution(store, id).ok_or(Error::Unavailable)?;

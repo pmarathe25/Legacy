@@ -2319,3 +2319,362 @@ fn bound_passage_uses_exact_projected_society_receipt_and_keeps_foreign_reads_gu
     assert!(guard.validate(&batch).is_err());
     assert_eq!(store.snapshot().unwrap(), before);
 }
+
+struct RegionalExecution {
+    runtime: Runtime,
+    store: Store,
+    now: SimTime,
+    presence: NativePresence,
+    concepts: BTreeMap<ConceptId, Good>,
+    attempts: Vec<PersonId>,
+}
+impl RealmExecution<u8> for RegionalExecution {
+    fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+    fn store(&self) -> &Store {
+        &self.store
+    }
+    fn store_mut(&mut self) -> &mut Store {
+        &mut self.store
+    }
+    fn now(&self) -> SimTime {
+        self.now
+    }
+    fn presence(&self) -> impl Presence {
+        self.presence.clone()
+    }
+    fn authority(&self, _: PersonId) -> game_society::institutions::AuthorityFacts {
+        game_society::institutions::AuthorityFacts::default()
+    }
+    fn judgment(&self, _: PersonId) -> JudgmentFacts<'_> {
+        JudgmentFacts {
+            hunger: 0,
+            hunger_exempt: false,
+            meal_relief: 1,
+            meal_size: Quantity(1),
+            hydration_urgency: 0,
+            drink_quantity: Quantity(1),
+            concepts: &self.concepts,
+        }
+    }
+    fn execute_choice(&mut self, actor: PersonId, _: ReviewChoice) -> Result<(), Error> {
+        self.attempts.push(actor);
+        Err(Error::Unavailable)
+    }
+}
+#[test]
+fn production_regional_review_expires_canonical_terms_and_does_not_review_busy_people() {
+    let (store, _, id) = setup();
+    let mut port = RegionalExecution {
+        runtime: Runtime::default(),
+        store,
+        now: SimTime(101),
+        presence: NativePresence::default(),
+        concepts: BTreeMap::new(),
+        attempts: Vec::new(),
+    };
+    port.presence.busy.insert(PersonId(2));
+    review_realm::<u8>(&mut port).unwrap();
+    assert_eq!(
+        commitment(&port.store, id).unwrap().current().status(),
+        Status::Expired
+    );
+    assert_eq!(
+        requests(&port.store, PersonId(1)).unwrap().reconsider_after,
+        SimTime(180_101)
+    );
+    assert!(requests(&port.store, PersonId(2)).is_none());
+    let before = port.store.snapshot().unwrap();
+    review_realm::<u8>(&mut port).unwrap();
+    assert_eq!(port.store.snapshot().unwrap(), before);
+}
+#[test]
+fn production_regional_observation_and_reconciliation_use_native_rows_without_assembly() {
+    let (store, _, id) = composed_store();
+    let mut port = RegionalExecution {
+        runtime: Runtime::default(),
+        store,
+        now: SimTime(3),
+        presence: NativePresence::default(),
+        concepts: BTreeMap::new(),
+        attempts: Vec::new(),
+    };
+    let before = commitment(&port.store, id).unwrap().clone();
+    observe_realm::<u8>(&mut port).unwrap();
+    assert_eq!(commitment(&port.store, id).unwrap(), &before);
+    assert!(knowledge(&port.store, PersonId(1)).is_some());
+}
+
+#[test]
+fn newborn_reception_shares_reserved_child_and_rejects_stale_or_foreign_personal_rows() {
+    let mut schema = Schema::new();
+    register_components(&mut schema).unwrap();
+    schema
+        .register::<NativeActivity>("test/activity", |_| Ok(()))
+        .unwrap();
+    let mut store = Store::with_schema(schema);
+    let runtime = Runtime::default();
+    let child = PersonId(999);
+    let plan = runtime.prepare_newborn(&store, child).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    batch.insert(StableId(child.0), NativeActivity(0));
+    let guard = plan.stage_into(&store, &mut batch).unwrap();
+    guard.validate(&store, &batch).unwrap();
+    assert!(!store.contains(StableId(child.0)));
+    store.apply_batch(batch).unwrap();
+    assert!(knowledge(&store, child).is_some());
+    assert!(requests(&store, child).is_some());
+    assert!(runtime.prepare_newborn(&store, child).is_err());
+    let other = PersonId(1000);
+    let plan = runtime.prepare_newborn(&store, other).unwrap();
+    insert_requests(&mut store, other, Requests::default()).unwrap();
+    assert!(
+        plan.stage_into(&store, &mut game_ecs::Batch::new())
+            .is_err()
+    );
+    let other = PersonId(1001);
+    let plan = runtime.prepare_newborn(&store, other).unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage_into(&store, &mut batch).unwrap();
+    batch.insert(StableId(other.0), Requests::default());
+    assert!(guard.validate(&store, &batch).is_err());
+    assert!(knowledge(&store, other).is_none());
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum CleanupActivity {
+    Idle,
+    RealmSpeech(SimTime),
+    OtherSpeech(SimTime),
+}
+struct CleanupActivities;
+impl TalkActivityFacts<CleanupActivity> for CleanupActivities {
+    fn report(&self, activity: &CleanupActivity) -> Option<TalkActivity> {
+        match activity {
+            CleanupActivity::RealmSpeech(completes) => Some(TalkActivity {
+                commitment: RealmCommitmentId(100),
+                recipient: PersonId(2),
+                completes: *completes,
+            }),
+            _ => None,
+        }
+    }
+}
+struct CleanupPresence;
+impl Presence for CleanupPresence {
+    type Activity = CleanupActivity;
+    fn actor_reads(&self, actor: PersonId) -> game_ecs::ReadFootprint {
+        let mut reads = game_ecs::ReadFootprint::new();
+        reads.protect::<CleanupActivity>(StableId(actor.0));
+        reads
+    }
+    fn inventory_reads(&self, _: InventoryId) -> game_ecs::ReadFootprint {
+        game_ecs::ReadFootprint::new()
+    }
+    fn actor(&self, actor: PersonId) -> Option<ActorFacts> {
+        [PersonId(1), PersonId(2)]
+            .contains(&actor)
+            .then_some(ActorFacts {
+                alive: true,
+                health: 1,
+                independent: true,
+                in_combat: false,
+                location: Location::AtArea(AreaId(1)),
+                idle_or_rest: actor == PersonId(2),
+                foreign_talking: false,
+                controlled: false,
+                past_life_controlled: false,
+            })
+    }
+    fn people(&self) -> impl Iterator<Item = PersonId> {
+        [PersonId(1), PersonId(2)].into_iter()
+    }
+    fn local_people(&self, area: AreaId) -> impl Iterator<Item = PersonId> {
+        self.people().filter(move |_| area == AreaId(1))
+    }
+    fn same_place(&self, _: PersonId, _: PersonId) -> bool {
+        true
+    }
+    fn inventory_area(&self, _: InventoryId) -> Option<AreaId> {
+        Some(AreaId(1))
+    }
+}
+fn cleanup_store(activity: CleanupActivity, reject_idle: bool) -> (Runtime, Store) {
+    let (mut base, _, id) = setup();
+    ratify(&mut base, id);
+    learn_approvals(&mut base, id, PersonId(1));
+    let report = Ledger::new(&base)
+        .prepare_report(PersonId(1), id, SimTime(3))
+        .unwrap();
+    let mut schema = Schema::new();
+    register_components(&mut schema).unwrap();
+    if reject_idle {
+        schema
+            .register::<CleanupActivity>("test/cleanup", |activity| {
+                if *activity == CleanupActivity::Idle {
+                    return Err(Error::InvalidConfiguration(
+                        "foreign idle activity schema".into(),
+                    ));
+                }
+                Ok(())
+            })
+            .unwrap();
+    } else {
+        schema
+            .register::<CleanupActivity>("test/cleanup", |_| Ok(()))
+            .unwrap();
+    }
+    let mut store = Store::with_schema(schema);
+    for (_, row) in commitments(&base) {
+        insert_commitment(&mut store, row.clone()).unwrap();
+    }
+    for (actor, row) in knowledges(&base) {
+        insert_knowledge(&mut store, actor, row.clone()).unwrap();
+    }
+    insert_talk(
+        &mut store,
+        PendingTalk {
+            speaker: PersonId(1),
+            recipient: PersonId(2),
+            area: AreaId(1),
+            completes: SimTime(10),
+            report,
+            institutions: Vec::new(),
+            stocks: Vec::new(),
+        },
+    )
+    .unwrap();
+    store.insert_or_spawn(StableId(1), activity).unwrap();
+    if !reject_idle {
+        store
+            .insert_or_spawn(StableId(2), CleanupActivity::Idle)
+            .unwrap();
+    }
+    (Runtime::default(), store)
+}
+#[test]
+fn owner_realm_interruption_preserves_variant_only_cleanup_and_pending_removal() {
+    for activity in [
+        CleanupActivity::RealmSpeech(SimTime(10)),
+        CleanupActivity::RealmSpeech(SimTime(11)),
+        CleanupActivity::OtherSpeech(SimTime(10)),
+    ] {
+        let (runtime, mut store) = cleanup_store(activity.clone(), false);
+        let projected = runtime
+            .prepare_cancel_talks(&store, &[PersonId(2)])
+            .activity_resets(|speaker| {
+                matches!(
+                    store.get::<CleanupActivity>(StableId(speaker.0)),
+                    Some(CleanupActivity::RealmSpeech(_))
+                )
+            });
+        assert_eq!(
+            projected,
+            if matches!(activity, CleanupActivity::RealmSpeech(_)) {
+                vec![PersonId(1)]
+            } else {
+                vec![]
+            }
+        );
+        let mut batch = game_ecs::Batch::new();
+        let publication = runtime
+            .prepare_cancel_talks(&store, &[PersonId(2)])
+            .stage_into_with_activities(
+                &runtime,
+                &store,
+                &CleanupActivities,
+                CleanupActivity::Idle,
+                &mut batch,
+            )
+            .unwrap();
+        publication.validate(&runtime, &store, &batch).unwrap();
+        store.apply_batch(batch).unwrap();
+        assert!(talk(&store, PersonId(1)).is_none());
+        let expected = if matches!(activity, CleanupActivity::RealmSpeech(_)) {
+            CleanupActivity::Idle
+        } else {
+            activity
+        };
+        assert_eq!(store.get::<CleanupActivity>(StableId(1)), Some(&expected));
+    }
+}
+#[test]
+fn realm_cleanup_runtime_and_foreign_schema_guards_preserve_canonical_state() {
+    for complete in [false, true] {
+        let (runtime, store) = cleanup_store(CleanupActivity::RealmSpeech(SimTime(10)), false);
+        let before = store.snapshot().unwrap();
+        let mut batch = game_ecs::Batch::new();
+        let publication = if complete {
+            runtime
+                .prepare_report_completion(&store, SimTime(10), PersonId(1), &CleanupPresence)
+                .unwrap()
+                .stage_into_guarded(
+                    &runtime,
+                    &store,
+                    SimTime(10),
+                    &CleanupPresence,
+                    CleanupActivity::Idle,
+                    &mut batch,
+                )
+                .unwrap()
+                .0
+        } else {
+            runtime
+                .prepare_cancel_talks(&store, &[PersonId(2)])
+                .stage_into_with_activities(
+                    &runtime,
+                    &store,
+                    &CleanupActivities,
+                    CleanupActivity::Idle,
+                    &mut batch,
+                )
+                .unwrap()
+        };
+        let mut changed = runtime.clone();
+        changed.rules.talk_time.0 += 1;
+        assert_eq!(
+            publication.validate(&changed, &store, &batch),
+            Err(Error::Unavailable)
+        );
+        batch.insert(StableId(1), CleanupActivity::OtherSpeech(SimTime(11)));
+        assert_eq!(
+            publication.validate(&runtime, &store, &batch),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+    let (runtime, mut store) = cleanup_store(CleanupActivity::RealmSpeech(SimTime(10)), true);
+    let before = store.snapshot().unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let publication = runtime
+        .prepare_cancel_talks(&store, &[PersonId(2)])
+        .stage_into_with_activities(
+            &runtime,
+            &store,
+            &CleanupActivities,
+            CleanupActivity::Idle,
+            &mut batch,
+        )
+        .unwrap();
+    publication.validate(&runtime, &store, &batch).unwrap();
+    assert!(store.apply_batch(batch).is_err());
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+#[test]
+fn prepared_realm_cursor_rejects_rewind_or_stale_metadata_before_native_publication() {
+    let mut runtime = Runtime {
+        last_event: 5,
+        ..Runtime::default()
+    };
+    assert!(runtime.prepare_event_cursor(4).is_err());
+    let cursor = runtime.prepare_event_cursor(7).unwrap();
+    let opening = runtime.clone();
+    let mut changed = runtime.clone();
+    changed.rules.talk_time.0 += 1;
+    assert_eq!(cursor.validate(&changed), Err(Error::Unavailable));
+    assert_eq!(runtime, opening);
+    cursor.validate(&runtime).unwrap();
+    cursor.finish(&mut runtime);
+    assert_eq!(runtime.last_event, 7);
+}

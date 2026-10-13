@@ -14,13 +14,7 @@ fn fixture(workers: usize) -> Simulation {
         },
     )
     .unwrap();
-    let people: Vec<_> = sim
-        .canonical_state()
-        .state
-        .people
-        .iter()
-        .map(|p| p.id)
-        .collect();
+    let people: Vec<_> = sim.canonical_state().people().map(|p| p.id).collect();
     for person in people {
         sim.debug_set_personality(person, Personality::restful(), Aspiration::Comfort)
             .unwrap();
@@ -31,7 +25,7 @@ fn ruler(sim: &Simulation) -> PersonId {
     sim.canonical_state().state.ruler
 }
 fn citizen(sim: &Simulation) -> PersonId {
-    sim.canonical_state().state.people[3].id
+    sim.canonical_state().person_at(3).id
 }
 fn action(sim: &mut Simulation, action: AgreementAction) -> Result<CommandReceipt, Error> {
     sim.submit(Submission {
@@ -93,7 +87,7 @@ fn accept(sim: &mut Simulation, id: AgreementId) {
 fn signature_creates_debt_and_cargo_performance_requires_actual_loading_and_delivery() {
     let mut sim = fixture(2);
     let source = food(&sim);
-    let carrier = sim.canonical_state().state.people[0].inventory;
+    let carrier = sim.canonical_state().person_at(0).inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -356,7 +350,7 @@ fn npc_uses_own_knowledge_to_refuse_or_counteroffer_and_can_accept_useful_trade(
         debtor: ruler(&sim),
         creditor: npc,
         source,
-        destination: sim.canonical_state().state.people[3].inventory,
+        destination: sim.canonical_state().person_at(3).inventory,
         quantity: Quantity(1_000),
         deadline: SimTime(300_000),
     };
@@ -428,7 +422,7 @@ fn competing_deliveries_do_not_double_credit_and_consumed_cargo_remains_owed() {
     let source = food(&sim);
     let actor = ruler(&sim);
     let recipient = citizen(&sim);
-    let cargo = sim.canonical_state().state.people[0].inventory;
+    let cargo = sim.canonical_state().person_at(0).inventory;
     let destination = sim
         .debug_add_inventory(
             Good::Food,
@@ -507,8 +501,8 @@ fn accepted_receipt_does_not_allow_remote_loading_or_interrupt_a_valid_action() 
     let actor = ruler(&sim);
     let recipient = citizen(&sim);
     let source = food(&sim);
-    let cargo = sim.canonical_state().state.people[0].inventory;
-    let destination = sim.canonical_state().state.people[3].inventory;
+    let cargo = sim.canonical_state().person_at(0).inventory;
+    let destination = sim.canonical_state().person_at(3).inventory;
     let id = propose(
         &mut sim,
         vec![AgreementTerm::Delivery {

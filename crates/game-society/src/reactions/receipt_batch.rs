@@ -1,7 +1,35 @@
 //! Ordered receipt interpretation prepares sparse native rows before publication.
 use super::*;
 use crate::storage::{Concept, Exclusions, Knowledge};
-use game_ecs::{BatchKey, Component, ReadFootprint};
+use game_ecs::{BatchKey, Component, ReadFootprint, ReadGuard, ReadSet};
+
+/// Native history required by ordered receipt interpretation. Memory itself is
+/// canonical; this closure limits joined historical cases to the owner's attention.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReceiptKnowledgeInputs {
+    pub cases: BTreeSet<CaseId>,
+    pub exclusion_stocks: BTreeSet<InventoryId>,
+}
+pub fn receipt_knowledge_inputs(
+    store: &Store,
+    actors: &BTreeSet<PersonId>,
+) -> ReceiptKnowledgeInputs {
+    let mut inputs = ReceiptKnowledgeInputs::default();
+    for actor in actors {
+        if let Some(memory) = crate::storage::knowledge(store, *actor) {
+            inputs
+                .cases
+                .extend(memory.cases.iter().rev().take(64).copied());
+        }
+        if let Some(exclusions) = crate::storage::exclusions(store, *actor) {
+            inputs
+                .exclusion_stocks
+                .extend(exclusions.stores.keys().copied());
+            inputs.cases.extend(exclusions.stores.values().copied());
+        }
+    }
+    inputs
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReceiptObservation {
@@ -160,11 +188,41 @@ pub struct PreparedReceiptReactions {
 }
 pub struct ReceiptReactionsFinalization {
     key: BatchKey,
+    native: ReadGuard,
     source: PreparedReceiptReactions,
     writes: ReadFootprint,
     reads: ReadFootprint,
 }
 impl Runtime {
+    /// Include the canonical knowledge initialization performed before receipt review.
+    /// The actor roster is factual; receipt interpretation and learning stay here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_initialized_receipt_reactions(
+        &self,
+        store: &Store,
+        actors: impl IntoIterator<Item = PersonId>,
+        receipts: &[(SocialReceipt, SubjectFacts)],
+        at: SimTime,
+        start_case: CaseId,
+        through: u64,
+        facts: &impl ReceiptObserverFacts,
+    ) -> Result<PreparedReceiptReactions, Error> {
+        let mut prepared =
+            self.prepare_receipt_reactions(store, receipts, at, start_case, through, facts)?;
+        for actor in actors {
+            if actor.0 == 0 {
+                return Err(Error::Unavailable);
+            }
+            if crate::storage::knowledge(store, actor).is_none() {
+                prepared
+                    .projected
+                    .knowledge
+                    .entry(actor)
+                    .or_insert_with(|| (None, Knowledge::default()));
+            }
+        }
+        Ok(prepared)
+    }
     pub fn prepare_receipt_reactions(
         &self,
         store: &Store,
@@ -415,6 +473,32 @@ impl PreparedReceiptReactions {
         batch: &mut Batch,
     ) -> Result<ReceiptReactionsFinalization, Error> {
         self.check_source(runtime, store, at, facts)?;
+        let mut native = ReadSet::new();
+        for (actor, (before, _)) in &self.projected.knowledge {
+            native.expect_row::<Knowledge>(StableId(actor.0), before.clone());
+        }
+        for (actor, (before, _)) in &self.projected.exclusions {
+            native.expect_row::<Exclusions>(StableId(actor.0), before.clone());
+        }
+        for (actor, before) in &self.knowledge_reads {
+            native.expect_row::<Knowledge>(StableId(actor.0), before.clone());
+        }
+        for (actor, before) in &self.exclusion_reads {
+            native.expect_row::<Exclusions>(StableId(actor.0), before.clone());
+        }
+        for (id, before) in &self.case_reads {
+            native.expect_row::<SocialCaseView>(StableId(id.0), before.clone());
+        }
+        for source in &self.selections {
+            if let Some((institution, concept)) = source.selected {
+                native
+                    .expect_row::<Institution>(StableId(institution.0), source.institution.clone());
+                native.expect_row::<Concept>(StableId(concept.0), source.concept.clone());
+            }
+        }
+        for id in self.projected.cases.keys() {
+            native.exclusive_entity(store, StableId(id.0))?;
+        }
         let mut writes = ReadFootprint::new();
         let mut reads = self.reads.clone();
         for (actor, (_, after)) in &self.projected.knowledge {
@@ -445,6 +529,7 @@ impl PreparedReceiptReactions {
         }
         let receipt = ReceiptReactionsFinalization {
             key: batch.key(),
+            native: native.bind(store, batch, &writes)?,
             source: self,
             writes,
             reads,
@@ -454,6 +539,9 @@ impl PreparedReceiptReactions {
     }
 }
 impl ReceiptReactionsFinalization {
+    pub fn row_guard(&self) -> ReadGuard {
+        self.native.clone()
+    }
     pub fn validate_batch(
         &self,
         runtime: &Runtime,
@@ -463,6 +551,7 @@ impl ReceiptReactionsFinalization {
         batch: &Batch,
     ) -> Result<(), Error> {
         self.source.check_source(runtime, store, at, facts)?;
+        self.native.validate(store, batch)?;
         if self.key != batch.key()
             || !self.writes.has_one_edit_per_row(batch)
             || !self.reads.is_untouched(batch)
@@ -594,6 +683,165 @@ mod tests {
             .into_iter()
             .map(|receipt| (receipt, subject))
             .collect()
+    }
+    #[test]
+    fn physical_consumption_and_receipt_initialization_share_atomic_host_publication() {
+        use game_sim::ClockWorld;
+        use game_world::{GenericHost, Transaction};
+        for reject in [true, false] {
+            let mut schema = game_ecs::Schema::new();
+            schema.register::<u8>("test/body", |_| Ok(())).unwrap();
+            schema
+                .register::<SocialCaseView>("society/case", SocialCaseView::validate_shape)
+                .unwrap();
+            let validate: fn(&Knowledge) -> Result<(), Error> = if reject {
+                |row| {
+                    if row.cases.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(Error::Unavailable)
+                    }
+                }
+            } else {
+                Knowledge::validate_shape
+            };
+            schema
+                .register::<Knowledge>("society/knowledge", validate)
+                .unwrap();
+            schema
+                .register::<Exclusions>("society/exclusions", |_| Ok(()))
+                .unwrap();
+            game_cargo::register_components(&mut schema).unwrap();
+            let mut host = GenericHost::<Runtime, &'static str>::new(schema, 1, Runtime::default());
+            host.allocate_ids(49).unwrap();
+            host.storage.insert_or_spawn(StableId(1), 0u8).unwrap();
+            host.storage.insert_or_spawn(StableId(2), 0u8).unwrap();
+            host.storage.insert_or_spawn(StableId(3), 0u8).unwrap();
+            crate::insert_knowledge(&mut host.storage, PersonId(2), Knowledge::default()).unwrap();
+            host.append_many(vec!["pending-cooperation"]).unwrap();
+            game_cargo::insert_inventory(
+                &mut host.storage,
+                game_cargo::Inventory {
+                    id: InventoryId(4),
+                    location: game_cargo::InventoryLocation::Area(AreaId(3)),
+                    good: Good::Food,
+                    quantity: Quantity(1_000),
+                    capacity: Quantity(2_000),
+                    access: BTreeSet::from([PersonId(1)]),
+                    last_granted: None,
+                    spoils_at: None,
+                },
+            )
+            .unwrap();
+            let facts = Facts {
+                subject: SubjectFacts {
+                    actor: PersonId(1),
+                    area: Some(AreaId(3)),
+                    hunger: 300_000,
+                },
+                observers: BTreeMap::from([(PersonId(1), 500), (PersonId(2), 800)]),
+            };
+            let opening = host.transaction_opening();
+            let before = host.snapshot().unwrap();
+            let clock = host.clock();
+            // The receiving projection contains no remote person/body rows.
+            let mut opening_scene = host
+                .storage
+                .project_entities([StableId(1), StableId(4)])
+                .unwrap();
+            opening_scene
+                .import_rows::<Knowledge>(&host.storage, [StableId(2), StableId(3)])
+                .unwrap();
+            opening_scene
+                .import_rows::<Exclusions>(&host.storage, [StableId(2)])
+                .unwrap();
+            let mut scene = opening_scene.clone();
+            assert!(scene.get::<u8>(StableId(2)).is_none());
+            let mut batch = Batch::new();
+            let cargo =
+                game_cargo::prepare_consumptions(&scene, &[(InventoryId(4), Quantity(500))])
+                    .unwrap()
+                    .stage_guarded_into(&scene, &mut batch)
+                    .unwrap();
+            let plan = host
+                .state
+                .prepare_initialized_receipt_reactions(
+                    &scene,
+                    [PersonId(3)],
+                    &inputs(vec![receipt_pair()[0]], facts.subject),
+                    clock.time,
+                    CaseId(opening.next_id),
+                    opening.next_event + 1,
+                    &facts,
+                )
+                .unwrap();
+            let finish = plan
+                .stage_into(&host.state, &scene, clock.time, &facts, &mut batch)
+                .unwrap();
+            finish
+                .validate_batch(&host.state, &scene, clock.time, &facts, &batch)
+                .unwrap();
+            cargo.validate(&scene, &batch).unwrap();
+            let projected = scene.apply_batch(batch);
+            if reject {
+                assert_eq!(projected, Err(Error::Unavailable));
+                assert_eq!(host.snapshot().unwrap(), before);
+                assert_eq!(host.clock(), clock);
+                assert_eq!(host.state.last_event, 0);
+                assert!(crate::storage::knowledge(&host.storage, PersonId(3)).is_none());
+            } else {
+                projected.unwrap();
+                let mut batch = Batch::new();
+                let (reads, writes) = scene.diff_into(&opening_scene, &mut batch).unwrap();
+                let guard = reads.bind(&host.storage, &batch, &writes).unwrap();
+                let mut source_facts = ReadSet::new();
+                source_facts.read::<u8>(&host.storage, StableId(2));
+                source_facts.membership::<u8>(&host.storage, |_, _| true);
+                let source_facts = source_facts
+                    .bind(&host.storage, &batch, &ReadFootprint::new())
+                    .unwrap();
+                let mut transaction = Transaction::new(opening.clone(), batch);
+                transaction.ids = 1;
+                transaction.revisions = 1;
+                transaction.events = vec!["interrupted", "consumed", "case-recorded"];
+                transaction.guards = vec![guard, source_facts];
+                host.commit_transaction(transaction).unwrap();
+                finish.finish(&mut host.state);
+                assert_eq!(host.state.last_event, opening.next_event + 1);
+                assert_eq!(
+                    game_cargo::inventory(&host.storage, InventoryId(4))
+                        .unwrap()
+                        .quantity,
+                    Quantity(500)
+                );
+                assert_eq!(
+                    crate::storage::knowledge(&host.storage, PersonId(1))
+                        .unwrap()
+                        .cases,
+                    BTreeSet::from([CaseId(opening.next_id)])
+                );
+                assert!(crate::storage::knowledge(&host.storage, PersonId(3)).is_some());
+                assert!(
+                    crate::storage::knowledge(&host.storage, PersonId(2))
+                        .unwrap()
+                        .cases
+                        .contains(&CaseId(opening.next_id))
+                );
+                assert_eq!(host.storage.get::<u8>(StableId(2)), Some(&0));
+                assert_eq!(
+                    host.events()
+                        .iter()
+                        .map(|event| event.event)
+                        .collect::<Vec<_>>(),
+                    vec![
+                        "pending-cooperation",
+                        "interrupted",
+                        "consumed",
+                        "case-recorded"
+                    ]
+                );
+            }
+        }
     }
     #[test]
     fn ordered_prefix_matches_legacy_sequential_personal_learning_and_reciprocity() {

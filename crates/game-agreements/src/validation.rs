@@ -401,3 +401,46 @@ pub fn valid_knowledge(
     }
     true
 }
+
+pub fn validate_absent(store: &Store) -> Result<(), Error> {
+    if store.count::<Agreement>() > 0
+        || store.count::<Obligation>() > 0
+        || store.count::<Amendment>() > 0
+        || store.count::<Knowledge>() > 0
+        || store.count::<Requests>() > 0
+        || store.count::<PendingReport>() > 0
+        || store.count::<PendingWork>() > 0
+    {
+        return Err(Error::InvalidSave("orphan agreement components".into()));
+    }
+    Ok(())
+}
+#[derive(Clone, Copy, Debug)]
+pub struct ReportActivityFact {
+    pub actor: PersonId,
+    pub reporting_until: Option<SimTime>,
+}
+pub fn validate_report_activities(
+    store: &Store,
+    facts: impl IntoIterator<Item = ReportActivityFact>,
+) -> Result<(), Error> {
+    let mut seen = BTreeSet::new();
+    for fact in facts {
+        if !seen.insert(fact.actor) {
+            return Err(Error::InvalidSave(
+                "duplicate agreement activity fact".into(),
+            ));
+        }
+        if fact.reporting_until != report(store, fact.actor).map(|report| report.completes) {
+            return Err(Error::InvalidSave(
+                "agreement report activity mismatch".into(),
+            ));
+        }
+    }
+    if reports(store).any(|(actor, _)| !seen.contains(&actor)) {
+        return Err(Error::InvalidSave(
+            "agreement report activity missing".into(),
+        ));
+    }
+    Ok(())
+}

@@ -1196,3 +1196,718 @@ fn created_proposal_publication_rejects_stale_receivers_and_foreign_final_edits(
     assert!(agreement(&store, AgreementId(30)).is_none());
     assert_ne!(store.snapshot().unwrap(), before);
 }
+
+fn transition_observation_events(plan: &PreparedTransition, now: SimTime) -> Vec<ObservationEvent> {
+    plan.events
+        .iter()
+        .filter_map(|event| {
+            let kind = match *event {
+                TransitionEvent::Proposed {
+                    agreement,
+                    proposer,
+                } => ObservationKind::Proposed {
+                    agreement,
+                    proposer,
+                },
+                TransitionEvent::Activated { agreement } => {
+                    ObservationKind::Activated { agreement }
+                }
+                TransitionEvent::Rejected { agreement, actor } => {
+                    ObservationKind::Rejected { agreement, actor }
+                }
+                TransitionEvent::Performed {
+                    obligation, actor, ..
+                } => ObservationKind::Obligation {
+                    obligation,
+                    performer: actor,
+                },
+                TransitionEvent::Amended { .. } => return None,
+            };
+            Some(ObservationEvent { at: now, kind })
+        })
+        .collect()
+}
+#[test]
+fn every_transition_projects_exact_legacy_notices_and_observations_before_publication() {
+    let mut store = world();
+    let mut runtime = Runtime::default();
+    let mut contacts = publication_contacts();
+    contacts.0.get_mut(&B).unwrap().area = Some(AreaId(1));
+    let terms = vec![delivery()];
+    let facts = TransitionFacts {
+        actor_available: true,
+        present: BTreeSet::from([A, B]),
+        assets: terms_context(&store, SimTime(0), &terms, &Facts::default()),
+    };
+    let procedure = AmendmentProcedure {
+        eligible_proposers: BTreeSet::from([A, B]),
+        approvers: BTreeSet::from([A, B]),
+        threshold: 1,
+        term_approvers: BTreeMap::new(),
+    };
+    for (speaker, action, ids) in [
+        (
+            A,
+            AgreementAction::Propose {
+                parties: BTreeSet::from([A, B]),
+                terms: terms.clone(),
+                procedure: Some(procedure),
+            },
+            TransitionIds {
+                agreement: Some(AgreementId(30)),
+                ..Default::default()
+            },
+        ),
+        (
+            B,
+            AgreementAction::Accept {
+                agreement: AgreementId(30),
+            },
+            TransitionIds {
+                obligations: vec![ObligationId(31)],
+                ..Default::default()
+            },
+        ),
+        (
+            A,
+            AgreementAction::Amend {
+                agreement: AgreementId(30),
+                replacements: BTreeMap::from([(
+                    0,
+                    AgreementTerm::Delivery {
+                        debtor: A,
+                        creditor: B,
+                        source: SOURCE,
+                        destination: GOAL,
+                        quantity: Quantity(5),
+                        deadline: SimTime(100_000),
+                    },
+                )]),
+            },
+            TransitionIds {
+                amendment: Some(AmendmentId(32)),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let plan = Ledger::new(&store)
+            .prepare_transition(speaker, &action, &facts, &ids)
+            .unwrap();
+        let cursor = runtime.last_observation_event + plan.events.len() as u64;
+        let mut legacy = store.clone();
+        let mut legacy_runtime = runtime.clone();
+        plan.clone().commit(&mut legacy).unwrap();
+        for notice in &plan.notices {
+            local_notice(
+                &mut legacy,
+                SimTime(0),
+                notice.agreement,
+                speaker,
+                notice.amendment,
+                &contacts,
+            )
+            .unwrap();
+        }
+        observe_events(
+            &mut legacy,
+            &mut legacy_runtime,
+            SimTime(0),
+            cursor,
+            &transition_observation_events(&plan, SimTime(0)),
+            &contacts,
+        )
+        .unwrap();
+        let publication = PreparedTransitionPublication::prepare(
+            plan,
+            &store,
+            &runtime,
+            SimTime(0),
+            cursor,
+            &[],
+            speaker,
+            &contacts,
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        let mut batch = Batch::new();
+        let finish = publication
+            .stage_into(&store, &runtime, &mut batch)
+            .unwrap();
+        finish.validate(&runtime, &store, &batch).unwrap();
+        assert_eq!(store.snapshot().unwrap(), before);
+        store.apply_batch(batch).unwrap();
+        finish.finish(&mut runtime);
+        assert_eq!(store.snapshot().unwrap(), legacy.snapshot().unwrap());
+        assert_eq!(runtime, legacy_runtime);
+    }
+}
+#[test]
+fn transition_publication_rejects_late_native_knowledge_and_cursor_changes() {
+    for change in [0, 1, 2] {
+        let store = world();
+        let mut runtime = Runtime::default();
+        let publication = PreparedTransitionPublication::prepare(
+            proposal_publication_plan(&store),
+            &store,
+            &runtime,
+            SimTime(0),
+            1,
+            &[],
+            A,
+            &publication_contacts(),
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        let mut batch = Batch::new();
+        let finish = publication
+            .stage_into(&store, &runtime, &mut batch)
+            .unwrap();
+        match change {
+            0 => {
+                batch.remove::<Agreement>(StableId(30));
+            }
+            1 => {
+                batch.insert(StableId(A.0), Knowledge::default());
+            }
+            _ => runtime.last_observation_event = 2,
+        }
+        assert_eq!(
+            finish.validate(&runtime, &store, &batch),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+}
+#[test]
+fn already_staged_transition_can_receive_atomic_knowledge_without_duplicate_native_rows() {
+    let mut store = world();
+    let mut runtime = Runtime::default();
+    let plan = proposal_publication_plan(&store);
+    let publication = PreparedTransitionPublication::prepare(
+        plan.clone(),
+        &store,
+        &runtime,
+        SimTime(0),
+        1,
+        &[],
+        A,
+        &publication_contacts(),
+    )
+    .unwrap();
+    let mut batch = Batch::new();
+    let native = plan.stage_into(&store, &mut batch).unwrap();
+    let finish = publication
+        .stage_after_transition(&store, &runtime, &mut batch)
+        .unwrap();
+    native.validate(&store, &batch).unwrap();
+    finish.validate(&runtime, &store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    finish.finish(&mut runtime);
+    assert!(known_agreement(&store, A, AgreementId(30)).is_some());
+    assert!(known_agreement(&store, B, AgreementId(30)).is_none());
+}
+
+#[test]
+fn transition_observation_and_character_default_learning_share_one_schema_admission() {
+    use game_characters::decisions::{Aspiration, Mind, Personality, Stocks};
+    for reject_trust in [true, false] {
+        let mut schema = Schema::new();
+        register_components(&mut schema).unwrap();
+        game_cargo::register_components(&mut schema).unwrap();
+        game_property::register_components(&mut schema).unwrap();
+        if reject_trust {
+            schema
+                .register::<Mind<u8>>("characters/mind", |mind| {
+                    mind.validate()?;
+                    if mind
+                        .relationships
+                        .values()
+                        .any(|relation| relation.trust < 0)
+                    {
+                        return Err(Error::Unavailable);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            schema
+                .register::<Stocks>("characters/stocks", Stocks::validate)
+                .unwrap();
+        } else {
+            game_characters::decisions::register_minds::<u8>(&mut schema).unwrap();
+        }
+        let mut store = Store::with_schema(schema);
+        for person in [A, B] {
+            store.ensure(StableId(person.0)).unwrap();
+        }
+        for row in [
+            inventory(SOURCE, game_cargo::InventoryLocation::Area(AreaId(1)), 20),
+            inventory(GOAL, game_cargo::InventoryLocation::Area(AreaId(1)), 0),
+            inventory(CARRY, game_cargo::InventoryLocation::Carried(A), 0),
+        ] {
+            game_cargo::insert_inventory(&mut store, row).unwrap();
+        }
+        game_property::declare_custody(&mut store, GOAL, B).unwrap();
+        game_characters::decisions::insert_mind(
+            &mut store,
+            B,
+            Mind::<u8>::new(Personality::industrious(), Aspiration::Comfort).unwrap(),
+        )
+        .unwrap();
+        active(&mut store, vec![delivery()]);
+        let mut contacts = publication_contacts();
+        contacts.0.get_mut(&B).unwrap().area = Some(AreaId(1));
+        local_notice(&mut store, SimTime(0), AgreementId(30), A, None, &contacts).unwrap();
+        obligation_mut(&mut store, ObligationId(31))
+            .unwrap()
+            .defaulted = true;
+        agreement_mut(&mut store, AgreementId(30)).unwrap().status = AgreementStatus::Breached;
+        let term = AgreementTerm::Delivery {
+            debtor: A,
+            creditor: B,
+            source: SOURCE,
+            destination: GOAL,
+            quantity: Quantity(10),
+            deadline: SimTime(200_000),
+        };
+        let facts = TransitionFacts {
+            actor_available: true,
+            present: BTreeSet::from([A, B]),
+            assets: terms_context(
+                &store,
+                SimTime(100_000),
+                std::slice::from_ref(&term),
+                &Facts::default(),
+            ),
+        };
+        let transition = Ledger::new(&store)
+            .prepare_transition(
+                A,
+                &AgreementAction::Propose {
+                    parties: BTreeSet::from([A, B]),
+                    terms: vec![term],
+                    procedure: None,
+                },
+                &facts,
+                &TransitionIds {
+                    agreement: Some(AgreementId(50)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut runtime = Runtime::default();
+        let publication = PreparedTransitionPublication::prepare(
+            transition,
+            &store,
+            &runtime,
+            SimTime(100_000),
+            2,
+            &[ObservationEvent {
+                at: SimTime(100_000),
+                kind: ObservationKind::Defaulted {
+                    obligation: ObligationId(31),
+                },
+            }],
+            A,
+            &contacts,
+        )
+        .unwrap();
+        assert_eq!(
+            publication.default_knowledge(),
+            &[NewDefaultKnowledge {
+                observer: B,
+                debtor: A
+            }]
+        );
+        let trust = game_characters::receivers::prepare_default_knowledge_reactions::<u8>(
+            &store,
+            publication
+                .default_knowledge()
+                .iter()
+                .map(|effect| (effect.observer, effect.debtor)),
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        let mut batch = Batch::new();
+        let finish = publication
+            .stage_into(&store, &runtime, &mut batch)
+            .unwrap();
+        let trust = trust.stage_into(&store, &mut batch).unwrap();
+        finish.validate(&runtime, &store, &batch).unwrap();
+        trust.validate(&store, &batch).unwrap();
+        if reject_trust {
+            assert_eq!(store.apply_batch(batch), Err(Error::Unavailable));
+            assert_eq!(store.snapshot().unwrap(), before);
+            assert_eq!(runtime.last_observation_event, 0);
+            assert!(agreement(&store, AgreementId(50)).is_none());
+        } else {
+            store.apply_batch(batch).unwrap();
+            finish.finish(&mut runtime);
+            assert_eq!(runtime.last_observation_event, 2);
+            assert!(known_agreement(&store, B, AgreementId(50)).is_some());
+            let mind = game_characters::decisions::mind::<u8>(&store, B).unwrap();
+            assert_eq!(
+                mind.relationships[&A].trust,
+                -(i32::from(mind.personality.honesty) / 100)
+            );
+            assert!(
+                known_agreement(&store, B, AgreementId(30))
+                    .unwrap()
+                    .obligations[0]
+                    .defaulted
+            );
+        }
+    }
+}
+
+#[test]
+fn absent_runtime_and_report_activity_validation_are_owner_entry_points() {
+    let mut store = world();
+    validate_absent(&store).unwrap();
+    store.insert(StableId(A.0), Knowledge::default()).unwrap();
+    assert!(validate_absent(&store).is_err());
+    store.remove::<Knowledge>(StableId(A.0)).unwrap();
+    active(&mut store, vec![delivery()]);
+    let snapshot = actual_snapshot(&store, SimTime(0), A, AgreementId(30)).unwrap();
+    insert_report(
+        &mut store,
+        A,
+        PendingReport {
+            sender: A,
+            recipient: B,
+            started_at: SimTime(0),
+            completes: SimTime(10),
+            snapshot,
+        },
+    )
+    .unwrap();
+    validate_report_activities(
+        &store,
+        [
+            ReportActivityFact {
+                actor: A,
+                reporting_until: Some(SimTime(10)),
+            },
+            ReportActivityFact {
+                actor: B,
+                reporting_until: None,
+            },
+        ],
+    )
+    .unwrap();
+    for time in [None, Some(SimTime(11))] {
+        assert!(
+            validate_report_activities(
+                &store,
+                [
+                    ReportActivityFact {
+                        actor: A,
+                        reporting_until: time
+                    },
+                    ReportActivityFact {
+                        actor: B,
+                        reporting_until: None
+                    }
+                ]
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        validate_report_activities(
+            &store,
+            [ReportActivityFact {
+                actor: B,
+                reporting_until: None
+            }]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn interval_labor_preserves_equipment_and_independent_construction_eligibility() {
+    let mut store = world();
+    let site = SiteId(50);
+    let project = ProjectId(60);
+    active(
+        &mut store,
+        vec![
+            AgreementTerm::Labor {
+                debtor: A,
+                creditor: B,
+                site,
+                millis: 100,
+                deadline: SimTime(1000),
+            },
+            AgreementTerm::ConstructionLabor {
+                debtor: A,
+                creditor: B,
+                project,
+                millis: 100,
+                deadline: SimTime(1000),
+            },
+        ],
+    );
+    let facts = IntervalLaborFacts {
+        actor: A,
+        activity: IntervalActivity::Cultivate { field: site },
+        tool_ready: false,
+        construction: Some(project),
+    };
+    let plan = Ledger::new(&store)
+        .prepare_interval_labor(SimTime(0), SimTime(40), true, true, [facts])
+        .unwrap();
+    assert_eq!(plan.credits.len(), 1);
+    assert!(matches!(
+        obligation(&store, plan.credits[0].obligation).unwrap().term,
+        AgreementTerm::ConstructionLabor { .. }
+    ));
+    plan.commit(&mut store).unwrap();
+    let plan = Ledger::new(&store)
+        .prepare_interval_labor(
+            SimTime(40),
+            SimTime(100),
+            true,
+            true,
+            [IntervalLaborFacts {
+                tool_ready: true,
+                ..facts
+            }],
+        )
+        .unwrap();
+    assert_eq!(plan.credits.len(), 2);
+    plan.commit(&mut store).unwrap();
+    assert_eq!(
+        obligations(&store)
+            .map(|(_, row)| row.performed)
+            .collect::<Vec<_>>(),
+        vec![60, 100]
+    );
+    assert!(
+        Ledger::new(&store)
+            .prepare_interval_labor(SimTime(100), SimTime(110), false, false, [facts])
+            .unwrap()
+            .credits
+            .is_empty()
+    );
+}
+
+#[test]
+fn interval_labor_guards_pending_credit_and_final_owner_rows() {
+    let mut store = world();
+    let site = SiteId(50);
+    active(
+        &mut store,
+        vec![AgreementTerm::Labor {
+            debtor: A,
+            creditor: B,
+            site,
+            millis: 100,
+            deadline: SimTime(1000),
+        }],
+    );
+    let facts = IntervalLaborFacts {
+        actor: A,
+        activity: IntervalActivity::Work { site },
+        tool_ready: true,
+        construction: None,
+    };
+    let plan = Ledger::new(&store)
+        .prepare_interval_labor(SimTime(0), SimTime(40), true, false, [facts])
+        .unwrap();
+    let id = plan.credits[0].obligation;
+    let mut batch = Batch::new();
+    let guard = plan.stage_into(&store, &mut batch).unwrap();
+    let mut overwrite = obligation(&store, id).unwrap().clone();
+    overwrite.performed = 1;
+    batch.insert(StableId(id.0), overwrite);
+    assert_eq!(guard.validate(&store, &batch), Err(Error::Unavailable));
+    let before = store.clone();
+    let mut change = Batch::new();
+    change.insert(StableId(id.0), PendingWork { millis: 7 });
+    store.apply_batch(change).unwrap();
+    let changed = store.clone();
+    assert_eq!(plan.commit(&mut store), Err(Error::Unavailable));
+    assert_eq!(store, changed);
+    assert_ne!(before, changed);
+}
+
+#[test]
+fn projected_loss_reconciliation_and_remembered_cargo_publish_atomically() {
+    let mut store = world();
+    active(&mut store, vec![delivery()]);
+    let mut property = game_property::Runtime::default();
+    let mut runtime = Runtime::default();
+    transfer(&mut store, &mut property, 1, SOURCE, CARRY, 7);
+    prepare_reconciliation(
+        &store,
+        &runtime,
+        SimTime(1),
+        1,
+        &[Receipt {
+            at: SimTime(1),
+            kind: ReceiptKind::Transferred {
+                actor: A,
+                source: SOURCE,
+                destination: CARRY,
+                quantity: Quantity(7),
+            },
+        }],
+        &Facts::default(),
+    )
+    .unwrap()
+    .commit(&mut store, &mut runtime)
+    .unwrap();
+    notice(&mut store, SimTime(1), A, AgreementId(30)).unwrap();
+    runtime.last_observation_event = 1;
+    for overwrite in [true, false] {
+        let mut candidate = store.clone();
+        let mut candidate_runtime = runtime.clone();
+        let before = candidate.clone();
+        // A remaining attributed lot requires reconciliation to read the
+        // source's final material row, so the receiving guard must retain it.
+        let quantity = Quantity(3);
+        let loss = game_cargo::prepare_consumptions(&candidate, &[(CARRY, quantity)]).unwrap();
+        let mut batch = Batch::new();
+        let stock_guard = loss.stage_guarded_into(&candidate, &mut batch).unwrap();
+        let receipts = [Receipt {
+            at: SimTime(2),
+            kind: ReceiptKind::Lost {
+                source: CARRY,
+                quantity,
+            },
+        }];
+        let ledger = prepare_reconciliation_projected(
+            &candidate,
+            &candidate_runtime,
+            SimTime(2),
+            2,
+            &receipts,
+            &Facts::default(),
+            &batch,
+        )
+        .unwrap();
+        let publication = PreparedReconciledPublication::prepare(
+            ledger,
+            &candidate,
+            &candidate_runtime,
+            SimTime(2),
+            2,
+            &[],
+            &Facts::default(),
+        )
+        .unwrap();
+        let finalization = publication
+            .stage_into(&candidate, &candidate_runtime, &mut batch)
+            .unwrap();
+        if overwrite {
+            let row = game_cargo::inventory(&candidate, CARRY).unwrap().clone();
+            batch.insert(StableId(CARRY.0), row);
+            assert_eq!(
+                finalization.validate(&candidate_runtime, &candidate, &batch),
+                Err(Error::Unavailable)
+            );
+            assert_eq!(
+                stock_guard.validate(&candidate, &batch),
+                Err(Error::Unavailable)
+            );
+            assert_eq!(candidate, before);
+            assert_eq!(candidate_runtime, runtime);
+        } else {
+            stock_guard.validate(&candidate, &batch).unwrap();
+            finalization
+                .validate(&candidate_runtime, &candidate, &batch)
+                .unwrap();
+            candidate.apply_batch(batch).unwrap();
+            finalization.finish(&mut candidate_runtime);
+            assert_eq!(
+                game_cargo::inventory(&candidate, CARRY).unwrap().quantity,
+                Quantity(4)
+            );
+            assert_eq!(
+                obligation(&candidate, ObligationId(31)).unwrap().cargo,
+                BTreeMap::from([(CARRY, 4)])
+            );
+            assert_eq!(
+                known_agreements(&candidate, A).unwrap()[&AgreementId(30)].obligations[0].cargo,
+                BTreeMap::from([(CARRY, 4)])
+            );
+            assert_eq!(candidate_runtime.last_event, 2);
+            assert_eq!(candidate_runtime.last_observation_event, 2);
+        }
+    }
+}
+
+#[test]
+fn maintenance_input_closure_requests_native_ledger_and_sparse_stock_contact_facts() {
+    let mut store = world();
+    active(&mut store, vec![delivery()]);
+    notice(&mut store, SimTime(0), B, AgreementId(30)).unwrap();
+    let inputs = maintenance_inputs(
+        &store,
+        &[Receipt {
+            at: SimTime(1),
+            kind: ReceiptKind::Transferred {
+                actor: A,
+                source: SOURCE,
+                destination: CARRY,
+                quantity: Quantity(7),
+            },
+        }],
+        &[],
+        &Facts::default(),
+    );
+    assert_eq!(inputs.agreements, BTreeSet::from([AgreementId(30)]));
+    assert_eq!(inputs.obligations, BTreeSet::from([ObligationId(31)]));
+    assert!(inputs.knowledge.contains(&B));
+    assert_eq!(inputs.people, BTreeSet::from([A, B]));
+    assert_eq!(inputs.stocks, BTreeSet::from([SOURCE, CARRY, GOAL]));
+    assert!(inputs.output_sources.is_empty());
+}
+
+#[test]
+fn observation_and_report_receiving_guards_retain_exact_rows_and_cursors() {
+    let mut store = world();
+    active(&mut store, vec![delivery()]);
+    notice(&mut store, SimTime(0), A, AgreementId(30)).unwrap();
+    let facts = ReportFacts {
+        sender_under_care: false,
+        recipient_idle_or_rest: true,
+    };
+    let presence = Facts::default();
+    let report =
+        prepare_report_start(&store, SimTime(1), A, B, AgreementId(30), facts, &presence).unwrap();
+    let mut batch = Batch::new();
+    let replacement = report
+        .stage_into_with_replacement(&store, SimTime(1), facts, &presence, &mut batch)
+        .unwrap();
+    let report_guard = replacement.read_guard(&store, &batch).unwrap();
+    let mut runtime = Runtime::default();
+    let observation =
+        prepare_observations(&store, &runtime, SimTime(1), 1, &[], &presence).unwrap();
+    let finish = observation
+        .stage_into(&store, &runtime, &mut batch)
+        .unwrap();
+    report_guard.validate(&store, &batch).unwrap();
+    finish.validate(&runtime, &store, &batch).unwrap();
+    runtime.last_event = 1;
+    assert_eq!(
+        finish.validate(&runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    runtime.last_event = 0;
+    let before = store.clone();
+    let mut after = batch
+        .projected::<PendingReport>(&store, StableId(A.0))
+        .unwrap()
+        .unwrap()
+        .clone();
+    after.completes = SimTime(after.completes.0 + 1);
+    batch.insert(StableId(A.0), after);
+    assert_eq!(
+        report_guard.validate(&store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store, before);
+    assert_eq!(runtime, Runtime::default());
+}
