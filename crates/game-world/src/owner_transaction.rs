@@ -281,6 +281,7 @@ pub struct Registry<S, E> {
     slots: BTreeMap<SlotKey, Box<dyn Slot<S>>>,
     writes: BTreeMap<TypeId, TypeId>,
     due_owners: BTreeMap<TypeId, TypeId>,
+    causal_depth_limit: u32,
 }
 impl<S: 'static, E: 'static> Default for Registry<S, E> {
     fn default() -> Self {
@@ -299,10 +300,21 @@ impl<S: 'static, E: 'static> Registry<S, E> {
             slots: BTreeMap::new(),
             writes: BTreeMap::new(),
             due_owners: BTreeMap::new(),
+            causal_depth_limit: 128,
         }
     }
     fn changed(&mut self) -> Result<(), Error> {
         self.generation = self.generation.checked_add(1).ok_or(Error::Overflow)?;
+        Ok(())
+    }
+    /// Bound queued feedback generations, independently of the number of root
+    /// operations or sibling recipients in an interval. The default is 128.
+    pub fn set_causal_depth_limit(&mut self, limit: u32) -> Result<(), Error> {
+        if limit == 0 {
+            return Err(configuration("zero queued dispatch causal depth limit"));
+        }
+        self.changed()?;
+        self.causal_depth_limit = limit;
         Ok(())
     }
     pub fn register<O: OwnerSystem<E>>(
@@ -481,7 +493,8 @@ impl<S: 'static, E: 'static> Registry<S, E> {
             pending: VecDeque::new(),
             notifications: VecDeque::new(),
             notifying: false,
-            calls: 0,
+            causal_depth: 0,
+            causal_depth_limit: self.causal_depth_limit,
             failed: None,
             ids: 0,
             revisions: 0,
@@ -602,10 +615,11 @@ struct Journal<'s, E> {
     readonly_depth: u16,
     mutable_started: bool,
     facts: BTreeMap<TypeId, SharedFact>,
-    pending: VecDeque<(TypeId, Box<dyn Any>)>,
-    notifications: VecDeque<(Arc<dyn Handler<E>>, Box<dyn Any>)>,
+    pending: VecDeque<(TypeId, Box<dyn Any>, u32)>,
+    notifications: VecDeque<(Arc<dyn Handler<E>>, Box<dyn Any>, u32)>,
     notifying: bool,
-    calls: u64,
+    causal_depth: u32,
+    causal_depth_limit: u32,
     failed: Option<Error>,
     ids: u64,
     revisions: u64,
@@ -671,12 +685,9 @@ impl<E: 'static> Journal<'_, E> {
         let owner = handler.owner();
         let readonly = handler.readonly();
         let already_active = self.active.contains(&owner);
-        if self.calls >= 65_536
-            || (readonly && self.readonly_depth >= 128)
-            || (!readonly && already_active)
-        {
+        if (readonly && self.readonly_depth >= 128) || (!readonly && already_active) {
             let error = configuration(
-                "recursive mutable owner entry or request depth/count limit exceeded",
+                "recursive mutable owner entry or readonly request depth limit exceeded",
             );
             self.failed = Some(error.clone());
             return Err(error);
@@ -689,7 +700,6 @@ impl<E: 'static> Journal<'_, E> {
         } else {
             self.mutable_started = true;
         }
-        self.calls += 1;
         let result = handler.run(self, input);
         if readonly {
             self.readonly_depth -= 1;
@@ -705,14 +715,37 @@ impl<E: 'static> Journal<'_, E> {
         }
         result
     }
+    fn next_causal_depth(&mut self) -> Result<u32, Error> {
+        let next = self
+            .causal_depth
+            .checked_add(1)
+            .filter(|depth| *depth <= self.causal_depth_limit);
+        match next {
+            Some(depth) => Ok(depth),
+            None => self.rejected(configuration(
+                "queued owner dispatch causal depth limit exceeded",
+            )),
+        }
+    }
+    fn run_queued(
+        &mut self,
+        handler: Arc<dyn Handler<E>>,
+        input: Box<dyn Any>,
+        depth: u32,
+    ) -> Result<Box<dyn Any>, Error> {
+        let previous = std::mem::replace(&mut self.causal_depth, depth);
+        let result = self.run(handler, input);
+        self.causal_depth = previous;
+        result
+    }
     fn notify(&mut self) -> Result<(), Error> {
         if self.notifying {
             return Ok(());
         }
         self.notifying = true;
         let result = (|| {
-            while let Some((handler, notification)) = self.notifications.pop_front() {
-                self.run(handler, notification)?;
+            while let Some((handler, notification, depth)) = self.notifications.pop_front() {
+                self.run_queued(handler, notification, depth)?;
             }
             Ok(())
         })();
@@ -750,13 +783,13 @@ impl<E: 'static> Journal<'_, E> {
             .map_err(|_| Error::Unavailable)
     }
     fn drain(&mut self) -> Result<(), Error> {
-        while let Some((key, input)) = self.pending.pop_front() {
+        while let Some((key, input, depth)) = self.pending.pop_front() {
             let handler = self
                 .requests
                 .get(&key)
                 .cloned()
                 .ok_or_else(|| configuration("unregistered deferred request"))?;
-            self.run(handler, input)?;
+            self.run_queued(handler, input, depth)?;
         }
         Ok(())
     }
@@ -946,22 +979,22 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerTxn<'_, '_, O, E> {
     /// callbacks and consumes no public event sequence or revision. A source
     /// publishes its authoritative public gameplay record separately with emit.
     pub fn publish<T: Clone + 'static>(&mut self, notification: T) -> Result<(), Error> {
+        if !self
+            .journal
+            .subscribers
+            .get(&TypeId::of::<T>())
+            .is_some_and(|subscribers| !subscribers.is_empty())
+        {
+            return Ok(());
+        }
+        let depth = self.journal.next_causal_depth()?;
         if let Some(subscribers) = self.journal.subscribers.get(&TypeId::of::<T>()) {
-            if self
-                .journal
-                .notifications
-                .len()
-                .saturating_add(subscribers.len())
-                > 65_536
-            {
-                return self
-                    .journal
-                    .rejected(configuration("typed topic notification limit exceeded"));
-            }
             for subscriber in subscribers {
-                self.journal
-                    .notifications
-                    .push_back((subscriber.clone(), Box::new(notification.clone())));
+                self.journal.notifications.push_back((
+                    subscriber.clone(),
+                    Box::new(notification.clone()),
+                    depth,
+                ));
             }
         }
         Ok(())
@@ -1024,14 +1057,10 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerTxn<'_, '_, O, E> {
                 .journal
                 .rejected(configuration("unregistered deferred request"));
         }
-        if self.journal.pending.len() >= 65_536 {
-            return self
-                .journal
-                .rejected(configuration("owner notification limit exceeded"));
-        }
+        let depth = self.journal.next_causal_depth()?;
         self.journal
             .pending
-            .push_back((TypeId::of::<Q>(), Box::new(request)));
+            .push_back((TypeId::of::<Q>(), Box::new(request), depth));
         Ok(())
     }
     pub fn reserve_ids(&mut self, count: u64) -> Result<StableId, Error> {
