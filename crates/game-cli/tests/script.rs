@@ -177,12 +177,9 @@ fn an_encounter_is_playable_through_the_text_client_and_ordinary_views() {
     assert_eq!(sim.time(), SimTime(24_000));
     assert!(
         sim.canonical_state()
-            .state
-            .combat
-            .as_ref()
-            .unwrap()
-            .captivity
-            .contains_key(&target)
+            .components
+            .iter::<game_assembly::combat::Captivity>()
+            .any(|(_, row)| row.actor == target)
     );
 }
 
@@ -346,17 +343,13 @@ fn agreement_text_commands_record_promises_and_deliver_actual_cargo() {
         .id;
     let cargo = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == ruler)
         .unwrap()
         .inventory;
     let destination = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == recipient)
         .unwrap()
         .inventory;
@@ -480,9 +473,7 @@ fn text_client_exposes_refusal_and_resistance_without_granting_goods() {
         .id;
     let cargo = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == view.ruler)
         .unwrap()
         .inventory;
@@ -766,14 +757,8 @@ fn a_captive_can_attempt_escape_through_ordinary_text_commands() {
     let execution = Execution::default();
     let mut sim = Simulation::new("force-fixture", 88, execution.clone()).unwrap();
     let ruler = sim.observe().ruler;
-    let captor = sim.canonical_state().state.people[3].id;
-    let people: Vec<_> = sim
-        .canonical_state()
-        .state
-        .people
-        .iter()
-        .map(|p| p.id)
-        .collect();
+    let captor = sim.canonical_state().person_at(3).id;
+    let people: Vec<_> = sim.canonical_state().people().map(|p| p.id).collect();
     for actor in people {
         sim.debug_actor_command(actor, Command::Cancel).unwrap();
         sim.debug_set_personality(
@@ -822,16 +807,10 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
         + world.rules.infancy.0;
     let delta = childhood - sim.time().0;
     game_cli::execute(&mut sim, &format!("run {delta}ms"), &execution).unwrap();
-    let teacher = *sim
-        .canonical_state()
-        .state
-        .lineage
-        .as_ref()
-        .unwrap()
-        .guardians
-        .keys()
+    let teacher = game_assembly::lineage::guardians(sim.canonical_state().components)
         .next()
-        .unwrap();
+        .unwrap()
+        .0;
     for _ in 0..2 {
         let mut completed = false;
         for _ in 0..12 {
@@ -902,22 +881,14 @@ fn childhood_guidance_activation_and_cost_choices_are_playable_through_text() {
 fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_stock() {
     let execution = Execution::default();
     let mut sim = Simulation::new("force-fixture", 88, execution.clone()).unwrap();
-    let guardian = *sim
-        .canonical_state()
-        .state
-        .lineage
-        .as_ref()
-        .unwrap()
-        .guardians
-        .keys()
+    let guardian = game_assembly::lineage::guardians(sim.canonical_state().components)
         .next()
-        .unwrap();
+        .unwrap()
+        .0;
     let ruler = sim.observe().ruler;
     for person in sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .map(|p| p.id)
         .collect::<Vec<_>>()
     {
@@ -942,9 +913,7 @@ fn a_guardian_food_request_delivers_existing_food_without_graduation_or_free_sto
         .0;
     let cargo = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .find(|p| p.id == ruler)
         .unwrap()
         .inventory;

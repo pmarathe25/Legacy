@@ -4,6 +4,95 @@ use crate::compute;
 use game_api::{InventoryId, PersonId};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
+use std::time::Instant;
+
+/// Timings from the real global interval wrapper on the small generic kernel.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct IntervalStagingSample {
+    pub wrapper_ns: u128,
+    pub evaluation_ns: u128,
+    pub prepare_interval_ns: u128,
+    pub publish_interval_ns: u128,
+    pub actors: usize,
+    pub retained_history: usize,
+    pub arriving: bool,
+}
+
+/// Construct a simple generic-kernel population, add old synthetic failed-transfer
+/// records, then measure one production prepare+commit interval. History is counter
+/// stress only: these receipts were not produced by a played scenario. Fixture and
+/// history construction are outside the measured region.
+#[doc(hidden)]
+pub fn interval_staging_sample(
+    actors: usize,
+    workers: usize,
+    retained_history: usize,
+    arriving: bool,
+) -> Result<IntervalStagingSample, game_api::Error> {
+    use crate::{Execution, Simulation};
+    use game_api::{Command, EventKind, SimDuration, SimTime, Submission};
+
+    let mut simulation = Simulation::kernel_fixture(
+        0x1a7e_2026,
+        actors,
+        Execution {
+            workers,
+            reverse_jobs: false,
+        },
+    )?;
+    let people: Vec<_> = simulation.people().cloned().collect();
+    if arriving {
+        let destination = simulation.host.state.areas[1].id;
+        simulation.submit(Submission {
+            caller_sequence: 1,
+            command: Command::Move { destination },
+        })?;
+    }
+    let receipts = (0..retained_history)
+        .map(|index| EventKind::TransferFailed {
+            actor: people[index % people.len()].id,
+            source: people[index % people.len()].inventory,
+        })
+        .collect();
+    simulation.host.publish_many(receipts)?;
+    // Consume the 60-second review boundary in every case. The arrival sample
+    // then measures the next engine-selected boundary at the journey's arrival.
+    simulation.advance(SimDuration(60_000))?;
+    simulation.profile = crate::Profile::default();
+    let requested = SimTime(simulation.time().0 + 60_000);
+    let boundary = simulation.engine.next_boundary(&simulation, requested)?;
+    let first_event = simulation.host.next_event();
+    let started = Instant::now();
+    let prepared = simulation.prepare_world_step(boundary)?;
+    simulation.commit_prepared_step(prepared)?;
+    let wrapper_ns = started.elapsed().as_nanos();
+    let published_arrival = simulation
+        .host
+        .events_since(first_event - 1)
+        .iter()
+        .any(|record| matches!(record.event, EventKind::Arrived { .. }));
+    assert_eq!(
+        published_arrival, arriving,
+        "arrival boundary fixture mismatch"
+    );
+    let profile = simulation.profile();
+    Ok(IntervalStagingSample {
+        wrapper_ns,
+        evaluation_ns: profile.evaluation_ns,
+        prepare_interval_ns: *profile
+            .phases_ns
+            .get("transaction.prepare_interval")
+            .unwrap_or(&0),
+        publish_interval_ns: *profile
+            .phases_ns
+            .get("transaction.publish_interval")
+            .unwrap_or(&0),
+        actors,
+        retained_history,
+        arriving,
+    })
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {

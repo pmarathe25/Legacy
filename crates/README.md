@@ -1,105 +1,77 @@
 # Crate boundaries
 
-Domain crates own game data and the systems that change it. The playable game assumes all systems are available; modularity serves independent development and testing. `game-sim` supplies deterministic scheduling and parallel execution. `game-world` provides generic host infrastructure. `game-assembly` composes the playable simulation and presents it through `game-api`; its remaining domain algorithms are being moved into their owners.
+Domain crates own game records and the rules that change them. `game-assembly` composes the playable simulation, registers component schemas and systems, and binds commands and observations. `game-world` supplies feature-neutral storage and publication; `game-sim` supplies the clock, deadlines, and bounded execution.
 
-## Dependency graph
+**Content:** Opening assets, crops, recipes, environment data, and human definitions are authored in TOML. Opening customs are validated definitions resolved by `game-openings` into institution, property, and agreement types. Saves retain the selected definitions for deterministic continuation; see [`content/README.md`](../content/README.md).
 
-An arrow means a production Cargo dependency, from consumer to provider. The domain node groups the 23 feature crates; its internal edges are listed below. Development dependencies are omitted.
+## Production workspace dependencies
 
-```mermaid
-flowchart TD
-    CLI[game-cli] --> Session[game-session]
-    CLI --> Assembly[game-assembly]
-    CLI --> API[game-api]
-    Session --> API
-    Assembly --> API
-    Assembly --> Sim[game-sim]
-    Assembly --> World[game-world]
-    World --> Sim
-    World --> ECS
-    World --> Core
-    Assembly --> Content[game-content]
-    Assembly --> ECS
-    Assembly --> Land[game-land]
-    Assembly --> Spatial[game-spatial]
-    Spatial --> ECS
-    Spatial --> Core
-    Land --> ECS
-    Land --> Core
-    Domains -->|soil components| Land
-    Domains -->|typed component access| ECS[game-ecs]
-    ECS --> Core
-    ECS --> Backend[private ECS backend]
-    Assembly --> Domains[Domain crates]
-    API -->|public types from a subset| Domains
-    Sim --> Core[game-core]
-    Content --> Core
-    Domains --> Core
-    Domains -. selected content loaders .-> Content
-```
+Each row lists direct production dependencies declared by that crate's current `Cargo.toml`. The table covers the 35 workspace crates. An arrow means consumer → provider; `?` marks an optional dependency. Third-party and development dependencies are omitted.
 
-The graph collapses `game-assembly`'s dependency on every domain crate and `game-api`'s dependencies on domain public types. `game-api` and `game-assembly` also depend directly on `game-core`. The API imports agreements, agriculture, armies, characters, conflict, ecology, health, invocation, lineage, missions, physiology, projects, property, realm, society, and transport.
+| Crate | Workspace providers |
+| --- | --- |
+| `game-agreements` | `game-cargo`, `game-core`, `game-ecs`, `game-logistics`, `game-property`, `game-transport` |
+| `game-agriculture` | `game-content?`, `game-core`, `game-ecs`, `game-land` |
+| `game-api` | `game-agreements`, `game-agriculture`, `game-armies`, `game-characters`, `game-conflict`, `game-core`, `game-ecology`, `game-health`, `game-invocation`, `game-lineage`, `game-missions`, `game-physiology`, `game-projects`, `game-property`, `game-realm`, `game-society`, `game-transport` |
+| `game-armies` | `game-conflict`, `game-core`, `game-ecs`, `game-missions` |
+| `game-assembly` | `game-agreements`, `game-agriculture`, `game-api`, `game-armies`, `game-cargo`, `game-characters`, `game-conflict`, `game-content`, `game-core`, `game-ecology`, `game-ecs`, `game-environment`, `game-genetics`, `game-health`, `game-invocation`, `game-land`, `game-lifecycle`, `game-lineage`, `game-logistics`, `game-missions`, `game-openings`, `game-physiology`, `game-projects`, `game-property`, `game-realm`, `game-sim`, `game-skills`, `game-society`, `game-spatial`, `game-transport`, `game-workshop`, `game-world` |
+| `game-cargo` | `game-core`, `game-ecs`, `game-logistics` |
+| `game-characters` | `game-core`, `game-ecs`, `game-genetics?`, `game-logistics`, `game-spatial` |
+| `game-cli` | `game-api`, `game-assembly`, `game-content`, `game-session` |
+| `game-conflict` | `game-cargo`, `game-core`, `game-ecs`, `game-physiology`, `game-skills`, `game-spatial`, `game-transport` |
+| `game-content` | `game-core` |
+| `game-core` | — |
+| `game-ecology` | `game-core`, `game-ecs`, `game-land`, `game-logistics` |
+| `game-ecs` | `game-core` |
+| `game-environment` | `game-content?`, `game-core`, `game-ecs` |
+| `game-genetics` | `game-core`, `game-ecs` |
+| `game-health` | `game-core`, `game-ecs` |
+| `game-invocation` | `game-cargo`, `game-characters`, `game-core`, `game-ecs`, `game-society` |
+| `game-land` | `game-core`, `game-ecs` |
+| `game-lifecycle` | `game-core`, `game-ecs`, `game-genetics?` |
+| `game-lineage` | `game-core`, `game-ecs`, `game-logistics`, `game-transport` |
+| `game-logistics` | `game-core` |
+| `game-missions` | `game-agreements`, `game-cargo`, `game-characters`, `game-conflict`, `game-core`, `game-ecs`, `game-logistics`, `game-spatial`, `game-transport` |
+| `game-openings` | `game-agreements`, `game-content`, `game-core`, `game-ecology`, `game-property`, `game-society` |
+| `game-physiology` | `game-core`, `game-ecs`, `game-genetics?` |
+| `game-projects` | `game-agreements`, `game-cargo`, `game-core`, `game-ecs`, `game-logistics`, `game-workshop` |
+| `game-property` | `game-cargo`, `game-core`, `game-ecs`, `game-logistics` |
+| `game-realm` | `game-agreements`, `game-cargo`, `game-characters`, `game-core`, `game-ecs`, `game-missions`, `game-society` |
+| `game-session` | `game-api` |
+| `game-sim` | `game-core` |
+| `game-skills` | `game-core`, `game-ecs` |
+| `game-society` | `game-agreements`, `game-cargo`, `game-characters`, `game-core`, `game-ecs`, `game-missions`, `game-property` |
+| `game-spatial` | `game-core`, `game-ecs` |
+| `game-transport` | `game-core`, `game-ecs`, `game-spatial` |
+| `game-workshop` | `game-cargo`, `game-content`, `game-core`, `game-ecs`, `game-skills` |
+| `game-world` | `game-core`, `game-ecs`, `game-sim` |
 
-Every domain crate depends on `game-core` for shared IDs, time, quantities, and errors. Their additional production dependencies are:
+The application depends on a broad set of feature crates to compose one playable simulation. Feature-to-feature dependencies are direct when one owner consumes another owner's typed records or effects. For example, Armies uses Missions and Conflict; Society uses Agreements, Property, Characters, Cargo, and Missions; Missions uses Conflict and Transport. Dependency tests prevent feature crates from importing the assembly and keep the selected ECS engine private to `game-ecs`.
 
-| Consumer | Providers | Shared interface |
-| --- | --- | --- |
-| `game-agreements` | `game-ecs`, `game-cargo`, `game-property`, `game-logistics`, `game-transport` | Native promises, personal knowledge, work and reports; conserved receipt credit and owner-planned fulfillment |
-| `game-agriculture` | `game-ecs`, `game-land`; `game-content` (optional) | Field, crop, soil and cultivation joins; crop-definition loading |
-| `game-armies` | `game-missions` | Objectives for autonomous leaders |
-| `game-cargo` | `game-ecs` | Inventory components, conserved loading and transfer effects, and typed stock access |
-| `game-characters` | `game-ecs`, `game-logistics`, `game-spatial`; `game-genetics` (optional) | Personal mind and temperament components; material goals; shared known-graph navigation; opaque inheritable temperament loci |
-| `game-conflict` | `game-ecs`, `game-cargo`, `game-skills` | Physical restraint stocks; combat practice effects |
-| `game-ecology` | `game-ecs`, `game-land`, `game-logistics` | Natural resources, plots, gathering, personal knowledge and request components; shared soil; sparse daily renewal effects; typed material offers |
-| `game-environment` | `game-ecs`; `game-content` (optional) | Local climate and weather components; typed calendar and climate loading |
-| `game-genetics` | `game-ecs` | Genomes and frozen inheritance components; opaque allele readers |
-| `game-health` | `game-ecs` | Clinical state, work, water quality, shelters, occupancy, consent offers, and remembered health components; guarded action and interval effects |
-| `game-lifecycle` | `game-ecs`; `game-genetics` (optional) | Life and pregnancy components; guarded age, lifespan responses, and birth transitions; opaque inheritable reproductive characteristics |
-| `game-invocation` | `game-ecs`, `game-characters`, `game-cargo`, `game-society` | Native control sessions, costs, warnings, archives, records and memory actions; Cargo conservation; sparse current learning; historical institutional snapshots |
-| `game-lineage` | `game-logistics`, `game-transport`, `game-ecs` | Care provision delivery requirements and receipts; guardian rescue from personal observations and actual carrying support |
-| `game-missions` | `game-ecs`, `game-agreements`, `game-cargo`, `game-characters`, `game-conflict`, `game-logistics`, `game-spatial`, `game-transport` | Four native commitment, recruitment, knowledge and talk columns; sparse receipts and speech; material, tactical and reinforcement effects |
-| `game-openings` | `game-content`, `game-ecology`, `game-property` | Authored opening and settlement declarations, validated independently of simulation startup |
-| `game-physiology` | `game-ecs`; `game-genetics` (optional) | Body components, numerical integration, guarded instant charges and survival receipts; opaque inheritable physical characteristics |
-| `game-projects` | `game-ecs`, `game-agreements`, `game-workshop` | Native plans, enterprises, construction and personal knowledge; guarded material funding and selected-recipe accounts |
-| `game-transport` | `game-ecs`, `game-spatial` | Native routes, carrying groups, lift offers and jobs, approaches, paused routes and dated support knowledge; guarded motion, physical placement and shared navigation |
-| `game-property` | `game-ecs` | Native claims, incidents, stock provenance, personal attitudes, dated knowledge, actions and request deadlines; guarded sparse changes |
-| `game-realm` | `game-ecs`, `game-cargo`, `game-society`, `game-characters`, `game-agreements`, `game-missions` | Native commitments, personal evidence, reports and requests; receiving owner judgments and staged institutional or work publications |
-| `game-society` | `game-agreements`, `game-ecs`, `game-property` | Native obligations and physical custody for institutional duties, exclusions and disputes |
-| `game-skills` | `game-ecs` | Personal mastery and semantic credit components |
-| `game-workshop` | `game-ecs`, `game-cargo`, `game-skills`, `game-content` | Native sites and jobs; saved recipe definitions, material inputs and outputs, work rates and craft practice effects |
+## Shared storage and transaction boundary
 
-`game-logistics` has no other production dependencies. `game-land` is a shared soil provider alongside the spatial foundation. Historical optional integrations remain in Cargo manifests; feature disablement is outside the current architecture work.
+**Storage:** `game-ecs` registers plain Rust component types by schema key and stores rows under stable game IDs. Its selected ECS engine stays behind the adapter. Features own their row types and validation; runtime structs generally retain rules or cursors while entity records live in the shared store.
 
-## Components and systems
+**Opening reads:** [`ReadSet`](game-ecs/src/reads.rs) can retain selected present or absent rows, entity presence, and scoped component membership. It validates those facts before staging. After an owner appends its edits, `ReadSet::bind` returns a `ReadGuard` containing the exact admitted projection and writes. Later validation rejects changed opening facts, altered projected results, unadmitted edits, or a different batch. `Batch::projected` provides indexed row projections; membership witnesses protect the selected set while allowing declared additions or removals.
 
-**Storage boundary:** `game-ecs` hides the chosen ECS engine. Feature data uses ordinary Rust types, stable game IDs, registered save schemas, and typed joins. Native entity handles, engine derives, and query internals remain in its private adapter. `game-sim` retains logical scheduling and per-simulation bounded execution.
+**Publication:** [`Transaction`](game-world/src/lib.rs) carries a host opening, one shared batch, owner guards, logical time, ID and event budgets, events, and revision changes. `GenericHost::commit_transaction` checks the host opening and budgets, validates all owner guards, then applies the component batch before advancing the clock and counters and publishing events. A failed check leaves canonical state and publication cursors unchanged. Owners validate their own rules and bindings before the host commits.
 
-**Ownership:** The host owns one component store. Each feature owns its component types, validation, rules, and prepared changes. Stable IDs join components on shared entities. Inventories, physical inventory custody, agreement records, personal agreement knowledge, owed work and frozen reports, property provenance, claims and incidents, personal property knowledge and actions, invocation control sessions, costs, warnings, archives, records and memory actions, agriculture, physiology bodies and development, lives and pregnancies, genomes and inheritance, personal minds, stock knowledge and temperament, regional commitments, personal regional evidence and reports, health state, personal skills, workshop sites and jobs, shared locations, local weather, natural deposits, and plots use this store; other features are being migrated. Query caches belong to running systems and rebuild after cloning or loading a save. Systems receive the component rows or typed facts they need; the composition applies material and other cross-feature effects through the receiving feature's interface.
+**Composition:** Assembly supplies factual adapters, binds public commands and views, and orders prepared owner effects in a transaction. Each receiving feature owns its reactions. Global intervals prepare their ordered work in a preview host and publish the resulting rows, clock, counters, and events atomically. Owner tests exercise the same entry points without constructing the playable assembly.
 
-**Behavior boundary:** Assembly registers systems and binds application inputs and outputs. A feature owns how it chooses targets, interprets facts, validates actions, progresses work, and reacts to events. A direct dependency between features is appropriate when one consumes a small public interface from another. For example, trait providers implement genetics' inheritance contract; workshop uses Cargo's inventory effects and Skills' practice effects. Historical content likewise enters Characters through its `MemoryLearner` trait: the receiving owner retains newer knowledge, current access rights, and learned routes. These interactions do not need assembly-owned rules. Factual ports may expose bodily state or remembered relations, but their adapters must not hide selection or scoring policy.
+## Feature owners
 
-**Composed changes:** Each owner prepares and validates its changes. Owners can append their component effects to one shared batch, which generic storage infrastructure validates and applies atomically. Assembly can order these operations and bind receipts to handlers; the receiving feature owns the reaction to a receipt. Cross-feature tests should construct the relevant owners and a small store directly, without the playable simulation. The dependency guard in `game-assembly/tests/domain_boundaries.rs` forbids features from importing assembly, including through test dependencies. This guard protects dependency direction; source review and executable behavior tests also establish policy ownership.
+**Armies:** `game-armies` stores `Army`, personal `Knowledge`, `Talk`, `Queue`, and `Approach` rows in the shared store. Its `World` retains rules and review timing. `Kernel` prepares relationship changes, while `Systems` owns invitation, participation, order, response, autonomy, and coordinated approach policy through factual `Ports`. The remaining adapter and scenario composition live in `game-assembly`. See [`state.rs`](game-armies/src/state.rs) and [`systems.rs`](game-armies/src/systems.rs).
 
-Owner tests may use the generic `game-world` host to exercise publication counters and atomic admission. Production features cannot depend on that host; no feature may import the playable assembly even for tests.
+**Social:** `game-characters` owns canonical personal interaction, participation, and development rows, plus admission and completion hooks. `game-society` owns institutional membership, proposals, judgments, enforcement cases, and policy decisions. Their interfaces exchange prepared effects and observations; local discovery, contact facts, and publication still require composition. See [`social.rs`](game-characters/src/social.rs), [`personal.rs`](game-society/src/personal.rs), and [`enforcement_systems.rs`](game-society/src/enforcement_systems.rs).
 
-**Engine independence:** Feature interfaces expose plain values, borrowed component rows, and typed prepared changes. They do not expose engine entity handles, derives, query types, or schedules. Replacing the engine changes the private `game-ecs` adapter; its callers keep the same interfaces. Systems order authoritative results by stable game IDs because engine iteration order is unspecified.
+**Conflict and Force:** `game-conflict::World` retains combat rules; maps, encounters, fighters, and captivity use canonical component rows. `game-conflict::force::Runtime` retains force rules and its event cursor; yielding, restraint, and escape rows are also in the shared store. Combat and Force expose prepared owner operations and guarded effects. Assembly adapts body, location, cargo, and mission facts and sequences the resulting changes. See [`lib.rs`](game-conflict/src/lib.rs), [`force.rs`](game-conflict/src/force.rs), and [`policy.rs`](game-conflict/src/force/policy.rs).
 
-**Shared space:** Features share `game-core::AreaId` and `Location`, rather than defining separate maps. Plots and fields refer to an area; `game-land` owns their shared soil component; weather cells use the same area IDs. Converting a plot into a field retains that soil on the same entity. `Location::cell()` keeps a road segment in its departure cell until its scheduled arrival; carried entities use their resolved carrier location. `game-spatial` owns location storage and carrier-chain resolution; transport owns carrying decisions and movement effects. Missing anchors and cycles are explicit errors. Different spatial resolutions will use explicit mappings within this common model.
+**Enforcement:** `game-society` owns enforcement policy, case evidence, hearings, remedies, and dispatch preparation. Dispatch proposals use Mission and Agreement interfaces; confinement uses Conflict's physical effects. Enforcement records and personal knowledge are component rows, while `game-assembly` supplies factual ports and binds public events and activities. See [`enforcement.rs`](game-society/src/enforcement.rs) and [`enforcement_storage.rs`](game-society/src/enforcement_storage.rs).
 
-Spatial's borrowed `LocalRoster` supplies raw stationary, resolved area, cell and road candidate IDs to local systems. Build it once per immutable phase, drop its borrow before changing locations or entity membership, and rebuild for the next phase. It is shared query infrastructure; features retain their own eligibility and exact contact rules. Spatial also owns deterministic shortest paths over plain directed area graphs.
+**Person progress:** `game-skills` stores per-person `Skills` rows and converts factual activity and interaction intervals into guarded practice effects. `game-lineage` stores invocation lesson learning as a person component and owns its threshold, lesson, and guardian priority decisions. Characters owns canonical temperament and social development rows. Assembly gathers body, activity, and contact facts and sequences owner-prepared changes. See [`learning.rs`](game-skills/src/learning.rs), [`learning.rs`](game-lineage/src/learning.rs), and [`temperament.rs`](game-characters/src/temperament.rs).
 
-**Local inputs:** Environment owns local climate and weather components on area entities. Agriculture joins `Field`, `Crop`, and `Soil` by `SiteId`, then looks up weather for the field's area. Crop growth consumes agriculture's `WeatherFacts`, supplied by the composition from environment observations. Agriculture has no dependency on environment's runtime or global climate state.
+## Execution and measured limits
 
-**Person systems:** Physiology integrates `Body` from activity flags, body limits, and external contributions. Workshop owns the optional `Job` component, including paused progress and frozen work rates. The composition joins bodies, activity, and optional jobs for interval evaluation. The existing `Activity` enum remains a coordination component while task payloads move to their feature owners; physiology does not depend on it.
+The bounded executor reuses a fixed worker pool and merges keyed results in stable order. The interval transaction currently copies the shared store and evaluates guarded differences before publication; this serial work scales with attached rows and limits the benefit from more workers. Runnable local-system and complete-game benchmarks, their fixture boundaries, and measured limits are documented in [`game-assembly/README.md`](game-assembly/README.md). Local ECS or feature timings do not establish complete-game throughput.
 
-**Scheduling:** `game-sim` orders registered phases by explicit dependencies and clips an advance to the earliest predicted boundary. Features can use daily boundaries, work-completion deadlines, or other simulation intervals. The composition prepares a transaction from immutable inputs, then commits it before publishing the closing clock. Event-triggered behavior is currently connected by the composition; the engine does not provide a general event subscription bus.
-
-**Parallel work:** The bounded executor evaluates independently keyed jobs from immutable inputs and merges results in logical-key order. Agriculture's growth batch is one example: each matched crop, soil, definition, and local weather input can be evaluated separately. Prepared changes retain the affected rows and validate their opening values before publication. Worker completion order does not determine game outcomes.
-
-**Inherited traits:** Physiology, characters, and lifecycle implement genetics' `HeritableCharacteristic` interface to declare opaque loci. Genetics owns inheritance, crossover, and mutation. Its `AlleleSource` interface supplies raw allele values from shared genomes or prepared founder rows. Trait owners interpret those values and apply their own development or experience; genetics does not encode their trait meanings.
-
-## Authored content
-
-`game-content` reads human-editable TOML into feature-owned definitions. Features validate those definitions; saves retain their definitions and content stamps. Crops refer to stable definition IDs, so adding a crop using existing mechanics requires editing data rather than recompiling code. See [content/README.md](../content/README.md) for the available files.
-
-The content migration is ongoing: goods and several other concrete game types still use code definitions. New mechanics belong in systems; new instances of an existing mechanic belong in content files.
+For content files and the definition loading boundary, see [`content/README.md`](../content/README.md).

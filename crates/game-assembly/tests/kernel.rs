@@ -27,8 +27,10 @@ fn contested(sim: &mut Simulation) -> InventoryId {
         .find(|i| matches!(i.location, InventoryLocation::Area(_)))
         .unwrap()
         .id;
-    let intentions = state.state.people[3..5]
-        .iter()
+    let intentions = state
+        .people()
+        .skip(3)
+        .take(2)
         .map(|p| TransferIntent {
             actor: p.id,
             source,
@@ -54,12 +56,12 @@ fn arrival_consumes_elapsed_time_and_cannot_credit_travel_as_work() {
             ..
         }
     ));
-    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().person_at(0).work_units, 0);
     sim.advance(SimDuration(1)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(2)));
-    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().person_at(0).work_units, 0);
     sim.advance(MINUTE).unwrap();
-    assert_eq!(sim.canonical_state().state.people[0].work_units, 1_000);
+    assert_eq!(sim.canonical_state().person_at(0).work_units, 1_000);
     assert!(matches!(
         sim.canonical_state().events[1],
         game_world::Published {
@@ -105,8 +107,10 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
         1_000
     );
     assert_eq!(
-        state.state.people[3..5]
-            .iter()
+        state
+            .people()
+            .skip(3)
+            .take(2)
             .filter(|p| game_cargo::inventory(state.components, p.inventory)
                 .expect("stock exists")
                 .quantity
@@ -126,7 +130,7 @@ fn competing_transfers_conserve_stock_and_carry_it_once() {
         game_cargo::inventory(state.components, source)
             .expect("stock exists")
             .last_granted,
-        Some(state.state.people[3].id)
+        Some(state.person_at(3).id)
     );
 }
 
@@ -187,7 +191,7 @@ fn duplicate_commands_are_idempotent_and_replacement_finishes_current_leg() {
     ));
     sim.advance(SimDuration(300_000)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
-    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().person_at(0).work_units, 0);
 }
 
 #[test]
@@ -268,11 +272,11 @@ fn replacing_a_route_with_the_current_leg_endpoint_stops_after_that_leg() {
     ));
     sim.advance(SimDuration(130_000)).unwrap();
     assert_eq!(sim.observe().location, Location::AtArea(AreaId(3)));
-    assert_eq!(sim.canonical_state().state.people[0].work_units, 0);
+    assert_eq!(sim.canonical_state().person_at(0).work_units, 0);
     assert!(
         game_transport::route_steps(
             sim.canonical_state().components,
-            sim.canonical_state().state.people[0].id
+            sim.canonical_state().person_at(0).id
         )
         .is_empty()
     );

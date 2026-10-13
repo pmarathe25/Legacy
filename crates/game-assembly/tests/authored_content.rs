@@ -141,7 +141,7 @@ fn edited_recipe_controls_normal_work_and_is_saved_with_the_selected_site() {
         let state = sim.canonical_state();
         let (_, site) = game_workshop::sites(state.components).next().unwrap();
         assert_eq!(site.recipe, recipe_id);
-        let actor = state.state.people[craftsperson].id;
+        let actor = state.person_at(craftsperson).id;
         let tool = game_cargo::inventory(state.components, site.tool).unwrap();
         assert!(
             site.access.contains(&actor),

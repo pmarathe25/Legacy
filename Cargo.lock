@@ -435,6 +435,7 @@ dependencies = [
 name = "game-agriculture"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
  "game-content",
  "game-core",
  "game-ecs",
@@ -472,7 +473,9 @@ dependencies = [
 name = "game-armies"
 version = "0.1.0"
 dependencies = [
+ "game-conflict",
  "game-core",
+ "game-ecs",
  "game-missions",
  "serde",
  "serde_json",
@@ -526,6 +529,7 @@ version = "0.1.0"
 dependencies = [
  "game-core",
  "game-ecs",
+ "game-logistics",
  "serde",
  "serde_json",
 ]
@@ -565,7 +569,11 @@ dependencies = [
  "game-cargo",
  "game-core",
  "game-ecs",
+ "game-physiology",
  "game-skills",
+ "game-spatial",
+ "game-transport",
+ "game-world",
  "serde",
  "serde_json",
 ]
@@ -591,8 +599,10 @@ dependencies = [
 name = "game-ecology"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
  "game-core",
  "game-ecs",
+ "game-health",
  "game-land",
  "game-logistics",
  "serde",
@@ -634,6 +644,7 @@ dependencies = [
 name = "game-health"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
  "game-core",
  "game-ecs",
  "serde",
@@ -671,9 +682,22 @@ dependencies = [
 name = "game-lifecycle"
 version = "0.1.0"
 dependencies = [
+ "game-cargo",
+ "game-characters",
  "game-core",
  "game-ecs",
  "game-genetics",
+ "game-health",
+ "game-lineage",
+ "game-logistics",
+ "game-physiology",
+ "game-property",
+ "game-realm",
+ "game-sim",
+ "game-skills",
+ "game-society",
+ "game-spatial",
+ "game-world",
  "serde",
  "serde_json",
 ]
@@ -682,6 +706,7 @@ dependencies = [
 name = "game-lineage"
 version = "0.1.0"
 dependencies = [
+ "game-characters",
  "game-core",
  "game-ecs",
  "game-logistics",
@@ -720,10 +745,12 @@ dependencies = [
 name = "game-openings"
 version = "0.1.0"
 dependencies = [
+ "game-agreements",
  "game-content",
  "game-core",
  "game-ecology",
  "game-property",
+ "game-society",
  "serde",
  "serde_json",
 ]
@@ -732,9 +759,12 @@ dependencies = [
 name = "game-physiology"
 version = "0.1.0"
 dependencies = [
+ "game-conflict",
  "game-core",
  "game-ecs",
  "game-genetics",
+ "game-skills",
+ "game-spatial",
  "serde",
  "serde_json",
 ]
@@ -748,6 +778,7 @@ dependencies = [
  "game-content",
  "game-core",
  "game-ecs",
+ "game-logistics",
  "game-workshop",
  "serde",
  "serde_json",
@@ -758,8 +789,11 @@ name = "game-property"
 version = "0.1.0"
 dependencies = [
  "game-cargo",
+ "game-characters",
  "game-core",
  "game-ecs",
+ "game-health",
+ "game-logistics",
  "serde",
  "serde_json",
 ]
@@ -813,9 +847,14 @@ name = "game-society"
 version = "0.1.0"
 dependencies = [
  "game-agreements",
+ "game-cargo",
+ "game-characters",
  "game-core",
  "game-ecs",
+ "game-missions",
  "game-property",
+ "game-sim",
+ "game-world",
  "serde",
  "serde_json",
 ]

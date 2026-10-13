@@ -3,6 +3,14 @@ use game_assembly::*;
 use std::time::Instant;
 
 fn main() {
+    let maximum_population = std::env::args()
+        .find_map(|argument| {
+            argument
+                .strip_prefix("--max-population=")
+                .map(|value| value.parse::<usize>().expect("maximum population"))
+        })
+        .unwrap_or(usize::MAX);
+    assert!(maximum_population >= 15);
     println!(
         "kernel synthetic fixture; seed=1; build=release; rustc={}",
         command("rustc", &["--version"])
@@ -27,7 +35,10 @@ fn main() {
     let mut workers = vec![1, 2, 4, available];
     workers.sort_unstable();
     workers.dedup();
-    for population in [15, 1_000, 10_000, 20_000] {
+    for population in [15, 1_000, 10_000, 20_000]
+        .into_iter()
+        .filter(|population| *population <= maximum_population)
+    {
         let mut expected = None;
         for count in &workers {
             let mut samples = Vec::new();
@@ -47,8 +58,9 @@ fn main() {
                     .map(|(id, _)| id)
                     .last()
                     .unwrap();
-                let intents = state.state.people[3..]
-                    .iter()
+                let intents = state
+                    .people()
+                    .skip(3)
                     .map(|p| TransferIntent {
                         actor: p.id,
                         source,
@@ -98,7 +110,10 @@ fn main() {
             );
         }
     }
-    for population in [15, 1_000, 10_000] {
+    for population in [15, 1_000, 10_000]
+        .into_iter()
+        .filter(|population| *population <= maximum_population)
+    {
         for contested in [false, true] {
             let mut expected = None;
             for count in &workers {

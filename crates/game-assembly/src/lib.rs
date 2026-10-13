@@ -23,9 +23,11 @@ pub mod health;
 mod host;
 pub mod institutions;
 mod interruptions;
+mod interval_transaction;
 pub mod invocation;
 pub mod lineage;
 mod logistics;
+mod maintenance;
 pub mod missions;
 mod persistence;
 pub mod physical;
@@ -91,17 +93,7 @@ pub struct Area {
     pub links: Vec<Link>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Person {
-    pub id: PersonId,
-    pub role: Role,
-    pub inventory: InventoryId,
-    pub work_units: u64,
-    pub work_remainder: u64,
-    pub work_rate: u64,
-    pub hunger_exempt: bool,
-}
+pub use game_characters::Person;
 
 pub use game_cargo::{Inventory, InventoryLocation};
 
@@ -137,7 +129,6 @@ pub struct AssemblyState {
     pub scenario: ScenarioInfo,
     pub ruler: PersonId,
     pub areas: Vec<Area>,
-    pub people: Vec<Person>,
     pub physical: Option<physical::World>,
     pub decisions: Option<decisions::Runtime>,
     #[serde(default)]
@@ -191,6 +182,15 @@ pub struct CanonicalState<'a> {
     pub events: &'a [game_world::Published<EventKind>],
 }
 impl<'a> CanonicalState<'a> {
+    pub fn person(&self, actor: PersonId) -> Option<&'a Person> {
+        game_characters::person(self.components, actor)
+    }
+    pub fn person_at(&self, index: usize) -> &'a Person {
+        self.people().nth(index).expect("known person index")
+    }
+    pub fn people(&self) -> impl Iterator<Item = &'a Person> + 'a {
+        game_characters::persons(self.components).map(|(_, row)| row)
+    }
     fn from_host(host: &'a GameHost) -> Self {
         let parts = host.parts();
         Self {
@@ -212,6 +212,7 @@ pub struct Simulation {
     engine: Arc<engine_adapter::WorldEngine>,
     execution: Execution,
     profile: Profile,
+    person_ids: Vec<PersonId>,
     person_index: BTreeMap<PersonId, usize>,
     inventory_index: BTreeMap<InventoryLocation, Vec<InventoryId>>,
     pregnancy_index: BTreeMap<PersonId, PregnancyId>,
@@ -222,6 +223,54 @@ pub struct Simulation {
     environment_queries: game_environment::Queries,
     ecology_queries: game_ecology::Queries,
     mission_membership: game_missions::MembershipIndex,
+}
+
+struct CumulativeWorkPort<'a> {
+    simulation: &'a Simulation,
+    equipment: &'a BTreeMap<PersonId, bool>,
+}
+impl game_characters::people::WorkPort for CumulativeWorkPort<'_> {
+    fn opening_reads(&self) -> game_ecs::ReadSet {
+        let mut reads = game_ecs::ReadSet::new();
+        if self.simulation.host.state.physical.is_some() {
+            for id in reads
+                .membership::<game_cargo::Inventory>(&self.simulation.host.storage, |_, stock| {
+                    stock.good == Good::Tool
+                })
+            {
+                reads.read::<game_cargo::Inventory>(&self.simulation.host.storage, id);
+            }
+            for id in
+                reads.membership::<game_workshop::Job>(&self.simulation.host.storage, |_, _| true)
+            {
+                reads.read::<game_workshop::Job>(&self.simulation.host.storage, id);
+            }
+        }
+        reads
+    }
+    fn work_facts(&self, actor: PersonId) -> game_characters::people::WorkFacts {
+        let mut reads = game_ecs::ReadSet::new();
+        let id = game_ecs::StableId(actor.0);
+        let body = reads.read::<game_physiology::Body>(&self.simulation.host.storage, id);
+        let physical = self.simulation.host.state.physical.as_ref().map(|_| {
+            let body = body.expect("body exists");
+            let alive = body.vitals.alive;
+            let health = body.vitals.health;
+            let activity = reads
+                .read::<Activity>(&self.simulation.host.storage, id)
+                .expect("activity exists");
+            game_characters::people::PhysicalWorkFacts {
+                alive,
+                health,
+                working_activity: matches!(activity, Activity::Work { .. }),
+            }
+        });
+        game_characters::people::WorkFacts {
+            physical,
+            equipment_available: self.equipment.get(&actor).copied().unwrap_or(true),
+            reads,
+        }
+    }
 }
 
 pub fn scenarios() -> Vec<ScenarioInfo> {
@@ -474,7 +523,6 @@ impl Simulation {
             scenario: fixture_scenarios().remove(0),
             ruler: PersonId(0),
             areas: Vec::new(),
-            people: Vec::new(),
             due: BTreeMap::new(),
             accepted: BTreeMap::new(),
             next_command: 1,
@@ -503,6 +551,7 @@ impl Simulation {
         let mut host = GameHost::with_storage(Components::new()?, seed, state);
         for name in ["village", "farm", "forest"] {
             let id = AreaId(host.allocate_id()?.0);
+            host.storage.ensure(game_ecs::StableId(id.0))?;
             host.state.areas.push(Area {
                 id,
                 name: name.into(),
@@ -533,15 +582,18 @@ impl Simulation {
             if i == 0 {
                 host.state.ruler = id;
             }
-            host.state.people.push(Person {
-                id,
-                role,
-                inventory,
-                work_units: 0,
-                work_remainder: 0,
-                work_rate: 1_000 + i as u64 % 7,
-                hunger_exempt: role == Role::Guardian,
-            });
+            game_characters::insert_person(
+                &mut host.storage,
+                Person {
+                    id,
+                    role,
+                    inventory,
+                    work_units: 0,
+                    work_remainder: 0,
+                    work_rate: 1_000 + i as u64 % 7,
+                    hunger_exempt: role == Role::Guardian,
+                },
+            )?;
             game_spatial::set_location(
                 &mut host.storage,
                 game_ecs::StableId((id).0),
@@ -562,6 +614,9 @@ impl Simulation {
             )?;
         }
         let store = InventoryId(host.allocate_id()?.0);
+        let people = game_characters::person_ids(&host.storage)
+            .into_iter()
+            .collect();
         game_cargo::insert_inventory(
             &mut host.storage,
             Inventory {
@@ -569,7 +624,7 @@ impl Simulation {
                 location: InventoryLocation::Area(village),
                 quantity: Quantity(1_000),
                 capacity: Quantity(1_000_000),
-                access: host.state.people.iter().map(|p| p.id).collect(),
+                access: people,
                 last_granted: None,
                 good: Good::Food,
                 spoils_at: None,
@@ -586,13 +641,8 @@ impl Simulation {
             ));
         }
         let engine = Arc::new(engine_adapter::build(&execution)?);
-        let person_index = host
-            .state
-            .people
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.id, i))
-            .collect();
+        let person_ids = Vec::new();
+        let person_index = BTreeMap::new();
         let mut inventory_index = BTreeMap::<_, Vec<_>>::new();
         for i in game_cargo::inventories(&host.storage).map(|(_, row)| row) {
             inventory_index
@@ -630,20 +680,20 @@ impl Simulation {
             .collect();
         let mut dependent_index = BTreeMap::<AreaId, BTreeSet<PersonId>>::new();
         if host.state.development.is_some() {
-            for p in &host.state.people {
+            for p_id in game_characters::person_ids(&host.storage) {
                 if let Location::AtArea(area) =
-                    *game_spatial::location(&host.storage, game_ecs::StableId((p.id).0))
+                    *game_spatial::location(&host.storage, game_ecs::StableId((p_id).0))
                         .expect("location exists")
                     && matches!(
-                        game_lifecycle::life(&host.storage, p.id).unwrap().stage,
+                        game_lifecycle::life(&host.storage, p_id).unwrap().stage,
                         LifeStage::Infant | LifeStage::Child
                     )
-                    && game_physiology::body(&host.storage, p.id)
+                    && game_physiology::body(&host.storage, p_id)
                         .expect("body exists")
                         .vitals
                         .alive
                 {
-                    dependent_index.entry(area).or_default().insert(p.id);
+                    dependent_index.entry(area).or_default().insert(p_id);
                 }
             }
         }
@@ -654,11 +704,12 @@ impl Simulation {
             .query2_optional::<game_physiology::Body, Activity, game_workshop::Job>();
         let environment_queries = game_environment::Runtime::bind(&mut host.storage);
         let ecology_queries = game_ecology::Runtime::bind(&mut host.storage);
-        let sim = Self {
+        let mut sim = Self {
             host,
             engine,
             execution,
             profile: Profile::default(),
+            person_ids,
             person_index,
             inventory_index,
             pregnancy_index,
@@ -670,6 +721,7 @@ impl Simulation {
             environment_queries,
             ecology_queries,
         };
+        sim.rebuild_person_index();
         sim.host.storage.validate_land()?;
         sim.validate_environment()?;
         sim.validate_agriculture()?;
@@ -679,9 +731,30 @@ impl Simulation {
     }
 
     pub(crate) fn has_stock_access(&self, actor: PersonId, inventory: &Inventory) -> bool {
-        inventory.access.contains(&actor) || self.institution_allows_access(actor, inventory.id)
+        game_cargo::effective_access(
+            inventory.access.contains(&actor),
+            self.institution_allows_access(actor, inventory.id),
+        )
     }
 
+    pub fn person(&self, actor: PersonId) -> &Person {
+        game_characters::person(&self.host.storage, actor).expect("known person")
+    }
+    pub fn person_at(&self, index: usize) -> &Person {
+        self.person(self.person_ids[index])
+    }
+    pub fn people(&self) -> impl ExactSizeIterator<Item = &Person> + DoubleEndedIterator {
+        self.person_ids.iter().map(|actor| self.person(*actor))
+    }
+    pub(crate) fn rebuild_person_index(&mut self) {
+        self.person_ids = game_characters::person_ids(&self.host.storage);
+        self.person_index = self
+            .person_ids
+            .iter()
+            .enumerate()
+            .map(|(index, actor)| (*actor, index))
+            .collect();
+    }
     pub fn canonical_state(&self) -> CanonicalState<'_> {
         CanonicalState::from_host(&self.host)
     }
@@ -696,160 +769,158 @@ impl Simulation {
     }
 
     pub fn observe(&self) -> PlayerView {
-        let ruler = &self.host.state.people[self.person_index[&self.host.state.ruler]];
+        let ruler = self.person_at(self.person_index[&self.host.state.ruler]);
         let ruler_location = self.resolved_location(ruler.id);
-        let origin = match ruler_location {
-            Location::AtArea(a) => a,
-            Location::InTransit { to, .. } => to,
-            Location::StoppedOnRoad { from, .. } => from,
-            Location::Carried { .. } => unreachable!("resolved carrier position"),
-        };
-        let known_routes = self.host.state.decisions.as_ref().map(|_| {
-            &game_characters::decisions::mind::<game_api::Command>(&self.host.storage, ruler.id)
-                .unwrap()
-                .routes
-        });
-        let known_area = |id: AreaId| {
-            known_routes.is_none_or(|routes| {
-                routes.contains_key(&id) || routes.values().any(|links| links.contains_key(&id))
-            })
-        };
-        let mut available_commands: Vec<_> = self
+        let raw_location =
+            game_spatial::location(&self.host.storage, game_ecs::StableId(ruler.id.0))
+                .expect("location exists");
+        let physical_body = self
             .host
             .state
-            .areas
+            .physical
+            .as_ref()
+            .map(|_| game_physiology::body(&self.host.storage, ruler.id).expect("body exists"));
+        let physical_view = self.physical_view();
+        let fixture_routes = decisions::fixture_routes(&self.host.state.areas);
+        let personal_routes = self.host.state.decisions.as_ref().map(|_| {
+            &game_characters::decisions::mind::<Command>(&self.host.storage, ruler.id)
+                .expect("mind exists")
+                .routes
+        });
+        let navigation = game_characters::views::public_navigation_menu(
+            personal_routes,
+            &fixture_routes,
+            self.host.state.areas.iter().map(|area| area.id),
+            game_transport::navigation_origin(&ruler_location).expect("resolved carrier position"),
+            game_transport::include_same_origin_destination(
+                raw_location,
+                game_transport::route_steps(&self.host.storage, ruler.id),
+            ),
+        );
+        let mut available_commands = navigation
+            .destinations
             .iter()
-            .filter(|a| {
-                a.id != origin
-                    || matches!(
-                        *game_spatial::location(
-                            &self.host.storage,
-                            game_ecs::StableId((ruler.id).0)
-                        )
-                        .expect("location exists"),
-                        Location::InTransit { .. }
-                    ) && !game_transport::route_steps(&self.host.storage, ruler.id).is_empty()
-            })
-            .filter(|a| {
-                known_routes.map_or_else(
-                    || self.path(origin, a.id).is_ok(),
-                    |routes| decisions::known_path(routes, origin, a.id).is_ok(),
-                )
-            })
-            .map(|a| Command::Move { destination: a.id })
+            .copied()
+            .map(|destination| Command::Move { destination })
             .collect();
-        if let Some(world) = &self.host.state.physical {
-            let actor = &game_physiology::body(&self.host.storage, ruler.id).expect("body exists");
-            if !actor.vitals.alive || actor.vitals.health == 0 {
-                available_commands.clear();
-            } else if matches!(
-                ruler_location,
-                Location::AtArea(_) | Location::StoppedOnRoad { .. }
-            ) {
-                available_commands.extend([Command::Rest, Command::Cancel]);
-                if let Some(view) = self.physical_view() {
-                    available_commands.extend(
-                        view.local_sites
-                            .into_iter()
-                            .map(|site| Command::Work { site }),
-                    );
-                    if !ruler.hunger_exempt {
-                        available_commands.extend(
-                            view.local_stocks
-                                .iter()
-                                .filter(|s| {
-                                    s.can_access
-                                        && s.good == Good::Food
-                                        && s.quantity >= world.rules.meal_size
-                                })
-                                .map(|s| Command::Eat { source: s.id }),
-                        );
-                    }
-                    if self.host.state.development.is_some() {
-                        let children = game_lifecycle::all_lives(&self.host.storage).filter_map(
-                            |(id, life)| {
-                                (self.dependent_signal_visible(ruler.id, id)
-                                    && matches!(life.stage, LifeStage::Infant | LifeStage::Child))
-                                .then_some(id)
-                            },
-                        );
-                        for child in children {
-                            if child != ruler.id {
-                                available_commands.push(Command::Comfort { child });
-                            }
-                            for source in view
-                                .local_stocks
-                                .iter()
-                                .filter(|s| self.prepare_care_source(ruler.id, child, s.id).is_ok())
-                            {
-                                available_commands.push(Command::Care {
-                                    child,
-                                    source: source.id,
-                                });
-                            }
+        game_characters::views::apply_basic_menu(
+            &mut available_commands,
+            physical_body.map(|body| game_characters::views::BasicMenuFacts {
+                alive: body.vitals.alive,
+                health: body.vitals.health,
+                resolved_location: ruler_location.clone(),
+            }),
+            |action| match action {
+                game_characters::views::BasicMenuAction::Rest => Command::Rest,
+                game_characters::views::BasicMenuAction::Cancel => Command::Cancel,
+            },
+            || {
+                let area = match ruler_location {
+                    Location::AtArea(area) => Some(area),
+                    _ => None,
+                };
+                let mut actions =
+                    game_workshop::local_work_sites(&self.host.storage, ruler.id, area)
+                        .into_iter()
+                        .map(|site| Command::Work { site })
+                        .collect::<Vec<_>>();
+                let stocks = physical_view
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|view| view.local_stocks.iter());
+                actions.extend(
+                    game_cargo::meal_sources(
+                        stocks.map(|stock| game_cargo::MealSourceFacts {
+                            inventory: stock.id,
+                            good: stock.good,
+                            quantity: stock.quantity,
+                            accessible: stock.can_access,
+                        }),
+                        self.host
+                            .state
+                            .physical
+                            .as_ref()
+                            .expect("physical rules")
+                            .rules
+                            .meal_size,
+                        ruler.hunger_exempt,
+                    )
+                    .into_iter()
+                    .map(|source| Command::Eat { source }),
+                );
+                let dependents = game_lifecycle::visible_dependents(
+                    self.host
+                        .state
+                        .development
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|_| game_lifecycle::all_lives(&self.host.storage))
+                        .map(|(id, life)| (id, life, self.dependent_signal_visible(ruler.id, id))),
+                );
+                let sources = physical_view
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|view| view.local_stocks.iter().map(|stock| stock.id))
+                    .collect::<Vec<_>>();
+                actions.extend(
+                    game_lifecycle::dependent_command_menu(
+                        ruler.id,
+                        dependents,
+                        &sources,
+                        |child, source| self.prepare_care_source(ruler.id, child, source).is_ok(),
+                    )
+                    .into_iter()
+                    .map(|action| match action {
+                        game_lifecycle::DependentCommand::Comfort { child } => {
+                            Command::Comfort { child }
                         }
-                    }
+                        game_lifecycle::DependentCommand::Care { child, source } => {
+                            Command::Care { child, source }
+                        }
+                    }),
+                );
+                actions
+            },
+        );
+        let lifecycle_kind = |command: &Command| match command {
+            Command::Work { .. } => game_lifecycle::MenuActionKind::Work,
+            Command::Signal { .. } => game_lifecycle::MenuActionKind::Signal,
+            Command::Cancel => game_lifecycle::MenuActionKind::Cancel,
+            _ => game_lifecycle::MenuActionKind::Other,
+        };
+        let stage = self.host.state.development.as_ref().map(|_| {
+            game_lifecycle::life(&self.host.storage, ruler.id)
+                .expect("life exists")
+                .stage
+        });
+        game_lifecycle::apply_dependent_menu(
+            &mut available_commands,
+            game_lifecycle::DependentMenuFacts {
+                stage,
+                alive: physical_body.is_some_and(|body| body.vitals.alive),
+                health: physical_body.map_or(0, |body| body.vitals.health),
+                at_area: matches!(ruler_location, Location::AtArea(_)),
+            },
+            lifecycle_kind,
+            |action| match action {
+                game_lifecycle::DependentMenuAction::Cancel => Command::Cancel,
+                game_lifecycle::DependentMenuAction::Signal(preference) => {
+                    Command::Signal { preference }
                 }
-            }
-        }
-        if self.host.state.development.is_some() {
-            let stage = game_lifecycle::life(&self.host.storage, ruler.id)
-                .unwrap()
-                .stage;
-            if stage == LifeStage::Infant {
-                available_commands.clear();
-                if game_physiology::body(&self.host.storage, ruler.id)
-                    .expect("body exists")
-                    .vitals
-                    .alive
-                {
-                    available_commands.push(Command::Cancel);
-                }
-            } else if stage == LifeStage::Child {
-                available_commands.retain(|c| !matches!(c, Command::Work { .. }));
-            }
-            if matches!(stage, LifeStage::Infant | LifeStage::Child)
-                && game_physiology::body(&self.host.storage, ruler.id)
-                    .expect("body exists")
-                    .vitals
-                    .alive
-                && game_physiology::body(&self.host.storage, ruler.id)
-                    .expect("body exists")
-                    .vitals
-                    .health
-                    > 0
-            {
-                for preference in [
-                    ChildhoodInterest::Food,
-                    ChildhoodInterest::Company,
-                    ChildhoodInterest::Movement,
-                    ChildhoodInterest::Craft,
-                ] {
-                    if matches!(
-                        preference,
-                        ChildhoodInterest::Food | ChildhoodInterest::Company
-                    ) {
-                        available_commands.push(Command::Signal { preference });
-                    }
-                    if stage == LifeStage::Child && matches!(ruler_location, Location::AtArea(_)) {
-                        available_commands.push(Command::Play {
-                            interest: preference,
-                        });
-                    }
-                }
-            }
-        }
-        if !matches!(
-            *game_spatial::location(&self.host.storage, game_ecs::StableId((ruler.id).0))
-                .expect("location exists"),
-            Location::AtArea(_) | Location::InTransit { .. }
-        ) {
-            available_commands.retain(|command| !matches!(command, Command::Move { .. }));
-        }
-        if matches!(ruler_location, Location::StoppedOnRoad { .. }) {
-            available_commands
-                .retain(|command| !matches!(command, Command::Work { .. } | Command::Load { .. }));
-        }
+                game_lifecycle::DependentMenuAction::Play(interest) => Command::Play { interest },
+            },
+        );
+        game_transport::filter_position_menu(
+            &mut available_commands,
+            raw_location,
+            &ruler_location,
+            |command| match command {
+                Command::Move { .. } => game_transport::MenuActionKind::Move,
+                Command::Work { .. } => game_transport::MenuActionKind::Work,
+                Command::Load { .. } => game_transport::MenuActionKind::Load,
+                _ => game_transport::MenuActionKind::Other,
+            },
+        );
         available_commands.extend(self.available_army_commands(ruler.id));
         available_commands.extend(self.available_realm_commands(ruler.id));
         available_commands.extend(self.available_transport_commands(ruler.id));
@@ -860,56 +931,59 @@ impl Simulation {
         available_commands.extend(self.available_lesson_commands(ruler.id));
         available_commands.extend(self.available_project_commands(ruler.id));
         available_commands.extend(self.available_invocation_commands(ruler.id));
-        if self.in_combat(ruler.id) {
-            available_commands.clear();
-            if let Some(view) = self.tactical_view()
-                && view.turn == Some(ruler.id)
-            {
-                for action in [
-                    CombatAction::Wait,
-                    CombatAction::Defend,
-                    CombatAction::Surrender,
-                ] {
-                    available_commands.push(Command::CombatTurn {
-                        encounter: view.encounter,
-                        movement: None,
-                        action,
-                    });
-                }
-                for fighter in view.fighters.iter().filter(|f| f.actor != ruler.id) {
-                    available_commands.push(Command::CombatTurn {
-                        encounter: view.encounter,
-                        movement: None,
-                        action: CombatAction::Attack {
-                            target: fighter.actor,
-                        },
-                    });
-                    if fighter.incapacitated || fighter.surrendered {
-                        available_commands.push(Command::CombatTurn {
-                            encounter: view.encounter,
-                            movement: None,
-                            action: CombatAction::Capture {
-                                target: fighter.actor,
-                            },
-                        });
-                    }
-                }
-            }
-        } else if self.combat_restricts(ruler.id) {
-            available_commands.retain(|c| {
-                matches!(
-                    c,
-                    Command::Rest | Command::Eat { .. } | Command::Tell { .. }
-                )
-            });
+        let tactical = self.tactical_view();
+        let fighters = tactical
+            .as_ref()
+            .into_iter()
+            .flat_map(|view| view.fighters.iter())
+            .map(|fighter| game_conflict::MenuFighter {
+                actor: fighter.actor,
+                incapacitated: fighter.incapacitated,
+                surrendered: fighter.surrendered,
+            })
+            .collect::<Vec<_>>();
+        let combat_menu = game_conflict::menu_policy(
+            ruler.id,
+            self.in_combat(ruler.id),
+            self.combat_restricts(ruler.id),
+            tactical
+                .as_ref()
+                .map(|view| game_conflict::TacticalMenuFacts {
+                    encounter: view.encounter,
+                    turn: view.turn,
+                    fighters: &fighters,
+                }),
+        );
+        combat_menu.filter_commands(&mut available_commands, |command| match command {
+            Command::Rest => game_conflict::MenuCommandKind::Rest,
+            Command::Eat { .. } => game_conflict::MenuCommandKind::Eat,
+            Command::Tell { .. } => game_conflict::MenuCommandKind::Tell,
+            _ => game_conflict::MenuCommandKind::Other,
+        });
+        if let game_conflict::MenuPolicy::Combat {
+            encounter: Some(encounter),
+            actions,
+        } = combat_menu
+        {
+            available_commands.extend(actions.into_iter().map(|action| Command::CombatTurn {
+                encounter,
+                movement: None,
+                action: match action {
+                    game_conflict::MenuAction::Wait => CombatAction::Wait,
+                    game_conflict::MenuAction::Defend => CombatAction::Defend,
+                    game_conflict::MenuAction::Surrender => CombatAction::Surrender,
+                    game_conflict::MenuAction::Attack(target) => CombatAction::Attack { target },
+                    game_conflict::MenuAction::Capture(target) => CombatAction::Capture { target },
+                },
+            }));
         }
-        if let Some(world) = &self.host.state.combat {
-            for target in world.captivity.keys() {
-                if self.can_release(ruler.id, *target) {
-                    available_commands.push(Command::FreeCaptive { target: *target });
-                }
-            }
-        }
+        available_commands.extend(
+            game_conflict::available_releases(&self.host.storage, ruler.id, |actor, target| {
+                self.can_release(actor, target)
+            })
+            .into_iter()
+            .map(|target| Command::FreeCaptive { target }),
+        );
         available_commands.extend(self.available_social_commands(ruler.id));
         available_commands.extend(self.available_enforcement_commands(ruler.id));
         available_commands.extend(self.available_health_commands(ruler.id));
@@ -918,22 +992,34 @@ impl Simulation {
         available_commands.extend(self.available_mission_commands(ruler.id));
         let mut quantity_opportunities = self.cargo_quantity_opportunities(ruler.id);
         quantity_opportunities.extend(self.ecology_quantity_opportunities(ruler.id));
-        for opportunity in &quantity_opportunities {
-            for quantity in &opportunity.suggested {
-                let command = opportunity.action.command(*quantity);
-                if !available_commands.contains(&command) {
-                    available_commands.push(command);
-                }
-            }
-        }
-        if !self.independent(ruler.id) {
-            quantity_opportunities.clear();
-            available_commands
-                .retain(|command| matches!(command, Command::Signal { .. } | Command::Cancel));
-        }
-        if self.past_life_controls_actor(ruler.id) {
-            available_commands.clear();
-            quantity_opportunities.clear();
+        game_characters::views::append_quantity_suggestions(
+            &mut available_commands,
+            &quantity_opportunities,
+            |opportunity| {
+                opportunity
+                    .suggested
+                    .iter()
+                    .map(|quantity| opportunity.action.command(*quantity))
+                    .collect()
+            },
+        );
+        game_lifecycle::filter_independent_menu(
+            &mut available_commands,
+            &mut quantity_opportunities,
+            stage,
+            self.host.state.development.is_some(),
+            lifecycle_kind,
+        );
+        if let Some(invocation) = self.host.state.invocation.as_ref() {
+            invocation.filter_controlled_menu(
+                &self.host.storage,
+                ruler.id,
+                self.host.clock().time,
+                game_physiology::body(&self.host.storage, ruler.id)
+                    .is_some_and(|body| body.vitals.alive),
+                &mut available_commands,
+                &mut quantity_opportunities,
+            );
         }
         PlayerView {
             armies: self.army_view(ruler.id),
@@ -965,20 +1051,29 @@ impl Simulation {
             )
             .expect("location exists"))
             .clone(),
-            known_areas: self
-                .host
-                .state
-                .areas
-                .iter()
-                .filter(|a| known_area(a.id))
-                .map(|a| AreaView {
-                    id: a.id,
-                    name: a.name.clone(),
-                })
-                .collect(),
+            known_areas: {
+                let catalog = self
+                    .host
+                    .state
+                    .areas
+                    .iter()
+                    .map(|area| (area.id, area))
+                    .collect::<BTreeMap<_, _>>();
+                navigation
+                    .known_areas
+                    .into_iter()
+                    .map(|id| {
+                        let area = catalog.get(&id).expect("known catalog area");
+                        AreaView {
+                            id,
+                            name: area.name.clone(),
+                        }
+                    })
+                    .collect()
+            },
             available_commands,
             quantity_opportunities,
-            physical: self.physical_view(),
+            physical: physical_view,
             known_stocks: self
                 .host
                 .state
@@ -992,18 +1087,13 @@ impl Simulation {
                         .cloned()
                         .collect()
                 }),
-            combat: self.tactical_view(),
-            life_stage: self.host.state.development.as_ref().map(|_| {
-                game_lifecycle::life(&self.host.storage, ruler.id)
-                    .unwrap()
-                    .stage
-            }),
+            combat: tactical,
+            life_stage: stage,
             preference: self.host.state.development.as_ref().and_then(|_| {
-                game_lifecycle::life(&self.host.storage, ruler.id)
-                    .unwrap()
-                    .preference
-                    .filter(|(_, until)| *until >= self.host.clock().time)
-                    .map(|(p, _)| p)
+                game_lifecycle::active_preference(
+                    game_lifecycle::life(&self.host.storage, ruler.id).expect("life exists"),
+                    self.host.clock().time,
+                )
             }),
             interests: self
                 .host
@@ -1040,47 +1130,50 @@ impl Simulation {
                 }),
         }
     }
-
     pub fn lineage_view(&self) -> Option<LineageView> {
         let world = self.host.state.lineage.as_ref()?;
-        let current = world.current();
+        let current = world.current(&self.host.storage);
         let local = self
             .nearby_people(0, 100)
             .into_iter()
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>();
         let learning = current
-            .and_then(|id| world.invocation_learning.get(&id))
-            .copied()
+            .map(|id| game_lineage::invocation_learning(&self.host.storage, id))
             .unwrap_or(0);
         Some(LineageView {
             invocation_learning: learning,
-            invocation_ready: learning >= world.rules.invocation_access_threshold,
+            invocation_ready: current
+                .is_some_and(|id| world.invocation_ready(&self.host.storage, id)),
             current,
-            incarnations: world.incarnations.iter().map(|life| life.person).collect(),
-            waiting_since: world.waiting.as_ref().map(|w| w.died_at),
-            guardians: world
-                .guardians
+            incarnations: world
+                .history(&self.host.storage)
+                .ok()?
+                .incarnations
                 .iter()
-                .filter(|(id, _)| current.is_none() || local.contains(id))
+                .map(|life| life.person)
+                .collect(),
+            waiting_since: world
+                .waiting(&self.host.storage)
+                .map(|waiting| waiting.died_at),
+            guardians: world
+                .visible_guardians(&self.host.storage, &local)
+                .into_iter()
                 .map(|(id, guardian)| GuardianSearchView {
                     ready: current
                         .and_then(|id| guardian.assessments.get(&id))
-                        .is_some_and(|a| a.ready),
+                        .is_some_and(|assessment| assessment.ready),
                     assessment: current
                         .and_then(|id| guardian.assessments.get(&id))
                         .map_or_else(
                             || "Readiness remains unassessed".into(),
-                            |a| a.explanation.clone(),
+                            |assessment| assessment.explanation.clone(),
                         ),
                     explanation: guardian.explanation.clone(),
-                    guardian: *id,
-                    location: (*game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId((self.host.state.people[self.person_index[id]].id).0),
-                    )
-                    .expect("location exists"))
-                    .clone(),
+                    guardian: id,
+                    location: game_spatial::location(&self.host.storage, game_ecs::StableId(id.0))
+                        .expect("guardian location")
+                        .clone(),
                     target: guardian.target,
                     goal: match guardian.goal {
                         lineage::GuardianGoal::Waiting => GuardianGoalView::Waiting,
@@ -1095,19 +1188,18 @@ impl Simulation {
     }
 
     pub fn nearby_people(&self, offset: usize, limit: usize) -> Vec<(PersonId, Role)> {
-        let ruler = &self.host.state.people[self.person_index[&self.host.state.ruler]];
-        if self.host.state.physical.as_ref().is_some_and(|_| {
-            !game_physiology::body(&self.host.storage, ruler.id)
+        let actor = self.host.state.ruler;
+        let alive = self.host.state.physical.as_ref().map(|_| {
+            game_physiology::body(&self.host.storage, actor)
                 .expect("body exists")
                 .vitals
                 .alive
-        }) {
-            return Vec::new();
-        }
-        self.host.state.people.iter().filter(|p| p.id != ruler.id && matches!((game_spatial::location(&self.host.storage,game_ecs::StableId((p.id).0)).expect("location exists"), game_spatial::location(&self.host.storage,game_ecs::StableId((ruler.id).0)).expect("location exists")), (Location::AtArea(a), Location::AtArea(b)) if a == b))
-            .skip(offset).take(limit.min(100)).map(|p| (p.id, p.role)).collect()
+        });
+        game_characters::views::nearby_people(&self.host.storage, actor, alive)
+            .skip(offset)
+            .take(game_characters::views::nearby_page_limit(limit))
+            .collect()
     }
-
     pub fn submit(&mut self, submission: Submission) -> Result<CommandReceipt, Error> {
         if let Some((command, receipt)) = self.host.state.accepted.get(&submission.caller_sequence)
         {
@@ -1219,9 +1311,9 @@ impl Simulation {
                     reason: StopReason::InvocationWarning { warning },
                 });
             }
-            let encounters: Vec<_> = self.host.state.combat.as_ref().map_or_else(Vec::new, |w| {
-                w.encounters
-                    .values()
+            let encounters: Vec<_> = self.host.state.combat.as_ref().map_or_else(Vec::new, |_| {
+                game_conflict::encounters(&self.host.storage)
+                    .map(|(_, encounter)| encounter)
                     .filter(|e| e.active)
                     .map(|e| e.id)
                     .collect()
@@ -1278,35 +1370,33 @@ impl Simulation {
         next: SimTime,
     ) -> Result<engine_adapter::PreparedWorldStep, Error> {
         let started = Instant::now();
-        let elapsed = next.0 - self.host.clock().time.0;
-        let equipment = self.equipment_availability();
-        let input: Vec<_> = self
+        let elapsed = next
+            .0
+            .checked_sub(self.host.clock().time.0)
+            .ok_or(Error::SequenceConflict)?;
+        let opening = self.host.transaction_opening();
+        let opening_rows = self
             .host
-            .state
-            .people
-            .iter()
-            .map(|p| compute::ProgressInput {
-                units: p.work_units,
-                remainder: p.work_remainder,
-                units_per_minute: if matches!(
-                    *game_spatial::location(&self.host.storage, game_ecs::StableId((p.id).0))
-                        .expect("location exists"),
-                    Location::AtArea(_)
-                ) && self.physically_working(p.id)
-                    && equipment.get(&p.id).copied().unwrap_or(true)
-                {
-                    p.work_rate
-                } else {
-                    0
-                },
-                elapsed_ms: elapsed,
-            })
-            .collect();
-        let output = compute::evaluate(
-            self.engine.executor().pool(),
-            &input,
-            self.execution.reverse_jobs,
+            .storage
+            .project_entities(self.host.storage.ids())?;
+        let opening_inputs = self.interval_inputs();
+        let equipment = self.equipment_availability();
+        let progress = game_characters::people::progress_inputs(
+            &self.host.storage,
+            elapsed,
+            &CumulativeWorkPort {
+                simulation: self,
+                equipment: &equipment,
+            },
         )?;
+        let evaluated_people = progress.jobs().len();
+        let output = self
+            .engine
+            .executor()
+            .map_ordered(progress.jobs(), |input| input.evaluate())?
+            .into_iter()
+            .map(|(_, result)| result)
+            .collect();
         let exposures = self.health_exposures()?;
         let physical_output = self.evaluate_physical(elapsed, &exposures)?;
         let skill_output = self.evaluate_skills(next)?;
@@ -1335,13 +1425,10 @@ impl Simulation {
         for event in &due {
             match event {
                 Due::Review => {
-                    next.0
-                        .checked_add(if self.host.state.decisions.is_some() {
-                            120_000
-                        } else {
-                            60_000
-                        })
-                        .ok_or(Error::Overflow)?;
+                    game_characters::orchestration::review_timing(
+                        next,
+                        self.host.state.decisions.is_some(),
+                    )?;
                 }
                 Due::Arrive(id) => self.transport_preflight_arrival(*id, next)?,
                 _ => {}
@@ -1352,28 +1439,21 @@ impl Simulation {
             for deadline in &due {
                 if let Due::Physical(actor) = deadline
                     && let Activity::Cultivate {
-                        field,
-                        operation: FarmOperation::Harvest,
-                        ..
+                        field, operation, ..
                     } = *self.host.storage.activity(*actor).expect("body exists")
                 {
-                    possible_outputs.push((
+                    possible_outputs.extend(agriculture.output_reserve(
+                        &self.host.storage,
                         field,
-                        Good::Food,
-                        agriculture.rules_for(&self.host.storage, field)?.food_yield,
-                    ));
-                    possible_outputs.push((
-                        field,
-                        Good::Seed,
-                        agriculture.rules_for(&self.host.storage, field)?.seed_yield,
-                    ));
+                        operation,
+                    )?);
                 }
             }
         }
         self.preflight_output_shares(&possible_outputs)?;
         self.preflight_prepared_maintenance(next, &possible_outputs)?;
         let births = due.iter().filter(|d| matches!(d, Due::Birth(_))).count() as u64;
-        let population = (self.host.state.people.len() as u64)
+        let population = (self.people().len() as u64)
             .checked_add(births)
             .ok_or(Error::Overflow)?;
         let (ledger_demand, direct_cases) =
@@ -1479,9 +1559,13 @@ impl Simulation {
             .collect();
         let arbitration_ns = started.elapsed().as_nanos();
         Ok(engine_adapter::PreparedWorldStep {
+            opening,
+            opening_rows,
+            opening_inputs,
             next,
             elapsed,
             equipment,
+            progress,
             output,
             physical_output,
             skill_output,
@@ -1495,7 +1579,7 @@ impl Simulation {
             lifecycle,
             transfers,
             opening_stock,
-            evaluated_people: input.len(),
+            evaluated_people,
             evaluation_ns,
             arbitration_ns,
         })
@@ -1529,18 +1613,22 @@ impl Simulation {
         Ok(())
     }
 
-    fn commit_prepared_step(
+    fn commit_prepared_step_inner(
         &mut self,
         prepared: engine_adapter::PreparedWorldStep,
     ) -> Result<(), Error> {
         self.host.preflight_records(0, 0, 1)?;
         let engine_adapter::PreparedWorldStep {
+            opening: _,
+            opening_rows: _,
+            opening_inputs: _,
             next,
             elapsed,
             equipment,
+            progress,
             output,
             physical_output,
-            skill_output,
+            mut skill_output,
             project_output,
             invocation_output,
             environment_output,
@@ -1556,6 +1644,7 @@ impl Simulation {
             arbitration_ns,
         } = prepared;
         self.validate_physical_output(&physical_output)?;
+        self.validate_skill_output(&skill_output)?;
         if let Some(batch) = &project_output {
             batch.validate(
                 self.host
@@ -1603,58 +1692,42 @@ impl Simulation {
         let mut production_completions = Vec::new();
         let mut force_completions = Vec::new();
         let started = Instant::now();
-        for (p, out) in self.host.state.people.iter_mut().zip(output) {
-            p.work_units = out.units;
-            p.work_remainder = out.remainder;
-        }
+        progress.commit(&mut self.host.storage, output)?;
         self.host.publish_clock(game_sim::Clock {
             time: next,
             ..self.host.clock()
         });
-        let actual_work: Vec<_> = self
+        let labor_actors: BTreeSet<_> = self
             .host
-            .state
-            .physical
-            .as_ref()
-            .map_or_else(Vec::new, |_| {
-                self.host
-                    .storage
-                    .activities()
-                    .filter_map(|(actor, activity)| {
-                        if let Activity::Work { site } = *activity {
-                            equipment
-                                .get(&actor)
-                                .copied()
-                                .unwrap_or(false)
-                                .then_some((actor, site))
-                        } else if let Activity::Cultivate { field, .. } = *activity {
-                            equipment
-                                .get(&actor)
-                                .copied()
-                                .unwrap_or(false)
-                                .then_some((actor, field))
-                        } else {
-                            None
+            .storage
+            .activities()
+            .map(|(actor, _)| actor)
+            .chain(game_projects::constructions(&self.host.storage).map(|(actor, _)| actor))
+            .collect();
+        let labor = game_agreements::Ledger::new(&self.host.storage).prepare_interval_labor(
+            SimTime(next.0 - elapsed),
+            next,
+            self.host.state.physical.is_some(),
+            self.host.state.projects.is_some(),
+            labor_actors
+                .into_iter()
+                .map(|actor| game_agreements::IntervalLaborFacts {
+                    actor,
+                    activity: match self.host.storage.activity(actor) {
+                        Some(Activity::Work { site }) => {
+                            game_agreements::IntervalActivity::Work { site: *site }
                         }
-                    })
-                    .collect()
-            });
-        for (actor, site) in actual_work {
-            self.record_agreement_work(actor, site, elapsed);
-        }
-        let builders: Vec<_> = self
-            .host
-            .state
-            .projects
-            .as_ref()
-            .map_or_else(Vec::new, |_| {
-                game_projects::constructions(&self.host.storage)
-                    .map(|(actor, job)| (actor, job.project))
-                    .collect()
-            });
-        for (actor, project) in builders {
-            self.record_agreement_construction(actor, project, elapsed);
-        }
+                        Some(Activity::Cultivate { field, .. }) => {
+                            game_agreements::IntervalActivity::Cultivate { field: *field }
+                        }
+                        _ => game_agreements::IntervalActivity::Other,
+                    },
+                    tool_ready: equipment.get(&actor).copied().unwrap_or(false),
+                    construction: game_projects::construction(&self.host.storage, actor)
+                        .map(|job| job.project),
+                }),
+        )?;
+        labor.commit(&mut self.host.storage)?;
         // Install elapsed clinical progress before closing intake effects.
         // Water care and other completed actions then update the progressed
         // state once, rather than being overwritten by an opening snapshot.
@@ -1685,46 +1758,34 @@ impl Simulation {
                     .host
                     .state
                     .due
-                    .entry(SimTime(next.0 + 60_000))
+                    .entry(
+                        game_characters::orchestration::review_timing(
+                            next,
+                            self.host.state.decisions.is_some(),
+                        )?
+                        .deadline,
+                    )
                     .or_default()
                     .push(Due::Review),
                 Due::Arrive(_) => {}
                 Due::Transfers(_) => {}
                 Due::Age(_) | Due::Birth(_) | Due::CombatRound(_) => {}
                 Due::Physical(actor) => {
-                    if self.host.state.physical.as_ref().is_some_and(|_| {
-                        matches!(
-                            *self.host.storage.activity(actor).expect("body exists"),
-                            Activity::Gather { .. }
-                                | Activity::Cultivate { .. }
-                                | Activity::Construct { .. }
-                        )
-                    }) {
-                        production_completions.push(actor);
-                    } else if self.host.state.physical.as_ref().is_some_and(|_| {
-                        matches!(
-                            *self.host.storage.activity(actor).expect("body exists"),
-                            Activity::Escape { .. }
-                                | Activity::Restrain { .. }
-                                | Activity::Lift { .. }
-                                | Activity::RealmTalk { .. }
-                        )
-                    }) {
-                        force_completions.push(actor);
-                    } else {
-                        self.complete_physical(actor)?;
+                    use game_physiology::completion_order::CompletionGroup;
+                    match game_physiology::completion_order::classify_completion(
+                        self.host.state.physical.is_some(),
+                        self.host
+                            .storage
+                            .activity(actor)
+                            .map(physical::physiology_activity),
+                    ) {
+                        CompletionGroup::Production => production_completions.push(actor),
+                        CompletionGroup::Late => force_completions.push(actor),
+                        CompletionGroup::Early => self.complete_physical(actor)?,
                     }
                 }
                 Due::Spoil(inventory) => {
-                    let stock =
-                        game_cargo::inventory_mut(&mut self.host.storage, inventory).unwrap();
-                    let quantity = stock.quantity;
-                    stock.quantity = Quantity(0);
-                    stock.spoils_at = None;
-                    self.emit(EventKind::Spoiled {
-                        inventory,
-                        quantity,
-                    });
+                    self.apply_spoilage(inventory)?;
                 }
             }
         }
@@ -1735,12 +1796,53 @@ impl Simulation {
         self.profile.arbitration_ns += arbitration_started.elapsed().as_nanos();
         loop {
             let mut batch = game_ecs::Batch::new();
-            let Some((intent, granted)) =
-                resolved.stage_next_into(&self.host.storage, &mut batch)?
+            let Some((intent, granted, cargo_guard)) =
+                resolved.stage_next_guarded_into(&self.host.storage, &mut batch)?
             else {
                 break;
             };
             if granted {
+                self.update_property_events()?;
+                let property = self
+                    .host
+                    .state
+                    .property
+                    .as_ref()
+                    .map(|runtime| {
+                        runtime
+                            .prepare_material_receipt(
+                                &self.host.storage,
+                                &intent,
+                                self.host.next_event(),
+                            )?
+                            .stage_into(runtime, &self.host.storage, &mut batch)
+                    })
+                    .transpose()?;
+                let source = game_cargo::inventory(&self.host.storage, intent.source)
+                    .ok_or(Error::Unavailable)?;
+                let destination = game_cargo::inventory(&self.host.storage, intent.destination)
+                    .ok_or(Error::Unavailable)?;
+                let water = if source.good == Good::Water {
+                    self.prepare_health_water_reaction(game_health::WaterReaction::Transfer {
+                        actor: intent.actor,
+                        source: intent.source,
+                        destination: intent.destination,
+                        quantity: intent.quantity,
+                        source_before: source.quantity,
+                        destination_before: destination.quantity,
+                    })?
+                } else {
+                    None
+                };
+                let water = water
+                    .map(|change| {
+                        change.stage_into(
+                            self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                            &self.host.storage,
+                            &mut batch,
+                        )
+                    })
+                    .transpose()?;
                 if let Some(runtime) = self.host.state.invocation.as_ref()
                     && let Some(records) = runtime.prepare_record_transfer(
                         &self.host.storage,
@@ -1752,10 +1854,37 @@ impl Simulation {
                 {
                     records.stage_into(&self.host.storage, &mut batch)?;
                 }
-                self.host.storage.apply_batch(batch)?;
+                cargo_guard.validate(&self.host.storage, &batch)?;
+                if let Some(property) = &property {
+                    property.validate_runtime(
+                        self.host
+                            .state
+                            .property
+                            .as_ref()
+                            .ok_or(Error::Unavailable)?,
+                    )?;
+                    property.validate_batch(&self.host.storage, &batch)?;
+                }
+                if let Some(water) = &water {
+                    water.validate_batch(
+                        self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                        &self.host.storage,
+                        &batch,
+                    )?;
+                }
+                self.host.commit_transaction(game_world::Transaction::new(
+                    self.host.transaction_opening(),
+                    batch,
+                ))?;
+                if let Some(property) = property {
+                    property.finish(self.host.state.property.as_mut().unwrap());
+                }
+                if let Some(water) = water {
+                    water.finish();
+                }
             }
             if granted {
-                self.emit(EventKind::Transferred {
+                self.emit_prepared_water(EventKind::Transferred {
                     actor: intent.actor,
                     source: intent.source,
                     destination: intent.destination,
@@ -1773,37 +1902,50 @@ impl Simulation {
         // interval which already elapsed.
         let closing_equipment = self.equipment_availability();
         for actor in production_completions {
-            if closing_equipment.get(&actor).copied().unwrap_or(false) {
-                self.complete_physical(actor)?;
-            } else {
-                self.interrupt_actor_activity(actor);
-                self.emit(EventKind::Interrupted { actor });
+            use game_physiology::completion_order::{CompletionDirective, CompletionGroup};
+            match game_physiology::completion_order::closing_completion(
+                CompletionGroup::Production,
+                self.host.state.physical.is_some(),
+                self.host
+                    .storage
+                    .activity(actor)
+                    .map(physical::physiology_activity),
+                closing_equipment.get(&actor).copied().unwrap_or(false),
+            ) {
+                CompletionDirective::Complete => self.complete_physical(actor)?,
+                CompletionDirective::Interrupt => {
+                    self.try_interrupt_actor_activity(actor)?;
+                    self.emit(EventKind::Interrupted { actor });
+                }
+                CompletionDirective::Skip => {}
             }
         }
         let phase_started = Instant::now();
-        self.commit_physical(physical_output, &closing_equipment)?;
+        self.commit_physical(physical_output, &closing_equipment, &mut skill_output)?;
         self.profile
             .record_phase("commit.commit_physical", phase_started);
         self.reconcile_transport();
         for actor in force_completions {
-            if self.host.state.physical.as_ref().is_some_and(|_| {
-                matches!(
-                    *self.host.storage.activity(actor).expect("body exists"),
-                    Activity::Escape { .. }
-                        | Activity::Restrain { .. }
-                        | Activity::Lift { .. }
-                        | Activity::RealmTalk { .. }
-                )
-            }) {
+            use game_physiology::completion_order::{CompletionDirective, CompletionGroup};
+            if game_physiology::completion_order::closing_completion(
+                CompletionGroup::Late,
+                self.host.state.physical.is_some(),
+                self.host
+                    .storage
+                    .activity(actor)
+                    .map(physical::physiology_activity),
+                false,
+            ) == CompletionDirective::Complete
+            {
                 self.complete_physical(actor)?;
             }
         }
-        self.commit_skills(skill_output);
+        self.commit_skills(skill_output)?;
         let phase_started = Instant::now();
         self.reconcile_health(&closing_equipment)?;
         self.profile
             .record_phase("commit.reconcile_health", phase_started);
-        self.reconcile_social();
+        self.reconcile_social()?;
         self.observe_invocation_deaths()?;
         self.commit_invocation(invocation_output)?;
         self.observe_lineage_deaths();
@@ -1811,7 +1953,7 @@ impl Simulation {
             .iter()
             .filter(|d| !matches!(d, Due::CombatRound(_)))
         {
-            self.complete_development(event.clone());
+            self.complete_development(event.clone())?;
         }
         self.reconcile_transport();
         // A closing arrival cannot grant another leg before death, exhaustion,
@@ -1885,8 +2027,10 @@ impl Simulation {
         self.review_social()?;
         self.profile
             .record_phase("commit.review_social", phase_started);
-        if self.host.clock().time.0.is_multiple_of(60_000) {
+        if game_characters::orchestration::review_due(self.host.clock().time) {
             self.review_decisions()?;
+        }
+        if game_invocation::review_due(self.host.clock().time) {
             let phase_started = Instant::now();
             self.review_invocation()?;
             self.profile
@@ -1930,15 +2074,14 @@ impl Simulation {
             receiver_contact: destination.is_some_and(|stock| self.stock_here(intent.actor, stock)),
             receiver_access: destination
                 .is_some_and(|stock| self.has_stock_access(intent.actor, stock)),
-            receiver_accepted: self.agreement_accepts_delivery(
-                intent.actor,
-                intent.destination,
-                intent.quantity,
-            ) || self.guardian_accepts_delivery(
-                intent.actor,
-                intent.source,
-                intent.destination,
-                intent.quantity,
+            receiver_accepted: game_cargo::receiver_authorization(
+                self.agreement_accepts_delivery(intent.actor, intent.destination, intent.quantity),
+                self.guardian_accepts_delivery(
+                    intent.actor,
+                    intent.source,
+                    intent.destination,
+                    intent.quantity,
+                ),
             ),
             record_permission: self.record_transfer_allowed(intent.source, intent.quantity),
         }
@@ -1980,25 +2123,24 @@ impl Simulation {
             holders
                 .into_iter()
                 .map(|holder| {
-                    let held: u128 = self
+                    let stocks = self
                         .inventory_index
                         .get(&InventoryLocation::Carried(holder))
                         .into_iter()
                         .flatten()
                         .map(|id| {
-                            u128::from(
-                                game_cargo::inventory(&self.host.storage, *(id))
-                                    .expect("inventory exists")
-                                    .quantity
-                                    .0,
+                            game_cargo::inventory(&self.host.storage, *id)
+                                .expect("inventory exists")
+                        });
+                    let room = game_cargo::carried_quantity_rows(stocks)
+                        .map(|held| {
+                            game_physiology::carrying_room(
+                                self.body_rules(holder).carrying_capacity,
+                                held,
                             )
                         })
-                        .sum();
-                    (
-                        holder,
-                        u128::from(self.body_rules(holder).carrying_capacity.0).saturating_sub(held)
-                            as u64,
-                    )
+                        .unwrap_or(Quantity(0));
+                    (holder, room.0)
                 })
                 .collect()
         });
@@ -2060,6 +2202,7 @@ impl Simulation {
 
     pub fn debug_add_disconnected_area(&mut self, name: &str) -> Result<AreaId, Error> {
         let id = AreaId(self.host.allocate_id()?.0);
+        self.host.storage.ensure(game_ecs::StableId(id.0))?;
         self.host.state.areas.push(Area {
             id,
             name: name.into(),
@@ -2073,16 +2216,120 @@ impl Simulation {
             .preflight_records(0, u64::try_from(count).map_err(|_| Error::Overflow)?, 0)
     }
 
+    fn apply_spoilage(&mut self, inventory: InventoryId) -> Result<(), Error> {
+        self.ensure_event_capacity(1)?;
+        let opening = self.host.transaction_opening();
+        let stock =
+            game_cargo::inventory(&self.host.storage, inventory).ok_or(Error::Unavailable)?;
+        let water = if stock.good == Good::Water {
+            self.prepare_health_water_reaction(game_health::WaterReaction::Spoil { inventory })?
+        } else {
+            None
+        };
+        let cargo = game_cargo::prepare_spoilage(&self.host.storage, inventory)?;
+        let quantity = cargo.quantity();
+        let prefix = self.prepare_property_receipts()?;
+        let property = self
+            .host
+            .state
+            .property
+            .as_ref()
+            .map(|runtime| {
+                runtime.prepare_loss_receipt(
+                    &self.host.storage,
+                    inventory,
+                    quantity,
+                    opening.next_event,
+                    prefix,
+                )
+            })
+            .transpose()?;
+        let mut batch = game_ecs::Batch::new();
+        let cargo = cargo.stage_into(&self.host.storage, &mut batch)?;
+        let property = property
+            .map(|change| {
+                change.stage_into(
+                    self.host
+                        .state
+                        .property
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    &self.host.storage,
+                    &mut batch,
+                )
+            })
+            .transpose()?;
+        let water = water
+            .map(|change| {
+                change.stage_into(
+                    self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                    &self.host.storage,
+                    &mut batch,
+                )
+            })
+            .transpose()?;
+        cargo.validate(&self.host.storage, &batch)?;
+        if let Some(property) = &property {
+            property.validate_runtime(
+                self.host
+                    .state
+                    .property
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?,
+            )?;
+            property.validate_batch(&self.host.storage, &batch)?;
+        }
+        if let Some(water) = &water {
+            water.validate_batch(
+                self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                &batch,
+            )?;
+        }
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.guards.push(cargo);
+        transaction.events.push(EventKind::Spoiled {
+            inventory,
+            quantity,
+        });
+        self.host.commit_transaction(transaction)?;
+        if let Some(property) = property {
+            property.finish(self.host.state.property.as_mut().unwrap());
+        }
+        if let Some(water) = water {
+            water.finish();
+        }
+        Ok(())
+    }
+
     fn emit(&mut self, kind: EventKind) {
+        self.emit_material(kind, false);
+    }
+
+    fn emit_prepared_water(&mut self, kind: EventKind) {
+        self.emit_material(kind, true);
+    }
+
+    fn emit_prepared_health(&mut self, kind: EventKind) {
+        self.emit_receivers(kind, false, true);
+    }
+
+    fn emit_material(&mut self, kind: EventKind, water_prepared: bool) {
+        self.emit_receivers(kind, water_prepared, false);
+    }
+
+    fn emit_receivers(&mut self, kind: EventKind, water_prepared: bool, health_prepared: bool) {
         if let EventKind::Died { actor } = kind {
             self.transport_death(actor);
         }
-        self.on_health_event(&kind);
+        if !health_prepared {
+            self.on_health_event(&kind);
+        }
         self.on_social_event(&kind);
-        self.on_trait_event(&kind);
-        self.update_water_event(&kind);
+        if !water_prepared {
+            self.update_water_event(&kind);
+        }
         self.witness_lineage_event(&kind);
-        self.on_skill_event(&kind);
         if let EventKind::Transferred {
             source,
             destination,
@@ -2092,8 +2339,6 @@ impl Simulation {
         {
             self.relocate_record_transfer(*source, *destination, *quantity);
         }
-        let id = EventId(self.host.next_event());
-        self.on_delivery_event(&kind, id);
         self.host
             .append_many(vec![kind])
             .expect("the command or interval preflighted its publication budget");

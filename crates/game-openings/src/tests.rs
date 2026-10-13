@@ -114,3 +114,119 @@ fn historical_stock_is_authored_and_invalid_established_bindings_are_rejected() 
         .historical_materials = None;
     assert!(defs.catalog.validate().is_err());
 }
+
+#[test]
+fn concrete_customs_are_selected_by_content_and_resolve_to_the_original_native_bundle() {
+    let definitions = definitions();
+    let (_, camp) = definitions.opening_plan("settlement-founder").unwrap();
+    let (_, office) = definitions.opening_plan("established-ruler").unwrap();
+    let residents = (101..116).map(PersonId).collect::<Vec<_>>();
+    let areas = BTreeMap::from([
+        ("centre".into(), AreaId(1)),
+        ("fields".into(), AreaId(2)),
+        ("wood".into(), AreaId(3)),
+    ]);
+    let stocks = BTreeMap::from([("food".into(), InventoryId(201))]);
+    let camp = camp.definition.customs["camp-provisioning"]
+        .resolve(&residents, &areas, &stocks, InventoryId(202), SimTime(10))
+        .unwrap();
+    let office = office.definition.customs["supported-office"]
+        .resolve(&residents, &areas, &stocks, InventoryId(202), SimTime(10))
+        .unwrap();
+    assert_eq!(
+        camp.charter.purpose,
+        "Willowbank camp provisioning association"
+    );
+    assert_eq!(camp.charter.offices[0].holder, PersonId(105));
+    assert_eq!(office.charter.offices[0].holder, PersonId(101));
+    assert_eq!(
+        camp.charter.founders,
+        BTreeSet::from([
+            PersonId(101),
+            PersonId(105),
+            PersonId(106),
+            PersonId(107),
+            PersonId(108)
+        ])
+    );
+    assert_eq!(camp.source_access, BTreeSet::from([PersonId(101)]));
+    assert_eq!(camp.charter.procedure.minimum_support, 3);
+    assert_eq!(camp.fulfil_step, SimDuration(60_000));
+    assert!(matches!(
+        camp.initial_delivery,
+        Some(game_agreements::AgreementTerm::Delivery {
+            debtor: PersonId(101),
+            creditor: PersonId(105),
+            source: InventoryId(201),
+            destination: InventoryId(202),
+            quantity: Quantity(1000),
+            deadline: SimTime(86_400_010)
+        })
+    ));
+}
+#[test]
+fn modifying_an_existing_custom_instance_uses_toml_and_survives_saved_definitions() {
+    let source = include_str!("../../../content/openings/temperate.toml")
+        .replacen(
+            "purpose = \"Willowbank camp provisioning association\"",
+            "purpose = \"New ford provisioning association\"",
+            1,
+        )
+        .replacen(
+            "quantity=1000, deadline_after=86400000",
+            "quantity=2000, deadline_after=172800000",
+            1,
+        );
+    let definitions = Definitions::from_content(game_content::parse(&source).unwrap()).unwrap();
+    let bytes = serde_json::to_vec(&definitions).unwrap();
+    let restored: Definitions = serde_json::from_slice(&bytes).unwrap();
+    restored.validate().unwrap();
+    let (opening, plan) = restored.opening_plan("settlement-founder").unwrap();
+    let custom = &plan.definition.customs[&opening.starting_custom];
+    assert_eq!(custom.purpose, "New ford provisioning association");
+    assert_eq!(custom.contributions[0].quantity, Quantity(2000));
+    assert_eq!(
+        custom.contributions[0].deadline_after,
+        SimDuration(172_800_000)
+    );
+}
+#[test]
+fn invalid_authored_custom_references_rights_capacity_offices_and_delivery_are_rejected() {
+    for edit in 0..9 {
+        let mut definitions = definitions();
+        let custom = definitions
+            .catalog
+            .settlements
+            .get_mut("ordinary")
+            .unwrap()
+            .customs
+            .get_mut("camp-provisioning")
+            .unwrap();
+        match edit {
+            0 => custom.claimant = 999,
+            1 => custom.source = "missing-stock".into(),
+            2 => custom.claim_rights.clear(),
+            3 => custom.fund.capacity = Quantity(1),
+            4 => custom.procedure.minimum_support = 65,
+            5 => custom.offices[0].holder = 14,
+            6 => custom.access_rules[0].authority = 99,
+            7 => custom.contributions[0].deadline_after = SimDuration(0),
+            _ => custom.fulfilled_contribution = Some(99),
+        }
+        assert!(definitions.catalog.validate().is_err(), "edit {edit}");
+    }
+    let mut definitions = definitions();
+    definitions
+        .catalog
+        .openings
+        .get_mut("settlement-founder")
+        .unwrap()
+        .starting_custom = "missing-custom".into();
+    assert!(definitions.catalog.validate().is_err());
+    let malformed = include_str!("../../../content/openings/temperate.toml").replacen(
+        "fulfilled_contribution = 0",
+        "fulfilled_contribution = 99",
+        1,
+    );
+    assert!(Definitions::from_content(game_content::parse(&malformed).unwrap()).is_err());
+}

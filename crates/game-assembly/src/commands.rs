@@ -4,8 +4,15 @@ use crate::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActivityOwner {
+    All,
     Agreements,
     Projects,
+    Agriculture,
+    Ecology,
+    Enforcement,
+    Combat,
+    Force,
+    Physical,
     Health,
     Property,
     Transport,
@@ -16,39 +23,41 @@ pub(crate) enum ActivityOwner {
 
 impl Simulation {
     pub(crate) fn conversation_actor_available(&self, actor: PersonId) -> bool {
-        (self.host.state.physical.is_some()
-            && self
+        use game_characters::orchestration::{ConversationActivity, ConversationAvailability};
+        ConversationAvailability {
+            physical_enabled: self.host.state.physical.is_some(),
+            activity: self
                 .host
                 .storage
                 .activity(actor)
-                .is_some_and(|activity| matches!(activity, Activity::Idle | Activity::Rest)))
-            && self.host.state.armies.as_ref().is_none_or(|w| {
-                !w.talks
-                    .values()
+                .map(|activity| match activity {
+                    Activity::Idle => ConversationActivity::Idle,
+                    Activity::Rest => ConversationActivity::Rest,
+                    _ => ConversationActivity::Other,
+                }),
+            army_talking: self.host.state.armies.as_ref().is_some_and(|_| {
+                game_armies::talks(&self.host.storage)
+                    .map(|(_, talk)| talk)
                     .any(|t| t.speaker == actor || t.listener == actor)
-            })
-            && self.host.state.missions.as_ref().is_none_or(|_| {
-                !self
-                    .host
-                    .state
-                    .missions
-                    .as_ref()
-                    .unwrap()
-                    .actor_talking(&self.host.storage, actor)
-            })
-            && self
+            }),
+            mission_talking: self
+                .host
+                .state
+                .missions
+                .as_ref()
+                .is_some_and(|world| world.actor_talking(&self.host.storage, actor)),
+            realm_busy: self
                 .host
                 .state
                 .realm
                 .as_ref()
-                .is_none_or(|w| !w.actor_busy(&self.host.storage, actor))
-            && !self.property_actor_talking(actor)
-            && self
-                .host
-                .state
-                .social
-                .as_ref()
-                .is_none_or(|w| !w.participants.contains_key(&actor))
+                .is_some_and(|w| w.actor_busy(&self.host.storage, actor)),
+            property_talking: self.property_actor_talking(actor),
+            social_participant: self.host.state.social.as_ref().is_some_and(|_| {
+                game_characters::social::participant(&self.host.storage, actor).is_some()
+            }),
+        }
+        .available()
     }
 
     pub(crate) fn submit_actor_action(
@@ -139,18 +148,10 @@ impl Simulation {
             _ => {}
         }
         if let Command::Institution { ref action } = command {
-            self.institution_command(actor, action)?;
-            self.reconcile_institutions()?;
-            self.host.bump_revision(1)?;
-            return Ok(());
+            return self.routed_institution_command(actor, action);
         }
         if let Command::Invocation { ref action } = command {
-            self.invocation_command(actor, action)?;
-            self.update_property_events()?;
-            self.reconcile_agreements()?;
-            self.observe_agreement_events();
-            self.host.bump_revision(1)?;
-            return Ok(());
+            return self.invocation_command(actor, action);
         }
         if let Command::Carry { source, quantity } = command {
             return self.carry_good(actor, source, quantity);
@@ -165,17 +166,10 @@ impl Simulation {
             return self.request_guardian(actor, guardian, request);
         }
         if let Command::Property { action } = command {
-            self.debug_property_action(actor, action)?;
-            self.update_property_events()?;
-            self.reconcile_agreements()?;
-            self.observe_agreement_events();
-            return Ok(());
+            return self.property_command(actor, action);
         }
         if let Command::Agreement { ref action } = command {
-            self.agreement_command(actor, action)?;
-            self.observe_agreement_events();
-            self.host.bump_revision(1)?;
-            return Ok(());
+            return self.agreement_command_with_revision(actor, action, 1);
         }
         if let Command::Cultivate { field, operation } = command {
             return self.start_cultivation(actor, field, operation);
@@ -189,17 +183,13 @@ impl Simulation {
         self.interrupt_actor_activity_preserving(actor, None);
     }
 
+    pub(crate) fn try_interrupt_actor_activity(&mut self, actor: PersonId) -> Result<(), Error> {
+        self.try_interrupt_actor_activity_preserving(actor, None)
+    }
+
     #[cfg(test)]
     pub(crate) fn interrupt_actor_activity_except_projects(&mut self, actor: PersonId) {
         self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Projects));
-    }
-
-    pub(crate) fn interrupt_actor_activity_except_health(&mut self, actor: PersonId) {
-        self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Health));
-    }
-
-    pub(crate) fn interrupt_actor_activity_except_property(&mut self, actor: PersonId) {
-        self.interrupt_actor_activity_preserving(actor, Some(ActivityOwner::Property));
     }
 
     fn interrupt_actor_activity_preserving(
@@ -207,42 +197,24 @@ impl Simulation {
         actor: PersonId,
         owner: Option<ActivityOwner>,
     ) {
-        self.interrupt_army_talk(actor);
-        self.interrupt_realm(actor);
-        self.interrupt_transport_lift(actor);
-        self.interrupt_social(actor);
-        self.interrupt_enforcement(actor);
-        if owner != Some(ActivityOwner::Health) {
-            self.cancel_health_activity(actor);
-        }
-        self.interrupt_ecology(actor);
-        self.cancel_mission_talk(actor);
-        self.interrupt_force(actor);
-        self.cancel_invocation_action(actor);
-        if owner != Some(ActivityOwner::Projects) {
-            self.interrupt_construction(actor);
-        }
-        self.interrupt_lesson(actor);
-        if owner != Some(ActivityOwner::Property) {
-            self.interrupt_property_action(actor);
-        }
-        self.interrupt_cultivation(actor);
-        self.invalidate_pregnancies(actor, false);
-        if self.host.state.physical.is_some() {
-            if let Activity::Care { child, .. } | Activity::Comfort { child, .. } =
-                *self.host.storage.activity(actor).expect("activity exists")
-            {
-                self.care_index.remove(&child);
-            }
-            *self
-                .host
-                .storage
-                .activity_mut(actor)
-                .expect("activity exists") = Activity::Idle;
-            for due in self.host.state.due.values_mut() {
-                due.retain(|d| !matches!(d, Due::Physical(id) if *id == actor));
-            }
-            self.host.state.due.retain(|_, due| !due.is_empty());
-        }
+        self.try_interrupt_actor_activity_preserving(actor, owner)
+            .expect("preflighted actor interruption");
+    }
+
+    fn try_interrupt_actor_activity_preserving(
+        &mut self,
+        actor: PersonId,
+        owner: Option<ActivityOwner>,
+    ) -> Result<(), Error> {
+        let opening = self.host.transaction_opening();
+        let prepared = self.prepare_interruptions(&[actor], owner.unwrap_or(ActivityOwner::All))?;
+        let mut batch = game_ecs::Batch::new();
+        let mut finish = prepared.stage_into(self, &mut batch, &BTreeMap::new())?;
+        finish.validate_batch(self, &batch)?;
+        let mut transaction = game_world::Transaction::new(opening, batch);
+        transaction.events = finish.events_for(&[actor]);
+        self.host.commit_transaction(transaction)?;
+        finish.finish_actor_metadata(self, actor);
+        Ok(())
     }
 }

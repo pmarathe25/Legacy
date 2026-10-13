@@ -7,21 +7,21 @@ label = "Settlement founder"
 settlement = "ordinary"
 initial_residents = 15
 established_workshop = false
-starting_customs = false
+starting_custom = "camp-provisioning"
 child_successor = false
 [data.openings.established-ruler]
 label = "Established ruler"
 settlement = "ordinary"
 initial_residents = 15
 established_workshop = true
-starting_customs = true
+starting_custom = "supported-office"
 child_successor = false
 [data.openings.child-successor]
 label = "Child successor"
 settlement = "ordinary"
 initial_residents = 15
 established_workshop = true
-starting_customs = true
+starting_custom = "supported-office"
 child_successor = true
 [data.settlements.ordinary]
 attitude = {exclusive_claims=500, sharing=600, willingness_to_defend=500}
@@ -221,6 +221,43 @@ workers = [0,6]
 craftsperson = 6
 historical_batches = 5
 historical_materials = { quantity = 5000, capacity = 100000 }
+
+[data.settlements.ordinary.customs.camp-provisioning]
+source = "food"
+source_access = { kind="selected", residents=[0] }
+claimant = 0
+claim_rights = ["Use", "Consume", "Transfer", "GrantAccess"]
+fund = { key="provisioning-fund", good="Food", area="centre", quantity=0, capacity=100000, access={ kind="selected", residents=[0,4] }, custodian=4 }
+founders = [0,4,5,6,7]
+join_remaining = true
+purpose = "Willowbank camp provisioning association"
+jurisdiction = "centre"
+open_membership = true
+procedure = { proposers={ members=true }, voters={ members=true }, minimum_support=3 }
+offices = [{ slot=0, holder=4, inventories=["food", "provisioning-fund"], powers=["Negotiate", "Access", "Delivery", "HearAccessCases"], minimum_support=3 }]
+access_rules = [{ subjects={ members=true }, condition="local", inventory="food", allowed=true, authority=0 }]
+contributions = [{ debtor=0, creditor=4, source="food", destination="provisioning-fund", quantity=1000, deadline_after=86400000 }]
+fulfilled_contribution = 0
+fulfil_step = 60000
+
+[data.settlements.ordinary.customs.supported-office]
+source = "food"
+source_access = { kind="selected", residents=[0] }
+claimant = 0
+claim_rights = ["Use", "Consume", "Transfer", "GrantAccess"]
+fund = { key="provisioning-fund", good="Food", area="centre", quantity=0, capacity=100000, access={ kind="selected", residents=[0,4] }, custodian=4 }
+founders = [0,4,5,6,7]
+join_remaining = true
+purpose = "Willowbank council and supported village office"
+jurisdiction = "centre"
+open_membership = true
+procedure = { proposers={ members=true }, voters={ members=true }, minimum_support=3 }
+offices = [{ slot=0, holder=0, inventories=["food", "provisioning-fund"], powers=["Negotiate", "Access", "Delivery", "HearAccessCases"], minimum_support=3 }]
+access_rules = [{ subjects={ members=true }, condition="local", inventory="food", allowed=true, authority=0 }]
+contributions = [{ debtor=0, creditor=4, source="food", destination="provisioning-fund", quantity=1000, deadline_after=86400000 }]
+fulfilled_contribution = 0
+fulfil_step = 60000
+
 [data.settlements.populated]
 attitude = {exclusive_claims=500, sharing=600, willingness_to_defend=500}
 minimum_residents = 15

@@ -1,4 +1,6 @@
 //! Authored starting places and assets. No live-world mutation or game systems.
+mod customs;
+pub use customs::*;
 use game_content::{Document, Stamp};
 use game_core::*;
 use game_ecology::ResourceKind;
@@ -114,6 +116,8 @@ pub struct SettlementDefinition {
     pub stocks: Vec<StockDefinition>,
     pub resources: Vec<ResourceDefinition>,
     pub workshops: Vec<WorkshopDefinition>,
+    #[serde(default)]
+    pub customs: BTreeMap<String, StartingCustom>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -122,7 +126,7 @@ pub struct Opening {
     pub settlement: String,
     pub initial_residents: usize,
     pub established_workshop: bool,
-    pub starting_customs: bool,
+    pub starting_custom: String,
     pub child_successor: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -340,6 +344,12 @@ impl SettlementDefinition {
             }
             check_access(&workshop.access, self.minimum_residents, None)?;
         }
+        for (key, custom) in &self.customs {
+            if !valid_key(key) {
+                return Err(invalid("invalid starting custom key"));
+            }
+            custom.validate(self)?;
+        }
         Ok(())
     }
     pub fn plan(&self, residents: usize) -> Result<AuthoredPlan, Error> {
@@ -412,6 +422,7 @@ impl Catalog {
                 || opening.label.trim().is_empty()
                 || opening.label.len() > 256
                 || !(settlement.minimum_residents..=128).contains(&opening.initial_residents)
+                || !settlement.customs.contains_key(&opening.starting_custom)
                 || opening.established_workshop
                     && (settlement.workshops.is_empty()
                         || settlement

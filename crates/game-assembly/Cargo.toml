@@ -50,5 +50,9 @@ harness = false
 name = "full_world"
 harness = false
 
+[[bench]]
+name = "interval_staging"
+harness = false
+
 [dev-dependencies]
 game-session.workspace = true

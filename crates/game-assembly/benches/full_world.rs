@@ -247,6 +247,8 @@ fn main() {
         .map_or(120, |s| s.parse::<u64>().expect("simulated minutes"));
     let policy = std::env::args().nth(4).as_deref() == Some("policy") || minutes > 120;
     let trace_player = std::env::args().nth(5).as_deref() == Some("trace-player");
+    let save_output = std::env::args()
+        .find_map(|argument| argument.strip_prefix("--save-to=").map(str::to_owned));
     let config = Config::default();
     let start = Instant::now();
     let mut sim = Simulation::populated_world(
@@ -409,7 +411,7 @@ fn main() {
                 .alive;
             eprintln!(
                 "full_world day={day} living={living} people={} player_alive={player_alive}",
-                state.state.people.len()
+                state.people().count()
             );
         }
     }
@@ -431,6 +433,9 @@ fn main() {
     let start = Instant::now();
     let save = sim.save().unwrap();
     let save_time = start.elapsed();
+    if let Some(path) = save_output {
+        std::fs::write(path, &save).expect("benchmark save output");
+    }
     let start = Instant::now();
     let loaded = Simulation::load(
         &save,

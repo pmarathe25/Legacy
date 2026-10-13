@@ -147,12 +147,16 @@ pub(crate) fn build(execution: &Execution) -> Result<WorldEngine, Error> {
 }
 
 pub(crate) struct PreparedWorldStep {
+    pub opening: game_world::TransactionOpening,
+    pub opening_rows: game_ecs::Store,
+    pub opening_inputs: AssemblyState,
     pub next: SimTime,
     pub elapsed: u64,
     pub equipment: BTreeMap<PersonId, bool>,
-    pub output: Vec<compute::ProgressOutput>,
+    pub progress: game_characters::people::ProgressInputs,
+    pub output: Vec<game_characters::people::EvaluatedProgress>,
     pub physical_output: Vec<physical::Outcome>,
-    pub skill_output: Vec<skills::PracticeDelta>,
+    pub skill_output: Option<game_skills::EvaluatedLearning>,
     pub project_output: Option<game_projects::PreparedAdvance>,
     pub invocation_output: invocation::PendingInvocation,
     pub environment_output: Option<environment::Step>,

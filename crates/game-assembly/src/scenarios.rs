@@ -150,7 +150,11 @@ impl Simulation {
         }
         sim.initialize_social(config.social.clone())?;
         sim.seed_playable_family_plans()?;
-        sim.establish_starting_custom(opening.starting_customs)?;
+        sim.establish_starting_custom(
+            &content.openings.catalog.settlements[&opening.settlement].customs
+                [&opening.starting_custom],
+            &settlements[0],
+        )?;
         if opening.child_successor {
             sim.author_child_opening()?;
         }
@@ -184,25 +188,18 @@ impl Simulation {
                 .checked_add(adult_extra)
                 .ok_or(Error::Overflow)?,
         );
-        for actor in self
-            .host
-            .state
-            .people
-            .iter()
-            .map(|person| person.id)
-            .collect::<Vec<_>>()
-        {
+        for actor in self.people().map(|person| person.id).collect::<Vec<_>>() {
             self.interrupt_actor_activity(actor);
             game_workshop::remove_job(&mut self.host.storage, actor).map(|_| ())?;
         }
         self.host.state.development.as_mut().unwrap().rules = config.biology.clone();
-        for person in &mut self.host.state.people {
+        for person_id in self.people().map(|person| person.id).collect::<Vec<_>>() {
             *game_spatial::location_mut(
                 &mut self.host.storage,
-                game_ecs::StableId((person.id).0),
+                game_ecs::StableId((person_id).0),
             )
             .expect("location exists") = Location::AtArea(village);
-            game_transport::replace_route(&mut self.host.storage, person.id, Vec::new())
+            game_transport::replace_route(&mut self.host.storage, person_id, Vec::new())
                 .expect("actor route");
         }
         for person in game_lifecycle::all_lives(&self.host.storage)
@@ -223,20 +220,13 @@ impl Simulation {
             ))
             .or_default()
             .push(Due::Review);
-        for person in self
-            .host
-            .state
-            .people
-            .iter()
-            .map(|p| p.id)
-            .collect::<Vec<_>>()
-        {
+        for person in self.people().map(|p| p.id).collect::<Vec<_>>() {
             self.schedule_age(person);
         }
         // These residents remember the existing fields, granaries and routes.
         // The reports predate control; newborns acquire their own knowledge later.
-        let reporter = self.host.state.people[3].id;
-        for person in &self.host.state.people {
+        let reporter = self.person_at(3).id;
+        for person_id in self.people().map(|person| person.id).collect::<Vec<_>>() {
             let known: Vec<_> = game_cargo::inventories(&self.host.storage)
                 .map(|(_, row)| row)
                 .filter_map(|stock| {
@@ -248,21 +238,21 @@ impl Simulation {
                         area,
                         good: stock.good,
                         quantity: stock.quantity,
-                        accessible: stock.access.contains(&person.id),
+                        accessible: stock.access.contains(&person_id),
                         observed_at: owner_now,
                         learned_at: owner_now,
                         source: KnowledgeSource::Reported(reporter),
                     })
                 })
                 .collect();
-            let (mind,stocks)=self.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((person.id).0)).expect("mind and stock knowledge exist");
+            let (mind,stocks)=self.host.storage.get_pair_mut::<game_characters::decisions::Mind<game_api::Command>,game_characters::decisions::Stocks>(game_ecs::StableId((person_id).0)).expect("mind and stock knowledge exist");
             mind.plan = None;
             mind.retry_after = owner_now;
             for fact in known {
                 stocks.known.insert(fact.inventory, fact);
             }
         }
-        let parents = [self.host.state.people[3].id, self.host.state.people[4].id];
+        let parents = [self.person_at(3).id, self.person_at(4).id];
         for (actor, partner) in [(parents[0], parents[1]), (parents[1], parents[0])] {
             let mind = game_characters::decisions::mind_mut::<game_api::Command>(
                 &mut self.host.storage,
@@ -281,7 +271,7 @@ impl Simulation {
         }
         // Shared cultivation is this settlement's starting land arrangement.
         // It does not prescribe property or caregiving for other societies.
-        let residents: BTreeSet<_> = self.host.state.people.iter().map(|p| p.id).collect();
+        let residents: BTreeSet<_> = self.people().map(|p| p.id).collect();
         let world = self.host.state.agriculture.as_mut().unwrap();
         let fields: Vec<_> = world.fields(&self.host.storage).map(|(id, _)| id).collect();
         for id in fields {
@@ -300,7 +290,7 @@ impl Simulation {
         config: &Config,
         profile: &str,
     ) -> Result<(), Error> {
-        let people: BTreeSet<_> = self.host.state.people.iter().map(|p| p.id).collect();
+        let people: BTreeSet<_> = self.people().map(|p| p.id).collect();
         let ruler = self.host.state.ruler;
         let village = self.host.state.areas[0].id;
         self.host.state.skills = Some(skills::Runtime::new(config.skills.clone())?);
@@ -318,11 +308,8 @@ impl Simulation {
             .0
             .checked_mul(u64::from(config.skills.max_level))
             .ok_or(Error::Overflow)?;
-        let guardians = self
-            .host
-            .state
-            .people
-            .iter()
+        let guardians: Vec<_> = self
+            .people()
             .filter(|person| person.role == Role::Guardian)
             .map(|person| {
                 (
@@ -344,12 +331,10 @@ impl Simulation {
             })
             .collect();
         for actor in self
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .filter(|p| p.role == Role::Guardian)
             .map(|p| p.id)
+            .collect::<Vec<_>>()
         {
             game_skills::skills_mut(&mut self.host.storage, actor)
                 .unwrap()
@@ -363,17 +348,21 @@ impl Simulation {
                     },
                 );
         }
-        self.host.state.lineage = Some(lineage::World {
-            incarnations: vec![lineage::Incarnation {
-                person: ruler,
-                bound_at: self.host.clock().time,
-                died_at: None,
-            }],
-            waiting: None,
+        let history_id = game_ecs::StableId(ruler.0);
+        let bound_at = self.host.clock().time;
+        self.host.state.lineage = Some(lineage::World::initialize(
+            &mut self.host.storage,
+            history_id,
+            config.mentorship.clone(),
+            lineage::History {
+                incarnations: vec![lineage::Incarnation {
+                    person: ruler,
+                    bound_at,
+                    died_at: None,
+                }],
+            },
             guardians,
-            rules: config.mentorship.clone(),
-            invocation_learning: BTreeMap::new(),
-        });
+        )?);
         self.host.state.combat = Some(combat::World {
             rules: combat::Rules {
                 encounter_limit: 128,
@@ -384,22 +373,16 @@ impl Simulation {
                 defence: self.host.state.physical.as_ref().unwrap().rules.max_health / 6,
                 incapacitation: self.host.state.physical.as_ref().unwrap().rules.max_health / 4,
             },
-            profiles: people
-                .iter()
-                .map(|person| {
-                    (
-                        *person,
-                        combat::Profile {
-                            initiative: if *person == ruler { 200 } else { 100 },
-                        },
-                    )
-                })
-                .collect(),
-            maps: BTreeMap::new(),
-            road_maps: BTreeMap::new(),
-            encounters: BTreeMap::new(),
-            captivity: BTreeMap::new(),
         });
+        for person in &people {
+            game_conflict::insert_profile(
+                &mut self.host.storage,
+                *person,
+                combat::Profile {
+                    initiative: if *person == ruler { 200 } else { 100 },
+                },
+            )?;
+        }
         let custodians = game_cargo::inventories(&self.host.storage)
             .map(|(_, row)| row)
             .map(|stock| {
@@ -454,10 +437,10 @@ impl Simulation {
         self.host.state.institutions = Some(institutions::Runtime {
             last_event: self.host.next_event() - 1,
         });
-        for person in &self.host.state.people {
+        for person_id in self.people().map(|person| person.id).collect::<Vec<_>>() {
             game_society::insert_knowledge(
                 &mut self.host.storage,
-                person.id,
+                person_id,
                 game_society::Knowledge::default(),
             )?;
         }
@@ -482,10 +465,7 @@ impl Simulation {
             control: game_invocation::ControlState::new(config.invocation.clone())?,
         });
         self.host.state.force = Some(force::World {
-            yielded: BTreeMap::new(),
             rules: force::Rules::default(),
-            escapes: BTreeMap::new(),
-            restraints: BTreeMap::new(),
             last_event: self.host.next_event() - 1,
         });
         self.host.state.missions = Some(missions::Runtime {
@@ -753,12 +733,12 @@ impl Simulation {
                 ));
             }
             stock.quantity = Quantity(quantity);
-            self.emit(EventKind::Produced {
+            self.publish_authored_experience(EventKind::Produced {
                 actor: craftsperson,
                 site,
                 output,
                 quantity: recipe.output_quantity,
-            });
+            })?;
         }
         self.host.state.projects.as_mut().unwrap().last_event = self.host.next_event() - 1;
         let level = 10.min(self.host.state.skills.as_ref().unwrap().rules.max_level);
@@ -799,20 +779,16 @@ impl Simulation {
             .records
             .extend(experiences);
         let observed_at = self.time();
-        for guardian in self
-            .host
-            .state
-            .lineage
-            .as_mut()
-            .unwrap()
-            .guardians
-            .values_mut()
-        {
-            guardian.assessments.insert(ruler, lineage::Assessment {
-                    independence: 500, competence: 500, judgment: 450, risks: 200,
-                    observed_stage: Some(LifeStage::Adult), observed_at, ready: true,
-                    explanation: "I witnessed this adult's earlier provisioning, craft work and council decisions; I still judge each request individually".into(),
-                });
+        let guardians: Vec<_> = game_lineage::guardians(&self.host.storage)
+            .map(|(id, _)| id)
+            .collect();
+        for guardian in guardians {
+            let prepared = self.host.state.lineage.as_ref().unwrap().prepare_authored_assessment(&self.host.storage, guardian, ruler, lineage::Assessment {
+                independence: 500, competence: 500, judgment: 450, risks: 200,
+                observed_stage: Some(LifeStage::Adult), observed_at, ready: true,
+                explanation: "I witnessed this adult's earlier provisioning, craft work and council decisions; I still judge each request individually".into(),
+            })?;
+            self.commit_lineage(prepared)?;
         }
         self.update_property_events()?;
         Ok(())
@@ -822,13 +798,7 @@ impl Simulation {
         &mut self,
         settlement: &population::Settlement,
     ) -> Result<(), Error> {
-        let residents: BTreeSet<_> = self
-            .host
-            .state
-            .people
-            .iter()
-            .map(|person| person.id)
-            .collect();
+        let residents: BTreeSet<_> = self.people().map(|person| person.id).collect();
         let day = self.host.state.environment.as_ref().unwrap().calendar.day.0;
         self.host.state.ecology = Some(ecology::Runtime {
             rules: game_ecology::EcologyRules::default(),
@@ -860,7 +830,7 @@ impl Simulation {
             residents.clone(),
             850,
         )?;
-        let healer = self.host.state.people[6].id;
+        let healer = self.person_at(6).id;
         let water = settlement.stocks["drinking-water"];
         let amount = game_cargo::inventory(&self.host.storage, water)
             .unwrap()
@@ -893,8 +863,8 @@ impl Simulation {
     }
 
     fn seed_playable_family_plans(&mut self) -> Result<(), Error> {
-        let first = self.host.state.people[3].id;
-        let second = self.host.state.people[4].id;
+        let first = self.person_at(3).id;
+        let second = self.person_at(4).id;
         // This particular couple discussed parenthood before control begins.
         // Affection alone never creates family intent for later generations.
         let effect = self
@@ -903,7 +873,12 @@ impl Simulation {
             .social
             .as_mut()
             .unwrap()
-            .finish_conversation(first, second, SocialTopic::FamilyPlans)?;
+            .finish_conversation(
+                &mut self.host.storage,
+                first,
+                second,
+                SocialTopic::FamilyPlans,
+            )?;
         for (actor, partner) in [(first, second), (second, first)] {
             let relationship = game_characters::decisions::mind_mut::<game_api::Command>(
                 &mut self.host.storage,
@@ -916,164 +891,131 @@ impl Simulation {
             relationship.affection = (relationship.affection + effect.affection_gain).min(1_000);
             relationship.trust = (relationship.trust + effect.trust_gain).min(1_000);
         }
-        self.emit(EventKind::Socialized {
+        self.publish_authored_experience(EventKind::Socialized {
             first,
             second,
             topic: SocialTopic::FamilyPlans,
-        });
+        })?;
         Ok(())
     }
 
-    fn establish_starting_custom(&mut self, ruling_office: bool) -> Result<(), Error> {
-        let ruler = self.host.state.ruler;
-        let steward = self.host.state.people[4].id;
-        let village = self.host.state.areas[0].id;
-        let food = game_cargo::inventories(&self.host.storage)
-            .map(|(_, row)| row)
-            .find(|stock| {
-                stock.good == Good::Food && stock.location == InventoryLocation::Area(village)
-            })
-            .unwrap()
-            .id;
-        game_cargo::inventory_mut(&mut self.host.storage, food)
-            .unwrap()
-            .access = BTreeSet::from([ruler]);
+    fn establish_starting_custom(
+        &mut self,
+        definition: &game_openings::StartingCustom,
+        settlement: &population::Settlement,
+    ) -> Result<(), Error> {
+        let source = settlement.stocks[&definition.source];
+        game_cargo::inventory_mut(&mut self.host.storage, source)
+            .ok_or(Error::Unavailable)?
+            .access = definition
+            .source_access
+            .resolve(&settlement.residents, None)?;
         let fund = self.add_inventory(
-            Good::Food,
-            InventoryLocation::Area(village),
-            Quantity(0),
-            Quantity(100_000),
-            BTreeSet::from([ruler, steward]),
+            definition.fund.good,
+            InventoryLocation::Area(settlement.areas[&definition.fund.area]),
+            definition.fund.quantity,
+            definition.fund.capacity,
+            definition
+                .fund
+                .access
+                .resolve(&settlement.residents, None)?,
         )?;
-        game_property::declare_custody(&mut self.host.storage, fund, steward)
-            .expect("declared custody");
+        game_property::declare_custody(
+            &mut self.host.storage,
+            fund,
+            settlement.residents[definition.fund.custodian],
+        )?;
         self.update_property_events()?;
-        let founders = BTreeSet::from([
-            ruler,
-            steward,
-            self.host.state.people[5].id,
-            self.host.state.people[6].id,
-            self.host.state.people[7].id,
-        ]);
+        let custom = definition.resolve(
+            &settlement.residents,
+            &settlement.areas,
+            &settlement.stocks,
+            fund,
+            self.time(),
+        )?;
         self.debug_property_action(
-            ruler,
+            custom.claimant,
             PropertyAction::Claim {
-                inventory: food,
-                rights: BTreeSet::from([
-                    ClaimRight::Use,
-                    ClaimRight::Consume,
-                    ClaimRight::Transfer,
-                    ClaimRight::GrantAccess,
-                ]),
+                inventory: custom.source,
+                rights: custom.claim_rights,
                 evidence: Vec::new(),
             },
         )?;
         let claim = game_property::claims(&self.host.storage)
             .map(|(id, _)| id)
             .last()
-            .unwrap();
-        for actor in founders.iter().copied().filter(|actor| *actor != ruler) {
+            .ok_or(Error::Unavailable)?;
+        for actor in custom
+            .founders
+            .iter()
+            .copied()
+            .filter(|actor| *actor != custom.claimant)
+        {
             self.debug_property_action(actor, PropertyAction::Recognize { claim })?;
         }
-        let holder = if ruling_office { ruler } else { steward };
-        let charter = InstitutionCharter {
-            purpose: if ruling_office {
-                "Willowbank council and supported village office"
-            } else {
-                "Willowbank camp provisioning association"
-            }
-            .into(),
-            jurisdiction: village,
-            founders: founders.clone(),
-            open_membership: true,
-            procedure: DecisionProcedure {
-                proposers: Subjects::members(),
-                voters: Subjects::members(),
-                minimum_support: 3,
-            },
-            offices: vec![OfficeMandate {
-                slot: 0,
-                holder,
-                inventories: BTreeSet::from([food, fund]),
-                sites: BTreeSet::new(),
-                powers: BTreeSet::from([
-                    OfficePower::Negotiate,
-                    OfficePower::Access,
-                    OfficePower::Delivery,
-                    OfficePower::HearAccessCases,
-                ]),
-                minimum_support: 3,
-            }],
-            rules: vec![InstitutionalRule {
-                subjects: Subjects::members(),
-                when: RuleExpression::Fact(SocialCondition::Local),
-                effect: SocialEffect::Access {
-                    inventory: food,
-                    allowed: true,
-                },
-                authority: 0,
-            }],
-            contributions: vec![AgreementTerm::Delivery {
-                debtor: ruler,
-                creditor: steward,
-                source: food,
-                destination: fund,
-                quantity: Quantity(1_000),
-                deadline: SimTime(self.host.clock().time.0 + 86_400_000),
-            }],
-            evidence: BTreeSet::new(),
-        };
         self.debug_institution_action(
-            ruler,
+            custom.claimant,
             InstitutionAction::Found {
-                charter,
+                charter: custom.charter,
                 origin: None,
             },
         )?;
         let institution = game_society::institutions(&self.host.storage)
             .map(|(id, _)| id)
             .next_back()
-            .unwrap();
-        for actor in founders.into_iter().filter(|actor| *actor != ruler) {
+            .ok_or(Error::Unavailable)?;
+        for actor in custom
+            .founders
+            .into_iter()
+            .filter(|actor| *actor != custom.claimant)
+        {
             self.debug_institution_action(actor, InstitutionAction::Join { institution })?;
         }
-        for actor in self
-            .host
-            .state
-            .people
-            .iter()
-            .map(|person| person.id)
-            .filter(|person| *person != ruler)
-            .collect::<Vec<_>>()
-        {
-            if !game_society::institution(&self.host.storage, institution)
-                .expect("validated Society reference")
-                .members
-                .contains(&actor)
+        if custom.join_remaining {
+            for actor in self
+                .people()
+                .map(|person| person.id)
+                .filter(|person| *person != custom.claimant)
+                .collect::<Vec<_>>()
             {
-                self.debug_institution_action(actor, InstitutionAction::Join { institution })?;
+                if !game_society::institution(&self.host.storage, institution)
+                    .ok_or(Error::Unavailable)?
+                    .members
+                    .contains(&actor)
+                {
+                    self.debug_institution_action(actor, InstitutionAction::Join { institution })?;
+                }
             }
         }
         self.reconcile_institutions()?;
-        self.carry_good(ruler, food, Quantity(1_000))?;
-        self.advance(MINUTE)?;
-        self.debug_actor_command(
-            ruler,
-            Command::Load {
-                source: self.host.state.people[self.person_index[&ruler]].inventory,
-                destination: fund,
-                quantity: Quantity(1_000),
-            },
-        )?;
-        self.advance(MINUTE)?;
-        self.reconcile_institutions()?;
+        if let Some(AgreementTerm::Delivery {
+            debtor,
+            source,
+            destination,
+            quantity,
+            ..
+        }) = custom.initial_delivery
+        {
+            self.carry_good(debtor, source, quantity)?;
+            self.advance(custom.fulfil_step)?;
+            self.debug_actor_command(
+                debtor,
+                Command::Load {
+                    source: self.person_at(self.person_index[&debtor]).inventory,
+                    destination,
+                    quantity,
+                },
+            )?;
+            self.advance(custom.fulfil_step)?;
+            self.reconcile_institutions()?;
+        }
         Ok(())
     }
 
     fn author_child_opening(&mut self) -> Result<(), Error> {
         let owner_seed = self.host.seed();
-        let mother = self.host.state.people[3].id;
-        let father = self.host.state.people[4].id;
+        let mother = self.person_at(3).id;
+        let father = self.person_at(4).id;
         if !game_lifecycle::all_pregnancies(&self.host.storage)
             .map(|(_, row)| row)
             .any(|pregnancy| {
@@ -1143,33 +1085,15 @@ impl Simulation {
             body.vitals.hunger = 0;
             body.vitals.fatigue = 0;
         }
-        for person in &mut self.host.state.people {
-            game_transport::replace_route(&mut self.host.storage, person.id, Vec::new())
+        for person_id in self.people().map(|person| person.id).collect::<Vec<_>>() {
+            game_transport::replace_route(&mut self.host.storage, person_id, Vec::new())
                 .expect("actor route");
             *game_spatial::location_mut(
                 &mut self.host.storage,
-                game_ecs::StableId((person.id).0),
+                game_ecs::StableId((person_id).0),
             )
             .expect("location exists") = Location::AtArea(self.host.state.areas[0].id);
         }
-        let lifespan = self
-            .host
-            .state
-            .development
-            .as_ref()
-            .unwrap()
-            .rules
-            .lifespan
-            .0;
-        let elderhood = self
-            .host
-            .state
-            .development
-            .as_ref()
-            .unwrap()
-            .rules
-            .elderhood
-            .0;
         let cultivators: Vec<_> = game_agriculture::cultivations(&self.host.storage)
             .map(|(actor, _)| actor)
             .collect();
@@ -1182,11 +1106,8 @@ impl Simulation {
         {
             game_projects::remove_construction(&mut self.host.storage, actor)?;
         }
-        let gatherers: Vec<_> = game_ecology::gatherings(&self.host.storage)
-            .map(|(actor, _)| actor)
-            .collect();
-        for actor in gatherers {
-            game_ecology::remove_gathering(&mut self.host.storage, actor)?;
+        if let Some(ecology) = &self.host.state.ecology {
+            ecology.reset_gatherings(&mut self.host.storage)?;
         }
         // This authored interval ends all previously active social tasks. Its
         // scheduler epoch begins at this snapshot, as do the rebuilt physical
@@ -1195,44 +1116,14 @@ impl Simulation {
             traits.reset_epoch(death_at)?;
         }
         if let Some(social) = &mut self.host.state.social {
-            social.interactions.clear();
-            social.participants.clear();
-            social.last_review = death_at;
-            for record in social.development.values_mut() {
-                record.next_choice = death_at;
-            }
+            social.reset(&mut self.host.storage, death_at)?;
         }
 
-        for person in game_lifecycle::all_lives(&self.host.storage)
-            .map(|(id, _)| id)
-            .collect::<Vec<_>>()
-        {
-            let life =
-                game_lifecycle::life_mut(&mut self.host.storage, person).expect("life exists");
-            let age = life
-                .initial_age
-                .0
-                .checked_add(death_at.0 - life.born.0)
-                .ok_or(Error::Overflow)?;
-            if age >= lifespan {
-                return Err(Error::InvalidConfiguration(
-                    "biology cannot support the authored prenatal history".into(),
-                ));
-            }
-            life.stage = if age < elderhood {
-                LifeStage::Adult
-            } else {
-                LifeStage::Elder
-            };
-        }
-        for person in self
-            .host
-            .state
-            .people
-            .iter()
-            .map(|p| p.id)
-            .collect::<Vec<_>>()
-        {
+        let lifecycle = self.host.state.development.as_ref().unwrap();
+        lifecycle
+            .prepare_prenatal_history(&self.host.storage, death_at)?
+            .commit(lifecycle, &mut self.host.storage)?;
+        for person in self.people().map(|p| p.id).collect::<Vec<_>>() {
             self.schedule_age(person);
         }
         self.host
@@ -1328,12 +1219,9 @@ impl Simulation {
     }
     fn seed_playable_shelters(&mut self, rules: &HealthRules, houses: bool) -> Result<(), Error> {
         self.initialize_health(rules.clone())?;
-        let custodian = self.host.state.people[4].id;
+        let custodian = self.person_at(4).id;
         let access: BTreeSet<_> = self
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .filter(|person| {
                 game_physiology::body(&self.host.storage, person.id)
                     .expect("body exists")
@@ -1398,10 +1286,7 @@ impl Simulation {
                 built_at,
             )?;
             let occupants: Vec<_> = self
-                .host
-                .state
-                .people
-                .iter()
+                .people()
                 .filter(|person| {
                     access.contains(&person.id)
                         && *game_spatial::location(
@@ -1540,7 +1425,7 @@ mod tests {
                         .map(|shelter| shelter.timber_used.0)
                         .sum::<u64>()
             );
-            let healer = sim.host.state.people[6].id;
+            let healer = sim.person_at(6).id;
             assert!(sim.own_skill_level(healer, Skill::Medicine) > 0);
             let water = game_cargo::inventories(&sim.host.storage)
                 .map(|(_, row)| row)
@@ -1630,7 +1515,14 @@ mod tests {
     fn child_control_follows_an_actual_human_birth_after_actual_death_and_inherits_no_office_or_mastery()
      {
         let sim = opening("child-successor", 1);
-        let lineage = sim.host.state.lineage.as_ref().unwrap();
+        let lineage = sim
+            .host
+            .state
+            .lineage
+            .as_ref()
+            .unwrap()
+            .history(&sim.host.storage)
+            .unwrap();
         assert_eq!(lineage.incarnations.len(), 2);
         let previous = &lineage.incarnations[0];
         let current = &lineage.incarnations[1];

@@ -237,7 +237,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
         .areas
         .iter()
         .map(|a| a.id.0)
-        .chain(s.state.people.iter().map(|p| p.id.0))
+        .chain(game_characters::persons(s.components).map(|(id, _)| id.0))
         .chain(
             game_cargo::inventories(s.components)
                 .map(|(id, _)| id)
@@ -248,6 +248,16 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             return Err(fail());
         }
     }
+    if let Some(lineage) = &s.state.lineage {
+        let id = lineage.history.0;
+        if id == 0
+            || id >= s.next_id
+            || !ids.contains(&id)
+            || game_characters::people::person(s.components, PersonId(id)).is_none()
+        {
+            return Err(fail());
+        }
+    }
     if s.state.health.is_some() {
         for (id, _) in game_health::shelters(s.components) {
             if id.0 == 0 || id.0 >= s.next_id || !ids.insert(id.0) {
@@ -255,13 +265,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.enforcement {
-        for id in world.cases.keys().map(|id| id.0).chain(
-            world
-                .cases
-                .values()
-                .filter_map(|case| case.judgment.as_ref().map(|judgment| judgment.id.0)),
-        ) {
+    if s.state.enforcement.is_some() {
+        for id in game_society::enforcement::cases(s.components)
+            .map(|(id, _)| id.0)
+            .chain(
+                game_society::enforcement::cases(s.components)
+                    .filter_map(|(_, case)| case.judgment.as_ref().map(|judgment| judgment.id.0)),
+            )
+        {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
@@ -353,7 +364,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             inventories: &game_cargo::inventories(s.components)
                 .map(|(id, _)| id)
                 .collect(),
-            people: &s.state.people.iter().map(|row| row.id).collect(),
+            people: &s.people().map(|row| row.id).collect(),
         },
     )?;
     if let Some(world) = &s.state.agriculture {
@@ -384,8 +395,8 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             }
         }
     }
-    if let Some(world) = &s.state.armies {
-        for army in world.kernel.armies.values() {
+    if s.state.armies.is_some() {
+        for (_, army) in game_armies::armies(s.components) {
             for id in std::iter::once(army.id.0)
                 .chain(army.orders.keys().map(|id| id.0))
                 .chain(army.reports.keys().map(|id| id.0))
@@ -409,25 +420,33 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     {
         return Err(fail());
     }
-    if let Some(world) = &s.state.combat {
-        for id in world
-            .maps
-            .values()
-            .chain(world.road_maps.values())
-            .map(|m| m.id.0)
-            .chain(world.encounters.keys().map(|e| e.0))
+    if s.state.combat.is_some() {
+        for id in game_conflict::maps(s.components)
+            .map(|(id, _)| id.0)
+            .chain(game_conflict::encounters(s.components).map(|(id, _)| id.0))
         {
             if id == 0 || id >= s.next_id || !ids.insert(id) {
                 return Err(fail());
             }
         }
     }
-    if !s.state.people.windows(2).all(|p| p[0].id < p[1].id)
-        || !s.state.areas.windows(2).all(|a| a[0].id < a[1].id)
-    {
+    if !s.state.areas.windows(2).all(|a| a[0].id < a[1].id) {
         return Err(fail());
     }
-    let people: BTreeMap<_, _> = s.state.people.iter().map(|p| (p.id, p)).collect();
+    game_characters::people::validate_people(
+        s.components,
+        game_characters::people::PersonContext {
+            ruler: s.state.ruler,
+            next_id: s.next_id,
+        },
+        |inventory| {
+            game_cargo::inventory(s.components, inventory).and_then(|stock| match stock.location {
+                InventoryLocation::Carried(actor) => Some(actor),
+                _ => None,
+            })
+        },
+    )?;
+    let people: BTreeMap<_, _> = s.people().map(|p| (p.id, p)).collect();
     if game_spatial::locations(s.components)
         .map(|(id, location)| (game_core::PersonId(id.0), location))
         .map(|(id, _)| id)
@@ -443,28 +462,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     )?;
 
     let areas: BTreeSet<_> = s.state.areas.iter().map(|a| a.id).collect();
-    if !people
-        .get(&s.state.ruler)
-        .is_some_and(|p| p.role == Role::Ruler)
-        || s.state
-            .people
-            .iter()
-            .filter(|p| p.role == Role::Ruler)
-            .count()
-            != 1
-    {
-        return Err(fail());
-    }
     for a in &s.state.areas {
-        let mut destinations = BTreeSet::new();
-        for l in &a.links {
-            if l.duration.0 == 0
-                || !areas.contains(&l.destination)
-                || !destinations.insert(l.destination)
-            {
-                return Err(fail());
-            }
+        if !s.components.contains(game_ecs::StableId(a.id.0)) {
+            return Err(fail());
         }
+        game_spatial::receipt_validation::validate_link_rows(
+            a.links.iter().map(|link| (link.destination, link.duration)),
+            &areas,
+        )?;
     }
     let mut reviews = Vec::new();
     let mut physical_deadlines = BTreeSet::new();
@@ -488,15 +493,15 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     }
                 }
                 Due::Transfers(intents) => {
-                    for i in intents {
-                        if i.quantity.0 == 0
-                            || i.source == i.destination
-                            || !people.contains_key(&i.actor)
-                            || !game_cargo::inventory(s.components, i.source).is_some()
-                            || !game_cargo::inventory(s.components, i.destination).is_some()
-                        {
-                            return Err(fail());
-                        }
+                    for intent in intents {
+                        game_cargo::receipt_validation::validate_pending_transfer(
+                            intent.quantity,
+                            intent.source,
+                            intent.destination,
+                            people.contains_key(&intent.actor),
+                            game_cargo::inventory(s.components, intent.source).is_some(),
+                            game_cargo::inventory(s.components, intent.destination).is_some(),
+                        )?;
                     }
                 }
                 Due::Physical(id) => {
@@ -506,52 +511,34 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                         .as_ref()
                         .and_then(|_| s.components.activity(*id))
                         .ok_or_else(fail)?;
-                    if !matches!(*activity, Activity::RealmTalk { completes, .. } | Activity::Lift { completes, .. } | Activity::Social { completes, .. } | Activity::Instruction { completes, .. } | Activity::Practice { completes, .. } | Activity::EnforcementTalk { completes, .. } | Activity::Gather { completes, .. } | Activity::ReportAgreement { completes, .. } | Activity::Escape { completes, .. } | Activity::Restrain { completes, .. } | Activity::Eat { completes, .. } | Activity::Load { completes, .. } | Activity::Tell { completes, .. } | Activity::Care { completes, .. } | Activity::Conceive { completes, .. } | Activity::Unbind { completes, .. } | Activity::Comfort { completes, .. } | Activity::Construct { completes, .. } | Activity::Lesson { completes, .. } | Activity::Take { completes, .. } | Activity::ReportIncident { completes, .. } | Activity::Cultivate { completes, .. } | Activity::Express { completes, .. } | Activity::Play { completes, .. } if completes == *time)
-                        || !physical_deadlines.insert(*id)
-                    {
+                    game_physiology::save_validation::validate_deadline(
+                        &saved_activity(activity),
+                        *time,
+                        activity_completion(activity),
+                    )?;
+                    if !physical_deadlines.insert(*id) {
                         return Err(fail());
                     }
                 }
                 Due::Spoil(id) => {
-                    if !game_cargo::inventory(s.components, *(id))
-                        .is_some_and(|i| i.good == Good::Food && i.spoils_at == Some(*time))
-                        || !spoil_deadlines.insert(*id)
-                    {
+                    game_cargo::receipt_validation::validate_spoil_deadline(
+                        game_cargo::inventory(s.components, *id),
+                        *time,
+                    )?;
+                    if !spoil_deadlines.insert(*id) {
                         return Err(fail());
                     }
                 }
             }
         }
     }
-    if reviews.len() != 1 || reviews[0].0 % 60_000 != 0 || reviews[0].0 - s.time.0 > 60_000 {
-        return Err(fail());
-    }
-    for p in &s.state.people {
-        if p.work_remainder >= 60_000
-            || p.hunger_exempt != (p.role == Role::Guardian)
-            || !game_cargo::inventory(s.components, p.inventory)
-                .is_some_and(|i| i.location == InventoryLocation::Carried(p.id))
-        {
-            return Err(fail());
-        }
-    }
-    for (id, inventory) in game_cargo::inventories(s.components) {
-        if id != inventory.id
-            || inventory.quantity > inventory.capacity
-            || inventory.access.iter().any(|p| !people.contains_key(p))
-            || inventory
-                .last_granted
-                .is_some_and(|p| !people.contains_key(&p))
-            || inventory.spoils_at.is_some() != spoil_deadlines.contains(&id)
-        {
-            return Err(fail());
-        }
-        match inventory.location {
-            InventoryLocation::Area(a) if !areas.contains(&a) => return Err(fail()),
-            InventoryLocation::Carried(p) if !people.contains_key(&p) => return Err(fail()),
-            _ => {}
-        }
-    }
+    game_characters::save_validation::validate_review_deadlines(s.time, &reviews)?;
+    game_cargo::save_validation::validate_save_rows(
+        s.components,
+        &people.keys().copied().collect(),
+        &areas,
+        &spoil_deadlines,
+    )?;
     for (i, event) in s.events.iter().enumerate() {
         if event.sequence != i as u64 + 1
             || event.at > s.time
@@ -565,16 +552,14 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 actor,
                 revision,
             } => {
-                if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .realm
-                        .as_ref()
-                        .and_then(|_| game_realm::commitment(s.components, commitment))
-                        .is_some_and(|c| c.revision(revision).is_some())
-                {
+                if !people.contains_key(&actor) || s.state.realm.is_none() {
                     return Err(fail());
                 }
+                game_realm::receipt_validation::validate_revision(
+                    s.components,
+                    commitment,
+                    revision,
+                )?;
             }
             EventKind::RealmReported {
                 commitment,
@@ -593,17 +578,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
             }
             EventKind::RealmWorkRequested { key, actor } => {
-                if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .realm
-                        .as_ref()
-                        .and_then(|_| game_realm::commitment(s.components, key.commitment))
-                        .and_then(|c| c.revision(key.revision))
-                        .is_some_and(|r| usize::from(key.index) < r.proposal.terms.len())
-                {
+                if !people.contains_key(&actor) || s.state.realm.is_none() {
                     return Err(fail());
                 }
+                game_realm::receipt_validation::validate_work_request(s.components, key)?;
             }
             EventKind::RealmRatified {
                 commitment,
@@ -612,19 +590,19 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 proposal,
                 ..
             } => {
-                if !s
-                    .state
-                    .realm
-                    .as_ref()
-                    .and_then(|_| game_realm::commitment(s.components, commitment))
-                    .is_some_and(|c| c.revision(revision).is_some())
-                    || !s.state.institutions.as_ref().is_some_and(|_| {
-                        game_society::proposal(s.components, proposal)
-                            .is_some_and(|p| p.institution == institution)
-                    })
-                {
+                if s.state.realm.is_none() || s.state.institutions.is_none() {
                     return Err(fail());
                 }
+                game_realm::receipt_validation::validate_revision(
+                    s.components,
+                    commitment,
+                    revision,
+                )?;
+                game_society::receipt_validation::validate_proposal_receipt(
+                    s.components,
+                    institution,
+                    proposal,
+                )?;
             }
             EventKind::Socialized { first, second, .. }
             | EventKind::InstructionCompleted {
@@ -668,11 +646,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             } => {
                 if !people.contains_key(&actor)
                     || !people.contains_key(&recipient)
-                    || !s
-                        .state
-                        .enforcement
-                        .as_ref()
-                        .is_some_and(|w| w.cases.contains_key(&case))
+                    || !s.state.enforcement.as_ref().is_some_and(|_| {
+                        game_society::enforcement::case(s.components, case).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -683,11 +659,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 institution,
             } => {
                 if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .enforcement
-                        .as_ref()
-                        .is_some_and(|w| w.cases.contains_key(&case))
+                    || !s.state.enforcement.as_ref().is_some_and(|_| {
+                        game_society::enforcement::case(s.components, case).is_some()
+                    })
                     || !s.state.institutions.as_ref().is_some_and(|_| {
                         game_society::institution(s.components, institution).is_some()
                     })
@@ -700,23 +674,20 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 judgment,
                 proposer,
             } => {
-                if !people.contains_key(&proposer)
-                    || !s.state.enforcement.as_ref().is_some_and(|w| {
-                        w.cases
-                            .get(&case)
-                            .is_some_and(|c| c.judgment.as_ref().is_some_and(|j| j.id == judgment))
-                    })
-                {
+                if !people.contains_key(&proposer) || s.state.enforcement.is_none() {
                     return Err(fail());
                 }
+                game_society::receipt_validation::validate_judgment_receipt(
+                    s.components,
+                    case,
+                    judgment,
+                )?;
             }
             EventKind::EnforcementResponded { case, actor, .. } => {
                 if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .enforcement
-                        .as_ref()
-                        .is_some_and(|w| w.cases.contains_key(&case))
+                    || !s.state.enforcement.as_ref().is_some_and(|_| {
+                        game_society::enforcement::case(s.components, case).is_some()
+                    })
                 {
                     return Err(fail());
                 }
@@ -727,11 +698,9 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 mission,
             } => {
                 if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .enforcement
-                        .as_ref()
-                        .is_some_and(|w| w.cases.contains_key(&case))
+                    || !s.state.enforcement.as_ref().is_some_and(|_| {
+                        game_society::enforcement::case(s.components, case).is_some()
+                    })
                     || !s
                         .state
                         .missions
@@ -746,18 +715,16 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .enforcement
                     .as_ref()
-                    .is_some_and(|w| w.cases.contains_key(&case))
+                    .is_some_and(|_| game_society::enforcement::case(s.components, case).is_some())
                 {
                     return Err(fail());
                 }
             }
             EventKind::Drank { actor, source, .. } | EventKind::WaterPurified { actor, source } => {
-                if !people.contains_key(&actor)
-                    || !game_cargo::inventory(s.components, source)
-                        .is_some_and(|i| i.good == Good::Water)
-                {
-                    return Err(fail());
-                }
+                game_cargo::receipt_validation::validate_water_source(
+                    people.contains_key(&actor),
+                    game_cargo::inventory(s.components, source).map(|stock| stock.good),
+                )?;
             }
             EventKind::ShelterBuilt {
                 shelter,
@@ -983,22 +950,21 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
             EventKind::CombatReinforcement {
                 encounter, actor, ..
             } => {
-                if !people.contains_key(&actor)
-                    || !s.state.combat.as_ref().is_some_and(|w| {
-                        w.encounters
-                            .get(&encounter)
-                            .is_some_and(|e| e.fighters.contains_key(&actor))
-                    })
-                {
+                if !people.contains_key(&actor) || s.state.combat.is_none() {
                     return Err(fail());
                 }
+                game_conflict::receipt_validation::validate_reinforcement(
+                    s.components,
+                    encounter,
+                    actor,
+                )?;
             }
             EventKind::EncounterStarted { encounter, area } => {
                 if !s
                     .state
                     .combat
                     .as_ref()
-                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    .is_some_and(|_| game_conflict::encounter(s.components, encounter).is_some())
                     || !areas.contains(&area)
                 {
                     return Err(fail());
@@ -1012,7 +978,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .combat
                     .as_ref()
-                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    .is_some_and(|_| game_conflict::encounter(s.components, encounter).is_some())
                     || !people.contains_key(&actor)
                 {
                     return Err(fail());
@@ -1028,7 +994,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .combat
                     .as_ref()
-                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    .is_some_and(|_| game_conflict::encounter(s.components, encounter).is_some())
                     || !people.contains_key(&actor)
                     || !people.contains_key(&target)
                 {
@@ -1045,7 +1011,7 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                     .state
                     .combat
                     .as_ref()
-                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    .is_some_and(|_| game_conflict::encounter(s.components, encounter).is_some())
                     || !people.contains_key(&actor)
                     || !people.contains_key(&target)
                     || !game_cargo::inventory(s.components, binding).is_some()
@@ -1059,19 +1025,21 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 }
             }
             EventKind::ObstacleDamaged { map, obstacle, .. } => {
-                if !s.state.combat.as_ref().is_some_and(|w| {
-                    w.map(map)
-                        .is_some_and(|m| m.obstacles.iter().any(|o| o.index == obstacle))
-                }) {
+                if s.state.combat.is_none() {
                     return Err(fail());
                 }
+                game_conflict::receipt_validation::validate_obstacle_damage(
+                    s.components,
+                    map,
+                    obstacle,
+                )?;
             }
             EventKind::RoundEnded { encounter, .. } | EventKind::EncounterEnded { encounter } => {
                 if !s
                     .state
                     .combat
                     .as_ref()
-                    .is_some_and(|w| w.encounters.contains_key(&encounter))
+                    .is_some_and(|_| game_conflict::encounter(s.components, encounter).is_some())
                 {
                     return Err(fail());
                 }
@@ -1083,13 +1051,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 to,
                 arrives,
             } => {
-                if !people.contains_key(&actor)
-                    || !areas.contains(&from)
-                    || !areas.contains(&to)
-                    || arrives <= event.at
-                {
+                if !people.contains_key(&actor) || !areas.contains(&from) || !areas.contains(&to) {
                     return Err(fail());
                 }
+                game_spatial::receipt_validation::validate_departure(event.at, arrives)?;
             }
             EventKind::Arrived { actor, area } => {
                 if !people.contains_key(&actor) || !areas.contains(&area) {
@@ -1102,20 +1067,18 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 destination,
                 quantity,
             } => {
-                if !people.contains_key(&actor)
-                    || !game_cargo::inventory(s.components, source).is_some()
-                    || !game_cargo::inventory(s.components, destination).is_some()
-                    || quantity.0 == 0
-                {
-                    return Err(fail());
-                }
+                game_cargo::receipt_validation::validate_transfer(
+                    quantity,
+                    people.contains_key(&actor),
+                    game_cargo::inventory(s.components, source).is_some(),
+                    game_cargo::inventory(s.components, destination).is_some(),
+                )?;
             }
             EventKind::TransferFailed { actor, source } => {
-                if !people.contains_key(&actor)
-                    || !game_cargo::inventory(s.components, source).is_some()
-                {
-                    return Err(fail());
-                }
+                game_cargo::receipt_validation::validate_transfer_failed(
+                    people.contains_key(&actor),
+                    game_cargo::inventory(s.components, source).is_some(),
+                )?;
             }
             EventKind::Consumed {
                 actor,
@@ -1127,17 +1090,16 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 source,
                 quantity,
             } => {
-                if !people.contains_key(&actor)
-                    || !game_cargo::inventory(s.components, source).is_some()
-                    || quantity.0 == 0
-                {
-                    return Err(fail());
-                }
+                game_cargo::receipt_validation::validate_consumption(
+                    quantity,
+                    people.contains_key(&actor),
+                    game_cargo::inventory(s.components, source).is_some(),
+                )?;
             }
             EventKind::Spoiled { inventory, .. } => {
-                if !game_cargo::inventory(s.components, inventory).is_some() {
-                    return Err(fail());
-                }
+                game_cargo::receipt_validation::validate_spoilage(
+                    game_cargo::inventory(s.components, inventory).is_some(),
+                )?;
             }
             EventKind::Produced {
                 actor,
@@ -1145,17 +1107,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 output,
                 quantity,
             } => {
-                if !people.contains_key(&actor)
-                    || !s
-                        .state
-                        .physical
-                        .as_ref()
-                        .is_some_and(|_| game_workshop::site(s.components, site).is_some())
-                    || !game_cargo::inventory(s.components, output).is_some()
-                    || quantity.0 == 0
-                {
-                    return Err(fail());
-                }
+                game_workshop::receipt_validation::validate_produced(
+                    quantity,
+                    people.contains_key(&actor),
+                    s.state.physical.is_some() && game_workshop::site(s.components, site).is_some(),
+                    game_cargo::inventory(s.components, output).is_some(),
+                )?;
             }
             EventKind::Died { actor }
             | EventKind::Interrupted { actor }
@@ -1224,13 +1181,12 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 source,
                 quantity,
             } => {
-                if !people.contains_key(&caregiver)
-                    || !people.contains_key(&child)
-                    || !game_cargo::inventory(s.components, source).is_some()
-                    || quantity.0 == 0
-                {
-                    return Err(fail());
-                }
+                game_cargo::receipt_validation::validate_care(
+                    quantity,
+                    people.contains_key(&caregiver),
+                    people.contains_key(&child),
+                    game_cargo::inventory(s.components, source).is_some(),
+                )?;
             }
             EventKind::InvocationStarted { actor, ref lives } => {
                 if !people.contains_key(&actor)
@@ -1360,50 +1316,47 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 enterprise,
                 site,
             } => {
-                let valid = s.state.projects.as_ref().is_some_and(|_| {
-                    let Some(plan) = game_projects::project(s.components, project) else {
-                        return false;
-                    };
-                    game_projects::enterprise(s.components, enterprise).is_some_and(|record| {
-                        record.project == project
-                            && record.site == site
-                            && match plan.kind {
-                                ProjectKind::Workshop { .. } => {
-                                    s.state.physical.as_ref().is_some_and(|_| {
-                                        game_workshop::site(s.components, site).is_some()
-                                    })
-                                }
-                                ProjectKind::Farm { plot, water } => {
-                                    site == plot
-                                        && s.state
-                                            .agriculture
-                                            .as_ref()
-                                            .and_then(|world| world.field(s.components, site))
-                                            .is_some_and(|field| {
-                                                field.id == plot
-                                                    && field.area == plan.area
-                                                    && field.seed == plan.input
-                                                    && field.tool == plan.tool
-                                                    && field.water == water
-                                                    && field.food == plan.output
-                                            })
-                                }
-                            }
-                    })
-                });
-                if !valid {
+                if s.state.projects.is_none() {
                     return Err(fail());
                 }
+                let farm = s
+                    .state
+                    .agriculture
+                    .as_ref()
+                    .and_then(|world| world.field(s.components, site))
+                    .map(
+                        |field| game_projects::receipt_validation::FarmReceiptFacts {
+                            id: field.id,
+                            area: field.area,
+                            seed: field.seed,
+                            tool: field.tool,
+                            water: field.water,
+                            food: field.food,
+                        },
+                    );
+                game_projects::receipt_validation::validate_project_completed_receipt(
+                    s.components,
+                    project,
+                    enterprise,
+                    site,
+                    game_projects::receipt_validation::ProjectCompletionSiteFacts {
+                        workshop_exists: s.state.physical.is_some()
+                            && game_workshop::site(s.components, site).is_some(),
+                        farm,
+                    },
+                )?;
             }
             EventKind::EnterpriseInputUsed {
                 enterprise, site, ..
             } => {
-                if !s.state.projects.as_ref().is_some_and(|_| {
-                    game_projects::enterprise(s.components, enterprise)
-                        .is_some_and(|e| e.site == site)
-                }) {
+                if s.state.projects.is_none() {
                     return Err(fail());
                 }
+                game_projects::receipt_validation::validate_enterprise_input_receipt(
+                    s.components,
+                    enterprise,
+                    site,
+                )?;
             }
             EventKind::InstitutionProposed {
                 institution,
@@ -1434,13 +1387,16 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 institution,
                 proposal,
             } => {
-                if !s.state.institutions.as_ref().is_some_and(|_| {
-                    game_society::institution(s.components, institution).is_some()
-                        && game_society::proposal(s.components, proposal)
-                            .is_some_and(|p| p.institution == institution)
-                }) {
+                if s.state.institutions.is_none()
+                    || game_society::institution(s.components, institution).is_none()
+                {
                     return Err(fail());
                 }
+                game_society::receipt_validation::validate_proposal_receipt(
+                    s.components,
+                    institution,
+                    proposal,
+                )?;
             }
             EventKind::SocialCaseRecorded { case, actor } => {
                 if !people.contains_key(&actor)
@@ -1459,10 +1415,10 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 gain,
                 ..
             } => {
-                if !people.contains_key(&teacher) || !people.contains_key(&student) || gain > 1_000
-                {
+                if !people.contains_key(&teacher) || !people.contains_key(&student) {
                     return Err(fail());
                 }
+                game_skills::receipt_validation::validate_lesson_gain(gain)?;
             }
             EventKind::GuardianRefused {
                 guardian,
@@ -1516,12 +1472,11 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 custodian: recipient,
                 inventory,
             } => {
-                if !people.contains_key(&actor)
-                    || !people.contains_key(&recipient)
-                    || !game_cargo::inventory(s.components, inventory).is_some()
-                {
-                    return Err(fail());
-                }
+                game_cargo::receipt_validation::validate_inventory_access(
+                    people.contains_key(&actor),
+                    people.contains_key(&recipient),
+                    game_cargo::inventory(s.components, inventory).is_some(),
+                )?;
             }
             EventKind::TakingAttempted {
                 incident,
@@ -1537,18 +1492,15 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 destination,
                 quantity,
             } => {
-                if quantity.0 == 0
-                    || !people.contains_key(&actor)
-                    || !game_cargo::inventory(s.components, source).is_some()
-                    || !game_cargo::inventory(s.components, destination).is_some()
-                    || !s
-                        .state
-                        .property
-                        .as_ref()
-                        .is_some_and(|_| game_property::incident(s.components, incident).is_some())
-                {
-                    return Err(fail());
-                }
+                game_property::validate_taking_receipt(
+                    s.components,
+                    s.state.property.is_some(),
+                    incident,
+                    quantity,
+                    people.contains_key(&actor),
+                    game_cargo::inventory(s.components, source).is_some(),
+                    game_cargo::inventory(s.components, destination).is_some(),
+                )?;
             }
             EventKind::TakingInterrupted { incident, actor } => {
                 if !people.contains_key(&actor)
@@ -1604,26 +1556,20 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
                 agreement,
                 amendment,
             } => {
-                if !game_agreements::agreement(s.components, agreement).is_some()
-                    || !game_agreements::amendment(s.components, amendment)
-                        .is_some_and(|row| row.agreement == agreement)
-                {
-                    return Err(fail());
-                }
+                game_agreements::validate_amended_receipt(s.components, agreement, amendment)?;
             }
             EventKind::ObligationPerformed {
                 obligation,
                 actor,
                 quantity,
             } => {
-                if !people.contains_key(&actor)
-                    || quantity.0 == 0
-                    || !s.state.agreements.as_ref().is_some_and(|_| {
-                        game_agreements::obligation(s.components, obligation).is_some()
-                    })
-                {
-                    return Err(fail());
-                }
+                game_agreements::validate_performed_receipt(
+                    s.components,
+                    s.state.agreements.is_some(),
+                    obligation,
+                    quantity,
+                    people.contains_key(&actor),
+                )?;
             }
             EventKind::ObligationDefaulted { obligation } => {
                 if !s.state.agreements.as_ref().is_some_and(|_| {
@@ -1693,263 +1639,46 @@ fn validate(s: &CanonicalState) -> Result<(), Error> {
     {
         return Err(fail());
     }
-    if s.state.decisions.is_none()
-        && game_characters::decisions::stock_rows(s.components)
-            .next()
-            .is_some()
-    {
-        return Err(fail());
-    }
-    if let Some(world) = &s.state.decisions {
-        if game_characters::decisions::minds::<game_api::Command>(s.components)
-            .map(|(id, _)| id)
-            .collect::<BTreeSet<_>>()
-            != people.keys().copied().collect::<BTreeSet<_>>()
-            || game_characters::decisions::stock_rows(s.components)
-                .map(|(id, _)| id)
-                .collect::<BTreeSet<_>>()
-                != people.keys().copied().collect::<BTreeSet<_>>()
-            || !world.concepts.contains_key(&world.work_concept)
-            || world.last_learning_event >= s.next_event
-            || world.switching_margin < 0
-        {
-            return Err(fail());
-        }
-        for (id, mind) in game_characters::decisions::minds::<game_api::Command>(s.components) {
-            let id = &id;
-            if !people.contains_key(id)
-                || mind.interests.values().any(|v| *v > 1_000)
-                || mind
-                    .plan
-                    .as_ref()
-                    .is_some_and(|plan| plan.shape != decisions::action_shape(&plan.action))
-                || [
-                    mind.personality.discipline,
-                    mind.personality.ambition,
-                    mind.personality.sociability,
-                    mind.personality.risk_tolerance,
-                    mind.personality.hedonism,
-                    mind.personality.empathy,
-                    mind.personality.aggression,
-                    mind.personality.honesty,
-                    mind.personality.patience,
-                ]
-                .iter()
-                .any(|v| *v > 1_000)
-            {
-                return Err(fail());
-            }
-            if let Some(plan) = &mind.plan {
-                use game_characters::decisions::{CommitmentRef, IntentionKey, Motive, Subject};
-                let commitment_exists = |commitment: CommitmentRef| match commitment {
-                    CommitmentRef::Obligation(id) => {
-                        s.state.agreements.as_ref().is_some_and(|_| {
-                            game_agreements::obligation(s.components, id).is_some()
-                        })
-                    }
-                    CommitmentRef::Project(id) => s
-                        .state
-                        .projects
-                        .as_ref()
-                        .is_some_and(|_| game_projects::project(s.components, id).is_some()),
-                };
-                let subject_exists = |subject: Subject| match subject {
-                    Subject::Inventory(id) => game_cargo::inventory(s.components, id).is_some(),
-                    Subject::Site(id) => s
-                        .state
-                        .physical
-                        .as_ref()
-                        .is_some_and(|_| game_workshop::site(s.components, id).is_some()),
-                    Subject::Project(id) => s
-                        .state
-                        .projects
-                        .as_ref()
-                        .is_some_and(|_| game_projects::project(s.components, id).is_some()),
-                    Subject::Resource(id) => s
-                        .state
-                        .ecology
-                        .as_ref()
-                        .is_some_and(|w| w.resource(s.components, id).is_some()),
-                };
-                let key_valid = match plan.key {
-                    IntentionKey::Relief { beneficiary, .. } => people.contains_key(&beneficiary),
-                    IntentionKey::Development {
-                        beneficiary,
-                        subject,
-                        ..
-                    } => people.contains_key(&beneficiary) && subject.is_none_or(subject_exists),
-                    IntentionKey::Provision {
-                        good,
-                        beneficiary,
-                        source,
-                    } => {
-                        people.contains_key(&beneficiary)
-                            && source.is_none_or(|id| {
-                                game_cargo::inventory(s.components, id)
-                                    .is_some_and(|stock| stock.good == good)
-                            })
-                    }
-                    IntentionKey::Commitment(commitment) => commitment_exists(commitment),
-                };
-                let motives_valid = plan.motives.iter().all(|motive| match motive {
-                    Motive::Relieve { beneficiary, .. } | Motive::Develop { beneficiary, .. } => {
-                        people.contains_key(beneficiary)
-                    }
-                    Motive::Provide {
-                        requirement,
-                        beneficiary,
-                        ..
-                    } => {
-                        people.contains_key(beneficiary)
-                            && requirement.quantity.0 > 0
-                            && requirement.source.is_none_or(|id| {
-                                game_cargo::inventory(s.components, id)
-                                    .is_some_and(|stock| stock.good == requirement.good)
-                            })
-                    }
-                    Motive::Fulfil { commitment } => commitment_exists(*commitment),
-                });
-                if !key_valid
-                    || !motives_valid
-                    || plan
-                        .prospects
-                        .source
-                        .is_some_and(|id| !game_cargo::inventory(s.components, id).is_some())
-                    || plan.prospects.site.is_some_and(|id| {
-                        !s.state
-                            .physical
-                            .as_ref()
-                            .is_some_and(|_| game_workshop::site(s.components, id).is_some())
-                    })
-                    || plan
-                        .prospects
-                        .sponsor
-                        .is_some_and(|id| !people.contains_key(&id))
-                {
-                    return Err(fail());
-                }
-            }
-            if let Some(plan) = &mind.plan
-                && let Some(delivery) = &plan.delivery
-            {
-                let target_exists = match delivery.destination {
-                    game_logistics::Destination::Inventory(target) => {
-                        game_cargo::inventory(s.components, target).is_some()
-                    }
-                    game_logistics::Destination::Contact(target) => people.contains_key(&target),
-                };
-                let matches_motive = plan.motives.iter().all(|motive| match motive {
-                    game_characters::decisions::Motive::Provide {
-                        requirement,
-                        beneficiary,
-                        ..
-                    } => {
-                        delivery.destination == game_logistics::Destination::Contact(*beneficiary)
-                            && delivery.requirement.good == requirement.good
-                            && delivery.requirement.source == requirement.source
-                    }
-                    _ => true,
-                });
-                if !delivery.valid()
-                    || !target_exists
-                    || !matches_motive
-                    || delivery.last_receipt >= s.next_event
-                    || delivery.requirement.source.is_some_and(|source| {
-                        !game_cargo::inventory(s.components, source)
-                            .is_some_and(|stock| stock.good == delivery.requirement.good)
-                    })
-                {
-                    return Err(fail());
-                }
-            }
-            for (from, links) in &mind.routes {
-                if !areas.contains(from)
-                    || links
-                        .iter()
-                        .any(|(to, duration)| !areas.contains(to) || duration.0 == 0)
-                {
-                    return Err(fail());
-                }
-            }
-            if mind.last_failure.is_some_and(|(time, inventory)| {
-                time > s.time || !game_cargo::inventory(s.components, inventory).is_some()
-            }) {
-                return Err(fail());
-            }
-            for (id, fact) in &game_characters::decisions::stocks(s.components, *id)
-                .ok_or_else(fail)?
-                .known
-            {
-                if *id != fact.inventory
-                    || !game_cargo::inventory(s.components, *(id)).is_some()
-                    || !areas.contains(&fact.area)
-                    || fact.observed_at > s.time
-                    || fact.learned_at > s.time
-                {
-                    return Err(fail());
-                }
-            }
-            for (child, signal) in &mind.child_signals {
-                if !people.contains_key(child)
-                    || !match signal.location {
-                        Location::AtArea(area) => areas.contains(&area),
-                        Location::StoppedOnRoad {
-                            from,
-                            to,
-                            progress,
-                            duration,
-                        } => {
-                            areas.contains(&from)
-                                && areas.contains(&to)
-                                && from != to
-                                && duration.0 > 0
-                                && progress <= duration
-                        }
-                        Location::InTransit {
-                            from,
-                            to,
-                            departed,
-                            arrives,
-                            ..
-                        } => {
-                            areas.contains(&from)
-                                && areas.contains(&to)
-                                && from != to
-                                && departed <= signal.observed_at
-                                && signal.observed_at <= arrives
-                                && departed < arrives
-                        }
-                        Location::Carried { .. } => false,
-                    }
-                    || signal.observed_at > s.time
-                    || ![0, 3_000, 20_000].contains(&signal.urgency)
-                    || ![0, 3_000, 20_000].contains(&signal.hydration_urgency)
-                {
-                    return Err(fail());
-                }
-            }
-            for id in mind.relationships.keys() {
-                if !people.contains_key(id) {
-                    return Err(fail());
-                }
-            }
-            for (id, value) in &mind.values {
-                if !world.concepts.contains_key(id) || !(0..=1_000).contains(&value.weight) {
-                    return Err(fail());
-                }
-            }
-            for (id, site) in &mind.sites {
-                if *id != site.site
-                    || !game_workshop::site(s.components, *id).is_some()
-                    || !areas.contains(&site.area)
-                    || !game_cargo::inventory(s.components, site.input).is_some()
-                    || !game_cargo::inventory(s.components, site.tool).is_some()
-                {
-                    return Err(fail());
-                }
-            }
-        }
-    }
+    game_characters::save_validation::validate_store::<Command>(
+        s.components,
+        s.state.decisions.as_ref(),
+        &game_characters::save_validation::SaveFacts {
+            people: people.keys().copied().collect(),
+            areas: areas.clone(),
+            inventories: game_cargo::inventories(s.components)
+                .map(|(id, stock)| (id, stock.good))
+                .collect(),
+            sites: if s.state.physical.is_some() {
+                game_workshop::sites(s.components)
+                    .map(|(id, _)| id)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            },
+            projects: if s.state.projects.is_some() {
+                game_projects::projects(s.components)
+                    .map(|(id, _)| id)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            },
+            obligations: if s.state.agreements.is_some() {
+                game_agreements::obligations(s.components)
+                    .map(|(id, _)| id)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            },
+            resources: if let Some(ecology) = &s.state.ecology {
+                ecology.resources(s.components).map(|(id, _)| id).collect()
+            } else {
+                BTreeSet::new()
+            },
+            time: s.time,
+            next_event: s.next_event,
+        },
+        decisions::action_shape,
+    )?;
     agreements::validate(s)?;
     development::validate(s)?;
     combat::validate(s)?;
@@ -1976,277 +1705,270 @@ fn validate_physical(
 ) -> Result<(), Error> {
     let fail = || Error::InvalidSave("inconsistent physical state".into());
     let rules = &world.rules;
-    if game_physiology::bodies(s.components).count() != people.len()
-        || s.components
-            .activities()
-            .map(|(id, _)| id)
-            .collect::<BTreeSet<_>>()
-            != people.keys().copied().collect()
-        || game_workshop::jobs(s.components).any(|(id, _)| !people.contains_key(&id))
-        || rules.hunger_harm == 0
-        || rules.fatigue_limit == 0
-        || rules.max_health == 0
-        || rules.meal_relief == 0
-        || rules.meal_size.0 == 0
-        || rules.eating_time.0 == 0
-        || rules.loading_time.0 == 0
-    {
-        return Err(fail());
-    }
-    for (id, site) in game_workshop::sites(s.components) {
-        let id = &id;
-        if *id != site.id
-            || !areas.contains(&site.area)
-            || s.state.workshops.resolve_site(site).is_err()
-            || site.access.iter().any(|p| !people.contains_key(p))
-        {
-            return Err(fail());
-        }
-        for inventory in [site.input, site.tool, site.output] {
-            if !game_cargo::inventory(s.components, inventory)
-                .is_some_and(|i| i.location == InventoryLocation::Area(site.area))
-            {
-                return Err(fail());
-            }
-        }
-        if game_cargo::inventory(s.components, site.tool)
-            .expect("inventory exists")
-            .good
-            != Good::Tool
-        {
-            return Err(fail());
-        }
-    }
-    let mut cargo = BTreeMap::<PersonId, u128>::new();
-    for i in game_cargo::inventories(s.components).map(|(_, row)| row) {
-        if let InventoryLocation::Carried(p) = i.location {
-            *cargo.entry(p).or_default() += u128::from(i.quantity.0);
-        }
-    }
+    game_physiology::save_validation::validate_activity_population(
+        s.components.activities().map(|(id, _)| id),
+        &people.keys().copied().collect(),
+    )?;
+    let workshop_actors = people
+        .keys()
+        .map(|id| {
+            let body = game_physiology::body(s.components, *id).ok_or_else(fail)?;
+            let activity = s.components.activity(*id).ok_or_else(fail)?;
+            let maximum_craft_rate = s.state.skills.as_ref().map_or(1_000, |skills| {
+                game_skills::rate_for_level(
+                    skills.level(s.components, *id, Skill::Craft),
+                    &skills.rules,
+                )
+                .numerator
+            });
+            Ok((
+                *id,
+                game_workshop::ActorSaveFacts {
+                    alive: body.vitals.alive,
+                    active_site: match activity {
+                        Activity::Work { site } => Some(*site),
+                        _ => None,
+                    },
+                    maximum_craft_rate,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, Error>>()?;
+    game_workshop::validate_store(
+        s.components,
+        &s.state.workshops,
+        &game_workshop::SaveFacts {
+            areas: areas.clone(),
+            actors: workshop_actors,
+        },
+    )?;
+    let cargo = game_cargo::carried_quantities(s.components).map_err(|_| fail())?;
     let locations = crate::transport::resolved_locations_for(s)?;
-    let mut care_targets = BTreeSet::new();
-    for (id, actor) in game_physiology::bodies(s.components) {
-        let id = &id;
-        let activity = s.components.activity(*id).ok_or_else(fail)?;
-        let job = game_workshop::job(s.components, *id);
-        let p = people.get(id).ok_or_else(fail)?;
-        let carried = cargo.get(id).copied().unwrap_or(0);
-        if actor.health_remainder >= 1_000
-            || actor.fatigue_remainder >= 1_000
-            || actor.vitals.health > physical::rules_for(s, *id).max_health
-            || actor.vitals.fatigue > rules.fatigue_limit
-            || (carried > u128::from(physical::rules_for(s, *id).carrying_capacity.0)
-                && matches!(
-                    *game_spatial::location(s.components, game_ecs::StableId((p.id).0))
-                        .expect("location exists"),
-                    Location::InTransit { .. }
-                ))
-            || (p.hunger_exempt && (actor.vitals.hunger != 0 || !actor.vitals.alive))
-            || (!actor.vitals.alive && actor.vitals.health != 0)
-        {
-            return Err(fail());
-        }
-        if !actor.vitals.alive && (*activity != Activity::Idle || job.is_some()) {
-            return Err(fail());
-        }
-        if let Some(job) = job
-            && (job.tool.is_some_and(|tool| {
-                !game_cargo::inventory(s.components, tool).is_some_and(|i| i.good == Good::Tool)
-            }) || !matches!(job.rate.denominator, 1_000 | 1_000_000)
-                || job.body_rate.denominator != 1_000
-                || !(250..=2_000).contains(&job.body_rate.numerator)
-                || {
-                    let numerator = u128::from(job.rate.numerator)
-                        * u128::from(job.body_rate.denominator)
-                        * 1_000;
-                    let denominator =
-                        u128::from(job.rate.denominator) * u128::from(job.body_rate.numerator);
-                    let maximum = s.state.skills.as_ref().map_or(1_000, |skills| {
-                        1_000
-                            + u64::from(skills.level(s.components, *id, Skill::Craft))
-                                * u64::from(skills.rules.work_bonus_per_level)
-                    });
-                    denominator == 0
-                        || numerator % denominator != 0
-                        || numerator / denominator < 1_000
-                        || numerator / denominator > u128::from(maximum)
-                }
-                || job.work_remainder >= job.rate.denominator
-                || !game_workshop::site(s.components, job.site).is_some_and(|site| {
-                    s.state
-                        .workshops
-                        .resolve_site(site)
-                        .is_ok_and(|view| job.remaining <= view.recipe.duration.0)
-                }))
-        {
-            return Err(fail());
-        }
-        let timed = matches!(
-            *activity,
-            Activity::RealmTalk { .. }
-                | Activity::Lift { .. }
-                | Activity::Social { .. }
-                | Activity::Instruction { .. }
-                | Activity::Practice { .. }
-                | Activity::EnforcementTalk { .. }
-                | Activity::Gather { .. }
-                | Activity::ReportAgreement { .. }
-                | Activity::Escape { .. }
-                | Activity::Restrain { .. }
-                | Activity::Eat { .. }
-                | Activity::Load { .. }
-                | Activity::Tell { .. }
-                | Activity::Care { .. }
-                | Activity::Conceive { .. }
-                | Activity::Unbind { .. }
-                | Activity::Comfort { .. }
-                | Activity::Express { .. }
-                | Activity::Play { .. }
-                | Activity::Construct { .. }
-                | Activity::Lesson { .. }
-                | Activity::Take { .. }
-                | Activity::ReportIncident { .. }
-                | Activity::Cultivate { .. }
-        );
-        if timed != deadlines.contains(id) {
-            return Err(fail());
-        }
-        let location = &locations[id];
-        let allowed = match location {
-            Location::AtArea(_) => true,
-            Location::StoppedOnRoad { .. } => matches!(
-                *activity,
-                Activity::Idle
-                    | Activity::Rest
-                    | Activity::Eat { .. }
-                    | Activity::Load { .. }
-                    | Activity::Care { .. }
-                    | Activity::Comfort { .. }
-                    | Activity::Express { .. }
-                    | Activity::Lift { .. }
-                    | Activity::HealthWork { .. }
-                    | Activity::Unbind { .. }
-                    | Activity::Escape { .. }
-                    | Activity::Restrain { .. }
-                    | Activity::Combat { .. }
-            ),
-            Location::InTransit { .. } => matches!(
-                *activity,
-                Activity::Idle | Activity::Express { .. } | Activity::Escape { .. }
-            ),
-            Location::Carried { .. } => false,
-        };
-        if !allowed {
-            return Err(fail());
-        }
-        match *activity {
-            Activity::Cultivate {
-                field,
-                operation,
-                completes,
-            } if !s.state.agriculture.as_ref().is_some_and(|_| {
-                game_agriculture::cultivation(s.components, *id).is_some_and(|job| {
-                    job.field == field && job.operation == operation && job.completes == completes
-                })
-            }) =>
-            {
-                return Err(fail());
+    let body_facts = people
+        .iter()
+        .map(|(id, person)| {
+            let activity = s.components.activity(*id).ok_or_else(fail)?;
+            let location =
+                game_spatial::location(s.components, game_ecs::StableId(id.0)).ok_or_else(fail)?;
+            Ok(game_physiology::ValidationFacts {
+                actor: *id,
+                hunger_exempt: person.hunger_exempt,
+                in_transit: matches!(location, Location::InTransit { .. }),
+                carried: u128::from(cargo.get(id).copied().unwrap_or(Quantity(0)).0),
+                idle: *activity == Activity::Idle,
+                has_work: game_workshop::job(s.components, *id).is_some(),
+                phenotype: genetics::phenotype(s, *id),
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    game_physiology::validate_with_facts(s.components, rules, &body_facts)?;
+    let rows = game_physiology::bodies(s.components)
+        .map(|(id, _)| {
+            let activity = s.components.activity(id).ok_or_else(fail)?;
+            Ok((id, saved_activity(activity), locations[&id].clone()))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    game_physiology::save_validation::validate_activity_rows(
+        &rows,
+        deadlines,
+        s.time,
+        &PhysicalSavePort { state: s, people },
+    )?;
+    Ok(())
+}
+
+fn saved_activity(
+    activity: &Activity,
+) -> game_physiology::save_validation::SavedActivity<game_agriculture::FarmOperation> {
+    use game_physiology::save_validation::SavedActivity as Saved;
+    match *activity {
+        Activity::ArmyApproach { .. } => Saved::ArmyApproach,
+        Activity::ArmyTalk { .. } => Saved::ArmyTalk,
+        Activity::RealmTalk { .. } => Saved::RealmTalk,
+        Activity::Lift { .. } => Saved::Lift,
+        Activity::Social { .. } => Saved::Social,
+        Activity::Instruction { .. } => Saved::Instruction,
+        Activity::Practice { .. } => Saved::Practice,
+        Activity::EnforcementTalk { .. } => Saved::EnforcementTalk,
+        Activity::HealthWork { .. } => Saved::HealthWork,
+        Activity::Gather { .. } => Saved::Gather,
+        Activity::MissionTalk { .. } => Saved::MissionTalk,
+        Activity::Escape { .. } => Saved::Escape,
+        Activity::Restrain { .. } => Saved::Restrain,
+        Activity::ReportAgreement { .. } => Saved::ReportAgreement,
+        Activity::WritingMemory { .. } => Saved::WritingMemory,
+        Activity::ReadingMemory { .. } => Saved::ReadingMemory,
+        Activity::TeachingMemory { .. } => Saved::TeachingMemory,
+        Activity::MovingRecord { .. } => Saved::MovingRecord,
+        Activity::Construct { .. } => Saved::Construct,
+        Activity::Lesson { .. } => Saved::Lesson,
+        Activity::Take { .. } => Saved::Take,
+        Activity::ReportIncident { .. } => Saved::ReportIncident,
+        Activity::Work { .. } => Saved::Work,
+        Activity::Combat { .. } => Saved::Combat,
+        Activity::Idle => Saved::Idle,
+        Activity::Rest => Saved::Rest,
+        Activity::Cultivate {
+            field,
+            operation,
+            completes,
+            ..
+        } => Saved::Cultivate {
+            field,
+            operation,
+            completes,
+        },
+        Activity::Comfort { child, .. } => Saved::Comfort { child },
+        Activity::Eat { source, .. } => Saved::Eat { source },
+        Activity::Load {
+            source,
+            destination,
+            quantity,
+            completes,
+            ..
+        } => Saved::Load {
+            source,
+            destination,
+            quantity,
+            completes,
+        },
+        Activity::Conceive {
+            pregnancy,
+            completes,
+            ..
+        } => Saved::Conceive {
+            pregnancy,
+            completes,
+        },
+        Activity::Care { child, source, .. } => Saved::Care { child, source },
+        Activity::Unbind { target, .. } => Saved::Unbind { target },
+        Activity::Express { completes, .. } => Saved::Express { completes },
+        Activity::Play { completes, .. } => Saved::Play { completes },
+        Activity::Tell {
+            recipient,
+            ref fact,
+            ..
+        } => Saved::Tell {
+            recipient,
+            inventory: fact.inventory,
+            observed_at: fact.observed_at,
+        },
+    }
+}
+struct PhysicalSavePort<'a> {
+    state: &'a CanonicalState<'a>,
+    people: &'a BTreeMap<PersonId, &'a Person>,
+}
+impl game_physiology::save_validation::SavePort for PhysicalSavePort<'_> {
+    type Operation = game_agriculture::FarmOperation;
+    fn person_exists(&self, actor: PersonId) -> bool {
+        self.people.contains_key(&actor)
+    }
+    fn inventory_good(&self, inventory: InventoryId) -> Option<Good> {
+        game_cargo::inventory(self.state.components, inventory).map(|stock| stock.good)
+    }
+    fn health_available(&self) -> bool {
+        self.state.state.health.is_some()
+    }
+    fn cultivation(&self, actor: PersonId) -> Option<(SiteId, FarmOperation, SimTime)> {
+        self.state.state.agriculture.as_ref()?;
+        game_agriculture::cultivation(self.state.components, actor)
+            .map(|job| (job.field, job.operation, job.completes))
+    }
+    fn conception(&self, pregnancy: PregnancyId) -> Option<([PersonId; 2], SimTime)> {
+        self.state.state.development.as_ref()?;
+        let pregnancy = game_lifecycle::pregnancy(self.state.components, pregnancy)?;
+        match pregnancy.state {
+            development::PregnancyState::Conceiving { completes } => {
+                Some(([pregnancy.gestator, pregnancy.partner], completes))
             }
-            Activity::Express { completes, .. } | Activity::Play { completes, .. } => {
-                let life = s
-                    .state
-                    .development
-                    .as_ref()
-                    .and_then(|_| game_lifecycle::life(s.components, *id))
-                    .ok_or_else(fail)?;
-                let duration = if matches!(*activity, Activity::Play { .. }) {
-                    MINUTE.0
-                } else {
-                    6_000
-                };
-                let started = completes.0.checked_sub(duration).ok_or_else(fail)?;
-                let age = started
-                    .checked_sub(life.born.0)
-                    .and_then(|v| v.checked_add(life.initial_age.0))
-                    .ok_or_else(fail)?;
-                let rules = &s.state.development.as_ref().unwrap().rules;
-                if started > s.time.0
-                    || age >= rules.adulthood.0
-                    || matches!(*activity, Activity::Play { .. }) && age < rules.infancy.0
-                {
-                    return Err(fail());
-                }
-            }
-            Activity::Unbind { target, .. } if !people.contains_key(&target) => return Err(fail()),
-            Activity::Care { child, .. } | Activity::Comfort { child, .. }
-                if !care_targets.insert(child) =>
-            {
-                return Err(fail());
-            }
-            Activity::Eat { source, .. } => {
-                if !game_cargo::inventory(s.components, source)
-                    .is_some_and(|i| i.good == Good::Food)
-                {
-                    return Err(fail());
-                }
-            }
-            Activity::Load {
-                source,
-                destination,
-                quantity,
-                completes,
-            } => {
-                let source_stock = game_cargo::inventory(s.components, source).ok_or_else(fail)?;
-                let destination_stock =
-                    game_cargo::inventory(s.components, destination).ok_or_else(fail)?;
-                game_cargo::LoadJob {
-                    actor: *id,
-                    source,
-                    destination,
-                    quantity,
-                    completes,
-                }
-                .validate(s.time, source_stock, destination_stock)
-                .map_err(|_| fail())?;
-            }
-            Activity::Work { site } => {
-                if !job.is_some_and(|j| j.site == site && j.remaining > 0) {
-                    return Err(fail());
-                }
-            }
-            Activity::Tell {
-                recipient,
-                ref fact,
-                ..
-            } if !people.contains_key(&recipient)
-                || !game_cargo::inventory(s.components, fact.inventory).is_some()
-                || fact.observed_at > s.time =>
-            {
-                return Err(fail());
-            }
-            Activity::Comfort { child, .. } if !people.contains_key(&child) => return Err(fail()),
-            Activity::Care { child, source, .. }
-                if !people.contains_key(&child)
-                    || !game_cargo::inventory(s.components, source).is_some_and(|i| {
-                        i.good == Good::Food || i.good == Good::Water && s.state.health.is_some()
-                    }) =>
-            {
-                return Err(fail());
-            }
-            Activity::Conceive {
-                pregnancy,
-                completes,
-            } if !s.state.development.as_ref().is_some_and(|_| {
-                game_lifecycle::pregnancy(s.components, pregnancy).is_some_and(|p| {
-                    [p.gestator, p.partner].contains(id)
-                        && p.state == development::PregnancyState::Conceiving { completes }
-                })
-            }) =>
-            {
-                return Err(fail());
-            }
-            _ => {}
+            _ => None,
         }
     }
-    Ok(())
+    fn validate_dependent(
+        &self,
+        actor: PersonId,
+        activity: game_physiology::save_validation::DependentActivity,
+        completes: SimTime,
+    ) -> Result<(), Error> {
+        self.state
+            .state
+            .development
+            .as_ref()
+            .ok_or_else(|| Error::InvalidSave("inconsistent physical state".into()))?
+            .validate_dependent_activity(
+                self.state.components,
+                actor,
+                self.state.time,
+                match activity {
+                    game_physiology::save_validation::DependentActivity::Express => {
+                        game_lifecycle::DependentActivity::Express
+                    }
+                    game_physiology::save_validation::DependentActivity::Play => {
+                        game_lifecycle::DependentActivity::Play
+                    }
+                },
+                completes,
+            )
+    }
+    fn validate_load(
+        &self,
+        actor: PersonId,
+        source: InventoryId,
+        destination: InventoryId,
+        quantity: Quantity,
+        completes: SimTime,
+    ) -> Result<(), Error> {
+        let fail = || Error::InvalidSave("inconsistent physical state".into());
+        let source_stock = game_cargo::inventory(self.state.components, source).ok_or_else(fail)?;
+        let destination_stock =
+            game_cargo::inventory(self.state.components, destination).ok_or_else(fail)?;
+        game_cargo::LoadJob {
+            actor,
+            source,
+            destination,
+            quantity,
+            completes,
+        }
+        .validate(self.state.time, source_stock, destination_stock)
+        .map_err(|_| fail())
+    }
+}
+
+fn activity_completion(activity: &Activity) -> Option<SimTime> {
+    match *activity {
+        Activity::ArmyApproach { completes, .. } => Some(completes),
+        Activity::ArmyTalk { completes, .. } => Some(completes),
+        Activity::RealmTalk { completes, .. } => Some(completes),
+        Activity::Lift { completes, .. } => Some(completes),
+        Activity::Social { completes, .. } => Some(completes),
+        Activity::Instruction { completes, .. } => Some(completes),
+        Activity::Practice { completes, .. } => Some(completes),
+        Activity::EnforcementTalk { completes, .. } => Some(completes),
+        Activity::HealthWork { completes, .. } => Some(completes),
+        Activity::Gather { completes, .. } => Some(completes),
+        Activity::MissionTalk { completes, .. } => Some(completes),
+        Activity::Escape { completes, .. } => Some(completes),
+        Activity::Restrain { completes, .. } => Some(completes),
+        Activity::ReportAgreement { completes, .. } => Some(completes),
+        Activity::WritingMemory { completes, .. } => Some(completes),
+        Activity::ReadingMemory { completes, .. } => Some(completes),
+        Activity::TeachingMemory { completes, .. } => Some(completes),
+        Activity::MovingRecord { completes, .. } => Some(completes),
+        Activity::Construct { completes, .. } => Some(completes),
+        Activity::Lesson { completes, .. } => Some(completes),
+        Activity::Take { completes, .. } => Some(completes),
+        Activity::ReportIncident { completes, .. } => Some(completes),
+        Activity::Cultivate { completes, .. } => Some(completes),
+        Activity::Comfort { completes, .. } => Some(completes),
+        Activity::Eat { completes, .. } => Some(completes),
+        Activity::Load { completes, .. } => Some(completes),
+        Activity::Tell { completes, .. } => Some(completes),
+        Activity::Conceive { completes, .. } => Some(completes),
+        Activity::Care { completes, .. } => Some(completes),
+        Activity::Unbind { completes, .. } => Some(completes),
+        Activity::Express { completes, .. } => Some(completes),
+        Activity::Play { completes, .. } => Some(completes),
+        Activity::Idle | Activity::Rest | Activity::Work { .. } | Activity::Combat { .. } => None,
+    }
 }

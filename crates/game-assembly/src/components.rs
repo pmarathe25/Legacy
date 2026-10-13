@@ -7,10 +7,15 @@ use std::ops::{Deref, DerefMut};
 pub(crate) fn schema() -> Result<Schema, Error> {
     let mut schema = Schema::new();
     game_cargo::register_components(&mut schema)?;
+    game_characters::register_people(&mut schema)?;
     game_agriculture::register_components(&mut schema)?;
     game_physiology::register_components(&mut schema)?;
     game_workshop::register_components(&mut schema)?;
     game_skills::register_components(&mut schema)?;
+    game_armies::register_components(&mut schema)?;
+    game_conflict::register_components(&mut schema)?;
+    game_conflict::force::register_components(&mut schema)?;
+    game_lineage::register_components(&mut schema)?;
     game_health::register_components(&mut schema)?;
     game_lifecycle::register_components(&mut schema)?;
     game_property::register_components(&mut schema)?;
@@ -22,7 +27,9 @@ pub(crate) fn schema() -> Result<Schema, Error> {
     game_invocation::register_memory_components::<game_api::Command>(&mut schema)?;
     game_transport::register_components(&mut schema)?;
     game_society::register_components(&mut schema)?;
+    game_society::enforcement::register_components(&mut schema)?;
     game_characters::decisions::register_minds::<game_api::Command>(&mut schema)?;
+    game_characters::social::register_components(&mut schema)?;
     game_genetics::register_components(&mut schema)?;
     game_physiology::traits::register_components(&mut schema)?;
     game_characters::temperament::register_components(&mut schema)?;

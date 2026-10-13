@@ -60,14 +60,14 @@ fn body_activity_and_workshop_jobs_are_independent_canonical_columns() {
             .as_array()
             .unwrap()
             .len(),
-        sim.host.state.people.len()
+        sim.people().len()
     );
     assert_eq!(
         json["components"]["columns"]["coordination/activity"]
             .as_array()
             .unwrap()
             .len(),
-        sim.host.state.people.len()
+        sim.people().len()
     );
     assert!(
         !json["components"]["columns"]["workshop/job"]
@@ -147,7 +147,7 @@ fn stale_expressed_alleles_fail_before_publication() {
 #[test]
 fn invalid_final_founder_traits_leave_admission_inert() {
     let mut sim = Simulation::skills_fixture(87, Execution::default()).unwrap();
-    let last = sim.host.state.people.last().unwrap().id;
+    let last = sim.people().last().unwrap().id;
     game_characters::decisions::mind_mut::<game_api::Command>(&mut sim.host.storage, last)
         .unwrap()
         .personality
@@ -182,7 +182,7 @@ fn genetic_and_trait_rows_are_authoritative_and_orphans_fail_restore() {
                 .as_array()
                 .unwrap()
                 .len(),
-            sim.host.state.people.len()
+            sim.people().len()
         );
         let mut malformed = json.clone();
         malformed["state"]["components"]["columns"][column]
@@ -222,7 +222,7 @@ fn pending_npc_death_refreshes_queries_after_occupancy_removal() {
     sim.initialize_health(game_health::Rules::fixture())
         .unwrap();
     let ruler = sim.host.state.ruler;
-    let enemy = sim.host.state.people[3].id;
+    let enemy = sim.person_at(3).id;
     let area = game_spatial::location(&sim.host.storage, game_ecs::StableId((ruler).0))
         .unwrap()
         .cell()
@@ -266,10 +266,14 @@ fn pending_npc_death_refreshes_queries_after_occupancy_removal() {
     }
     let damage = sim.body_rules(ruler).max_health - 1;
     sim.debug_injure(ruler, damage).unwrap();
-    let combat = sim.host.state.combat.as_mut().unwrap();
-    let map = combat.encounters[&encounter].map;
-    combat.map_mut(map).unwrap().obstacles.clear();
-    let battle = combat.encounters.get_mut(&encounter).unwrap();
+    let map = game_conflict::encounter(&sim.host.storage, encounter)
+        .unwrap()
+        .map;
+    game_conflict::map_mut(&mut sim.host.storage, map)
+        .unwrap()
+        .obstacles
+        .clear();
+    let battle = game_conflict::encounter_mut(&mut sim.host.storage, encounter).unwrap();
     battle.fighters.get_mut(&ruler).unwrap().position = game_api::Point { x: 5_000, y: 5_000 };
     battle.fighters.get_mut(&enemy).unwrap().position = game_api::Point { x: 6_000, y: 5_000 };
     // An authored pending NPC turn runs through the normal advance path.
@@ -369,7 +373,7 @@ fn mind_column_is_authoritative_and_missing_person_rows_fail_restore() {
             .as_array()
             .unwrap()
             .len(),
-        sim.host.state.people.len()
+        sim.people().len()
     );
     assert_eq!(
         sim.canonical_state(),
@@ -414,7 +418,7 @@ fn lifecycle_rows_are_authoritative_and_missing_or_orphan_lives_fail_restore() {
             .as_array()
             .unwrap()
             .len(),
-        sim.host.state.people.len()
+        sim.people().len()
     );
     assert_eq!(
         sim.canonical_state(),
@@ -444,8 +448,8 @@ fn lifecycle_rows_are_authoritative_and_missing_or_orphan_lives_fail_restore() {
 #[test]
 fn stale_lifecycle_actions_leave_rows_clock_and_events_unchanged() {
     let mut sim = Simulation::life_fixture(91, Execution::default()).unwrap();
-    let actor = sim.host.state.people[3].id;
-    let partner = sim.host.state.people[4].id;
+    let actor = sim.person_at(3).id;
+    let partner = sim.person_at(4).id;
     sim.debug_actor_command(actor, game_api::Command::Conceive { partner })
         .unwrap();
     let pregnancy = game_lifecycle::all_pregnancies(&sim.host.storage)
@@ -549,7 +553,7 @@ fn health_columns_are_authoritative_and_orphans_fail_restore() {
             .as_array()
             .unwrap()
             .len(),
-        sim.host.state.people.len()
+        sim.people().len()
     );
     let restored = Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     assert_eq!(sim.canonical_state(), restored.canonical_state());
@@ -631,7 +635,7 @@ fn physical_batch_guards_opening_population_membership() {
     let mut sim = Simulation::survival_fixture(15, Execution::default()).unwrap();
     sim.physical_query.refresh(&sim.host.storage).unwrap();
     let prepared = sim.prepare_world_step(SimTime(1)).unwrap();
-    let mut newcomer = sim.host.state.people[0].clone();
+    let mut newcomer = sim.person_at(0).clone();
     newcomer.id = game_api::PersonId(sim.host.allocate_id().unwrap().0);
     newcomer.role = game_api::Role::Citizen;
     let body = game_physiology::body(&sim.host.storage, sim.host.state.ruler)
@@ -655,9 +659,8 @@ fn physical_batch_guards_opening_population_membership() {
         .set_activity(newcomer.id, game_api::Activity::Idle)
         .unwrap();
     let id = newcomer.id;
-    let index = sim.host.state.people.len();
-    sim.host.state.people.push(newcomer);
-    sim.person_index.insert(id, index);
+    game_characters::insert_person(&mut sim.host.storage, newcomer).unwrap();
+    sim.rebuild_person_index();
     let inventory = sim
         .debug_add_inventory(
             game_api::Good::Food,
@@ -667,7 +670,9 @@ fn physical_batch_guards_opening_population_membership() {
             std::collections::BTreeSet::from([id]),
         )
         .unwrap();
-    sim.host.state.people[index].inventory = inventory;
+    game_characters::person_mut(&mut sim.host.storage, id)
+        .unwrap()
+        .inventory = inventory;
     Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
     let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
@@ -684,12 +689,13 @@ fn spatial_column_is_the_only_person_position_and_bad_graphs_fail_restore() {
     let sim = Simulation::kernel_fixture(17, 5, Execution::default()).unwrap();
     let saved = sim.save().unwrap();
     let json: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    assert!(json["state"]["state"].get("people").is_none());
     assert!(
-        json["state"]["state"]["people"]
+        json["state"]["components"]["columns"]["characters/person"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|person| person.get("location").is_none())
+            .all(|row| row["value"].get("location").is_none())
     );
     assert_eq!(
         json["state"]["components"]["columns"]["spatial/location"]
@@ -698,8 +704,8 @@ fn spatial_column_is_the_only_person_position_and_bad_graphs_fail_restore() {
             .len(),
         5
     );
-    let first = sim.host.state.people[0].id;
-    let second = sim.host.state.people[1].id;
+    let first = sim.person_at(0).id;
+    let second = sim.person_at(1).id;
     let mut state = GameHost::restore(
         super::schema().unwrap(),
         sim.canonical_snapshot().unwrap(),
@@ -766,7 +772,7 @@ fn workshop_sites_roundtrip_only_as_shared_rows_and_require_physical_metadata() 
     assert_eq!(sim.canonical_state(), restored.canonical_state());
 
     let mut kernel = Simulation::kernel_fixture(19, 5, Execution::default()).unwrap();
-    let person = &kernel.host.state.people[0];
+    let person = kernel.person_at(0);
     let id = game_api::SiteId(person.id.0);
     let stock = person.inventory;
     let chosen_recipe = kernel
@@ -810,7 +816,7 @@ fn personal_skills_are_saved_as_components_and_require_their_runtime() {
             .as_array()
             .unwrap()
             .len(),
-        sim.host.state.people.len()
+        sim.people().len()
     );
     let restored = Simulation::load(
         &saved,
@@ -838,12 +844,7 @@ fn land_soil_keys_match_one_land_use_and_reject_missing_or_orphan_rows() {
         .debug_add_plot(
             sim.host.state.areas[1].id,
             None,
-            sim.host
-                .state
-                .people
-                .iter()
-                .map(|person| person.id)
-                .collect(),
+            sim.people().map(|person| person.id).collect(),
             900,
         )
         .unwrap();
@@ -871,7 +872,7 @@ fn land_soil_keys_match_one_land_use_and_reject_missing_or_orphan_rows() {
         |_| Ok(()),
     )
     .unwrap();
-    let person = game_core::SiteId(orphan.state.people[0].id.0);
+    let person = game_core::SiteId(sim.person_at(0).id.0);
     game_land::insert_soil(
         &mut orphan.storage,
         person,
@@ -1076,5 +1077,56 @@ fn native_property_columns_restore_and_reject_metadata_shadows_and_orphan_rows()
             "property reference attack {attack}"
         );
         assert_eq!(sim.save().unwrap(), before);
+    }
+}
+
+#[test]
+fn canonical_person_rows_replace_roster_values_and_reject_bad_native_identity() {
+    let sim = Simulation::kernel_fixture(23, 5, Execution::default()).unwrap();
+    let base: serde_json::Value = serde_json::from_slice(&sim.save().unwrap()).unwrap();
+    assert!(base["state"]["state"].get("people").is_none());
+    let rows = base["state"]["components"]["columns"]["characters/person"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0]["entity"], sim.person_at(0).id.0);
+    assert_eq!(rows[0]["value"]["inventory"], sim.person_at(0).inventory.0);
+    for failure in 0..6 {
+        let mut malformed = base.clone();
+        match failure {
+            0 => {
+                malformed["state"]["components"]["columns"]["characters/person"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(0);
+            }
+            1 => {
+                malformed["state"]["components"]["columns"]["characters/person"][0]["value"]["id"] =
+                    serde_json::json!(sim.person_at(3).id.0);
+            }
+            2 => {
+                malformed["state"]["components"]["columns"]["characters/person"][0]["value"]["work_remainder"] =
+                    serde_json::json!(60_000);
+            }
+            3 => {
+                malformed["state"]["components"]["columns"]["characters/person"][1]["value"]["hunger_exempt"] =
+                    serde_json::json!(false);
+            }
+            4 => {
+                malformed["state"]["components"]["columns"]["characters/person"][3]["value"]["inventory"] =
+                    serde_json::json!(sim.person_at(0).inventory.0);
+            }
+            _ => {
+                malformed["state"]["state"]["people"] = serde_json::json!([]);
+            }
+        }
+        assert!(
+            Simulation::load(
+                &serde_json::to_vec(&malformed).unwrap(),
+                Execution::default()
+            )
+            .is_err(),
+            "malformed native person case {failure}"
+        );
     }
 }

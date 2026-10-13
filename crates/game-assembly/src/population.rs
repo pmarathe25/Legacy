@@ -101,12 +101,12 @@ impl Simulation {
                     .social
                     .as_mut()
                     .unwrap()
-                    .finish_conversation(a, b, topic)?;
-                sim.emit(EventKind::Socialized {
+                    .finish_conversation(&mut sim.host.storage, a, b, topic)?;
+                sim.publish_authored_experience(EventKind::Socialized {
                     first: a,
                     second: b,
                     topic,
-                });
+                })?;
             }
         }
         for settlement in &settlements {
@@ -353,7 +353,7 @@ impl Simulation {
                 .filter(|id| {
                     *game_spatial::location(
                         &self.host.storage,
-                        game_ecs::StableId((self.host.state.people[self.person_index[id]].id).0),
+                        game_ecs::StableId((self.person_at(self.person_index[id]).id).0),
                     )
                     .expect("location exists")
                         == Location::AtArea(area)
@@ -495,10 +495,7 @@ impl Simulation {
             vec![Due::Review],
         );
         let mut chunks: Vec<_> = sim
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .map(|p| p.id)
             .collect::<Vec<_>>()
             .chunks(plan.settlement_size)
@@ -526,6 +523,7 @@ impl Simulation {
                 for area in &mut ids {
                     let id = AreaId(sim.host.allocate_id()?.0);
                     *area = id;
+                    sim.host.storage.ensure(game_ecs::StableId(id.0))?;
                     sim.host.state.areas.push(Area {
                         id,
                         name: String::new(),
@@ -549,6 +547,7 @@ impl Simulation {
                     areas[2]
                 } else {
                     let id = AreaId(sim.host.allocate_id()?.0);
+                    sim.host.storage.ensure(game_ecs::StableId(id.0))?;
                     sim.host.state.areas.push(Area {
                         id,
                         name: String::new(),
@@ -636,15 +635,17 @@ impl Simulation {
                 .collect::<BTreeMap<_, _>>();
             let authored_now = sim.time();
             for (local, actor) in settlement.residents.iter().copied().enumerate() {
-                let p = &mut sim.host.state.people[sim.person_index[&actor]];
-                *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId((p.id).0))
+                let role = sim.person(actor).role;
+                *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId(actor.0))
                     .expect("location exists") =
-                    Location::AtArea(if mixed && local % 4 == 1 && p.role == Role::Citizen {
+                    Location::AtArea(if mixed && local % 4 == 1 && role == Role::Citizen {
                         settlement.fields
                     } else {
                         settlement.center
                     });
-                p.work_rate = 1_000;
+                game_characters::person_mut(&mut sim.host.storage, actor)
+                    .expect("resident identity")
+                    .work_rate = 1_000;
                 let personality = if local % 3 == 1 {
                     decisions::Personality::restful()
                 } else {
@@ -686,7 +687,7 @@ impl Simulation {
                         born: authored_now,
                         initial_age: SimDuration(age),
                         stage: config.biology.stage_at(age),
-                        reproduction: if p.role == Role::Guardian {
+                        reproduction: if role == Role::Guardian {
                             development::Reproduction::Neither
                         } else if local % 2 == 0 {
                             development::Reproduction::SuppliesSeed
@@ -837,12 +838,12 @@ impl Simulation {
             let _ = (food, timber, tool, wood_tool);
         }
         sim.dependent_index.clear();
-        for person in sim.host.state.people.clone() {
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
             if let Location::AtArea(area) =
-                *game_spatial::location(&sim.host.storage, game_ecs::StableId((person.id).0))
+                *game_spatial::location(&sim.host.storage, game_ecs::StableId((person_id).0))
                     .expect("location exists")
             {
-                sim.index_dependent(person.id, area);
+                sim.index_dependent(person_id, area);
             }
         }
         Ok((sim, settlements))
@@ -892,7 +893,7 @@ mod tests {
     #[test]
     fn existing_residents_have_distinct_local_worlds_and_current_saves() {
         let sim = world(1);
-        assert_eq!(sim.host.state.people.len(), 45);
+        assert_eq!(sim.people().len(), 45);
         assert_eq!(sim.host.state.areas.len(), 9);
         assert_eq!(game_physiology::bodies(&sim.host.storage).count(), 45);
         assert_eq!(game_lifecycle::all_lives(&sim.host.storage).count(), 45);
@@ -914,10 +915,7 @@ mod tests {
         assert_eq!(
             game_health::occupancies(&sim.host.storage).count()
                 + sim
-                    .host
-                    .state
-                    .people
-                    .iter()
+                    .people()
                     .filter(|p| matches!(
                         *game_spatial::location(&sim.host.storage, game_ecs::StableId((p.id).0))
                             .expect("location exists"),
@@ -988,13 +986,13 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(one.host.state.people.len(), 30);
+        assert_eq!(one.people().len(), 30);
         one.advance(SimDuration(15 * MINUTE.0)).unwrap();
         for _ in 0..15 {
             many.advance(MINUTE).unwrap();
         }
         assert_eq!(one.canonical_state(), many.canonical_state());
-        assert!(one.host.state.people.len() > 30);
+        assert!(one.people().len() > 30);
         for event in one.host.events() {
             if let EventKind::Born {
                 pregnancy,
