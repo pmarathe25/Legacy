@@ -52,6 +52,21 @@ impl ReadSet {
         self.dependencies.push(Arc::new(Entity { id, present }));
         present
     }
+    /// Reserve an owner-exclusive new entity shape. At binding, every component
+    /// edit at this identity must be a declared insertion. The resulting guard
+    /// retains that exact typed footprint. Declare a combined shape explicitly
+    /// when cooperating owners intentionally attach several components.
+    /// Ordinary `entity` reads continue to permit shared creation.
+    pub fn exclusive_entity(&mut self, store: &Store, id: StableId) -> Result<(), Error> {
+        if id.0 == 0 {
+            return Err(Error::InvalidConfiguration("zero stable entity ID".into()));
+        }
+        if store.contains(id) {
+            return Err(Error::Unavailable);
+        }
+        self.dependencies.push(Arc::new(ExclusiveEntity { id }));
+        Ok(())
+    }
     /// Track IDs matching a factual scope. Membership checks enumerate only this
     /// component column; use row reads for selected member values. The predicate
     /// must be pure and retain all scope inputs rather than reading mutable state.
@@ -232,6 +247,50 @@ impl Dependency for Entity {
 impl Projection for ProjectedEntity {
     fn validate(&self, store: &Store, batch: &Batch) -> Result<bool, Error> {
         Ok(projected_entity(store, batch, self.id) == self.present)
+    }
+}
+
+struct ExclusiveEntity {
+    id: StableId,
+}
+struct ProjectedShape {
+    id: StableId,
+    components: BTreeSet<std::any::TypeId>,
+}
+impl Dependency for ExclusiveEntity {
+    fn validate(&self, store: &Store) -> bool {
+        !store.contains(self.id)
+    }
+    fn bind(
+        &self,
+        _store: &Store,
+        batch: &Batch,
+        admitted: &ReadFootprint,
+    ) -> Result<Box<dyn Projection>, Error> {
+        let mut components = BTreeSet::new();
+        for edit in batch.edits_on(self.id) {
+            if edit.inserted_value().is_none()
+                || !admitted.rows.contains(&edit.key())
+                || !components.insert(edit.key().1)
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        if components.is_empty() {
+            return Err(Error::Unavailable);
+        }
+        Ok(Box::new(ProjectedShape {
+            id: self.id,
+            components,
+        }))
+    }
+}
+impl Projection for ProjectedShape {
+    fn validate(&self, _store: &Store, batch: &Batch) -> Result<bool, Error> {
+        Ok(batch.edit_count(self.id) == self.components.len()
+            && batch.edits_on(self.id).all(|edit| {
+                edit.inserted_value().is_some() && self.components.contains(&edit.key().1)
+            }))
     }
 }
 

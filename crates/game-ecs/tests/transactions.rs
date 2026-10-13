@@ -217,6 +217,74 @@ fn pure_entity_absence_guard_rejects_foreign_creation_before_and_after_binding()
 }
 
 #[test]
+fn exclusive_entity_allows_declared_compound_shape_and_rejects_foreign_components() {
+    let mut schema = fixture().schema().clone();
+    schema.register::<bool>("test/flag", |_| Ok(())).unwrap();
+    let store = Store::with_schema(schema);
+    let id = StableId(3);
+    let mut reads = ReadSet::new();
+    reads.exclusive_entity(&store, id).unwrap();
+    let mut admitted = ReadFootprint::new();
+    admitted.protect::<Row>(id);
+    admitted.protect::<u64>(id);
+    let mut batch = Batch::new();
+    // Two cooperating owners deliberately declare the complete compound shape.
+    batch.insert(
+        id,
+        Row {
+            scope: 7,
+            value: 30,
+        },
+    );
+    batch.insert(id, 31_u64);
+    let guard = reads.clone().bind(&store, &batch, &admitted).unwrap();
+    guard.validate(&store, &batch).unwrap();
+    batch.insert(StableId(4), true);
+    guard.validate(&store, &batch).unwrap();
+    let before = store.snapshot().unwrap();
+    batch.insert(id, true);
+    assert!(guard.validate(&store, &batch).is_err());
+    // An already staged foreign component cannot be silently captured at bind.
+    assert!(reads.bind(&store, &batch, &admitted).is_err());
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn exclusive_entity_rejects_occupied_empty_duplicate_and_removal_shapes() {
+    let mut store = fixture();
+    let id = StableId(3);
+    let mut reads = ReadSet::new();
+    assert_eq!(
+        reads.exclusive_entity(&store, StableId(1)),
+        Err(Error::Unavailable)
+    );
+    assert!(matches!(
+        reads.exclusive_entity(&store, StableId(0)),
+        Err(Error::InvalidConfiguration(_))
+    ));
+    reads.exclusive_entity(&store, id).unwrap();
+    assert!(
+        reads
+            .clone()
+            .bind(&store, &Batch::new(), &ReadFootprint::new())
+            .is_err()
+    );
+    let mut admitted = ReadFootprint::new();
+    admitted.protect::<u64>(id);
+    let mut removal = Batch::new();
+    removal.remove::<u64>(id);
+    assert!(reads.clone().bind(&store, &removal, &admitted).is_err());
+    let mut batch = Batch::new();
+    batch.insert(id, 30_u64);
+    let guard = reads.clone().bind(&store, &batch, &admitted).unwrap();
+    batch.remove::<u64>(id);
+    assert!(guard.validate(&store, &batch).is_err());
+    assert!(reads.clone().bind(&store, &batch, &admitted).is_err());
+    store.spawn(id).unwrap();
+    assert_eq!(reads.validate(&store), Err(Error::Unavailable));
+}
+
+#[test]
 fn projected_reads_distinguish_absence_removal_and_duplicate_edits() {
     let store = fixture();
     let mut batch = Batch::new();
