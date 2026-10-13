@@ -439,3 +439,51 @@ fn projection_diff_rejects_invalid_mutation_without_partial_staging() {
         vec![StableId(80)]
     );
 }
+
+#[test]
+fn typed_projection_import_does_not_copy_or_guard_unimported_remote_columns() {
+    let mut schema = Schema::new();
+    schema.register::<u64>("number", |_| Ok(())).unwrap();
+    schema.register::<String>("name", |_| Ok(())).unwrap();
+    let mut source = Store::with_schema(schema);
+    source.insert_or_spawn(StableId(1), 1_u64).unwrap();
+    source
+        .insert_pair_or_spawn(StableId(2), 2_u64, "private".to_owned())
+        .unwrap();
+    let mut opening = source.project_entities([StableId(1)]).unwrap();
+    opening.import_rows::<u64>(&source, [StableId(2)]).unwrap();
+    assert_eq!(opening.get::<String>(StableId(2)), None);
+    let mut preview = opening.clone();
+    preview.insert(StableId(2), 3_u64).unwrap();
+    let mut batch = Batch::new();
+    let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    source
+        .insert(StableId(2), "changed private".to_owned())
+        .unwrap();
+    guard.validate(&source, &batch).unwrap();
+    preview
+        .insert(StableId(2), "unauthorized".to_owned())
+        .unwrap();
+    assert!(preview.diff_into(&opening, &mut Batch::new()).is_err());
+    source.insert(StableId(2), 4_u64).unwrap();
+    assert!(guard.validate(&source, &batch).is_err());
+}
+
+#[test]
+fn absent_partial_import_guards_entity_collision_even_without_selected_component() {
+    let mut schema = Schema::new();
+    schema.register::<u64>("number", |_| Ok(())).unwrap();
+    schema.register::<String>("name", |_| Ok(())).unwrap();
+    let mut source = Store::with_schema(schema);
+    let mut opening = source.project_entities([]).unwrap();
+    opening.import_rows::<u64>(&source, [StableId(90)]).unwrap();
+    let preview = opening.clone();
+    let mut batch = Batch::new();
+    let (reads, writes) = preview.diff_into(&opening, &mut batch).unwrap();
+    let guard = reads.bind(&source, &batch, &writes).unwrap();
+    source
+        .insert_or_spawn(StableId(90), "other type collision".to_owned())
+        .unwrap();
+    assert!(guard.validate(&source, &batch).is_err());
+}

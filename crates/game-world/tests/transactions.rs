@@ -141,6 +141,96 @@ fn preview_tail_rejects_bad_sequences_or_timestamps_without_touching_source() {
     }
 }
 
+#[test]
+fn transaction_publishes_rows_cursors_and_records_at_one_final_logical_time() {
+    let mut host = fixture();
+    host.publish_clock(Clock {
+        time: SimTime(5),
+        revision: 3,
+    });
+    host.append_many(vec!["historical"]).unwrap();
+    let opening = host.transaction_opening();
+    let mut batch = Batch::new();
+    batch.insert(StableId(1), 11_u64);
+    batch.insert(StableId(opening.next_id), 30_u64);
+    let mut transaction = Transaction::new(opening, batch);
+    assert_eq!(transaction.time, SimTime(5));
+    transaction.time = SimTime(9);
+    transaction.ids = 1;
+    transaction.events = vec!["first", "second"];
+    transaction.revisions = 2;
+    host.commit_transaction(transaction).unwrap();
+    assert_eq!(
+        host.clock(),
+        Clock {
+            time: SimTime(9),
+            revision: 5
+        }
+    );
+    assert_eq!(host.next_id(), 3);
+    assert_eq!(host.next_event(), 4);
+    assert_eq!(host.storage.get::<u64>(StableId(1)), Some(&11));
+    assert_eq!(host.storage.get::<u64>(StableId(2)), Some(&30));
+    assert_eq!(
+        host.events()
+            .iter()
+            .map(|record| (record.sequence, record.at, record.event))
+            .collect::<Vec<_>>(),
+        [
+            (1, SimTime(5), "historical"),
+            (2, SimTime(9), "first"),
+            (3, SimTime(9), "second")
+        ]
+    );
+}
+
+#[test]
+fn invalid_or_stale_interval_publication_preserves_the_complete_host() {
+    for failure in 0..4 {
+        let mut host = fixture();
+        host.state = 41;
+        host.publish_clock(Clock {
+            time: SimTime(5),
+            revision: 3,
+        });
+        host.append_many(vec!["historical"]).unwrap();
+        let mut reads = ReadSet::new();
+        reads.read::<u64>(&host.storage, StableId(1));
+        let mut writes = ReadFootprint::new();
+        writes.protect::<u64>(StableId(1));
+        let opening = host.transaction_opening();
+        let mut batch = Batch::new();
+        batch.insert(StableId(1), if failure == 0 { 101_u64 } else { 11_u64 });
+        let guard = reads.bind(&host.storage, &batch, &writes).unwrap();
+        batch.insert(StableId(opening.next_id), 30_u64);
+        let mut transaction = Transaction::new(opening, batch);
+        transaction.time = SimTime(9);
+        transaction.ids = 1;
+        transaction.events = vec!["rejected"];
+        transaction.revisions = 2;
+        transaction.guards.push(guard);
+        match failure {
+            1 => *host.storage.get_mut::<u64>(StableId(1)).unwrap() = 12,
+            2 => host.publish_clock(Clock {
+                time: SimTime(6),
+                revision: 3,
+            }),
+            3 => transaction.time = SimTime(4),
+            _ => {}
+        }
+        let before = host.snapshot().unwrap();
+        let clock = host.clock();
+        let expected = if failure == 3 {
+            Error::SequenceConflict
+        } else {
+            Error::Unavailable
+        };
+        assert_eq!(host.commit_transaction(transaction), Err(expected));
+        assert_eq!(host.snapshot().unwrap(), before);
+        assert_eq!(host.clock(), clock);
+    }
+}
+
 // A tiny owner finalization token: domain validation happens before staging,
 // and its precomputed runtime cursor is published without fallible work.
 struct Finish {

@@ -87,6 +87,8 @@ impl Eq for TransactionOpening {}
 /// finalization may perform fallible work after successful canonical publication.
 pub struct Transaction<Event> {
     pub opening: TransactionOpening,
+    /// Logical closing time, admitted together with component rows and records.
+    pub time: SimTime,
     pub batch: Batch,
     pub guards: Vec<ReadGuard>,
     pub ids: u64,
@@ -96,6 +98,7 @@ pub struct Transaction<Event> {
 impl<Event> Transaction<Event> {
     pub fn new(opening: TransactionOpening, batch: Batch) -> Self {
         Self {
+            time: opening.clock.time,
             opening,
             batch,
             guards: Vec::new(),
@@ -295,12 +298,15 @@ impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
         }
     }
     /// Admit one combined batch and its complete publication budget before any
-    /// mutation. All Result-returning work precedes the backend's atomic batch
+    /// mutation, including monotonic logical time. All Result-returning work precedes the backend's atomic batch
     /// application. Successful application is followed only by infallible cursor
     /// assignments and record publication; failed validation preserves all state.
     pub fn commit_transaction(&mut self, transaction: Transaction<Event>) -> Result<(), Error> {
         if transaction.opening != self.transaction_opening() {
             return Err(Error::Unavailable);
+        }
+        if transaction.time < self.clock.time {
+            return Err(Error::SequenceConflict);
         }
         let count = u64::try_from(transaction.events.len()).map_err(|_| Error::Overflow)?;
         self.preflight_records(transaction.ids, count, transaction.revisions)?;
@@ -323,16 +329,19 @@ impl<State, Event, Storage: StorageAccess> GenericHost<State, Event, Storage> {
         // before the first component change. No duplicate schema admission here.
         self.storage.store_mut().apply_batch(transaction.batch)?;
         self.next_id = next_id;
+        self.clock = Clock {
+            time: transaction.time,
+            revision,
+        };
         let first_event = self.next_event;
         for (offset, event) in transaction.events.into_iter().enumerate() {
             self.events.push(Published {
                 sequence: first_event + offset as u64,
-                at: self.clock.time,
+                at: transaction.time,
                 event,
             });
         }
         self.next_event = next_event;
-        self.clock.revision = revision;
         Ok(())
     }
 

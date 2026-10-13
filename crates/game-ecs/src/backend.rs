@@ -139,6 +139,7 @@ pub(super) struct Storage {
     schema: Schema,
     structural_revision: Generation,
     projection_members: Option<std::collections::BTreeSet<StableId>>,
+    projection_rows: BTreeMap<StableId, std::collections::BTreeSet<TypeId>>,
 }
 // Pending operations are erased only inside this adapter. They validate against
 // typed registrations and publish into native typed columns, never a value bag.
@@ -239,6 +240,7 @@ impl Storage {
             schema,
             structural_revision: Generation::default(),
             projection_members: None,
+            projection_rows: BTreeMap::new(),
         }
     }
     pub(super) fn project_entities(
@@ -268,6 +270,53 @@ impl Storage {
         }
         Ok(projected)
     }
+    pub(super) fn import_rows<C: Component>(
+        &mut self,
+        source: &Self,
+        ids: impl IntoIterator<Item = StableId>,
+    ) -> Result<(), Error> {
+        if self.projection_members.is_none()
+            || self.schema != source.schema
+            || self.schema.components.iter().any(|(key, registration)| {
+                !Arc::ptr_eq(
+                    &registration.validator,
+                    &source.schema.components[key].validator,
+                )
+            })
+        {
+            return Err(Error::InvalidConfiguration(
+                "row import requires matching bounded projection schema".into(),
+            ));
+        }
+        let registration = source.schema.registration::<C>()?;
+        let ids: std::collections::BTreeSet<_> = ids.into_iter().collect();
+        if ids.iter().any(|id| id.0 == 0) {
+            return Err(Error::InvalidConfiguration("zero stable entity ID".into()));
+        }
+        if ids.iter().any(|id| {
+            self.projection_members.as_ref().unwrap().contains(id)
+                || self
+                    .projection_rows
+                    .get(id)
+                    .is_some_and(|rows| rows.contains(&TypeId::of::<C>()))
+        }) {
+            return Err(Error::Unavailable);
+        }
+        for id in ids {
+            if let Some(source_entity) = source.entities.get(&id) {
+                if !self.contains(id) {
+                    self.spawn(id)?;
+                }
+                let entity = self.entities[&id];
+                (registration.clone_row)(&source.world, *source_entity, &mut self.world, entity);
+            }
+            self.projection_rows
+                .entry(id)
+                .or_default()
+                .insert(TypeId::of::<C>());
+        }
+        Ok(())
+    }
     pub(super) fn diff_into(
         &self,
         opening: &Self,
@@ -288,8 +337,12 @@ impl Storage {
         let members = opening.projection_members.as_ref().ok_or_else(|| {
             Error::InvalidConfiguration("diff requires a bounded opening projection".into())
         })?;
-        let ids: std::collections::BTreeSet<_> =
-            members.iter().copied().chain(self.ids()).collect();
+        let ids: std::collections::BTreeSet<_> = members
+            .iter()
+            .copied()
+            .chain(opening.projection_rows.keys().copied())
+            .chain(self.ids())
+            .collect();
         let mut reads = ReadSet::new();
         let mut writes = ReadFootprint::new();
         // Stage separately so a rejected diff cannot partially change the caller's batch.
@@ -305,6 +358,24 @@ impl Storage {
                 }
             }
             for registration in opening.schema.components.values() {
+                if let Some(rows) = opening.projection_rows.get(&id) {
+                    if !members.contains(&id) && !rows.contains(&registration.component_type) {
+                        // Partial imports confer no authority over other component keys.
+                        let mut unexpected = Batch::new();
+                        (registration.diff)(
+                            opening,
+                            self,
+                            id,
+                            &mut unexpected,
+                            &mut ReadSet::new(),
+                            &mut ReadFootprint::new(),
+                        );
+                        if unexpected.edit_count(id) != 0 {
+                            return Err(Error::Unavailable);
+                        }
+                        continue;
+                    }
+                }
                 (registration.diff)(opening, self, id, &mut staged, &mut reads, &mut writes);
             }
             if !opening.contains(id) && self.contains(id) && staged.edit_count(id) == 0 {
@@ -628,6 +699,7 @@ impl Clone for Storage {
             }
         }
         cloned.projection_members = self.projection_members.clone();
+        cloned.projection_rows = self.projection_rows.clone();
         cloned
     }
 }

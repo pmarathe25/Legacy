@@ -301,6 +301,15 @@ impl Store {
             backend: self.backend.project_entities(ids)?,
         })
     }
+    /// Import only one registered type on remote identities into a projection.
+    /// Other component keys on these identities confer no preview authority.
+    pub fn import_rows<C: Component>(
+        &mut self,
+        source: &Store,
+        ids: impl IntoIterator<Item = StableId>,
+    ) -> Result<(), Error> {
+        self.backend.import_rows::<C>(&source.backend, ids)
+    }
     /// Coalesce a bounded preview into sparse writes and opening dependencies.
     /// Bind the returned reads and footprint against the original source store
     /// immediately after staging; new preview identities require exclusive creation.
