@@ -896,6 +896,14 @@ impl World {
         facts: &ChoiceFacts,
     ) -> Option<SocialAction> {
         let own = personal(store, facts.actor)?;
+        self.choose_from_personal(own, mind, facts)
+    }
+    pub fn choose_from_personal<A>(
+        &self,
+        own: &Personal,
+        mind: &crate::decisions::Mind<A>,
+        facts: &ChoiceFacts,
+    ) -> Option<SocialAction> {
         if !facts.autonomous || !facts.can_speak || own.development.next_choice > facts.now {
             return None;
         }

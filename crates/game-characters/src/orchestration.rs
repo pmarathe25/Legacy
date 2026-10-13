@@ -502,14 +502,14 @@ pub trait ObservationPort {
     fn routes(&self, area: AreaId) -> BTreeMap<AreaId, SimDuration>;
 }
 pub struct Observation {
-    actor: PersonId,
-    location: Location,
-    area: AreaId,
-    meal_size: Quantity,
-    routes: Option<BTreeMap<AreaId, SimDuration>>,
-    stocks: Vec<StockKnowledge>,
-    children: Vec<(PersonId, ChildSignal)>,
-    sites: Vec<SiteKnowledge>,
+    pub(crate) actor: PersonId,
+    pub(crate) location: Location,
+    pub(crate) area: AreaId,
+    pub(crate) meal_size: Quantity,
+    pub(crate) routes: Option<BTreeMap<AreaId, SimDuration>>,
+    pub(crate) stocks: Vec<StockKnowledge>,
+    pub(crate) children: Vec<(PersonId, ChildSignal)>,
+    pub(crate) sites: Vec<SiteKnowledge>,
 }
 /// Cohort joining and bounded dependent attention are receiving character policy.
 pub fn prepare_observations(now: SimTime, port: &impl ObservationPort) -> Vec<Observation> {

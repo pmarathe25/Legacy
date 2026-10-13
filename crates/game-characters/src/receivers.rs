@@ -1168,6 +1168,15 @@ pub fn prepare_lineage_lesson<A: Component>(
         .ok_or(Error::Unavailable)?;
     teacher.validate()?;
     let learner = change.row(store, student).ok_or(Error::Unavailable)?;
+    let gain = receive_lesson_to_mind(&teacher, learner, knowledge)?;
+    learner.validate()?;
+    Ok(PreparedLesson { gain, change })
+}
+pub(crate) fn receive_lesson_to_mind<A>(
+    teacher: &Mind<A>,
+    learner: &mut Mind<A>,
+    knowledge: LessonKnowledge,
+) -> Result<u64, Error> {
     let gain = match knowledge {
         LessonKnowledge::Craft {
             skill_level,
@@ -1189,10 +1198,10 @@ pub fn prepare_lineage_lesson<A: Component>(
         }
         LessonKnowledge::Travel { lesson_gain } => {
             let mut new_links = 0_u64;
-            for (area, links) in teacher.routes {
-                let own = learner.routes.entry(area).or_default();
+            for (area, links) in &teacher.routes {
+                let own = learner.routes.entry(*area).or_default();
                 for (destination, duration) in links {
-                    if own.insert(destination, duration).is_none() {
+                    if own.insert(*destination, *duration).is_none() {
                         new_links = new_links.checked_add(1).ok_or(Error::Overflow)?;
                     }
                 }
@@ -1200,8 +1209,7 @@ pub fn prepare_lineage_lesson<A: Component>(
             new_links.min(lesson_gain)
         }
     };
-    learner.validate()?;
-    Ok(PreparedLesson { gain, change })
+    Ok(gain)
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 mod newborn;
 pub use newborn::*;
+pub mod services;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -308,7 +309,7 @@ impl Runtime {
         let record = person_temperament(store, person).ok_or(Error::Unavailable)?;
         self.express_record(record, score)
     }
-    fn express_record(
+    pub(crate) fn express_record(
         &self,
         record: &PersonTemperament,
         mut score: impl FnMut(&str) -> Result<i32, Error>,
@@ -360,7 +361,7 @@ impl Runtime {
         insert_person_temperament(store, person, record)?;
         Ok(())
     }
-    fn apply_learning(&self, record: &mut PersonTemperament, deltas: [i16; 4]) {
+    pub(crate) fn apply_learning(&self, record: &mut PersonTemperament, deltas: [i16; 4]) {
         let bound = i32::from(self.definitions.learned_limit);
         for (offset, delta) in record.learned_offsets.iter_mut().zip(deltas) {
             *offset = (i32::from(*offset) + i32::from(delta)).clamp(-bound, bound) as i16;
