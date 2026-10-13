@@ -1479,3 +1479,845 @@ fn projected_share_preserves_integer_operation_order_and_rejects_bad_inputs() {
         Err(Error::Overflow)
     );
 }
+
+fn composed_store(world: &Fixture) -> game_ecs::Store {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_land::register_components(&mut schema).unwrap();
+    game_cargo::register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    world
+        .runtime
+        .insert_field(&mut store, world.field(SiteId(1)).unwrap().clone())
+        .unwrap();
+    world
+        .runtime
+        .insert_crop(
+            &mut store,
+            SiteId(1),
+            world.crop(SiteId(1)).unwrap().clone(),
+        )
+        .unwrap();
+    world
+        .runtime
+        .insert_soil(
+            &mut store,
+            SiteId(1),
+            world.soil(SiteId(1)).unwrap().clone(),
+        )
+        .unwrap();
+    for (id, good) in [
+        (4, Good::Seed),
+        (5, Good::Tool),
+        (6, Good::Water),
+        (7, Good::Food),
+    ] {
+        game_cargo::insert_inventory(
+            &mut store,
+            game_cargo::Inventory {
+                id: InventoryId(id),
+                location: game_cargo::InventoryLocation::Area(AreaId(2)),
+                quantity: Quantity(10_000),
+                capacity: Quantity(10_000_000),
+                access: BTreeSet::from([PersonId(3)]),
+                last_granted: None,
+                good,
+                spoils_at: None,
+            },
+        )
+        .unwrap();
+    }
+    store
+}
+
+#[test]
+fn production_start_path_composes_checked_material_consumption() {
+    let world = world();
+    let mut store = composed_store(&world);
+    let before = store.snapshot().unwrap();
+    let plan = world
+        .runtime
+        .prepare_start(&store, SiteId(1), FarmOperation::Irrigate, begin())
+        .unwrap();
+    let input = plan.effect().consumed.unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage(&world.runtime, &store, &mut batch).unwrap();
+    let consumption_guard =
+        game_cargo::prepare_consumptions(&store, &[(input.inventory, input.quantity)])
+            .unwrap()
+            .stage_guarded_into(&store, &mut batch)
+            .unwrap();
+    guard.validate(&world.runtime, &store, &batch).unwrap();
+    consumption_guard.validate(&store, &batch).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        world
+            .runtime
+            .cultivation(&store, PersonId(3))
+            .unwrap()
+            .operation,
+        FarmOperation::Irrigate
+    );
+    assert_eq!(
+        game_cargo::inventory(&store, InventoryId(6))
+            .unwrap()
+            .quantity,
+        Quantity(9_000)
+    );
+}
+
+#[test]
+fn production_start_guards_competing_claims_and_foreign_crop_writes() {
+    let world = world();
+    let mut store = composed_store(&world);
+    let plan = world
+        .runtime
+        .prepare_start(&store, SiteId(1), FarmOperation::Irrigate, begin())
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage(&world.runtime, &store, &mut batch).unwrap();
+    let before = store.snapshot().unwrap();
+    batch.insert(
+        game_ecs::StableId(8),
+        Cultivation {
+            field: SiteId(1),
+            operation: FarmOperation::Tend,
+            labor_ms: 0,
+            completes: SimTime(50),
+        },
+    );
+    assert_eq!(
+        guard.validate(&world.runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    let plan = world
+        .runtime
+        .prepare_start(&store, SiteId(1), FarmOperation::Irrigate, begin())
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage(&world.runtime, &store, &mut batch).unwrap();
+    let mut crop = world.runtime.crop(&store, SiteId(1)).unwrap().clone();
+    crop.tending = 999;
+    batch.insert(game_ecs::StableId(1), crop);
+    assert_eq!(
+        guard.validate(&world.runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    world
+        .runtime
+        .crop_mut(&mut store, SiteId(1))
+        .unwrap()
+        .tending = 500;
+    assert_eq!(
+        guard.validate(&world.runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+}
+
+#[test]
+fn production_finish_path_composes_harvest_deposits_and_capacity_failure_is_atomic() {
+    let world = world();
+    let mut store = composed_store(&world);
+    let crop = world.runtime.crop_mut(&mut store, SiteId(1)).unwrap();
+    crop.phase = CropPhase::Ripe;
+    crop.degree_days_milli = world
+        .runtime
+        .rules_for(&world.store, SiteId(1))
+        .unwrap()
+        .ripe_degree_days
+        * 1_000;
+    let job = Cultivation {
+        field: SiteId(1),
+        operation: FarmOperation::Harvest,
+        labor_ms: 0,
+        completes: SimTime(1),
+    };
+    world
+        .runtime
+        .insert_cultivation(&mut store, PersonId(3), job)
+        .unwrap();
+    let plan = world
+        .runtime
+        .prepare_finish(
+            &store,
+            PersonId(3),
+            FinishFacts {
+                now: SimTime(1),
+                equipped: true,
+                alive: true,
+                access: Some(begin()),
+            },
+        )
+        .unwrap()
+        .unwrap();
+    let FinishOutcome::Completed {
+        harvest: Some(output),
+        ..
+    } = plan.outcome().clone()
+    else {
+        panic!("harvest expected");
+    };
+    let before = store.snapshot().unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage(&world.runtime, &store, &mut batch).unwrap();
+    let deposit =
+        game_cargo::prepare_deposit(&store, output.food_inventory, Good::Food, output.food)
+            .unwrap();
+    let food_guard = deposit.stage_into(&store, &mut batch).unwrap();
+    let deposit =
+        game_cargo::prepare_deposit(&store, output.seed_inventory, Good::Seed, output.seed)
+            .unwrap();
+    let seed_guard = deposit.stage_into(&store, &mut batch).unwrap();
+    guard.validate(&world.runtime, &store, &batch).unwrap();
+    food_guard.validate(&store, &batch).unwrap();
+    seed_guard.validate(&store, &batch).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
+    store.apply_batch(batch).unwrap();
+    assert_eq!(
+        world.runtime.crop(&store, SiteId(1)).unwrap().phase,
+        CropPhase::Fallow
+    );
+    assert!(world.runtime.cultivation(&store, PersonId(3)).is_none());
+    assert_eq!(
+        game_cargo::inventory(&store, output.food_inventory)
+            .unwrap()
+            .quantity,
+        Quantity(10_000 + output.food.0)
+    );
+    let before = store.snapshot().unwrap();
+    assert!(
+        game_cargo::prepare_deposit(
+            &store,
+            output.food_inventory,
+            Good::Food,
+            Quantity(u64::MAX)
+        )
+        .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn production_selection_and_capability_policy_live_in_agriculture() {
+    let mut world = world();
+    world.crop_mut(SiteId(1)).unwrap().tending = 500;
+    let mut facts = begin();
+    facts.water_available = Quantity(0);
+    assert_eq!(
+        world
+            .runtime
+            .select_cultivation(&world.store, |_| Some(facts)),
+        Some((SiteId(1), FarmOperation::Tend))
+    );
+    let vitals = Vitals {
+        hunger: 0,
+        fatigue: 0,
+        health: 1,
+        alive: true,
+    };
+    assert!(cultivation_capable(
+        &vitals,
+        1,
+        true,
+        false,
+        false,
+        Some(LifeStage::Adult)
+    ));
+    assert!(!cultivation_capable(
+        &vitals,
+        1,
+        true,
+        false,
+        false,
+        Some(LifeStage::Child)
+    ));
+    assert!(!cultivation_capable(
+        &vitals,
+        1,
+        true,
+        false,
+        true,
+        Some(LifeStage::Adult)
+    ));
+    assert!(!cultivation_tool_available(Some(Quantity(999)), true));
+}
+
+struct Links {
+    wrong_stock: bool,
+    wrong_person: bool,
+    weather_day: u64,
+}
+impl SaveLinks for Links {
+    fn next_id(&self) -> u64 {
+        100
+    }
+    fn physical_available(&self) -> bool {
+        true
+    }
+    fn weather_day(&self) -> Option<u64> {
+        Some(self.weather_day)
+    }
+    fn area_exists(&self, area: AreaId) -> bool {
+        area == AreaId(2)
+    }
+    fn person_exists(&self, actor: PersonId) -> bool {
+        !self.wrong_person && actor == PersonId(3)
+    }
+    fn workshop_exists(&self, _: SiteId) -> bool {
+        false
+    }
+    fn inventory(&self, id: InventoryId) -> Option<(Good, Option<AreaId>)> {
+        if self.wrong_stock {
+            return None;
+        }
+        let good = match id.0 {
+            4 => Good::Seed,
+            5 => Good::Tool,
+            6 => Good::Water,
+            7 => Good::Food,
+            _ => return None,
+        };
+        Some((good, Some(AreaId(2))))
+    }
+    fn actor_location(&self, _: PersonId) -> Option<Location> {
+        Some(Location::AtArea(AreaId(2)))
+    }
+    fn actor_alive(&self, _: PersonId) -> bool {
+        true
+    }
+    fn activity(&self, _: PersonId) -> Option<(SiteId, FarmOperation, SimTime)> {
+        None
+    }
+    fn completion_scheduled(&self, _: PersonId, _: SimTime) -> bool {
+        false
+    }
+}
+#[test]
+fn production_save_link_validator_rejects_foreign_references_and_missing_runtime() {
+    let world = world();
+    let links = Links {
+        wrong_stock: false,
+        wrong_person: false,
+        weather_day: world.day,
+    };
+    world
+        .runtime
+        .validate_links(&world.store, SimTime(0), &links)
+        .unwrap();
+    for links in [
+        Links {
+            wrong_stock: true,
+            wrong_person: false,
+            weather_day: world.day,
+        },
+        Links {
+            wrong_stock: false,
+            wrong_person: true,
+            weather_day: world.day,
+        },
+        Links {
+            wrong_stock: false,
+            wrong_person: false,
+            weather_day: world.day + 1,
+        },
+    ] {
+        assert!(
+            world
+                .runtime
+                .validate_links(&world.store, SimTime(0), &links)
+                .is_err()
+        );
+    }
+    assert!(validate_runtime_presence(&world.store, None).is_err());
+    validate_runtime_presence(&world.store, Some(&world.runtime)).unwrap();
+}
+#[test]
+fn accepted_field_establishment_preserves_shared_land_and_rejects_late_soil_changes() {
+    let world = world();
+    let mut store = composed_store(&world);
+    let mut field = world.field(SiteId(1)).unwrap().clone();
+    field.id = SiteId(20);
+    let soil = world.soil(SiteId(1)).unwrap().clone();
+    game_land::insert_soil(&mut store, field.id, soil.clone()).unwrap();
+    let plan = world
+        .runtime
+        .prepare_establish_field(&store, field.clone())
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage(&world.runtime, &store, &mut batch).unwrap();
+    guard.validate(&world.runtime, &store, &batch).unwrap();
+    store.apply_batch(batch).unwrap();
+    assert_eq!(world.runtime.field(&store, field.id), Some(&field));
+    assert_eq!(
+        world.runtime.crop(&store, field.id).unwrap().phase,
+        CropPhase::Fallow
+    );
+    assert_eq!(game_land::soil(&store, field.id), Some(&soil));
+    assert!(
+        world
+            .runtime
+            .prepare_establish_field(&store, field)
+            .is_err()
+    );
+    let mut field = world.field(SiteId(1)).unwrap().clone();
+    field.id = SiteId(30);
+    game_land::insert_soil(&mut store, field.id, soil.clone()).unwrap();
+    let plan = world
+        .runtime
+        .prepare_establish_field(&store, field)
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = plan.stage(&world.runtime, &store, &mut batch).unwrap();
+    batch.insert(game_ecs::StableId(30), Soil { water: 0, ..soil });
+    assert_eq!(
+        guard.validate(&world.runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert!(world.runtime.field(&store, SiteId(30)).is_none());
+}
+
+#[test]
+fn cultivation_publication_rejects_late_consulted_catalog_changes() {
+    let mut world = world();
+    let store = composed_store(&world);
+    let plan = world
+        .runtime
+        .prepare_start(&store, SiteId(1), FarmOperation::Irrigate, begin())
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let publication = plan.stage(&world.runtime, &store, &mut batch).unwrap();
+    let before = store.snapshot().unwrap();
+    let definition = world.runtime.catalog.default_crop.clone();
+    world
+        .runtime
+        .catalog
+        .crops
+        .get_mut(&definition)
+        .unwrap()
+        .irrigation_water += 1;
+    assert_eq!(
+        publication.validate(&world.runtime, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+}
+
+#[test]
+fn site_permission_publication_binds_ordered_changes_to_selected_opening_fields() {
+    let mut world = world();
+    let before_crop = world.crop(SiteId(1)).unwrap().clone();
+    let before_soil = world.soil(SiteId(1)).unwrap().clone();
+    let prepared = world
+        .runtime
+        .prepare_site_access(
+            &world.store,
+            &[
+                (SiteId(1), PersonId(3), PersonId(8), true),
+                (SiteId(1), PersonId(3), PersonId(9), true),
+                (SiteId(1), PersonId(3), PersonId(8), false),
+            ],
+        )
+        .unwrap();
+    let before = world.store.snapshot().unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = prepared
+        .stage_into(&world.runtime, &world.store, &mut batch)
+        .unwrap();
+    guard.validate(&world.store, &batch).unwrap();
+    assert_eq!(world.store.snapshot().unwrap(), before);
+    world.store.apply_batch(batch).unwrap();
+    assert_eq!(
+        world.field(SiteId(1)).unwrap().access,
+        BTreeSet::from([PersonId(3), PersonId(9)])
+    );
+    assert_eq!(world.crop(SiteId(1)), Some(&before_crop));
+    assert_eq!(world.soil(SiteId(1)), Some(&before_soil));
+}
+#[test]
+fn site_permission_preparation_rejects_changed_custody_access_identity_and_resource_allocations() {
+    for change in 0..8 {
+        let mut world = world();
+        let prepared = world
+            .runtime
+            .prepare_site_access(&world.store, &[(SiteId(1), PersonId(3), PersonId(8), true)])
+            .unwrap();
+        let row = world
+            .runtime
+            .field_mut(&mut world.store, SiteId(1))
+            .unwrap();
+        match change {
+            0 => {
+                row.access.insert(PersonId(9));
+            }
+            1 => row.custodian = Some(PersonId(4)),
+            2 => row.id = SiteId(99),
+            3 => row.area = AreaId(99),
+            4 => row.seed = InventoryId(99),
+            5 => row.tool = InventoryId(99),
+            6 => row.water = InventoryId(99),
+            7 => row.food = InventoryId(99),
+            _ => unreachable!(),
+        }
+        let before = world.store.snapshot().unwrap();
+        let mut batch = game_ecs::Batch::new();
+        assert!(matches!(
+            prepared.stage_into(&world.runtime, &world.store, &mut batch),
+            Err(Error::Unavailable)
+        ));
+        assert_eq!(batch.edited_ids::<Field>().count(), 0);
+        assert_eq!(world.store.snapshot().unwrap(), before);
+    }
+    let mut world = world();
+    let prepared = world
+        .runtime
+        .prepare_site_access(&world.store, &[(SiteId(1), PersonId(3), PersonId(8), true)])
+        .unwrap();
+    world
+        .runtime
+        .remove_field(&mut world.store, SiteId(1))
+        .unwrap();
+    let before = world.store.snapshot().unwrap();
+    let mut batch = game_ecs::Batch::new();
+    assert!(matches!(
+        prepared.stage_into(&world.runtime, &world.store, &mut batch),
+        Err(Error::Unavailable)
+    ));
+    assert_eq!(world.store.snapshot().unwrap(), before);
+}
+#[test]
+fn site_permission_guard_rejects_late_foreign_field_edits_and_stale_canonical_rows() {
+    for deletion in [false, true] {
+        let world = world();
+        let prepared = world
+            .runtime
+            .prepare_site_access(&world.store, &[(SiteId(1), PersonId(3), PersonId(8), true)])
+            .unwrap();
+        let mut batch = game_ecs::Batch::new();
+        let guard = prepared
+            .stage_into(&world.runtime, &world.store, &mut batch)
+            .unwrap();
+        let before = world.store.snapshot().unwrap();
+        if deletion {
+            batch.remove::<Field>(game_ecs::StableId(1));
+        } else {
+            // Even reappending the accepted value is an unadmitted second write.
+            let row = batch
+                .projected::<Field>(&world.store, game_ecs::StableId(1))
+                .unwrap()
+                .unwrap()
+                .clone();
+            batch.insert(game_ecs::StableId(1), row);
+        }
+        assert_eq!(
+            guard.validate(&world.store, &batch),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(world.store.snapshot().unwrap(), before);
+    }
+    let mut world = world();
+    let prepared = world
+        .runtime
+        .prepare_site_access(&world.store, &[(SiteId(1), PersonId(3), PersonId(8), true)])
+        .unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let guard = prepared
+        .stage_into(&world.runtime, &world.store, &mut batch)
+        .unwrap();
+    world
+        .runtime
+        .field_mut(&mut world.store, SiteId(1))
+        .unwrap()
+        .custodian = Some(PersonId(4));
+    let before = world.store.snapshot().unwrap();
+    assert_eq!(
+        guard.validate(&world.store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(world.store.snapshot().unwrap(), before);
+}
+#[test]
+fn site_permission_guard_allows_unrelated_fields_and_unconsulted_crop_metadata() {
+    let mut world = world();
+    let mut unrelated = world.field(SiteId(1)).unwrap().clone();
+    unrelated.id = SiteId(20);
+    world.insert_field(unrelated.clone()).unwrap();
+    let crop = world.crop(SiteId(1)).unwrap().clone();
+    let soil = world.soil(SiteId(1)).unwrap().clone();
+    world.insert_crop(SiteId(20), crop).unwrap();
+    world.insert_soil(SiteId(20), soil).unwrap();
+    let prepared = world
+        .runtime
+        .prepare_site_access(&world.store, &[(SiteId(1), PersonId(3), PersonId(8), true)])
+        .unwrap();
+    world
+        .runtime
+        .field_mut(&mut world.store, SiteId(20))
+        .unwrap()
+        .access
+        .insert(PersonId(11));
+    let definition = world.runtime.catalog.default_crop.clone();
+    world
+        .runtime
+        .catalog
+        .crops
+        .get_mut(&definition)
+        .unwrap()
+        .soil_recovery += 1;
+    let mut batch = game_ecs::Batch::new();
+    let guard = prepared
+        .stage_into(&world.runtime, &world.store, &mut batch)
+        .unwrap();
+    unrelated.custodian = Some(PersonId(11));
+    batch.insert(game_ecs::StableId(20), unrelated.clone());
+    guard.validate(&world.store, &batch).unwrap();
+    world.store.apply_batch(batch).unwrap();
+    assert_eq!(world.field(SiteId(20)), Some(&unrelated));
+    assert!(
+        world
+            .field(SiteId(1))
+            .unwrap()
+            .access
+            .contains(&PersonId(8))
+    );
+}
+
+#[test]
+fn remembered_farm_share_uses_default_crop_and_preserves_integer_projection_order() {
+    let mut world = world();
+    assert_eq!(
+        world
+            .runtime
+            .remembered_food_share(None, true, 1, 2)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        world
+            .runtime
+            .remembered_food_share(Some(900), false, 1, 2)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        world
+            .runtime
+            .remembered_food_share(Some(900), true, 1, 2)
+            .unwrap(),
+        Some(2_700_000)
+    );
+    let alternative = CropId("test/alternate-default".into());
+    let mut alternate = rules();
+    alternate.food_yield = Quantity(101);
+    world
+        .runtime
+        .catalog
+        .crops
+        .insert(alternative.clone(), alternate);
+    world.runtime.catalog.default_crop = alternative;
+    // Divide the projected default yield at the same points as the established rule.
+    assert_eq!(
+        world
+            .runtime
+            .remembered_food_share(Some(333), true, 2, 3)
+            .unwrap(),
+        Some(22)
+    );
+    assert_eq!(
+        world
+            .runtime
+            .crop(&world.store, SiteId(1))
+            .unwrap()
+            .definition,
+        CropId("test/cereal".into())
+    );
+    assert!(
+        world
+            .runtime
+            .remembered_food_share(Some(1_001), true, 1, 2)
+            .is_err()
+    );
+    assert!(
+        world
+            .runtime
+            .remembered_food_share(Some(900), true, 1, 0)
+            .is_err()
+    );
+    assert!(
+        world
+            .runtime
+            .remembered_food_share(Some(900), true, 3, 2)
+            .is_err()
+    );
+    // Unremembered plans do not consult crop or ratio configuration.
+    world.runtime.catalog.crops.clear();
+    assert_eq!(
+        world
+            .runtime
+            .remembered_food_share(Some(900), false, 3, 0)
+            .unwrap(),
+        None
+    );
+    assert!(
+        world
+            .runtime
+            .remembered_food_share(Some(900), true, 1, 2)
+            .is_err()
+    );
+}
+#[test]
+fn local_field_observation_requires_the_selected_field_and_raw_stationary_location() {
+    let world = world();
+    assert!(
+        world
+            .runtime
+            .local_field(&world.store, SiteId(1), &Location::AtArea(AreaId(2)))
+    );
+    for location in [
+        Location::AtArea(AreaId(3)),
+        Location::Carried {
+            carrier: PersonId(3),
+        },
+        Location::StoppedOnRoad {
+            from: AreaId(2),
+            to: AreaId(3),
+            progress: SimDuration(1),
+            duration: SimDuration(2),
+        },
+    ] {
+        assert!(
+            !world
+                .runtime
+                .local_field(&world.store, SiteId(1), &location)
+        );
+    }
+    assert!(
+        !world
+            .runtime
+            .local_field(&world.store, SiteId(99), &Location::AtArea(AreaId(2)))
+    );
+}
+
+#[test]
+fn optional_runtime_food_forecast_requires_runtime_only_for_known_plan_and_fertility() {
+    use crate::integration::known_food_share;
+    assert_eq!(known_food_share(None, None, false, 1, 2), Ok(None));
+    assert_eq!(known_food_share(None, None, true, 1, 2), Ok(None));
+    assert_eq!(known_food_share(None, Some(900), false, 1, 2), Ok(None));
+    assert_eq!(
+        known_food_share(None, Some(900), true, 1, 2),
+        Err(Error::Unavailable)
+    );
+    // An unavailable runtime takes precedence over a ratio that would only be
+    // consulted during an available, remembered forecast.
+    assert_eq!(
+        known_food_share(None, Some(900), true, 1, 0),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(known_food_share(None, Some(900), false, 1, 0), Ok(None));
+    let world = world();
+    assert_eq!(
+        known_food_share(Some(&world.runtime), Some(900), true, 1, 2),
+        Ok(Some(2_700_000))
+    );
+    assert_eq!(
+        known_food_share(Some(&world.runtime), None, true, 1, 0),
+        Ok(None)
+    );
+    assert_eq!(
+        known_food_share(Some(&world.runtime), Some(900), true, 1, 0),
+        Err(Error::InvalidConfiguration(
+            "invalid projected crop share".into()
+        ))
+    );
+}
+#[test]
+fn harvest_output_reserve_uses_the_selected_fields_definition_and_bounds_actual_yield() {
+    let mut world = world();
+    assert_eq!(
+        world
+            .runtime
+            .output_reserve(&world.store, SiteId(1), FarmOperation::Harvest)
+            .unwrap(),
+        vec![
+            (SiteId(1), Good::Food, Quantity(6_000_000)),
+            (SiteId(1), Good::Seed, Quantity(2_000))
+        ]
+    );
+    let alternate = CropId("test/reserve-variant".into());
+    let mut definition = rules();
+    definition.food_yield = Quantity(77);
+    definition.seed_yield = Quantity(19);
+    world
+        .runtime
+        .catalog
+        .crops
+        .insert(alternate.clone(), definition.clone());
+    world.runtime.catalog.default_crop = alternate.clone();
+    // A change to the default for new fields does not rewrite this field's crop.
+    assert_eq!(
+        world
+            .runtime
+            .output_reserve(&world.store, SiteId(1), FarmOperation::Harvest)
+            .unwrap(),
+        vec![
+            (SiteId(1), Good::Food, Quantity(6_000_000)),
+            (SiteId(1), Good::Seed, Quantity(2_000))
+        ]
+    );
+    world
+        .runtime
+        .crop_mut(&mut world.store, SiteId(1))
+        .unwrap()
+        .definition = alternate;
+    let reserve = world
+        .runtime
+        .output_reserve(&world.store, SiteId(1), FarmOperation::Harvest)
+        .unwrap();
+    assert_eq!(
+        reserve,
+        vec![
+            (SiteId(1), Good::Food, Quantity(77)),
+            (SiteId(1), Good::Seed, Quantity(19))
+        ]
+    );
+    let (food, seed) = yield_amounts(
+        world.crop(SiteId(1)).unwrap(),
+        world.soil(SiteId(1)).unwrap(),
+        &definition,
+    );
+    assert!(reserve[0].2 >= food);
+    assert!(reserve[1].2 >= seed);
+}
+#[test]
+fn non_harvest_output_reserve_does_not_eagerly_validate_unconsulted_site_or_catalog() {
+    let mut world = world();
+    world.runtime.catalog.crops.clear();
+    for operation in [
+        FarmOperation::Prepare,
+        FarmOperation::Plant,
+        FarmOperation::Tend,
+        FarmOperation::Irrigate,
+        FarmOperation::Fallow,
+    ] {
+        assert_eq!(
+            world
+                .runtime
+                .output_reserve(&world.store, SiteId(999), operation),
+            Ok(Vec::new())
+        );
+    }
+    assert_eq!(
+        world
+            .runtime
+            .output_reserve(&world.store, SiteId(999), FarmOperation::Harvest),
+        Err(Error::Unavailable)
+    );
+    assert!(matches!(
+        world
+            .runtime
+            .output_reserve(&world.store, SiteId(1), FarmOperation::Harvest),
+        Err(Error::InvalidSave(_))
+    ));
+}

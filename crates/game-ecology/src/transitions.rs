@@ -50,15 +50,75 @@ impl PreparedAccess {
         Ok(())
     }
     pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<AccessEffect, Error> {
-        self.validate(runtime, store)?;
         let mut batch = Batch::new();
+        let (effect, guard) = self.stage_into(runtime, store, &mut batch)?;
+        guard.validate(store, &batch)?;
+        store.apply_batch(batch)?;
+        Ok(effect)
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(AccessEffect, game_ecs::ReadGuard), Error> {
+        let (mut effects, guard) = self.stage_with_response(None, runtime, store, batch)?;
+        Ok((effects.remove(0), guard))
+    }
+    /// A receiving character may grant the request immediately. Both owners'
+    /// accepted access transitions share one ecological publication, so refused
+    /// grant admission cannot leave behind an already published cooldown.
+    pub fn stage_with_response(
+        self,
+        response: Option<Self>,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(Vec<AccessEffect>, game_ecs::ReadGuard), Error> {
+        self.validate(runtime, store)?;
+        if let Some(response) = &response {
+            response.validate(runtime, store)?;
+            if self.resource != response.resource
+                || !matches!((&self.effect, &response.effect),
+                (AccessEffect::Requested { resource, actor, custodian },
+                 AccessEffect::Changed { resource: target, actor: grantor, recipient, allowed: true })
+                if resource == target && custodian == grantor && actor == recipient)
+            {
+                return Err(Error::Unavailable);
+            }
+        }
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        let mut effects = vec![self.append_access(store, batch, &mut reads, &mut admitted)?];
+        if let Some(response) = response {
+            effects.push(response.append_access(store, batch, &mut reads, &mut admitted)?);
+        }
+        Ok((effects, reads.bind(store, batch, &admitted)?))
+    }
+    fn append_access(
+        self,
+        store: &Store,
+        batch: &mut Batch,
+        reads: &mut game_ecs::ReadSet,
+        admitted: &mut game_ecs::ReadFootprint,
+    ) -> Result<AccessEffect, Error> {
+        reads.entity(store, StableId(self.actor.0));
+        reads.expect_row(StableId(self.resource.id.0), Some(self.resource.clone()));
         if let Some(resource) = self.changed_resource {
+            if batch.touches::<Resource>(StableId(resource.id.0)) {
+                return Err(Error::Unavailable);
+            }
+            admitted.protect::<Resource>(StableId(resource.id.0));
             batch.insert(StableId(resource.id.0), resource);
         }
-        if let Some((_, requests)) = self.requests {
+        if let Some((before, requests)) = self.requests {
+            if batch.touches::<Requests>(StableId(self.actor.0)) {
+                return Err(Error::Unavailable);
+            }
+            reads.expect_row(StableId(self.actor.0), before);
+            admitted.protect::<Requests>(StableId(self.actor.0));
             batch.insert(StableId(self.actor.0), requests);
         }
-        store.apply_batch(batch)?;
         Ok(self.effect)
     }
 }
@@ -189,7 +249,7 @@ impl PreparedCollectionFinish {
     }
     /// Validate first, then combine with other owners' admitted effects. Only
     /// ecological rows enter this batch; cargo and health supply their own rows.
-    pub fn append_writes(self, batch: &mut Batch) -> CollectionOutcome {
+    fn append_writes(self, batch: &mut Batch) -> CollectionOutcome {
         if let CollectionOutcome::Collected(effect) = &self.outcome {
             let mut resource = self.resource;
             resource.remaining = effect.remaining;
@@ -199,11 +259,37 @@ impl PreparedCollectionFinish {
         self.outcome
     }
     pub fn commit(self, runtime: &Runtime, store: &mut Store) -> Result<CollectionOutcome, Error> {
-        self.validate(runtime, store)?;
         let mut batch = Batch::new();
-        let outcome = self.append_writes(&mut batch);
+        let (outcome, guard) = self.stage_into(runtime, store, &mut batch)?;
+        guard.validate(store, &batch)?;
         store.apply_batch(batch)?;
         Ok(outcome)
+    }
+    pub fn stage_into(
+        self,
+        runtime: &Runtime,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<(CollectionOutcome, game_ecs::ReadGuard), Error> {
+        self.validate(runtime, store)?;
+        let actor = StableId(self.actor.0);
+        let source = StableId(self.resource.id.0);
+        if batch.touches::<Gathering>(actor) {
+            return Err(Error::Unavailable);
+        }
+        let mut reads = game_ecs::ReadSet::new();
+        reads.expect_row(actor, Some(self.job.clone()));
+        reads.expect_row(source, Some(self.resource.clone()));
+        let mut admitted = game_ecs::ReadFootprint::new();
+        admitted.protect::<Gathering>(actor);
+        if matches!(self.outcome, CollectionOutcome::Collected(_)) {
+            if batch.touches::<Resource>(source) {
+                return Err(Error::Unavailable);
+            }
+            admitted.protect::<Resource>(source);
+        }
+        let outcome = self.append_writes(batch);
+        Ok((outcome, reads.bind(store, batch, &admitted)?))
     }
 }
 impl Runtime {

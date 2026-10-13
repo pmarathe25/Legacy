@@ -522,3 +522,27 @@ fn live_mastery_changes_have_exact_boundaries_and_respect_a_guides_cap() {
             .is_err()
     );
 }
+
+#[test]
+fn borrowed_bonus_facts_follow_current_owner_rules_and_owner_defaults() {
+    assert_eq!(
+        bonus_rates(None),
+        BonusRates {
+            work_bonus_per_level: 10,
+            damage_bonus_per_level: 5
+        }
+    );
+    let runtime = Runtime::new(Rules {
+        work_bonus_per_level: 7,
+        damage_bonus_per_level: 3,
+        ..Rules::default()
+    })
+    .unwrap();
+    assert_eq!(
+        bonus_rates(Some(&runtime)),
+        BonusRates {
+            work_bonus_per_level: 7,
+            damage_bonus_per_level: 3
+        }
+    );
+}

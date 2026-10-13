@@ -77,3 +77,15 @@ impl Definitions {
 
 #[cfg(test)]
 mod tests;
+
+/// Local visible work options. Site permission and contact are sufficient for
+/// discovery; actual tools, input, output room, and employment admit a later start.
+pub fn local_work_sites(store: &Store, actor: PersonId, area: Option<AreaId>) -> Vec<SiteId> {
+    let Some(area) = area else {
+        return Vec::new();
+    };
+    sites(store)
+        .filter(|(_, site)| site.area == area && site.access.contains(&actor))
+        .map(|(id, _)| id)
+        .collect()
+}

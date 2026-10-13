@@ -10,10 +10,20 @@ Plots contain land-use metadata; their soil is the shared `game-land` component 
 
 Local observation groups supplied actor-area facts and forms personal resource and plot views from actual local rows and soil. It retains dated remote memories and the latest sixteen inspected areas. Prepared observations guard local land and each observer's knowledge, then publish one atomic batch; the assembly supplies physical eligibility and location facts.
 
+`ActorCondition` interprets factual body, location, life stage, restrictions, fatigue and capacity for ecological observation and work. `ObservationPort` supplies canonical actor facts; ecology enumerates and admits observers. Personal view limits and usable-tool selection also live here.
+
 Local opportunity systems select the first sixteen sources and validate suggested gathering amounts against real stock, workspace, tools, and time. Narrow callbacks supply quantity suggestions, custodian locations, and route reachability. Autonomous choices use personal source knowledge and remembered remote stock; discovering an access request remains separate from its execution cooldown.
+
+`provision_opportunities` returns typed actions and material requirements for the Characters owner to interpret as motives. It derives source goods and timber targets from dated personal knowledge, and uses the route owner's reachability result for travel.
 
 Ecology supplies typed material acquisition offers to `game-logistics`, including required equipment, access requests and exploration. Local gathering uses physical admission facts; remote yields remain dated estimates. Logistics chooses acquisition and delivery steps through that interface without importing the playable assembly.
 
 Prepared access transitions validate local custody and recipient facts, guard resources and request cooldowns, and return permission events. Collection completion reads committed source quality, guards its source and job, and atomically ends the job with any deposit reduction. Other owners admit material, water, and publication effects before commit.
 
 Collection finishing prepares resource depletion and job removal without mutating them. The assembly combines these writes with admitted cargo, water, and activity effects; a full receiving compartment interrupts collection without debiting the natural source. Closing collection still uses the source's current quality after renewal.
+
+`prepare_gathering_start` witnesses the canonical source, the actor's old job and scoped competing reservations through `game-ecs::ReadSet`. Start, access and collection effects can stage into a composed batch and return generic read guards that reject stale openings and late foreign edits. The assembly admits Cargo compartment creation and activity interruption before applying the batch.
+
+An accepted immediate resistance uses `stage_opposed` to end both participants' gathering jobs without a transient reservation or natural-stock debit. Cargo's empty compartment, Conflict's scene and encounter, and the final activities join the same admitted transaction. The common opening coordinator prepares the initial NPC actions through their existing owner APIs before publication. A refused opening or NPC prefix leaves the attempt, inventory allocation and receipts unpublished.
+
+`validate_save` owns saved reference and timing rules through `SavePort`: real actors and areas, allocated resource IDs, compatible carried compartments, matching gathering activities and deadlines, request references and dated memories. The port supplies foreign facts without deciding validity. Owner tests exercise these exact APIs and compose real Cargo and Health collection effects without importing the assembly.

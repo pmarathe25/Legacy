@@ -1,6 +1,6 @@
 use super::*;
 
-fn stock(id: u64, good: Good, quantity: u64) -> Inventory {
+pub(crate) fn stock(id: u64, good: Good, quantity: u64) -> Inventory {
     Inventory {
         id: InventoryId(id),
         location: InventoryLocation::Area(AreaId(1)),
@@ -12,7 +12,7 @@ fn stock(id: u64, good: Good, quantity: u64) -> Inventory {
         spoils_at: None,
     }
 }
-fn site() -> Site {
+pub(crate) fn site() -> Site {
     Site {
         recipe: RecipeId("meal".into()),
         id: SiteId(5),
@@ -37,7 +37,7 @@ fn view(site: &Site) -> RecipeView<'_> {
         recipe: &TEST_RECIPE,
     }
 }
-fn definitions() -> Definitions {
+pub(crate) fn definitions() -> Definitions {
     Definitions::from_content(game_content::Document {
         id: "test/workshop".into(),
         version: 1,
@@ -51,7 +51,7 @@ fn definitions() -> Definitions {
     })
     .unwrap()
 }
-fn facts() -> StartFacts {
+pub(crate) fn facts() -> StartFacts {
     StartFacts {
         actor: PersonId(1),
         area: AreaId(1),
@@ -89,17 +89,23 @@ fn staged_recipe_consumption_is_affine_and_rejects_foreign_source_writes() {
     let mut batch = game_ecs::Batch::new();
     let guard = consumption.stage_into(&store, &mut batch).unwrap();
     assert_eq!(store.snapshot().unwrap(), opening);
-    guard.validate_batch(&batch).unwrap();
+    guard.validate_batch(&store, &batch).unwrap();
     let mut foreign = game_ecs::Batch::new();
     foreign.insert(game_ecs::StableId(input.id.0), input.clone());
-    assert_eq!(guard.validate_batch(&foreign), Err(Error::Unavailable));
+    assert_eq!(
+        guard.validate_batch(&store, &foreign),
+        Err(Error::Unavailable)
+    );
     batch.insert(game_ecs::StableId(input.id.0), input.clone());
-    assert_eq!(guard.validate_batch(&batch), Err(Error::Unavailable));
+    assert_eq!(
+        guard.validate_batch(&store, &batch),
+        Err(Error::Unavailable)
+    );
     assert_eq!(store.snapshot().unwrap(), opening);
     let mut accepted = game_ecs::Batch::new();
     let guard = consumption.stage_into(&store, &mut accepted).unwrap();
     accepted.insert(game_ecs::StableId(tool.id.0), tool);
-    guard.validate_batch(&accepted).unwrap();
+    guard.validate_batch(&store, &accepted).unwrap();
     store.apply_batch(accepted).unwrap();
     assert_eq!(
         game_cargo::inventory(&store, input.id).unwrap().quantity,
@@ -487,25 +493,6 @@ fn completion_forecast_uses_evaluated_work_without_creating_output() {
     );
     assert_eq!(output.quantity, Quantity(0));
     assert!(job.remaining > 0);
-}
-
-#[test]
-fn craft_practice_tracks_actual_work_even_when_output_is_blocked() {
-    let mut job = start().job;
-    job.remaining = 0;
-    let practice = job.practice(PersonId(1), 37, true, true).unwrap();
-    assert_eq!(
-        (
-            practice.actor,
-            practice.skill,
-            practice.milliseconds,
-            practice.mastery_cap
-        ),
-        (PersonId(1), Skill::Craft, 37, None)
-    );
-    assert!(job.practice(PersonId(1), 0, true, true).is_none());
-    assert!(job.practice(PersonId(1), 37, false, true).is_none());
-    assert!(job.practice(PersonId(1), 37, true, false).is_none());
 }
 
 fn job_store() -> game_ecs::Store {
@@ -946,4 +933,152 @@ fn native_stock_production_is_atomic_with_schema_guards_and_replay() {
         Err(Error::Unavailable)
     );
     assert_eq!(store, before);
+}
+
+#[test]
+fn establishment_rejects_changed_recipe_and_late_stock_writes_before_publication() {
+    let mut definitions = definitions();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_cargo::register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    for stock in [
+        stock(1, Good::Timber, 4_000),
+        stock(2, Good::Tool, 1_000),
+        stock(3, Good::Food, 0),
+    ] {
+        game_cargo::insert_inventory(&mut store, stock).unwrap();
+    }
+    let declaration = site();
+    let prepare = |definitions: &Definitions| {
+        definitions
+            .prepare_site_establishment(
+                &store,
+                &declaration.recipe,
+                SiteBindings {
+                    id: declaration.id,
+                    area: declaration.area,
+                    input: game_cargo::inventory(&store, declaration.input).unwrap(),
+                    tool: game_cargo::inventory(&store, declaration.tool).unwrap(),
+                    output: game_cargo::inventory(&store, declaration.output).unwrap(),
+                    access: declaration.access.clone(),
+                },
+            )
+            .unwrap()
+    };
+    let opening = store.snapshot().unwrap();
+    let mut batch = game_ecs::Batch::new();
+    let publication = prepare(&definitions)
+        .stage(&definitions, &store, &mut batch)
+        .unwrap();
+    definitions
+        .catalog
+        .recipes
+        .get_mut(&declaration.recipe)
+        .unwrap()
+        .duration
+        .0 += 1;
+    assert_eq!(
+        publication.validate(&definitions, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), opening);
+    definitions
+        .catalog
+        .recipes
+        .get_mut(&declaration.recipe)
+        .unwrap()
+        .duration
+        .0 -= 1;
+    publication.validate(&definitions, &store, &batch).unwrap();
+    batch.insert(
+        game_ecs::StableId(declaration.tool.0),
+        stock(2, Good::Tool, 0),
+    );
+    assert_eq!(
+        publication.validate(&definitions, &store, &batch),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(store.snapshot().unwrap(), opening);
+}
+
+#[test]
+fn owner_save_validation_covers_frozen_rates_and_active_or_paused_work() {
+    let definitions = definitions();
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_cargo::register_components(&mut schema).unwrap();
+    let mut store = game_ecs::Store::with_schema(schema);
+    for stock in [
+        stock(1, Good::Timber, 0),
+        stock(2, Good::Tool, 1_000),
+        stock(3, Good::Food, 0),
+    ] {
+        game_cargo::insert_inventory(&mut store, stock).unwrap();
+    }
+    insert_site(&mut store, site()).unwrap();
+    insert_job(
+        &mut store,
+        PersonId(1),
+        Job {
+            site: SiteId(5),
+            remaining: 6_000,
+            rate: SkillRate::default(),
+            body_rate: SkillRate::default(),
+            work_remainder: 0,
+            tool: Some(InventoryId(2)),
+        },
+    )
+    .unwrap();
+    let mut facts = SaveFacts {
+        areas: BTreeSet::from([AreaId(1)]),
+        actors: std::collections::BTreeMap::from([(
+            PersonId(1),
+            ActorSaveFacts {
+                alive: true,
+                active_site: Some(SiteId(5)),
+                maximum_craft_rate: 1_000,
+            },
+        )]),
+    };
+    let opening = store.snapshot().unwrap();
+    validate_store(&store, &definitions, &facts).unwrap();
+    facts
+        .actors
+        .get_mut(&PersonId(1))
+        .unwrap()
+        .maximum_craft_rate = 999;
+    assert!(validate_store(&store, &definitions, &facts).is_err());
+    assert_eq!(store.snapshot().unwrap(), opening);
+    facts
+        .actors
+        .get_mut(&PersonId(1))
+        .unwrap()
+        .maximum_craft_rate = 1_000;
+    job_mut(&mut store, PersonId(1)).unwrap().remaining = 0;
+    assert!(validate_store(&store, &definitions, &facts).is_err());
+    facts.actors.get_mut(&PersonId(1)).unwrap().active_site = None;
+    validate_store(&store, &definitions, &facts).unwrap();
+    facts.actors.get_mut(&PersonId(1)).unwrap().alive = false;
+    assert!(validate_store(&store, &definitions, &facts).is_err());
+}
+
+#[test]
+fn work_site_occupancy_excludes_self_and_other_sites() {
+    let actor = PersonId(1);
+    let site = SiteId(2);
+    assert!(!site_occupied_by_other(
+        actor,
+        site,
+        [
+            (actor, Some(site)),
+            (PersonId(3), Some(SiteId(4))),
+            (PersonId(5), None)
+        ]
+    ));
+    assert!(site_occupied_by_other(
+        actor,
+        site,
+        [(PersonId(3), Some(site))]
+    ));
 }

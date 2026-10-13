@@ -777,10 +777,27 @@ impl PreparedSiteAccess {
         }
         Ok(())
     }
-    pub fn stage(&self, batch: &mut game_ecs::Batch) {
-        for (id, row) in &self.after {
-            batch.insert(game_ecs::StableId(id.0), row.clone());
+    /// Bind the admitted permission rows before other owners append effects.
+    /// The returned guard retains the complete selected fields and rejects late
+    /// changes to their identity, custody, resource references or access.
+    pub fn stage_into(
+        &self,
+        runtime: &Runtime,
+        store: &game_ecs::Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.check(runtime, store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut writes = game_ecs::ReadFootprint::new();
+        for (id, row) in &self.before {
+            reads.expect_row::<Field>(game_ecs::StableId(id.0), Some(row.clone()));
         }
+        for (id, row) in &self.after {
+            let entity = game_ecs::StableId(id.0);
+            writes.protect::<Field>(entity);
+            batch.insert(entity, row.clone());
+        }
+        reads.bind(store, batch, &writes)
     }
 }
 /// Existing physical facts are projected once per field. This owner admits all
@@ -813,3 +830,10 @@ pub fn available_operations(
         })
         .collect()
 }
+
+mod integration;
+pub use integration::{
+    AgriculturePublication, FinishFacts, FinishOutcome, PreparedCultivationFinish,
+    PreparedCultivationStart, PreparedFieldEstablishment, SaveLinks, StockFacts, available_stock,
+    cultivation_capable, cultivation_tool_available, known_food_share, validate_runtime_presence,
+};

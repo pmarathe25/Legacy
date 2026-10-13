@@ -8,6 +8,16 @@ mod recipes;
 pub use recipes::{
     Catalog, Definitions, ProductionRequirement, Recipe, RecipeId, RecipeView, SiteBindings,
 };
+mod progress;
+pub use progress::{
+    CompletedJobReceipt, JobPublication, PreparedJobCancellation, PreparedProgress,
+    PreparedProgressCompletion, ProductionReceipt, ProgressCompletionPublication, ProgressFacts,
+    prepare_cancel,
+};
+mod validation;
+pub use validation::*;
+mod establishment;
+pub use establishment::*;
 mod components;
 mod equipment;
 pub use components::{
@@ -76,10 +86,14 @@ impl Consumption {
         if batch.touches::<Inventory>(game_ecs::StableId(self.source.0)) {
             return Err(Error::Unavailable);
         }
-        batch.insert(game_ecs::StableId(self.source.0), input);
+        let id = game_ecs::StableId(self.source.0);
+        let mut reads = game_ecs::ReadSet::new();
+        reads.expect_row(id, Some(self.expected_input.clone()));
+        let mut admitted = game_ecs::ReadFootprint::default();
+        admitted.protect::<Inventory>(id);
+        batch.insert(id, input);
         Ok(ConsumptionFinalization {
-            source: self.source,
-            batch: batch.key(),
+            guard: reads.bind(store, batch, &admitted)?,
         })
     }
     /// Apply the admitted recipe input without creating a second stock ledger.
@@ -103,21 +117,15 @@ impl Consumption {
 }
 
 pub struct ConsumptionFinalization {
-    source: InventoryId,
-    batch: game_ecs::BatchKey,
+    guard: game_ecs::ReadGuard,
 }
 impl ConsumptionFinalization {
-    pub fn validate_batch(&self, batch: &game_ecs::Batch) -> Result<(), Error> {
-        if self.batch != batch.key()
-            || batch
-                .edited_ids::<Inventory>()
-                .filter(|id| *id == game_ecs::StableId(self.source.0))
-                .count()
-                != 1
-        {
-            return Err(Error::Unavailable);
-        }
-        Ok(())
+    pub fn validate_batch(
+        &self,
+        store: &game_ecs::Store,
+        batch: &game_ecs::Batch,
+    ) -> Result<(), Error> {
+        self.guard.validate(store, batch)
     }
 }
 
@@ -127,6 +135,9 @@ impl ConsumptionFinalization {
 pub struct Start {
     pub job: Job,
     pub consumption: Option<Consumption>,
+    witness: progress::StartWitness,
+    admitted_job: Job,
+    admitted_consumption: Option<Consumption>,
 }
 
 impl RecipeView<'_> {
@@ -164,6 +175,15 @@ impl RecipeView<'_> {
         {
             return Err(Error::Unavailable);
         }
+        let witness = progress::StartWitness {
+            actor: facts.actor,
+            previous: previous.cloned(),
+            site: self.site.clone(),
+            recipe: self.recipe.clone(),
+            input: input.clone(),
+            tool: tool.clone(),
+            output: output.clone(),
+        };
         if let Some(previous) = previous.filter(|job| job.site == self.site.id) {
             game_skills::advance_work(0, previous.rate, previous.work_remainder)?;
             game_skills::advance_work(0, previous.body_rate, 0)?;
@@ -172,10 +192,7 @@ impl RecipeView<'_> {
             }
             let mut job = previous.clone();
             job.tool = Some(tool.id);
-            return Ok(Start {
-                job,
-                consumption: None,
-            });
+            return Ok(witness.admit(job, None));
         }
         if !facts.input_usable
             || facts.input_unreserved < self.recipe.input_quantity
@@ -186,8 +203,8 @@ impl RecipeView<'_> {
         // Validate frozen rates before any stock can be consumed.
         game_skills::advance_work(0, facts.rate, 0)?;
         game_skills::advance_work(0, facts.body_rate, 0)?;
-        Ok(Start {
-            job: Job {
+        Ok(witness.admit(
+            Job {
                 site: self.site.id,
                 remaining: self.recipe.duration.0,
                 rate: facts.rate,
@@ -195,13 +212,13 @@ impl RecipeView<'_> {
                 work_remainder: 0,
                 tool: Some(tool.id),
             },
-            consumption: Some(Consumption {
+            Some(Consumption {
                 source: self.site.input,
                 quantity: self.recipe.input_quantity,
                 expected_input: input.clone(),
                 admitted_quantity: self.recipe.input_quantity,
             }),
-        })
+        ))
     }
 }
 
@@ -222,21 +239,6 @@ pub struct CompletionFacts {
 }
 
 impl Job {
-    pub fn practice(
-        &self,
-        actor: PersonId,
-        elapsed: u64,
-        active: bool,
-        equipped: bool,
-    ) -> Option<game_skills::PracticeDelta> {
-        (elapsed > 0 && active && equipped).then_some(game_skills::PracticeDelta {
-            actor,
-            skill: Skill::Craft,
-            milliseconds: elapsed,
-            mastery_cap: None,
-        })
-    }
-
     /// Effective rate includes live skill/body/invocation facts from their
     /// owners. Interruption preserves the frozen job and fractional work.
     pub fn evaluate(
@@ -459,4 +461,40 @@ impl Production {
 }
 
 #[cfg(test)]
+mod progress_tests;
+#[cfg(test)]
 mod tests;
+
+/// A sponsor's remembered enterprise operation candidate, before bodily and
+/// allocation admission through `prepare_start`.
+impl RecipeView<'_> {
+    pub fn operation_candidate(
+        &self,
+        input_usable: bool,
+        tool_usable: bool,
+        output: &Inventory,
+    ) -> bool {
+        input_usable
+            && tool_usable
+            && output.id == self.site.output
+            && output
+                .room()
+                .is_ok_and(|room| room >= self.recipe.output_quantity)
+    }
+}
+
+mod interval;
+pub use interval::*;
+
+pub mod receipt_validation;
+
+/// Workshop selects occupancy from factual actor-to-work-site activity links.
+pub fn site_occupied_by_other(
+    actor: PersonId,
+    site: SiteId,
+    activity_sites: impl IntoIterator<Item = (PersonId, Option<SiteId>)>,
+) -> bool {
+    activity_sites
+        .into_iter()
+        .any(|(worker, working)| worker != actor && working == Some(site))
+}

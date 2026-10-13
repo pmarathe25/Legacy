@@ -11,3 +11,7 @@ Interval preparation retains only active labor rows and matched daily growth row
 The host registers agricultural components, binds queries to its store, and refreshes those bindings after structural changes. Other features can attach their own components to the same entities. Agriculture admits prepared crop, soil, and cultivation rows through one typed batch before updating the consumed day; schema rejection leaves the entire interval unchanged.
 
 Soil is shared data owned by `game-land`. Agriculture registers field, crop, and cultivation components, joins land with the existing soil, and applies crop-specific growth, irrigation, and harvest effects. Converting land to a field retains its soil on the same entity.
+
+`Runtime::prepare_start` and `prepare_finish` are the production cultivation entry points. Their effects stage Agriculture's own rows and bind a shared ECS read guard; Cargo admits the consumed inputs and harvested deposits in the same batch. Completion returns typed outcomes for interruption, death, or completed cultivation. `select_cultivation` owns stable field selection and next-operation policy. `validate_links` checks saved field and worker references through a factual `SaveLinks` port. Assembly translates weather and external facts, binds public activities and events, and orders prepared publication.
+
+Owner tests exercise these public paths in a store composed with Cargo, including material conservation, capacity rejection, competing cultivation claims, and stale crop rows. They do not import the assembly.

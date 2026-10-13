@@ -15,14 +15,12 @@ fn fixture(workers: usize) -> Simulation {
     .unwrap()
 }
 fn actor(sim: &Simulation, index: usize) -> PersonId {
-    sim.canonical_state().state.people[index].id
+    sim.canonical_state().person_at(index).id
 }
 fn quiet(sim: &mut Simulation) {
     let people = sim
         .canonical_state()
-        .state
-        .people
-        .iter()
+        .people()
         .map(|person| person.id)
         .collect::<Vec<_>>();
     for person in people {
@@ -317,7 +315,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
         })
         .unwrap()
         .id;
-    let destination = sim.canonical_state().state.people[6].inventory;
+    let destination = sim.canonical_state().person_at(6).inventory;
     let deadline = SimTime(1_200_000);
     let terms = vec![
         AgreementTerm::ConstructionLabor {
@@ -393,7 +391,7 @@ fn worker_contract_records_exclusive_construction_time_and_actual_in_kind_paymen
         .expect("stock exists")
         .quantity
         .0;
-    let cargo = sim.canonical_state().state.people[3].inventory;
+    let cargo = sim.canonical_state().person_at(3).inventory;
     sim.debug_actor_command(
         maker,
         Command::Load {
@@ -481,7 +479,7 @@ fn operating_wages_follow_real_labor_and_delivery_and_nonpayment_remains_a_debt(
         })
         .unwrap()
         .id;
-    let destination = sim.canonical_state().state.people[6].inventory;
+    let destination = sim.canonical_state().person_at(6).inventory;
     let deadline = SimTime(sim.canonical_state().time.0 + 300_000);
     sim.debug_agreement_action(
         maker,

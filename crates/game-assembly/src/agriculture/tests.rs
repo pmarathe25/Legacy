@@ -21,14 +21,7 @@ fn compact(workers: usize) -> (Simulation, SiteId) {
     )
     .unwrap();
     let ruler = sim.host.state.ruler;
-    for actor in sim
-        .host
-        .state
-        .people
-        .iter()
-        .map(|p| p.id)
-        .collect::<Vec<_>>()
-    {
+    for actor in sim.people().map(|p| p.id).collect::<Vec<_>>() {
         sim.interrupt_actor_activity(actor);
     }
     let epoch = sim.time();
@@ -583,9 +576,61 @@ fn drought_can_kill_a_crop_and_irrigation_uses_actual_water() {
 }
 
 #[test]
+fn rejected_registered_irrigation_water_preserves_the_command_state() {
+    let (mut sim, field) = compact(1);
+    plant(&mut sim, field);
+    sim.initialize_health(game_health::Rules::fixture())
+        .unwrap();
+    let ruler = sim.host.state.ruler;
+    let water = sim
+        .host
+        .state
+        .agriculture
+        .as_ref()
+        .unwrap()
+        .field(&sim.host.storage, field)
+        .unwrap()
+        .water;
+    let opening = game_cargo::inventory(&sim.host.storage, water)
+        .unwrap()
+        .quantity;
+    game_health::insert_water_lot(
+        &mut sim.host.storage,
+        water,
+        game_health::WaterLot::new(opening.0 - 1, 100),
+    )
+    .unwrap();
+    sim.host
+        .state
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .soil_mut(&mut sim.host.storage, field)
+        .unwrap()
+        .water = 0;
+
+    let before = sim.canonical_snapshot().unwrap();
+    let next_id = sim.host.next_id();
+    let next_event = sim.host.next_event();
+    assert_eq!(
+        sim.debug_actor_command(
+            ruler,
+            Command::Cultivate {
+                field,
+                operation: FarmOperation::Irrigate,
+            },
+        ),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(sim.canonical_snapshot().unwrap(), before);
+    assert_eq!(sim.host.next_id(), next_id);
+    assert_eq!(sim.host.next_event(), next_event);
+}
+
+#[test]
 fn inaccessible_or_remote_land_and_out_of_season_planting_are_inert() {
     let (mut sim, field) = compact(1);
-    let actor = sim.host.state.people[3].id;
+    let actor = sim.person_at(3).id;
     let before = sim.canonical_snapshot().unwrap();
     assert_eq!(
         sim.debug_actor_command(

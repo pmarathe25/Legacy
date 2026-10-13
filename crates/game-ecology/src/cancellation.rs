@@ -17,14 +17,26 @@ impl PreparedGatheringCancellation {
         }
         Ok(())
     }
-    pub fn stage_into(self, store: &Store, batch: &mut Batch) -> Result<(), Error> {
+    pub fn stage_guarded_into(
+        self,
+        store: &Store,
+        batch: &mut Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
         self.validate(store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
         for (actor, before) in self.before {
+            let id = StableId(actor.0);
+            if batch.touches::<Gathering>(id) {
+                return Err(Error::Unavailable);
+            }
+            reads.expect_row(id, before.clone());
             if before.is_some() {
-                batch.remove::<Gathering>(StableId(actor.0));
+                admitted.protect::<Gathering>(id);
+                batch.remove::<Gathering>(id);
             }
         }
-        Ok(())
+        reads.bind(store, batch, &admitted)
     }
 }
 impl Runtime {

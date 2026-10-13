@@ -262,3 +262,64 @@ fn unfinished_personal_plan_blocks_search_but_cancelled_history_does_not() {
             .unwrap()
     );
 }
+
+#[test]
+fn farm_choice_is_stable_and_requires_remembered_accessible_owned_supplies() {
+    let rows = [
+        stock(1, Good::Timber, 0),
+        stock(2, Good::Tool, 1_000),
+        stock(3, Good::Seed, 0),
+        stock(4, Good::Water, 0),
+        stock(5, Good::Food, 0),
+    ];
+    let mut stocks = rows
+        .iter()
+        .map(|known| WorkshopStock {
+            known,
+            at_area: Some(AreaId(1)),
+            custodian: Some(PersonId(9)),
+        })
+        .collect::<Vec<_>>();
+    let plots = [
+        RememberedPlot {
+            id: SiteId(10),
+            area: AreaId(1),
+            accessible: true,
+        },
+        RememberedPlot {
+            id: SiteId(6),
+            area: AreaId(1),
+            accessible: true,
+        },
+    ];
+    let runtime = Runtime::default();
+    let mut store = store();
+    let choices = runtime.farm_prospects(&store, facts(), &stocks, &plots);
+    assert!(
+        matches!(choices.as_slice(), [ProjectAction::ProposeFarm { plot, .. }] if *plot == SiteId(6))
+    );
+    stocks.reverse();
+    assert_eq!(
+        runtime.farm_prospects(&store, facts(), &stocks, &plots),
+        choices
+    );
+    stocks[0].custodian = Some(PersonId(8));
+    assert!(
+        runtime
+            .farm_prospects(&store, facts(), &stocks, &plots)
+            .is_empty()
+    );
+    insert_requests(
+        &mut store,
+        PersonId(9),
+        Requests {
+            next_search: SimTime(1),
+        },
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .farm_prospects(&store, facts(), &stocks, &plots)
+            .is_empty()
+    );
+}

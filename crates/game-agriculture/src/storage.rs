@@ -2,7 +2,7 @@
 use super::*;
 use game_ecs::{Component, Schema, StableId, Store};
 
-fn validate_field(field: &Field) -> Result<(), Error> {
+pub(crate) fn validate_field(field: &Field) -> Result<(), Error> {
     if field.id.0 == 0
         || field.area.0 == 0
         || [field.seed.0, field.tool.0, field.water.0, field.food.0].contains(&0)

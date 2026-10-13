@@ -73,14 +73,7 @@ impl Simulation {
         }
         // Authoring an initial shared field is fixture data, not a government mode.
         // Remove the earlier timber-to-food recipe from this seasonal scenario.
-        for actor in sim
-            .host
-            .state
-            .people
-            .iter()
-            .map(|p| p.id)
-            .collect::<Vec<_>>()
-        {
+        for actor in sim.people().map(|p| p.id).collect::<Vec<_>>() {
             sim.interrupt_actor_activity(actor);
             game_workshop::remove_job(&mut sim.host.storage, actor).map(|_| ())?;
         }
@@ -107,10 +100,7 @@ impl Simulation {
         }
         let development_rules = development::Rules::human();
         let lives = sim
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .enumerate()
             .map(|(index, person)| {
                 (
@@ -137,19 +127,10 @@ impl Simulation {
         sim.initialize_life_people(development_rules, lives)?;
         let farm = sim.host.state.areas[1].id;
         // This resident starts physically at the farm; later workers must travel.
-        let farmer = sim.host.state.people[3].id;
-        *game_spatial::location_mut(
-            &mut sim.host.storage,
-            game_ecs::StableId((sim.host.state.people[sim.person_index[&farmer]].id).0),
-        )
-        .expect("location exists") = Location::AtArea(farm);
-        let people = sim
-            .host
-            .state
-            .people
-            .iter()
-            .map(|p| p.id)
-            .collect::<BTreeSet<_>>();
+        let farmer = sim.person_at(3).id;
+        *game_spatial::location_mut(&mut sim.host.storage, game_ecs::StableId((farmer).0))
+            .expect("location exists") = Location::AtArea(farm);
+        let people = sim.people().map(|p| p.id).collect::<BTreeSet<_>>();
         let seed_stock = sim.debug_add_inventory(
             Good::Seed,
             InventoryLocation::Area(farm),
@@ -382,9 +363,9 @@ impl Simulation {
         let area = match *game_spatial::location(
             &self.host.storage,
             game_ecs::StableId(
-                (self.host.state.people
-                    [*self.person_index.get(&actor).ok_or(Error::Unavailable)?]
-                .id)
+                (self
+                    .person_at(*self.person_index.get(&actor).ok_or(Error::Unavailable)?)
+                    .id)
                     .0,
             ),
         )
@@ -393,43 +374,48 @@ impl Simulation {
             Location::AtArea(area) => area,
             _ => return Err(Error::Unavailable),
         };
-        let mature = self.host.state.development.as_ref().is_none_or(|_| {
-            matches!(
-                game_lifecycle::life(&self.host.storage, actor)
-                    .unwrap()
-                    .stage,
-                LifeStage::Adult | LifeStage::Elder
-            )
-        });
+        let stage =
+            self.host.state.development.as_ref().and_then(|_| {
+                game_lifecycle::life(&self.host.storage, actor).map(|life| life.stage)
+            });
         let available = |id: InventoryId, good: Good| {
-            game_cargo::inventory(&self.host.storage, id)
-                .filter(|stock| {
-                    stock.good == good
-                        && self.has_stock_access(actor, stock)
-                        && self.inventory_area(stock) == Some(land.area)
-                })
-                .map(|_| Quantity(self.unreserved_stock_for_planning(id, actor, resources)))
+            game_agriculture::available_stock(
+                game_cargo::inventory(&self.host.storage, id).map(|stock| {
+                    game_agriculture::StockFacts {
+                        good: stock.good,
+                        accessible: self.has_stock_access(actor, stock),
+                        area: self.inventory_area(stock),
+                        quantity: Quantity(
+                            self.unreserved_stock_for_planning(id, actor, resources),
+                        ),
+                    }
+                }),
+                land.area,
+                good,
+            )
         };
         let room = |id: InventoryId| {
-            game_cargo::inventory(&self.host.storage, id).map_or(Quantity(0), |stock| {
-                Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))
-            })
+            game_cargo::inventory(&self.host.storage, id)
+                .and_then(|stock| stock.room().ok())
+                .unwrap_or(Quantity(0))
         };
         Ok(game_agriculture::BeginFacts {
             actor,
             now: self.host.clock().time,
             area,
-            capable: body.vitals.alive
-                && body.vitals.health > 0
-                && body.vitals.fatigue < physical.rules.fatigue_limit
-                && self.independent(actor)
-                && !self.combat_restricts(actor)
-                && !self.care_index.contains_key(&actor)
-                && mature,
-            tool_available: available(land.tool, Good::Tool).is_some_and(|q| q.0 >= 1_000)
-                && self.tool_available_for_planning(actor, land.tool, resources),
-            field_available: !game_agriculture::cultivations(&self.host.storage)
-                .any(|(person, job)| person != actor && job.field == field),
+            capable: game_agriculture::cultivation_capable(
+                &body.vitals,
+                physical.rules.fatigue_limit,
+                self.independent(actor),
+                self.combat_restricts(actor),
+                self.care_index.contains_key(&actor),
+                stage,
+            ),
+            tool_available: game_agriculture::cultivation_tool_available(
+                available(land.tool, Good::Tool),
+                self.tool_available_for_planning(actor, land.tool, resources),
+            ),
+            field_available: world.field_available(&self.host.storage, actor, field),
             seed_available: available(land.seed, Good::Seed).unwrap_or(Quantity(0)),
             water_available: available(land.water, Good::Water).unwrap_or(Quantity(0)),
             outputs_accessible: available(land.food, Good::Food).is_some()
@@ -442,24 +428,6 @@ impl Simulation {
                 .map(|w| w.temperature),
         })
     }
-    fn prepare_cultivation_start(
-        &self,
-        actor: PersonId,
-        field: SiteId,
-        operation: FarmOperation,
-        resources: Option<&equipment::RankingResources>,
-    ) -> Result<game_agriculture::BeginEffect, Error> {
-        let facts = self.cultivation_facts(actor, field, resources)?;
-        let world = self
-            .host
-            .state
-            .agriculture
-            .as_ref()
-            .ok_or(Error::Unavailable)?;
-        let (land, crop, soil, rules) = world.field_bundle(&self.host.storage, field)?;
-        game_agriculture::prepare_begin(land, crop, soil, rules, operation, facts)
-    }
-
     pub(crate) fn start_cultivation(
         &mut self,
         actor: PersonId,
@@ -467,39 +435,160 @@ impl Simulation {
         operation: FarmOperation,
     ) -> Result<(), Error> {
         self.host.preflight_records(0, 0, 1)?;
-        let plan = self.prepare_cultivation_start(actor, field, operation, None)?;
-        let project_input = if let Some(input) = plan.consumed {
+        let facts = self.cultivation_facts(actor, field, None)?;
+        let plan = self
+            .host
+            .state
+            .agriculture
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .prepare_start(&self.host.storage, field, operation, facts)?;
+        let effect = plan.effect().clone();
+        let project_input = if let Some(input) = effect.consumed {
             self.prepare_farm_input(field, input.inventory, input.quantity)?
         } else {
             None
         };
-        self.ensure_event_capacity(2)?;
-        self.commit_project_input(project_input)?;
-        self.interrupt_actor_activity(actor);
-        if let Some(input) = plan.consumed {
-            game_cargo::inventory_mut(&mut self.host.storage, input.inventory)
-                .unwrap()
-                .quantity
-                .0 -= input.quantity.0;
-            self.emit(EventKind::Consumed {
+        // Irrigation consumes physical water. Prepare Health's receiving-side
+        // debit from the opening Cargo quantity so it can join this command's
+        // atomic batch instead of reacting after publication.
+        let water = effect
+            .consumed
+            .map(|input| {
+                let stock = game_cargo::inventory(&self.host.storage, input.inventory)
+                    .ok_or(Error::Unavailable)?;
+                if stock.good == Good::Water {
+                    self.prepare_health_water_reaction(game_health::WaterReaction::Consume {
+                        source: input.inventory,
+                        quantity: input.quantity,
+                        source_before: stock.quantity,
+                    })
+                } else {
+                    Ok(None)
+                }
+            })
+            .transpose()?
+            .flatten();
+        let mut batch = game_ecs::Batch::new();
+        let guard = plan.stage(
+            self.host.state.agriculture.as_ref().unwrap(),
+            &self.host.storage,
+            &mut batch,
+        )?;
+        let consumption_guard = effect
+            .consumed
+            .map(|input| {
+                game_cargo::prepare_consumptions(
+                    &self.host.storage,
+                    &[(input.inventory, input.quantity)],
+                )?
+                .stage_guarded_into(&self.host.storage, &mut batch)
+            })
+            .transpose()?;
+        let input_event_count = project_input
+            .as_ref()
+            .map_or(0, |change| change.effects().len());
+        let project_finish = project_input
+            .map(|change| {
+                change.stage_into(
+                    self.host
+                        .state
+                        .projects
+                        .as_ref()
+                        .ok_or(Error::Unavailable)?,
+                    &self.host.storage,
+                    &self.host.state.workshops,
+                    &mut batch,
+                )
+            })
+            .transpose()?;
+        let water_finish = water
+            .map(|change| {
+                change.stage_into(
+                    self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                    &self.host.storage,
+                    &mut batch,
+                )
+            })
+            .transpose()?;
+        let completes = effect.job.completes;
+        let interruption =
+            self.prepare_interruptions(&[actor], commands::ActivityOwner::Agriculture)?;
+        self.ensure_event_capacity(
+            usize::try_from(interruption.event_count()?)
+                .map_err(|_| Error::Overflow)?
+                .checked_add(input_event_count)
+                .and_then(|count| count.checked_add(usize::from(effect.consumed.is_some())))
+                .ok_or(Error::Overflow)?,
+        )?;
+        let mut finish = interruption.stage_into(
+            self,
+            &mut batch,
+            &BTreeMap::from([(
+                actor,
+                Activity::Cultivate {
+                    field,
+                    operation,
+                    completes,
+                },
+            )]),
+        )?;
+        guard.validate(
+            self.host.state.agriculture.as_ref().unwrap(),
+            &self.host.storage,
+            &batch,
+        )?;
+        if let Some(consumption) = &consumption_guard {
+            consumption.validate(&self.host.storage, &batch)?;
+        }
+        if let Some(project) = &project_finish {
+            project.validate_batch(
+                self.host
+                    .state
+                    .projects
+                    .as_ref()
+                    .ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                &self.host.state.workshops,
+                &batch,
+            )?;
+        }
+        if let Some(water) = &water_finish {
+            water.validate_batch(
+                self.host.state.health.as_ref().ok_or(Error::Unavailable)?,
+                &self.host.storage,
+                &batch,
+            )?;
+        }
+        finish.validate_batch(self, &batch)?;
+        self.host.storage.apply_batch(batch)?;
+        if let Some(water) = water_finish {
+            water.finish();
+        }
+        if let Some(project) = project_finish {
+            for event in project.finish(self.host.state.projects.as_mut().unwrap()) {
+                if let game_projects::Effect::InputUsed {
+                    enterprise,
+                    site,
+                    quantity,
+                } = event
+                {
+                    self.emit(EventKind::EnterpriseInputUsed {
+                        enterprise,
+                        site,
+                        quantity,
+                    });
+                }
+            }
+        }
+        finish.finish_actor(self, actor);
+        if let Some(input) = effect.consumed {
+            self.emit_prepared_water(EventKind::Consumed {
                 actor,
                 source: input.inventory,
                 quantity: input.quantity,
             });
         }
-        let completes = plan.job.completes;
-        let world = self.host.state.agriculture.as_mut().unwrap();
-        world
-            .insert_crop(&mut self.host.storage, field, plan.crop)
-            .expect("validated component insertion");
-        world
-            .insert_cultivation(&mut self.host.storage, actor, plan.job)
-            .expect("validated cultivation");
-        *self.host.storage.activity_mut(actor).unwrap() = Activity::Cultivate {
-            field,
-            operation,
-            completes,
-        };
         self.host
             .state
             .due
@@ -510,101 +599,116 @@ impl Simulation {
         Ok(())
     }
 
-    pub(crate) fn interrupt_cultivation(&mut self, actor: PersonId) {
-        if let Some(world) = &mut self.host.state.agriculture {
-            world
-                .remove_cultivation(&mut self.host.storage, actor)
-                .expect("registered cultivation");
-        }
-    }
-
     pub(crate) fn complete_cultivation(&mut self, actor: PersonId) {
-        if !self.cultivation_equipment_available(actor) {
-            self.interrupt_actor_activity(actor);
-            self.emit(EventKind::Interrupted { actor });
-            return;
-        }
-        let Some(job) = self.host.state.agriculture.as_mut().and_then(|w| {
-            w.remove_cultivation(&mut self.host.storage, actor)
-                .expect("registered cultivation")
-        }) else {
+        let Some(world) = self.host.state.agriculture.as_ref() else {
             return;
         };
-        let valid = game_physiology::body(&self.host.storage, actor)
-            .expect("body exists")
-            .vitals
-            .alive;
-        if !valid {
+        let Some(job) = world.cultivation(&self.host.storage, actor) else {
             return;
-        }
-        let access = self
-            .cultivation_facts(actor, job.field, None)
-            .expect("validated cultivation actor");
-        let world = self.host.state.agriculture.as_ref().unwrap();
-        let field = &world
-            .field(&self.host.storage, job.field)
-            .expect("component exists");
-        let room = |id: InventoryId| {
-            let stock = game_cargo::inventory(&self.host.storage, id).expect("inventory exists");
-            Quantity(stock.capacity.0.saturating_sub(stock.quantity.0))
         };
-        let plan = game_agriculture::prepare_completion(
-            field,
-            world
-                .crop(&self.host.storage, job.field)
-                .expect("component exists"),
-            world
-                .soil(&self.host.storage, job.field)
-                .expect("component exists"),
-            &job,
-            world
-                .rules_for(&self.host.storage, job.field)
-                .expect("validated crop definition"),
-            game_agriculture::CompletionFacts {
-                now: self.host.clock().time,
-                eligible: valid,
-                outputs_accessible: access.capable
-                    && access.tool_available
-                    && access.field_available
-                    && field.access.contains(&actor)
-                    && access.outputs_accessible,
-                food_room: room(field.food),
-                seed_room: room(field.seed),
-            },
-        )
-        .expect("validated cultivation completion");
-        let harvested = plan.harvest.map(|output| {
-            game_cargo::inventory_mut(&mut self.host.storage, output.food_inventory)
-                .unwrap()
-                .quantity
-                .0 += output.food.0;
-            game_cargo::inventory_mut(&mut self.host.storage, output.seed_inventory)
-                .unwrap()
-                .quantity
-                .0 += output.seed.0;
-            (output.food, output.seed)
-        });
-        let world = self.host.state.agriculture.as_mut().unwrap();
-        world
-            .insert_crop(&mut self.host.storage, job.field, plan.crop)
-            .expect("validated component insertion");
-        world
-            .insert_soil(&mut self.host.storage, job.field, plan.soil)
-            .expect("validated component insertion");
-        *self.host.storage.activity_mut(actor).unwrap() = Activity::Idle;
-        self.emit(EventKind::Cultivated {
-            actor,
-            field: job.field,
-            operation: job.operation,
-            labor_ms: job.labor_ms,
-        });
-        if let Some((food, seed)) = harvested {
-            self.emit(EventKind::CropHarvested {
+        let plan = world
+            .prepare_finish(
+                &self.host.storage,
                 actor,
-                field: job.field,
-                food,
-                seed,
-            });
+                game_agriculture::FinishFacts {
+                    now: self.host.clock().time,
+                    equipped: self.cultivation_equipment_available(actor),
+                    alive: game_physiology::body(&self.host.storage, actor)
+                        .is_some_and(|body| body.vitals.alive),
+                    access: self.cultivation_facts(actor, job.field, None).ok(),
+                },
+            )
+            .expect("validated cultivation completion")
+            .expect("cultivation exists");
+        let outcome = plan.outcome().clone();
+        let mut batch = game_ecs::Batch::new();
+        let guard = plan
+            .stage(world, &self.host.storage, &mut batch)
+            .expect("current cultivation");
+        let mut deposits = Vec::new();
+        if let game_agriculture::FinishOutcome::Completed {
+            harvest: Some(output),
+            ..
+        } = &outcome
+        {
+            for (id, good, quantity) in [
+                (output.food_inventory, Good::Food, output.food),
+                (output.seed_inventory, Good::Seed, output.seed),
+            ] {
+                if quantity.0 > 0 {
+                    let deposit =
+                        game_cargo::prepare_deposit(&self.host.storage, id, good, quantity)
+                            .expect("checked harvest output");
+                    deposits.push(
+                        deposit
+                            .stage_into(&self.host.storage, &mut batch)
+                            .expect("current output stock"),
+                    );
+                }
+            }
+        }
+        let mut interruption = match &outcome {
+            game_agriculture::FinishOutcome::Interrupted => {
+                let prepared = self
+                    .prepare_interruptions(&[actor], commands::ActivityOwner::Agriculture)
+                    .expect("validated interruption");
+                Some(
+                    prepared
+                        .stage_into(self, &mut batch, &BTreeMap::from([(actor, Activity::Idle)]))
+                        .expect("validated interruption batch"),
+                )
+            }
+            game_agriculture::FinishOutcome::Completed { .. } => {
+                batch.insert(game_ecs::StableId(actor.0), Activity::Idle);
+                None
+            }
+            game_agriculture::FinishOutcome::Dead => None,
+        };
+        guard
+            .validate(
+                self.host.state.agriculture.as_ref().unwrap(),
+                &self.host.storage,
+                &batch,
+            )
+            .expect("current cultivation inputs");
+        if let Some(finish) = &interruption {
+            finish
+                .validate_batch(self, &batch)
+                .expect("current interruption");
+        }
+        for deposit in &deposits {
+            deposit
+                .validate(&self.host.storage, &batch)
+                .expect("current harvest stock");
+        }
+        self.host
+            .storage
+            .apply_batch(batch)
+            .expect("validated cultivation batch");
+        if let Some(finish) = &mut interruption {
+            finish.finish_actor(self, actor);
+        }
+        match outcome {
+            game_agriculture::FinishOutcome::Interrupted => {
+                self.emit(EventKind::Interrupted { actor });
+            }
+            game_agriculture::FinishOutcome::Dead => {}
+            game_agriculture::FinishOutcome::Completed { job, harvest } => {
+                self.emit(EventKind::Cultivated {
+                    actor,
+                    field: job.field,
+                    operation: job.operation,
+                    labor_ms: job.labor_ms,
+                });
+                if let Some(output) = harvest {
+                    self.emit(EventKind::CropHarvested {
+                        actor,
+                        field: job.field,
+                        food: output.food,
+                        seed: output.seed,
+                    });
+                }
+            }
         }
     }
 
@@ -614,11 +718,10 @@ impl Simulation {
         if !body.vitals.alive {
             return None;
         }
-        let Location::AtArea(area) = *game_spatial::location(
-            &self.host.storage,
-            game_ecs::StableId((self.host.state.people[self.person_index[&actor]].id).0),
-        )
-        .expect("location exists") else {
+        let Location::AtArea(area) =
+            *game_spatial::location(&self.host.storage, game_ecs::StableId((actor).0))
+                .expect("location exists")
+        else {
             return None;
         };
         Some(AgricultureView {
@@ -672,9 +775,10 @@ impl Simulation {
     ) -> Option<Command> {
         let world = self.host.state.agriculture.as_ref()?;
         world
-            .fields(&self.host.storage)
-            .map(|(id, _)| id)
-            .find_map(|field| self.autonomous_field_cultivation(actor, field, resources))
+            .select_cultivation(&self.host.storage, |field| {
+                self.cultivation_facts(actor, field, resources).ok()
+            })
+            .map(|(field, operation)| Command::Cultivate { field, operation })
     }
     pub(crate) fn autonomous_field_cultivation(
         &self,
@@ -683,124 +787,91 @@ impl Simulation {
         resources: Option<&equipment::RankingResources>,
     ) -> Option<Command> {
         let world = self.host.state.agriculture.as_ref()?;
-        let (_, crop, soil, rules) = world.field_bundle(&self.host.storage, field).ok()?;
-        let operation = game_agriculture::next_operation(crop, soil, rules)?;
-        self.prepare_cultivation_start(actor, field, operation, resources)
-            .is_ok()
-            .then_some(Command::Cultivate { field, operation })
+        world
+            .select_field_cultivation(
+                &self.host.storage,
+                field,
+                self.cultivation_facts(actor, field, resources).ok()?,
+            )
+            .map(|(field, operation)| Command::Cultivate { field, operation })
     }
 
     pub(crate) fn validate_agriculture(&self) -> Result<(), Error> {
+        game_agriculture::validate_runtime_presence(
+            &self.host.storage,
+            self.host.state.agriculture.as_ref(),
+        )?;
         let Some(world) = &self.host.state.agriculture else {
-            if self.host.storage.iter::<Field>().next().is_some()
-                || self.host.storage.iter::<Crop>().next().is_some()
-                || game_agriculture::cultivations(&self.host.storage)
-                    .next()
-                    .is_some()
-            {
-                return Err(Error::InvalidSave(
-                    "agricultural components have no runtime".into(),
-                ));
-            }
             return Ok(());
         };
-        let invalid = || Error::InvalidSave("invalid calendar, climate, crop or field".into());
-        let environment = self.host.state.environment.as_ref();
-        world
-            .validate(
-                &self.host.storage,
-                self.host.clock().time,
-                environment.map(|w| w.calendar.year_days()),
-            )
-            .map_err(|_| invalid())?;
-        if environment.is_some_and(|w| world.day != w.weather_day) {
-            return Err(invalid());
+        world.validate(
+            &self.host.storage,
+            self.host.clock().time,
+            self.host
+                .state
+                .environment
+                .as_ref()
+                .map(|world| world.calendar.year_days()),
+        )?;
+        world.validate_links(
+            &self.host.storage,
+            self.host.clock().time,
+            &AgricultureLinks(self),
+        )
+    }
+}
+
+struct AgricultureLinks<'a>(&'a Simulation);
+impl game_agriculture::SaveLinks for AgricultureLinks<'_> {
+    fn next_id(&self) -> u64 {
+        self.0.host.next_id()
+    }
+    fn physical_available(&self) -> bool {
+        self.0.host.state.physical.is_some()
+    }
+    fn weather_day(&self) -> Option<u64> {
+        self.0
+            .host
+            .state
+            .environment
+            .as_ref()
+            .map(|world| world.weather_day)
+    }
+    fn area_exists(&self, area: AreaId) -> bool {
+        self.0.host.state.areas.iter().any(|row| row.id == area)
+    }
+    fn person_exists(&self, actor: PersonId) -> bool {
+        self.0.person_index.contains_key(&actor)
+    }
+    fn workshop_exists(&self, site: SiteId) -> bool {
+        game_workshop::site(&self.0.host.storage, site).is_some()
+    }
+    fn inventory(&self, id: InventoryId) -> Option<(Good, Option<AreaId>)> {
+        game_cargo::inventory(&self.0.host.storage, id)
+            .map(|row| (row.good, self.0.inventory_area(row)))
+    }
+    fn actor_location(&self, actor: PersonId) -> Option<Location> {
+        game_spatial::location(&self.0.host.storage, game_ecs::StableId(actor.0)).cloned()
+    }
+    fn actor_alive(&self, actor: PersonId) -> bool {
+        game_physiology::body(&self.0.host.storage, actor).is_some_and(|row| row.vitals.alive)
+    }
+    fn activity(&self, actor: PersonId) -> Option<(SiteId, FarmOperation, SimTime)> {
+        match self.0.host.storage.activity(actor)? {
+            Activity::Cultivate {
+                field,
+                operation,
+                completes,
+            } => Some((*field, *operation, *completes)),
+            _ => None,
         }
-        for (id, field) in world.fields(&self.host.storage) {
-            if id != field.id
-                || id.0 >= self.host.next_id()
-                || self
-                    .host
-                    .state
-                    .physical
-                    .as_ref()
-                    .is_none_or(|_| game_workshop::site(&self.host.storage, id).is_some())
-                || !self.host.state.areas.iter().any(|a| a.id == field.area)
-                || field
-                    .custodian
-                    .is_some_and(|id| !self.person_index.contains_key(&id))
-                || field
-                    .access
-                    .iter()
-                    .chain(
-                        world
-                            .crop(&self.host.storage, id)
-                            .expect("component exists")
-                            .contributions
-                            .keys(),
-                    )
-                    .any(|person| !self.person_index.contains_key(person))
-            {
-                return Err(invalid());
-            }
-            let refs = [
-                (field.seed, Good::Seed),
-                (field.tool, Good::Tool),
-                (field.water, Good::Water),
-                (field.food, Good::Food),
-            ];
-            let mut unique = BTreeSet::new();
-            for (stock, good) in refs {
-                if !unique.insert(stock)
-                    || game_cargo::inventory(&self.host.storage, stock).is_none_or(|i| {
-                        i.good != good || self.inventory_area(i) != Some(field.area)
-                    })
-                {
-                    return Err(invalid());
-                }
-            }
-        }
-        for (actor, job) in game_agriculture::cultivations(&self.host.storage) {
-            let actor = &actor;
-            let Some(field) = world.field(&self.host.storage, job.field) else {
-                return Err(invalid());
-            };
-            if !self.person_index.contains_key(actor)
-                || job.completes <= self.host.clock().time
-                || *game_spatial::location(
-                    &self.host.storage,
-                    game_ecs::StableId((self.host.state.people[self.person_index[actor]].id).0),
-                )
-                .expect("location exists")
-                    != Location::AtArea(field.area)
-                || self
-                    .host
-                    .state
-                    .physical
-                    .as_ref()
-                    .and_then(|_| game_physiology::body(&self.host.storage, *actor))
-                    .is_none_or(|body| !body.vitals.alive)
-                || self.host.storage.activity(*actor)
-                    != Some(&Activity::Cultivate {
-                        field: job.field,
-                        operation: job.operation,
-                        completes: job.completes,
-                    })
-                || !self
-                    .host
-                    .state
-                    .due
-                    .get(&job.completes)
-                    .is_some_and(|events| {
-                        events
-                            .iter()
-                            .any(|d| matches!(d, Due::Physical(id) if id == actor))
-                    })
-            {
-                return Err(invalid());
-            }
-        }
-        Ok(())
+    }
+    fn completion_scheduled(&self, actor: PersonId, at: SimTime) -> bool {
+        self.0.host.state.due.get(&at).is_some_and(|events| {
+            events
+                .iter()
+                .any(|row| matches!(row,Due::Physical(id) if *id == actor))
+        })
     }
 }
 

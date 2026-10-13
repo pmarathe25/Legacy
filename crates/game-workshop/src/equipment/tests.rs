@@ -254,3 +254,49 @@ fn unavailable_actor_or_wrong_site_area_never_requests_allocations() {
     }
     assert_eq!(facts.allocation_reads.get(), 0);
 }
+
+#[test]
+fn visible_work_options_require_only_contact_and_site_permission() {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    let mut store = Store::with_schema(schema);
+    // These declarations have no input/tool/output stocks or workers yet.
+    // Discovery stays permissive; admitting real work is a separate operation.
+    for (id, area, access) in [
+        (30, 1, BTreeSet::from([PersonId(1)])),
+        (10, 1, BTreeSet::from([PersonId(1)])),
+        (20, 2, BTreeSet::from([PersonId(1)])),
+        (40, 1, BTreeSet::from([PersonId(2)])),
+    ] {
+        insert_site(
+            &mut store,
+            Site {
+                id: SiteId(id),
+                area: AreaId(area),
+                recipe: RecipeId("meal".into()),
+                input: InventoryId(100),
+                tool: InventoryId(101),
+                output: InventoryId(102),
+                access,
+                last_granted: None,
+            },
+        )
+        .unwrap();
+    }
+    let opening = store.snapshot().unwrap();
+    assert_eq!(
+        local_work_sites(&store, PersonId(1), Some(AreaId(1))),
+        vec![SiteId(10), SiteId(30)]
+    );
+    assert_eq!(
+        local_work_sites(&store, PersonId(1), Some(AreaId(2))),
+        vec![SiteId(20)]
+    );
+    assert_eq!(
+        local_work_sites(&store, PersonId(2), Some(AreaId(1))),
+        vec![SiteId(40)]
+    );
+    assert!(local_work_sites(&store, PersonId(3), Some(AreaId(1))).is_empty());
+    assert!(local_work_sites(&store, PersonId(1), None).is_empty());
+    assert_eq!(store.snapshot().unwrap(), opening);
+}

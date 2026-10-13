@@ -9,9 +9,10 @@ game-ecs.workspace = true
 game-workshop.workspace = true
 game-agreements.workspace = true
 game-core.workspace = true
+game-logistics.workspace = true
+game-cargo.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-game-cargo.workspace = true
 game-content.workspace = true
 serde_json.workspace = true

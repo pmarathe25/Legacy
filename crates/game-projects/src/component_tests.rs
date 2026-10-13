@@ -965,10 +965,10 @@ fn workshop_consumption_and_input_accounting_stage_together_and_late_rejection_i
             .validate_batch(&runtime, &store, &defs, &rejected)
             .is_err()
     );
-    cargo.validate_batch(&rejected).unwrap();
+    cargo.validate_batch(&store, &rejected).unwrap();
     assert_eq!(store.snapshot().unwrap(), before);
     let (batch, cargo, finish) = stage(&store);
-    cargo.validate_batch(&batch).unwrap();
+    cargo.validate_batch(&store, &batch).unwrap();
     finish
         .validate_batch(&runtime, &store, &defs, &batch)
         .unwrap();

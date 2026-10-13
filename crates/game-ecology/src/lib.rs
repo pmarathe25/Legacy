@@ -8,7 +8,7 @@ mod observation;
 mod opportunities;
 mod transitions;
 pub use observation::{ObserverArea, PreparedObservations};
-pub use opportunities::{AutonomousOptions, GatherOpportunity};
+pub use opportunities::{AutonomousOptions, GatherOpportunity, ProvisionOpportunity};
 pub use transitions::*;
 mod storage;
 pub use advancing::{PlotInput, PreparedAdvance, ResourceInput};
@@ -134,6 +134,8 @@ impl Resource {
     pub fn validate(&self) -> Result<(), Error> {
         if self.id.0 == 0
             || self.area.0 == 0
+            || self.access.iter().any(|actor| actor.0 == 0)
+            || self.custodian.is_some_and(|actor| actor.0 == 0)
             || self.capacity.0 == 0
             || self.remaining > self.capacity
             || self.decay_permille > 1_000
@@ -167,7 +169,11 @@ pub struct Plot {
 }
 impl Plot {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.id.0 == 0 || self.area.0 == 0 {
+        if self.id.0 == 0
+            || self.area.0 == 0
+            || self.access.iter().any(|actor| actor.0 == 0)
+            || self.custodian.is_some_and(|actor| actor.0 == 0)
+        {
             return Err(Error::InvalidConfiguration(
                 "invalid undeveloped plot".into(),
             ));
@@ -368,6 +374,11 @@ impl Runtime {
     ) -> Result<Quantity, Error> {
         let source = self.resource(store, resource).ok_or(Error::Unavailable)?;
         source.validate()?;
+        if source.id != resource {
+            return Err(Error::InvalidSave(
+                "inconsistent gathering source entity".into(),
+            ));
+        }
         let (reserved, _) = self.gathering_reservations(store, actor, resource)?;
         let available = u128::from(source.remaining.0).saturating_sub(reserved) as u64;
         Ok(Quantity(
@@ -407,6 +418,11 @@ impl Runtime {
     ) -> Result<GatheringConditions, Error> {
         let source = self.resource(store, resource).ok_or(Error::Unavailable)?;
         source.validate()?;
+        if source.id != resource {
+            return Err(Error::InvalidSave(
+                "inconsistent gathering source entity".into(),
+            ));
+        }
         let (reserved, working) = self.gathering_reservations(store, actor, resource)?;
         if quantity.0 == 0
             || !facts.capable
@@ -567,6 +583,18 @@ mod free_port_tests;
 mod cancellation;
 pub use cancellation::PreparedGatheringCancellation;
 
+mod policy;
+pub use policy::{
+    ActorCondition, ObservationPort, OpposedGatheringEffect, PreparedGatheringStart,
+    PreparedPlotDevelopment, ToolCandidate,
+};
+mod save_validation;
+pub use save_validation::{
+    GatheringActivity, InventoryFacts, SaveContext, SavePort, validate_save,
+};
+#[cfg(test)]
+mod policy_tests;
+
 mod acquisition;
 pub use acquisition::AcquisitionAction;
 
@@ -586,7 +614,12 @@ impl Runtime {
         let mut after: BTreeMap<SiteId, Plot> = BTreeMap::new();
         for (id, grantor, grantee, allowed) in changes {
             let original = self.plot(store, *id).ok_or(Error::Unavailable)?;
-            if original.custodian != Some(*grantor) || grantee.0 == 0 {
+            original.validate()?;
+            if original.id != *id
+                || original.custodian != Some(*grantor)
+                || grantor.0 == 0
+                || grantee.0 == 0
+            {
                 return Err(Error::Unavailable);
             }
             before.entry(*id).or_insert_with(|| original.clone());
@@ -611,9 +644,29 @@ impl PreparedSiteAccess {
         }
         Ok(())
     }
-    pub fn stage(&self, batch: &mut game_ecs::Batch) {
+    fn stage(&self, batch: &mut game_ecs::Batch) {
         for (id, row) in &self.after {
             batch.insert(game_ecs::StableId(id.0), row.clone());
         }
+    }
+    pub fn stage_into(
+        &self,
+        runtime: &Runtime,
+        store: &game_ecs::Store,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<game_ecs::ReadGuard, Error> {
+        self.check(runtime, store)?;
+        let mut reads = game_ecs::ReadSet::new();
+        let mut admitted = game_ecs::ReadFootprint::new();
+        for (id, before) in &self.before {
+            let entity = game_ecs::StableId(id.0);
+            if batch.touches::<Plot>(entity) {
+                return Err(Error::Unavailable);
+            }
+            reads.expect_row(entity, Some(before.clone()));
+            admitted.protect::<Plot>(entity);
+        }
+        self.stage(batch);
+        reads.bind(store, batch, &admitted)
     }
 }

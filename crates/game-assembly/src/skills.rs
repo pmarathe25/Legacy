@@ -4,7 +4,6 @@
 //! grants no mastery, and borrowing another life never changes these records.
 use crate::*;
 
-pub(crate) use game_skills::PracticeDelta;
 pub use game_skills::{
     Progress, Rules, Runtime, Skills, advance_work, damage_for_level, rate_for_level, work_duration,
 };
@@ -17,15 +16,16 @@ impl Simulation {
             .find(|scenario| scenario.id == "skills-fixture")
             .ok_or_else(|| Error::InvalidFixture("skills fixture is not registered".into()))?;
         let world = Runtime::default();
-        for person in &sim.host.state.people {
-            game_skills::insert_skills(&mut sim.host.storage, person.id, Skills::default())?;
-            if person.role == Role::Guardian {
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            let person_role = sim.person(person_id).role;
+            game_skills::insert_skills(&mut sim.host.storage, person_id, Skills::default())?;
+            if person_role == Role::Guardian {
                 // These authored immortal mentors have practiced the lineage
                 // method before the fixture begins. This is not a newborn gift.
                 let prior_practice = world.rules.per_level.0 * u64::from(world.rules.max_level);
                 world.credit(
                     &mut sim.host.storage,
-                    person.id,
+                    person_id,
                     Skill::Invocation,
                     prior_practice,
                     None,
@@ -36,109 +36,154 @@ impl Simulation {
         Ok(sim)
     }
 
-    pub(crate) fn evaluate_skills(&self, next: SimTime) -> Result<Vec<PracticeDelta>, Error> {
-        let elapsed = next
-            .0
-            .checked_sub(self.host.clock().time.0)
-            .ok_or(Error::Overflow)?;
-        let (Some(skills), Some(_)) = (&self.host.state.skills, &self.host.state.physical) else {
-            return Ok(Vec::new());
+    pub(crate) fn evaluate_skills(
+        &self,
+        next: SimTime,
+    ) -> Result<Option<game_skills::EvaluatedLearning>, Error> {
+        let (Some(runtime), Some(_)) = (&self.host.state.skills, &self.host.state.physical) else {
+            return Ok(None);
         };
         let equipment = self.equipment_availability();
-        let mut pending = Vec::new();
-        for (actor, body) in game_physiology::bodies(&self.host.storage) {
-            let actor = &actor;
-            let activity = self.host.storage.activity(*actor).expect("activity exists");
-            if elapsed == 0
-                || !body.vitals.alive
-                || body.vitals.health == 0
-                || !matches!(
-                    *game_spatial::location(
-                        &self.host.storage,
-                        game_ecs::StableId((self.host.state.people[self.person_index[actor]].id).0)
-                    )
-                    .expect("location exists"),
-                    Location::AtArea(_)
-                )
-            {
-                continue;
-            }
-            let (skill, cap) = match *activity {
-                Activity::Gather { .. } | Activity::Cultivate { .. }
-                    if equipment.get(actor).copied().unwrap_or(false) =>
-                {
-                    (Skill::Farming, None)
-                }
-                Activity::Construct { .. } => (Skill::Craft, None),
-                Activity::Play {
-                    interest: ChildhoodInterest::Craft,
-                    ..
-                } => (Skill::Craft, None),
+        let actors = game_physiology::bodies(&self.host.storage).map(|(actor, body)| {
+            let activity = match *self.host.storage.activity(actor).expect("activity exists") {
+                Activity::Gather { .. } => game_skills::ActivityFacts::Gather,
+                Activity::Cultivate { .. } => game_skills::ActivityFacts::Cultivate,
+                Activity::Construct { .. } => game_skills::ActivityFacts::Construct,
+                Activity::Play { interest, .. } => game_skills::ActivityFacts::Play { interest },
                 Activity::Lesson {
                     teacher,
                     student,
                     topic,
                     ..
-                } if student == *actor => {
-                    match topic {
-                        LessonTopic::Craft => (
-                            Skill::Craft,
-                            Some(skills.practice(&self.host.storage, teacher, Skill::Craft)),
-                        ),
-                        LessonTopic::Invocation => (Skill::Invocation, None),
-                        // Route instruction supplies actual information, but does
-                        // not pretend that sitting through it is farming/combat.
-                        LessonTopic::Travel => continue,
-                    }
-                }
-                Activity::Lesson { teacher, .. } if teacher == *actor => (Skill::Leadership, None),
-                _ => {
-                    let Some(skill) = self.health_practice_skill(*actor) else {
-                        continue;
-                    };
-                    (skill, None)
-                }
+                } => game_skills::ActivityFacts::Lesson {
+                    teacher,
+                    student,
+                    topic: match topic {
+                        LessonTopic::Craft => game_skills::Lesson::Craft,
+                        LessonTopic::Invocation => game_skills::Lesson::Invocation,
+                        LessonTopic::Travel => game_skills::Lesson::Travel,
+                    },
+                },
+                Activity::Work { .. } => game_skills::ActivityFacts::Workshop,
+                _ => game_skills::ActivityFacts::Other,
             };
-            pending.push(PracticeDelta {
-                actor: *actor,
-                skill,
-                milliseconds: elapsed,
-                mastery_cap: cap,
+            let care_job = self
+                .host
+                .state
+                .health
+                .as_ref()
+                .and_then(|_| game_health::job(&self.host.storage, actor));
+            game_skills::ActorFacts {
+                actor,
+                alive: body.vitals.alive,
+                health: body.vitals.health,
+                at_area: matches!(
+                    game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)),
+                    Some(Location::AtArea(_))
+                ),
+                equipped: equipment.get(&actor).copied().unwrap_or(false),
+                activity,
+                workshop_job: game_workshop::job(&self.host.storage, actor).is_some(),
+                care_work: care_job.map(|job| match job.work {
+                    game_health::Work::Treat { .. } => game_skills::CareWork::Treat,
+                    game_health::Work::Boil { .. } => game_skills::CareWork::Boil,
+                    game_health::Work::Shelter { .. } => game_skills::CareWork::Shelter,
+                    game_health::Work::Drink { .. } => game_skills::CareWork::Drink,
+                }),
+                care_can_progress: care_job.is_some_and(|job| self.health_job_can_progress(job)),
+            }
+        });
+        let interactions = self
+            .host
+            .state
+            .social
+            .iter()
+            .flat_map(|_| {
+                game_characters::social::interactions(&self.host.storage).map(|(_, row)| row)
+            })
+            .map(|interaction| {
+                let kind = match *interaction {
+                    social::Interaction::Talk { first, second, .. } => {
+                        game_skills::InteractionFacts::Talk { first, second }
+                    }
+                    social::Interaction::Instruction {
+                        teacher,
+                        student,
+                        topic,
+                        mastery_cap,
+                        ..
+                    } => game_skills::InteractionFacts::Instruction {
+                        teacher,
+                        student,
+                        skill: match topic {
+                            InstructionTopic::Skill(skill) => Some(skill),
+                            InstructionTopic::Routes => None,
+                        },
+                        mastery_cap,
+                    },
+                    social::Interaction::Practice { actor, skill, .. } => {
+                        game_skills::InteractionFacts::Practice { actor, skill }
+                    }
+                };
+                game_skills::SocialFacts {
+                    interaction: kind,
+                    can_progress: self.social_interaction_valid(interaction),
+                    completes: interaction.completes(),
+                }
             });
-        }
-        pending.extend(self.workshop_practice_deltas(elapsed, &equipment));
-        pending.extend(self.social_practice_deltas(next));
-        Ok(pending)
+        runtime
+            .evaluate_learning(
+                &self.host.storage,
+                self.host.clock().time,
+                next,
+                actors,
+                interactions,
+            )
+            .map(Some)
     }
 
-    pub(crate) fn commit_skills(&mut self, pending: Vec<PracticeDelta>) {
-        let Some(world) = &mut self.host.state.skills else {
-            return;
+    pub(crate) fn validate_skill_output(
+        &self,
+        pending: &Option<game_skills::EvaluatedLearning>,
+    ) -> Result<(), Error> {
+        match (self.host.state.skills.as_ref(), pending.as_ref()) {
+            (Some(runtime), Some(evaluation)) => evaluation.validate(runtime, &self.host.storage),
+            (_, None) => Ok(()),
+            (None, Some(_)) => Err(Error::Unavailable),
+        }
+    }
+
+    pub(crate) fn commit_skills(
+        &mut self,
+        pending: Option<game_skills::EvaluatedLearning>,
+    ) -> Result<(), Error> {
+        let Some(evaluation) = pending else {
+            return Ok(());
         };
-        world
-            .prepare_practice(&self.host.storage, pending)
-            .expect("validated practice effects")
-            .commit(world, &mut self.host.storage)
-            .expect("validated practice batch");
+        let runtime = self.host.state.skills.as_ref().ok_or(Error::Unavailable)?;
+        runtime
+            .prepare_learning(&self.host.storage, evaluation)?
+            .commit(runtime, &mut self.host.storage)
     }
 
     pub(crate) fn skill_boundary(&self, limit: SimTime) -> Result<SimTime, Error> {
         let Some(world) = &self.host.state.skills else {
             return Ok(limit);
         };
+        let Some(evaluation) = self.evaluate_skills(limit)? else {
+            return Ok(limit);
+        };
         world.practice_boundary(
             &self.host.storage,
             self.host.clock().time,
             limit,
-            &self.evaluate_skills(limit)?,
+            evaluation.deltas(),
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn credit_skill(&mut self, actor: PersonId, skill: Skill, milliseconds: u64) {
         let owner_now = self.host.clock().time;
-        if milliseconds == 0 {
-            return;
-        }
         if self.person_index.contains_key(&actor)
             && let Some(world) = &mut self.host.state.skills
         {
@@ -154,48 +199,57 @@ impl Simulation {
         }
     }
 
-    pub(crate) fn on_skill_event(&mut self, kind: &EventKind) {
-        if let EventKind::Born { child, .. } = kind {
-            if self.host.state.skills.is_some() {
-                game_skills::insert_skills(&mut self.host.storage, *child, Skills::default())
-                    .expect("validated newborn skills");
+    pub(crate) fn stage_agreement_skill_events(
+        &self,
+        prepared: &game_agreements::PreparedTransition,
+        batch: &mut game_ecs::Batch,
+    ) -> Result<Option<game_skills::StagedPractice>, Error> {
+        let Some(runtime) = self.host.state.skills.as_ref() else {
+            return Ok(None);
+        };
+        let mut events = Vec::new();
+        for event in &prepared.events {
+            match event {
+                game_agreements::TransitionEvent::Activated { agreement } => {
+                    let closing = batch
+                        .projected::<game_agreements::Agreement>(
+                            &self.host.storage,
+                            game_ecs::StableId(agreement.0),
+                        )?
+                        .ok_or(Error::Unavailable)?;
+                    events.push(game_skills::LearningEvent::AgreementActivated {
+                        accepted: closing
+                            .accepted
+                            .iter()
+                            .copied()
+                            .filter(|actor| self.person_index.contains_key(actor))
+                            .collect(),
+                    });
+                }
+                game_agreements::TransitionEvent::Amended { amendment, .. } => {
+                    let closing = batch
+                        .projected::<game_agreements::Amendment>(
+                            &self.host.storage,
+                            game_ecs::StableId(amendment.0),
+                        )?
+                        .ok_or(Error::Unavailable)?;
+                    if self.person_index.contains_key(&closing.proposer) {
+                        events.push(game_skills::LearningEvent::AgreementAmended {
+                            proposer: closing.proposer,
+                        });
+                    }
+                }
+                _ => {}
             }
-            return;
         }
-        let Some(world) = &self.host.state.skills else {
-            return;
-        };
-        let credit = world.rules.action_practice_ms;
-        let actors: Vec<_> = match kind {
-            EventKind::AgreementActivated { agreement } => self
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .and_then(|_| game_agreements::agreement(&self.host.storage, *(agreement)))
-                .map_or_else(Vec::new, |agreement| {
-                    agreement
-                        .accepted
-                        .iter()
-                        .map(|actor| (*actor, Skill::Negotiation))
-                        .collect()
-                }),
-            EventKind::AgreementAmended { amendment, .. } => self
-                .host
-                .state
-                .agreements
-                .as_ref()
-                .and_then(|_| game_agreements::amendment(&self.host.storage, *(amendment)))
-                .map_or_else(Vec::new, |amendment| {
-                    vec![(amendment.proposer, Skill::Negotiation)]
-                }),
-            // Produced/Cultivated/Practiced/LessonCompleted already have their
-            // actual elapsed practice; completion must not add a second minute.
-            _ => Vec::new(),
-        };
-        for (actor, skill) in actors {
-            self.credit_skill(actor, skill, credit);
+        if events.is_empty() {
+            return Ok(None);
         }
+        Ok(Some(
+            runtime
+                .prepare_events(&self.host.storage, events, self.host.clock().time)?
+                .stage_into(runtime, &self.host.storage, batch)?,
+        ))
     }
 
     pub(crate) fn own_skill_level(&self, actor: PersonId, skill: Skill) -> u16 {
@@ -207,24 +261,11 @@ impl Simulation {
     }
 
     pub(crate) fn own_skill_view(&self, actor: PersonId) -> Vec<SkillView> {
-        let Some(_) = &self.host.state.skills else {
-            return Vec::new();
-        };
-        Skill::ALL
-            .into_iter()
-            .map(|skill| {
-                let owned = game_skills::skills(&self.host.storage, actor)
-                    .and_then(|skills| skills.records.get(&skill))
-                    .cloned()
-                    .unwrap_or_default();
-                SkillView {
-                    skill,
-                    level: owned.level,
-                    practice_ms: owned.practice_ms,
-                    progress_ms: owned.progress_ms,
-                }
-            })
-            .collect()
+        self.host
+            .state
+            .skills
+            .as_ref()
+            .map_or_else(Vec::new, |runtime| runtime.view(&self.host.storage, actor))
     }
 
     pub(crate) fn effective_work_rate(&self, actor: PersonId, skill: Skill) -> SkillRate {
@@ -234,46 +275,34 @@ impl Simulation {
             .skills
             .as_ref()
             .map_or_else(SkillRate::default, |world| {
-                rate_for_level(self.own_skill_level(actor, skill), &world.rules)
+                world.work_rate(&self.host.storage, actor, skill)
             });
         self.genetic_work_rate(actor, rate)
             .expect("validated skill and phenotype bounds")
     }
 
     pub(crate) fn effective_combat_damage(&self, actor: PersonId, base: u64) -> Result<u64, Error> {
-        let trained = match &self.host.state.skills {
-            Some(world) => damage_for_level(
+        match &self.host.state.skills {
+            Some(runtime) => runtime.combat_damage(
+                &self.host.storage,
+                actor,
                 base,
-                self.own_skill_level(actor, Skill::Combat),
-                &world.rules,
-            )?,
-            None => base,
-        };
-        u64::try_from(u128::from(trained) * u128::from(self.genetic_strength_milli(actor)) / 1_000)
-            .map_err(|_| Error::Overflow)
+                self.genetic_strength_milli(actor),
+            ),
+            None => game_skills::scale_damage(base, self.genetic_strength_milli(actor)),
+        }
     }
 }
 
 pub(crate) fn validate(state: &CanonicalState) -> Result<(), Error> {
-    let fail = || Error::InvalidSave("inconsistent personal skills".into());
-    let Some(runtime) = &state.state.skills else {
-        if game_skills::all_skills(state.components).next().is_some() {
-            return Err(fail());
-        }
-        return Ok(());
-    };
-    if state.state.physical.is_none() {
-        return Err(fail());
-    }
-    runtime
-        .validate(state.components, state.time)
-        .map_err(|_| fail())?;
-    if game_skills::all_skills(state.components)
-        .any(|(actor, _)| !state.state.people.iter().any(|person| person.id == actor))
-    {
-        return Err(fail());
-    }
-    Ok(())
+    let people: BTreeSet<_> = state.people().map(|person| person.id).collect();
+    game_skills::validate_world(
+        state.state.skills.as_ref(),
+        state.components,
+        state.time,
+        state.state.physical.is_some(),
+        |actor| people.contains(&actor),
+    )
 }
 
 #[cfg(test)]
@@ -290,10 +319,7 @@ mod tests {
         )
         .unwrap();
         let citizens: Vec<_> = sim
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .filter(|p| p.role == Role::Citizen)
             .map(|p| p.id)
             .collect();
@@ -522,7 +548,7 @@ mod tests {
 
         let mut fighter = sim(1);
         let actor = fighter.host.state.ruler;
-        let target = fighter.host.state.people[3].id;
+        let target = fighter.person_at(3).id;
         fighter
             .submit(Submission {
                 caller_sequence: 1,
@@ -582,16 +608,7 @@ mod tests {
     fn coupled_guidance_trains_actual_pupil_and_teacher_without_copying_the_experts_level() {
         let mut sim = sim(1);
         let student = sim.host.state.ruler;
-        let teacher = *sim
-            .host
-            .state
-            .lineage
-            .as_ref()
-            .unwrap()
-            .guardians
-            .keys()
-            .next()
-            .unwrap();
+        let teacher = game_lineage::guardians(&sim.host.storage).next().unwrap().0;
         assert_eq!(sim.own_skill_level(teacher, Skill::Invocation), 100);
         sim.submit(Submission {
             caller_sequence: 1,
@@ -621,15 +638,7 @@ mod tests {
         assert_eq!(sim.own_skill_level(student, Skill::Invocation), 0);
         sim.debug_actor_command(teacher, Command::Cancel).unwrap();
         assert_eq!(
-            sim.host
-                .state
-                .lineage
-                .as_ref()
-                .unwrap()
-                .invocation_learning
-                .get(&student)
-                .copied()
-                .unwrap_or(0),
+            game_lineage::invocation_learning(&sim.host.storage, student),
             0
         );
         sim.submit(Submission {
@@ -652,7 +661,7 @@ mod tests {
         assert_eq!(sim.own_skill_level(student, Skill::Invocation), 1);
         assert_eq!(sim.own_skill_level(teacher, Skill::Invocation), 100);
         assert_eq!(
-            sim.host.state.lineage.as_ref().unwrap().invocation_learning[&student],
+            game_lineage::invocation_learning(&sim.host.storage, student),
             100
         );
         assert!(!sim.host.events().iter().any(|event| matches!(event.event, EventKind::Produced { actor, .. } if actor == student || actor == teacher)));
@@ -664,10 +673,7 @@ mod tests {
         sim.host.state.skills = Some(Runtime::default());
         let actor = sim.host.state.ruler;
         let citizen = sim
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .find(|person| person.role == Role::Citizen)
             .unwrap()
             .id;

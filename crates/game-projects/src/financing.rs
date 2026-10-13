@@ -447,3 +447,176 @@ impl Project {
 
 #[cfg(test)]
 mod tests;
+
+/// Facts for autonomous financing. Selecting a counterparty and retry policy
+/// belong to Projects; adapters supply personal memory and actual custody.
+pub struct FundingSearchFacts<'a> {
+    pub now: SimTime,
+    pub ruler: PersonId,
+    pub capable: bool,
+    pub knows_project: bool,
+    pub farm_independence: bool,
+    pub workshop_independence: bool,
+    pub ambition: u16,
+    pub loading: SimDuration,
+    pub calendar: Option<FundingCalendar>,
+    pub materials_usable: bool,
+    pub balances: FundingBalances,
+    pub supplies: &'a [RememberedFinancingStock<'a>],
+    pub repayments: &'a [FinancingRepaymentLot],
+}
+impl crate::Runtime {
+    pub fn funding_candidates(&self, store: &game_ecs::Store, farm: bool) -> Vec<ProjectId> {
+        crate::projects(store)
+            .filter(|(_, plan)| {
+                if farm {
+                    matches!(plan.kind, ProjectKind::Farm { .. })
+                        && !plan.materials_consumed
+                        && !matches!(
+                            plan.status,
+                            ProjectStatus::Failed | ProjectStatus::Cancelled
+                        )
+                } else {
+                    matches!(plan.kind, ProjectKind::Workshop { .. })
+                        && plan.support.iter().all(|id| {
+                            game_agreements::agreement(store, *id).is_some_and(|agreement| {
+                                matches!(
+                                    agreement.status,
+                                    game_agreements::AgreementStatus::Fulfilled
+                                        | game_agreements::AgreementStatus::Rejected
+                                        | game_agreements::AgreementStatus::Withdrawn
+                                )
+                            })
+                        })
+                }
+            })
+            .map(|(id, _)| id)
+            .collect()
+    }
+    pub fn search_funding(
+        &self,
+        store: &game_ecs::Store,
+        definitions: &Definitions,
+        id: ProjectId,
+        facts: FundingSearchFacts<'_>,
+    ) -> FundingChoice {
+        let unavailable = || FundingChoice::Unavailable(FundingUnavailable::IneligibleProject);
+        let Some(plan) = crate::project(store, id) else {
+            return unavailable();
+        };
+        if plan.sponsor == facts.ruler
+            || !facts.capable
+            || matches!(
+                plan.status,
+                ProjectStatus::Failed | ProjectStatus::Cancelled
+            )
+            || crate::requests(store, plan.sponsor).is_some_and(|row| row.next_search > facts.now)
+        {
+            return unavailable();
+        }
+        if matches!(plan.kind, ProjectKind::Farm { .. }) {
+            if !facts.knows_project
+                || facts.materials_usable
+                || !facts.farm_independence
+                || facts.ambition < 600
+                || plan.materials_consumed
+                || plan.support.iter().any(|id| {
+                    game_agreements::agreement(store, *id).is_some_and(|row| {
+                        matches!(
+                            row.status,
+                            game_agreements::AgreementStatus::Proposed
+                                | game_agreements::AgreementStatus::Active
+                                | game_agreements::AgreementStatus::Breached
+                        )
+                    })
+                })
+            {
+                return unavailable();
+            }
+            let offer = facts
+                .supplies
+                .iter()
+                .filter(|stock| {
+                    stock.known.good == Good::Timber
+                        && stock.known.area == plan.area
+                        && stock.known.quantity >= self.rules.construction_timber
+                        && stock.known.inventory != plan.materials
+                        && stock.custodian != Some(plan.sponsor)
+                        && stock.custodian.is_some()
+                        && stock.custodian_area == Some(plan.area)
+                })
+                .min_by_key(|stock| stock.known.inventory)
+                .map(|stock| (stock.custodian.unwrap(), stock.known.inventory));
+            let Some((financier, source)) = offer else {
+                return unavailable();
+            };
+            let Some(destination) = facts
+                .supplies
+                .iter()
+                .filter(|stock| {
+                    stock.known.good == Good::Food
+                        && stock.known.area == plan.area
+                        && stock.known.inventory != plan.output
+                        && stock.custodian == Some(financier)
+                })
+                .min_by_key(|stock| stock.known.inventory)
+                .map(|stock| stock.known.inventory)
+            else {
+                return unavailable();
+            };
+            let Some(calendar) = facts.calendar else {
+                return unavailable();
+            };
+            plan.prepare_farm_funding(
+                &self.rules,
+                FundingFacts {
+                    now: facts.now,
+                    financier,
+                    source,
+                    repayment_destination: destination,
+                },
+                calendar,
+            )
+        } else {
+            if !plan.support.iter().all(|id| {
+                game_agreements::agreement(store, *id).is_some_and(|row| {
+                    matches!(
+                        row.status,
+                        game_agreements::AgreementStatus::Fulfilled
+                            | game_agreements::AgreementStatus::Rejected
+                            | game_agreements::AgreementStatus::Withdrawn
+                    )
+                })
+            }) {
+                return unavailable();
+            }
+            plan.prepare_remembered_workshop_funding(
+                &self.rules,
+                definitions,
+                RememberedWorkshopFunding {
+                    seeks_independence: facts.workshop_independence,
+                    ambition: facts.ambition,
+                    now: facts.now,
+                    loading: facts.loading,
+                    balances: facts.balances,
+                    supplies: facts.supplies,
+                    repayments: facts.repayments,
+                },
+            )
+        }
+    }
+    pub fn record_funding_search(
+        &self,
+        store: &mut game_ecs::Store,
+        actor: PersonId,
+        funding: &FundingProposal,
+    ) -> Result<(), Error> {
+        crate::insert_requests(
+            store,
+            actor,
+            crate::Requests {
+                next_search: funding.next_search,
+            },
+        )
+    }
+}

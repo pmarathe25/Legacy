@@ -357,3 +357,94 @@ fn rejecting_collection_batch_preserves_source_and_job() {
     assert!(prepared.commit(&runtime, &mut store).is_err());
     assert_eq!(store.snapshot().unwrap(), before);
 }
+
+#[test]
+fn accepted_access_response_is_one_atomic_guarded_ecology_exchange() {
+    let (runtime, mut store) = setup();
+    let request = runtime
+        .prepare_access(
+            &store,
+            SimTime(100),
+            &EcologyAction::RequestAccess {
+                resource: ResourceId(100),
+            },
+            access(2),
+            local,
+        )
+        .unwrap();
+    let grant = runtime
+        .prepare_access(
+            &store,
+            SimTime(100),
+            &EcologyAction::GrantAccess {
+                resource: ResourceId(100),
+                recipient: PersonId(2),
+                allowed: true,
+            },
+            access(1),
+            local,
+        )
+        .unwrap();
+    let before = store.snapshot().unwrap();
+    let mut batch = Batch::new();
+    let (effects, guard) = request
+        .stage_with_response(Some(grant), &runtime, &store, &mut batch)
+        .unwrap();
+    assert_eq!(effects.len(), 2);
+    assert!(matches!(effects[0], AccessEffect::Requested { .. }));
+    assert!(matches!(
+        effects[1],
+        AccessEffect::Changed { allowed: true, .. }
+    ));
+    guard.validate(&store, &batch).unwrap();
+    assert_eq!(store.snapshot().unwrap(), before);
+    store.apply_batch(batch).unwrap();
+    assert!(
+        runtime
+            .resource(&store, ResourceId(100))
+            .unwrap()
+            .access
+            .contains(&PersonId(2))
+    );
+    assert_eq!(
+        runtime.requests(&store, PersonId(2)).unwrap().next_request[&ResourceId(100)],
+        SimTime(180_100)
+    );
+}
+
+#[test]
+fn wrong_recipient_response_cannot_publish_request_cooldown() {
+    let (runtime, store) = setup();
+    let request = runtime
+        .prepare_access(
+            &store,
+            SimTime(100),
+            &EcologyAction::RequestAccess {
+                resource: ResourceId(100),
+            },
+            access(2),
+            local,
+        )
+        .unwrap();
+    let grant = runtime
+        .prepare_access(
+            &store,
+            SimTime(100),
+            &EcologyAction::GrantAccess {
+                resource: ResourceId(100),
+                recipient: PersonId(3),
+                allowed: true,
+            },
+            access(1),
+            local,
+        )
+        .unwrap();
+    let before = store.snapshot().unwrap();
+    assert!(
+        request
+            .stage_with_response(Some(grant), &runtime, &store, &mut Batch::new())
+            .is_err()
+    );
+    assert_eq!(store.snapshot().unwrap(), before);
+    assert!(runtime.requests(&store, PersonId(2)).is_none());
+}

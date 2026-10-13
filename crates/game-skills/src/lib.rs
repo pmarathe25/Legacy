@@ -3,9 +3,16 @@ use game_core::*;
 use game_ecs::Store;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod learning;
 mod practice;
 mod storage;
-pub use practice::PreparedPractice;
+pub use learning::{
+    ActivityFacts, ActorFacts, CareWork, EvaluatedLearning, InteractionFacts, LearningEvent,
+    Lesson, PreparedLearningAcknowledgement, SocialFacts, scale_damage, validate_world,
+};
+pub use practice::{PreparedNewborn, PreparedPractice, StagedPractice};
+#[cfg(test)]
+mod learning_tests;
 #[cfg(test)]
 mod practice_tests;
 pub use storage::{
@@ -70,6 +77,27 @@ pub struct Skills {
 #[serde(deny_unknown_fields)]
 pub struct Runtime {
     pub rules: Rules,
+}
+/// Borrowed mastery consumes the owning feature's configured bonuses. A caller
+/// without a Skills runtime receives these same owner defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BonusRates {
+    pub work_bonus_per_level: u16,
+    pub damage_bonus_per_level: u16,
+}
+pub fn bonus_rates(runtime: Option<&Runtime>) -> BonusRates {
+    let defaults;
+    let rules = match runtime {
+        Some(runtime) => &runtime.rules,
+        None => {
+            defaults = Rules::default();
+            &defaults
+        }
+    };
+    BonusRates {
+        work_bonus_per_level: rules.work_bonus_per_level,
+        damage_bonus_per_level: rules.damage_bonus_per_level,
+    }
 }
 /// Learning earned by an actual interval of activity, supplied by its owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,6 +324,11 @@ pub fn rate_for_level(level: u16, rules: &Rules) -> SkillRate {
     }
 }
 
+/// Borrowed mastery supplies an effective ability without changing personal learning.
+pub fn effective_level(personal: u16, borrowed: u16) -> u16 {
+    personal.max(borrowed)
+}
+
 pub fn advance_work(elapsed: u64, rate: SkillRate, remainder: u64) -> Result<(u64, u64), Error> {
     if rate.numerator == 0 || rate.denominator == 0 || remainder >= rate.denominator {
         return Err(Error::InvalidConfiguration(
@@ -331,3 +364,47 @@ pub fn damage_for_level(base: u64, level: u16, rules: &Rules) -> Result<u64, Err
 
 #[cfg(test)]
 mod tests;
+
+/// Receiving effects for interruption of a linked personal lesson.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LessonInterruption {
+    pub deadlines: Vec<PersonId>,
+    pub idle: Vec<PersonId>,
+}
+/// Partners are factual activity links. Skills owns variant-only clearing and
+/// removal of both participants' physical deadlines even after one moves on.
+pub fn lesson_interruption(
+    partners: Option<(PersonId, PersonId)>,
+    mut is_lesson: impl FnMut(PersonId) -> bool,
+) -> LessonInterruption {
+    let deadlines = partners
+        .map(|(teacher, student)| vec![teacher, student])
+        .unwrap_or_default();
+    let idle = deadlines
+        .iter()
+        .copied()
+        .filter(|actor| is_lesson(*actor))
+        .collect();
+    LessonInterruption { deadlines, idle }
+}
+#[cfg(test)]
+mod interruption_tests {
+    use super::*;
+    #[test]
+    fn linked_lesson_removes_both_deadlines_but_clears_only_current_lesson() {
+        let effect = lesson_interruption(Some((PersonId(1), PersonId(2))), |actor| {
+            actor == PersonId(2)
+        });
+        assert_eq!(effect.deadlines, vec![PersonId(1), PersonId(2)]);
+        assert_eq!(effect.idle, vec![PersonId(2)]);
+        assert_eq!(
+            lesson_interruption(None, |_| panic!("absent lesson")),
+            LessonInterruption {
+                deadlines: vec![],
+                idle: vec![]
+            }
+        );
+    }
+}
+
+pub mod receipt_validation;

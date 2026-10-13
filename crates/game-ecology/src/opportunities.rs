@@ -15,7 +15,69 @@ pub struct AutonomousOptions {
     pub actions: Vec<EcologyAction>,
     pub destinations: Vec<AreaId>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProvisionOpportunity {
+    pub action: AcquisitionAction,
+    pub requirement: game_logistics::Requirement,
+}
 impl Runtime {
+    /// Ecology derives provision goals from personally remembered source kinds.
+    /// Characters interprets these requirements as motives, without rescanning
+    /// ecological knowledge or inventing source-specific target quantities.
+    pub fn provision_opportunities(
+        &self,
+        store: &Store,
+        actor: PersonId,
+        area: AreaId,
+        local_actions: &[EcologyAction],
+        meal_size: Quantity,
+        reachable: impl FnMut(AreaId) -> bool,
+    ) -> Vec<ProvisionOpportunity> {
+        let options = self.autonomous_options(store, actor, area, local_actions, reachable);
+        let Some(known) = self.knowledge(store, actor) else {
+            return Vec::new();
+        };
+        let mut output = Vec::new();
+        let mut append = |action: AcquisitionAction, goods: BTreeSet<Good>| {
+            for good in goods {
+                output.push(ProvisionOpportunity {
+                    action: action.clone(),
+                    requirement: game_logistics::Requirement {
+                        good,
+                        quantity: if good == Good::Timber {
+                            Quantity(5_000)
+                        } else {
+                            meal_size
+                        },
+                        source: None,
+                    },
+                });
+            }
+        };
+        for action in options.actions {
+            let resource = match &action {
+                EcologyAction::Gather { resource, .. }
+                | EcologyAction::RequestAccess { resource } => *resource,
+                EcologyAction::GrantAccess { .. } => continue,
+            };
+            let goods = known
+                .known_resources
+                .get(&resource)
+                .map(|source| BTreeSet::from([source.kind.good()]))
+                .unwrap_or_default();
+            append(AcquisitionAction::Resource(action), goods);
+        }
+        for destination in options.destinations {
+            let goods = known
+                .known_resources
+                .values()
+                .filter(|source| source.area == destination && source.available.0 > 0)
+                .map(|source| source.kind.good())
+                .collect();
+            append(AcquisitionAction::Explore { destination }, goods);
+        }
+        output
+    }
     /// Quantity suggestions come from their owner; ecology admits each amount
     /// against actual stock, workspaces, gear, and timing before offering it.
     pub fn local_gather_opportunities(

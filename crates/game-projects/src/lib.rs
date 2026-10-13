@@ -11,12 +11,24 @@ mod storage;
 pub use storage::*;
 mod transitions;
 pub use transitions::*;
+mod perception;
+#[cfg(test)]
+mod perception_tests;
+pub use perception::*;
+mod opportunities;
+#[cfg(test)]
+mod opportunities_tests;
+pub use opportunities::*;
+mod choices;
+pub use choices::*;
 mod prospects;
 pub use prospects::*;
 mod financing;
 pub use financing::*;
 mod judgment;
 pub use judgment::*;
+mod boundary_validation;
+pub use boundary_validation::*;
 mod validation;
 pub use validation::{validate_absent, validate_runtime};
 #[cfg(test)]
@@ -142,3 +154,41 @@ pub fn site_output(
 ) -> Option<game_core::InventoryId> {
     output_reads::site_output(store, site, good)
 }
+
+#[derive(Clone, Copy)]
+pub enum LaborActivity {
+    Other,
+    Workshop(SiteId),
+    Farm(SiteId),
+}
+#[derive(Clone, Copy)]
+pub struct LaborFacts {
+    pub actor: PersonId,
+    pub alive: bool,
+    pub health: u64,
+    pub activity: LaborActivity,
+}
+impl Runtime {
+    pub fn prepare_labor_advance(
+        &self,
+        store: &Store,
+        from: SimTime,
+        next: SimTime,
+        actors: &[LaborFacts],
+    ) -> Result<PreparedAdvance, Error> {
+        let work = actors
+            .iter()
+            .filter(|actor| actor.alive && actor.health > 0)
+            .filter_map(|actor| match actor.activity {
+                LaborActivity::Other => None,
+                LaborActivity::Workshop(site) | LaborActivity::Farm(site) => Some(EnterpriseWork {
+                    actor: actor.actor,
+                    site,
+                }),
+            })
+            .collect::<Vec<_>>();
+        self.prepare_advance(store, from, next, &work)
+    }
+}
+
+pub mod receipt_validation;

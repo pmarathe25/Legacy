@@ -13,3 +13,5 @@ serde.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+game-cargo.workspace = true
+game-health.workspace = true

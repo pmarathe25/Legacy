@@ -201,19 +201,19 @@ impl Simulation {
     /// All native-load facts and global allocation/event capacity are validated
     /// before allocating the sole actual compartment or interrupting its actor.
     fn apply_carried_compartment(&mut self, plan: game_cargo::PreparedCarry) -> Result<(), Error> {
-        self.ensure_event_capacity(3)?;
-        if let game_cargo::Selection::Proposed(stock) = &plan.selection {
-            self.host.next_id().checked_add(1).ok_or(Error::Overflow)?;
-            let id = self.add_inventory(
-                stock.good,
-                stock.location.clone(),
-                stock.quantity,
-                stock.capacity,
-                stock.access.clone(),
-            )?;
-            debug_assert_eq!(id, stock.id);
-        }
-        self.apply_cargo_load(plan.job)
+        let creation = match plan.selection {
+            game_cargo::Selection::Existing(_) => None,
+            game_cargo::Selection::Proposed(stock) => {
+                if stock.id.0 != self.host.next_id() {
+                    return Err(Error::Unavailable);
+                }
+                Some(game_cargo::prepare_inventory_creation(
+                    &self.host.storage,
+                    stock,
+                )?)
+            }
+        };
+        self.apply_cargo_load_with_compartment(plan.job, creation)
     }
     pub(crate) fn prepare_ranking_resources(&self) -> Result<RankingResources, Error> {
         Ok(RankingResources {
@@ -244,37 +244,31 @@ impl Simulation {
         let Some(_) = &self.host.state.physical else {
             return BTreeMap::new();
         };
-        let mut available: BTreeMap<_, _> = self
+        let demands = self
             .host
             .storage
             .activities()
-            .filter(|(_, activity)| {
-                matches!(
-                    **activity,
-                    Activity::Work { .. }
-                        | Activity::Instruction { .. }
-                        | Activity::Practice { .. }
-                        | Activity::HealthWork { .. }
-                        | Activity::Gather { .. }
-                        | Activity::Cultivate { .. }
-                        | Activity::Construct { .. }
-                        | Activity::WritingMemory { .. }
-                )
+            .filter_map(|(actor, activity)| {
+                let activity = match *activity {
+                    Activity::Work { .. } => game_physiology::EquipmentActivity::Work,
+                    Activity::Instruction { .. } => game_physiology::EquipmentActivity::Instruction,
+                    Activity::Practice { .. } => game_physiology::EquipmentActivity::Practice,
+                    Activity::HealthWork { .. } => game_physiology::EquipmentActivity::HealthWork,
+                    Activity::Gather { .. } => game_physiology::EquipmentActivity::Gather {
+                        tool: self.ecology_job_tool(actor),
+                    },
+                    Activity::Cultivate { .. } => game_physiology::EquipmentActivity::Cultivate,
+                    Activity::Construct { .. } => game_physiology::EquipmentActivity::Construct,
+                    Activity::WritingMemory { .. } => {
+                        game_physiology::EquipmentActivity::WritingMemory
+                    }
+                    _ => game_physiology::EquipmentActivity::Other,
+                };
+                game_physiology::equipment_demand(actor, activity)
             })
-            .map(|(actor, activity)| {
-                (
-                    actor,
-                    matches!(*activity, Activity::Gather { .. })
-                        && self.ecology_job_tool(actor).is_none(),
-                )
-            })
-            .collect();
-        if let Ok(allocations) = self.prepare_tool_allocations(None) {
-            for actor in allocations.allocated_actors() {
-                available.insert(actor, true);
-            }
-        }
-        available
+            .collect::<Vec<_>>();
+        let allocations = self.prepare_tool_allocations(None).ok();
+        game_cargo::equipment_availability(demands, allocations.as_ref())
     }
 
     /// Check a current allocation, or whether a prospective actor can take one
@@ -303,50 +297,45 @@ impl Simulation {
         resources: Option<&RankingResources>,
         released: bool,
     ) -> bool {
-        let Some(index) = self.person_index.get(&actor) else {
-            return false;
-        };
         let Some(stock) = game_cargo::inventory(&self.host.storage, tool) else {
             return false;
         };
-        if !self
+        let Some(body) = self
             .host
             .state
             .physical
             .as_ref()
             .and_then(|_| game_physiology::body(&self.host.storage, actor))
-            .is_some_and(|body| body.vitals.alive && body.vitals.health > 0)
-        {
-            return false;
-        }
-        let Location::AtArea(area) = *game_spatial::location(
-            &self.host.storage,
-            game_ecs::StableId((self.host.state.people[*index].id).0),
-        )
-        .expect("location exists") else {
+        else {
             return false;
         };
-        if stock.good != Good::Tool
-            || stock.quantity.0 < 1_000
-            || self.inventory_area(stock) != Some(area)
-        {
-            return false;
-        }
-        if let Some(resources) = resources {
-            return if released {
-                resources.allocations.allows_after_release(actor, tool)
-            } else {
-                resources.allocations.allows(actor, tool)
+        let stationary_area =
+            match game_spatial::location(&self.host.storage, game_ecs::StableId(actor.0)) {
+                Some(Location::AtArea(area)) => Some(*area),
+                _ => None,
             };
-        }
-        self.prepare_tool_allocations(Some(tool))
-            .is_ok_and(|allocations| {
-                if released {
-                    allocations.allows_after_release(actor, tool)
-                } else {
-                    allocations.allows(actor, tool)
-                }
-            })
+        let body = game_cargo::ToolBodyFacts {
+            alive: body.vitals.alive,
+            health: body.vitals.health,
+        };
+        let available = |allocations: &game_cargo::ToolAllocations| {
+            game_cargo::tool_available(
+                actor,
+                stock,
+                body,
+                stationary_area,
+                self.inventory_area(stock),
+                allocations,
+                released,
+            )
+        };
+        resources.map_or_else(
+            || {
+                self.prepare_tool_allocations(Some(tool))
+                    .is_ok_and(|allocations| available(&allocations))
+            },
+            |resources| available(&resources.allocations),
+        )
     }
 
     pub(crate) fn select_work_tool(&self, actor: PersonId, site: SiteId) -> Option<InventoryId> {
@@ -379,23 +368,25 @@ impl Simulation {
     }
 
     pub(crate) fn cultivation_equipment_available(&self, actor: PersonId) -> bool {
-        let Some(_) = &self.host.state.physical else {
-            return false;
-        };
-        if game_physiology::body(&self.host.storage, actor).is_none() {
-            return false;
-        }
-        let Some(Activity::Cultivate { field, .. }) = self.host.storage.activity(actor) else {
-            return false;
+        let activity = match self.host.storage.activity(actor) {
+            Some(Activity::Cultivate { field, .. }) => Some(*field),
+            _ => None,
         };
         self.host
             .state
             .agriculture
             .as_ref()
-            .and_then(|world| world.field(&self.host.storage, *field))
-            .is_some_and(|field| self.tool_available_for(actor, field.tool))
+            .and_then(|world| {
+                world.cultivation_tool(
+                    &self.host.storage,
+                    actor,
+                    self.host.state.physical.is_some()
+                        && game_physiology::body(&self.host.storage, actor).is_some(),
+                    activity,
+                )
+            })
+            .is_some_and(|tool| self.tool_available_for(actor, tool))
     }
-
     /// Allocate an empty compartment only after every acceptance check. Loading
     /// moves the actual goods later through the existing conserved transfer path.
     pub(crate) fn carry_good(
@@ -439,15 +430,15 @@ mod tests {
 
     fn compare_resource_queries(sim: &Simulation) {
         let resources = sim.prepare_ranking_resources().unwrap();
-        for person in &sim.host.state.people {
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
             for stock in game_cargo::inventories(&sim.host.storage).map(|(_, row)| row) {
                 assert_eq!(
-                    sim.unreserved_stock(stock.id, person.id),
-                    sim.unreserved_stock_for_planning(stock.id, person.id, Some(&resources)),
+                    sim.unreserved_stock(stock.id, person_id),
+                    sim.unreserved_stock_for_planning(stock.id, person_id, Some(&resources)),
                 );
                 assert_eq!(
-                    sim.tool_available_for(person.id, stock.id),
-                    sim.tool_available_for_planning(person.id, stock.id, Some(&resources)),
+                    sim.tool_available_for(person_id, stock.id),
+                    sim.tool_available_for_planning(person_id, stock.id, Some(&resources)),
                 );
             }
         }
@@ -459,8 +450,8 @@ mod tests {
         let before = sim.canonical_snapshot().unwrap();
         let resources = sim.prepare_ranking_resources().unwrap();
         compare_resource_queries(&sim);
-        for person in &sim.host.state.people {
-            let actor = person.id;
+        for person_id in sim.people().map(|person| person.id).collect::<Vec<_>>() {
+            let actor = person_id;
             assert_eq!(
                 sim.health_candidate(actor, None),
                 sim.health_candidate(actor, Some(&resources))
@@ -513,22 +504,12 @@ mod tests {
     fn ranking_projection_extracts_care_doses_load_amounts_and_health_water() {
         let mut sim = Simulation::health_fixture(48, Execution::default()).unwrap();
         let actors = sim
-            .host
-            .state
-            .people
-            .iter()
+            .people()
             .take(5)
             .map(|person| person.id)
             .collect::<Vec<_>>();
         assert_eq!(actors.len(), 5);
-        for actor in sim
-            .host
-            .state
-            .people
-            .iter()
-            .map(|person| person.id)
-            .collect::<Vec<_>>()
-        {
+        for actor in sim.people().map(|person| person.id).collect::<Vec<_>>() {
             sim.interrupt_actor_activity(actor);
         }
         let access = actors.iter().copied().collect();
@@ -541,7 +522,7 @@ mod tests {
                 access,
             )
             .unwrap();
-        let food = sim.host.state.people[sim.person_index[&actors[0]]].inventory;
+        let food = sim.person_at(sim.person_index[&actors[0]]).inventory;
         let completes = SimTime(sim.host.clock().time.0 + MINUTE.0);
         *sim.host.storage.activity_mut(actors[0]).unwrap() = Activity::Eat {
             source: food,
@@ -623,15 +604,8 @@ mod tests {
     fn ranking_projection_rebuilds_after_cancellation_death_and_tool_movement() {
         let mut sim = Simulation::autonomy_fixture(49, Execution::default()).unwrap();
         let worker = sim.host.state.ruler;
-        let carrier = sim.host.state.people[3].id;
-        for actor in sim
-            .host
-            .state
-            .people
-            .iter()
-            .map(|person| person.id)
-            .collect::<Vec<_>>()
-        {
+        let carrier = sim.person_at(3).id;
+        for actor in sim.people().map(|person| person.id).collect::<Vec<_>>() {
             sim.interrupt_actor_activity(actor);
         }
         let site = local_site(&sim);
@@ -710,7 +684,7 @@ mod tests {
     fn one_physical_toolkit_cannot_run_two_sites_and_an_owned_alternate_can() {
         let mut sim = sim();
         let first = sim.host.state.ruler;
-        let second = sim.host.state.people[3].id;
+        let second = sim.person_at(3).id;
         let site = local_site(&sim);
         let other = duplicate_site(&mut sim, site);
         sim.debug_actor_command(first, Command::Work { site })
@@ -752,8 +726,8 @@ mod tests {
     fn one_closing_toolkit_cannot_be_reused_for_two_already_elapsed_shifts() {
         let mut sim = sim();
         let first = sim.host.state.ruler;
-        let second = sim.host.state.people[3].id;
-        let carrier = sim.host.state.people[4].id;
+        let second = sim.person_at(3).id;
+        let carrier = sim.person_at(4).id;
         let site = local_site(&sim);
         let other = duplicate_site(&mut sim, site);
         let tool = game_workshop::site(&sim.host.storage, site)
@@ -794,14 +768,7 @@ mod tests {
     fn cultivation_and_work_cannot_allocate_the_same_toolkit() {
         let mut sim = Simulation::farming_fixture(1, Execution::default()).unwrap();
         // Replace fixture work durations only after canceling its opening jobs.
-        for actor in sim
-            .host
-            .state
-            .people
-            .iter()
-            .map(|p| p.id)
-            .collect::<Vec<_>>()
-        {
+        for actor in sim.people().map(|p| p.id).collect::<Vec<_>>() {
             sim.interrupt_actor_activity(actor);
         }
         let agriculture = sim.host.state.agriculture.as_mut().unwrap();
@@ -813,7 +780,7 @@ mod tests {
             .unwrap()
             .prepare_labor = MINUTE;
         let farmer = sim.host.state.ruler;
-        let worker = sim.host.state.people[3].id;
+        let worker = sim.person_at(3).id;
         let field = sim
             .host
             .state
@@ -832,11 +799,8 @@ mod tests {
         )
         .unwrap();
         for actor in [farmer, worker] {
-            if *game_spatial::location(
-                &sim.host.storage,
-                game_ecs::StableId((sim.host.state.people[sim.person_index[&actor]].id).0),
-            )
-            .expect("location exists")
+            if *game_spatial::location(&sim.host.storage, game_ecs::StableId((actor).0))
+                .expect("location exists")
                 != Location::AtArea(field.area)
             {
                 sim.debug_move_actor(actor, field.area).unwrap();
@@ -969,7 +933,7 @@ mod tests {
         let mut sim = sim();
         sim.host.state.physical.as_mut().unwrap().rules.loading_time = SimDuration(30_000);
         let worker = sim.host.state.ruler;
-        let carrier = sim.host.state.people[3].id;
+        let carrier = sim.person_at(3).id;
         let site = local_site(&sim);
         let recipe = game_workshop::site(&sim.host.storage, site)
             .expect("site exists")
@@ -1049,7 +1013,7 @@ mod tests {
     fn closing_transfer_prevents_output_without_erasing_the_elapsed_opening_work() {
         let mut sim = sim();
         let worker = sim.host.state.ruler;
-        let carrier = sim.host.state.people[3].id;
+        let carrier = sim.person_at(3).id;
         let site = local_site(&sim);
         let tool = game_workshop::site(&sim.host.storage, site)
             .expect("site exists")
@@ -1249,7 +1213,7 @@ mod tests {
                 BTreeSet::from([actor]),
             )
             .unwrap();
-        let recipient = sim.host.state.people[1].id;
+        let recipient = sim.person_at(1).id;
         let before = sim.canonical_snapshot().unwrap();
         assert_eq!(
             sim.start_contact_delivery(actor, held, recipient, Quantity(1000)),
@@ -1462,5 +1426,25 @@ mod tests {
         assert_eq!(sim.host.events().iter().filter(|event| matches!(event.event,
             EventKind::Transferred { source: from, destination: to, .. } if from == source && to == mixed || from == mixed && to == destination)).count(), 2);
         Simulation::load(&sim.save().unwrap(), Execution::default()).unwrap();
+    }
+    #[test]
+    fn proposed_carry_compartment_and_id_remain_unpublished_when_action_revision_is_exhausted() {
+        let mut sim = sim();
+        let actor = sim.host.state.ruler;
+        let source = game_workshop::site(&sim.host.storage, local_site(&sim))
+            .unwrap()
+            .tool;
+        let plan = sim
+            .prepare_carried_compartment(actor, source, actor, Quantity(1_000), false)
+            .unwrap();
+        assert!(matches!(plan.selection, game_cargo::Selection::Proposed(_)));
+        let mut clock = sim.host.clock();
+        clock.revision = u64::MAX;
+        game_sim::ClockWorld::publish_clock(&mut sim.host, clock);
+        let before = sim.canonical_snapshot().unwrap();
+        let index = sim.inventory_index.clone();
+        assert_eq!(sim.apply_carried_compartment(plan), Err(Error::Overflow));
+        assert_eq!(sim.canonical_snapshot().unwrap(), before);
+        assert_eq!(sim.inventory_index, index);
     }
 }

@@ -43,7 +43,7 @@ fn native_project_columns_restore_and_runtime_rejects_entity_map_shadows() {
 #[test]
 fn project_restore_rejects_missing_runtime_wrong_identity_and_empty_personal_orphans() {
     let mut sim = Simulation::project_fixture(79, Execution::default()).unwrap();
-    let sponsor = sim.host.state.people[3].id;
+    let sponsor = sim.person_at(3).id;
     let proposal = sim
         .project_opportunities(sponsor, None)
         .into_iter()

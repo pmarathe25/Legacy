@@ -692,3 +692,346 @@ fn owned_validation_detects_lifecycle_corruption_and_the_asset_bound_is_kind_spe
         );
     }
 }
+
+#[test]
+fn owner_selects_known_construction_and_cancel_commands_and_local_observations() {
+    let (mut runtime, mut store, definitions) = fixture();
+    propose(&mut runtime, &mut store, &definitions, 200, false);
+    runtime
+        .prepare_observation(
+            &store,
+            ObservationFacts {
+                now: SimTime(0),
+                observers: &[Observer {
+                    actor: PersonId(3),
+                    area: Some(AreaId(2)),
+                }],
+                accounts_available: false,
+            },
+        )
+        .unwrap()
+        .commit(&runtime, &mut store)
+        .unwrap();
+    assert_eq!(
+        runtime.construction_candidates(&store, PersonId(3)),
+        vec![ProjectId(11)]
+    );
+    assert!(
+        runtime
+            .construction_candidates(&store, PersonId(8))
+            .is_empty()
+    );
+    let commands =
+        runtime.available_actions(&store, actor(0), &[(ProjectId(11), construction(0, 5_000))]);
+    assert_eq!(
+        commands,
+        vec![
+            ProjectAction::Work {
+                project: ProjectId(11)
+            },
+            ProjectAction::Cancel {
+                project: ProjectId(11)
+            }
+        ]
+    );
+    let opening = store.snapshot().unwrap();
+    assert_eq!(
+        runtime.remembered_view(&store, PersonId(3)).projects.len(),
+        1
+    );
+    assert!(
+        runtime
+            .remembered_view(&store, PersonId(8))
+            .projects
+            .is_empty()
+    );
+    assert_eq!(store.snapshot().unwrap(), opening);
+}
+
+#[test]
+fn farm_financing_search_uses_personal_supply_memory_and_owned_retry_deadline() {
+    let (mut runtime, mut store, definitions) = fixture();
+    propose(&mut runtime, &mut store, &definitions, 1_000, true);
+    let rows = [
+        StockKnowledge {
+            inventory: InventoryId(20),
+            area: AreaId(2),
+            good: Good::Timber,
+            quantity: Quantity(5_000),
+            accessible: false,
+            observed_at: SimTime(0),
+            learned_at: SimTime(0),
+            source: KnowledgeSource::Observed(PersonId(3)),
+        },
+        StockKnowledge {
+            inventory: InventoryId(21),
+            area: AreaId(2),
+            good: Good::Food,
+            quantity: Quantity(0),
+            accessible: false,
+            observed_at: SimTime(0),
+            learned_at: SimTime(0),
+            source: KnowledgeSource::Observed(PersonId(3)),
+        },
+    ];
+    let supplies = rows
+        .iter()
+        .map(|known| RememberedFinancingStock {
+            known,
+            custodian: Some(PersonId(8)),
+            custodian_area: Some(AreaId(2)),
+        })
+        .collect::<Vec<_>>();
+    let facts = || FundingSearchFacts {
+        now: SimTime(0),
+        ruler: PersonId(99),
+        capable: true,
+        knows_project: true,
+        farm_independence: true,
+        workshop_independence: true,
+        ambition: 700,
+        loading: SimDuration(10),
+        calendar: Some(FundingCalendar {
+            day: SimDuration(100),
+            year_days: 10,
+        }),
+        materials_usable: false,
+        balances: FundingBalances {
+            materials: Quantity(0),
+            input: Quantity(0),
+        },
+        supplies: &supplies,
+        repayments: &[],
+    };
+    let opening = snapshot(&runtime, &store);
+    let FundingChoice::Available(funding) =
+        runtime.search_funding(&store, &definitions, ProjectId(11), facts())
+    else {
+        panic!("eligible remembered farm funding");
+    };
+    assert_eq!(funding.parties, BTreeSet::from([PersonId(3), PersonId(8)]));
+    assert_eq!(snapshot(&runtime, &store), opening);
+    runtime
+        .record_funding_search(&mut store, PersonId(3), &funding)
+        .unwrap();
+    assert!(matches!(
+        runtime.search_funding(&store, &definitions, ProjectId(11), facts()),
+        FundingChoice::Unavailable(_)
+    ));
+    assert_eq!(
+        requests(&store, PersonId(3)).unwrap().next_search,
+        funding.next_search
+    );
+}
+
+#[test]
+fn project_procurement_respects_fresh_contact_and_keeps_unknown_supply_hints() {
+    let (mut runtime, mut store, definitions) = fixture();
+    propose(&mut runtime, &mut store, &definitions, 200, false);
+    let observed = project(&store, ProjectId(11))
+        .unwrap()
+        .observed_view(SimTime(0));
+    insert_knowledge(
+        &mut store,
+        PersonId(3),
+        Knowledge {
+            projects: BTreeMap::from([(ProjectId(11), observed)]),
+            timber_hints: BTreeSet::from([AreaId(5)]),
+            ..Knowledge::default()
+        },
+    )
+    .unwrap();
+    let target = runtime
+        .procurement_target(&store, &definitions, PersonId(3), &[])
+        .unwrap();
+    let stocks = BTreeMap::from([(
+        InventoryId(4),
+        StockKnowledge {
+            inventory: InventoryId(4),
+            area: AreaId(2),
+            good: Good::Timber,
+            quantity: Quantity(0),
+            accessible: true,
+            observed_at: SimTime(0),
+            learned_at: SimTime(0),
+            source: KnowledgeSource::Observed(PersonId(3)),
+        },
+    )]);
+    let mut destination = game_logistics::KnownDestination {
+        destination: game_logistics::Destination::Inventory(InventoryId(4)),
+        location: Location::AtArea(AreaId(2)),
+        observed_at: SimTime(10),
+        accessible: true,
+        room: None,
+        direct_transfer: true,
+    };
+    assert!(
+        runtime
+            .procurement(
+                &store,
+                target,
+                ProcurementFacts {
+                    actor: PersonId(3),
+                    stocks: &stocks,
+                    destination: &destination,
+                    observed_location: &Location::AtArea(AreaId(2)),
+                    now: SimTime(10),
+                    actual_quantity: Quantity(5_000),
+                }
+            )
+            .is_none()
+    );
+    destination.observed_at = SimTime(0);
+    let procurement = runtime
+        .procurement(
+            &store,
+            target,
+            ProcurementFacts {
+                actor: PersonId(3),
+                stocks: &stocks,
+                destination: &destination,
+                observed_location: &Location::AtArea(AreaId(2)),
+                now: SimTime(10),
+                actual_quantity: Quantity(5_000),
+            },
+        )
+        .unwrap();
+    assert_eq!(procurement.delivery.requirement.quantity, Quantity(5_000));
+    assert_eq!(procurement.hints, vec![AreaId(5)]);
+}
+
+#[test]
+fn completed_workshop_asset_composes_receiving_owner_without_assembly() {
+    let mut schema = game_ecs::Schema::new();
+    register_components(&mut schema).unwrap();
+    game_workshop::register_components(&mut schema).unwrap();
+    game_cargo::register_components(&mut schema).unwrap();
+    let mut store = Store::with_schema(schema);
+    let (mut runtime, _, definitions) = fixture();
+    propose(&mut runtime, &mut store, &definitions, 200, false);
+    for (id, good, quantity) in [
+        (4, Good::Timber, 5_000),
+        (5, Good::Tool, 1_000),
+        (6, Good::Timber, 4_000),
+        (7, Good::Tool, 0),
+    ] {
+        game_cargo::insert_inventory(
+            &mut store,
+            game_cargo::Inventory {
+                id: InventoryId(id),
+                good,
+                quantity: Quantity(quantity),
+                capacity: Quantity(10_000),
+                location: game_cargo::InventoryLocation::Area(AreaId(2)),
+                access: BTreeSet::from([PersonId(3)]),
+                last_granted: None,
+                spoils_at: None,
+            },
+        )
+        .unwrap();
+    }
+    let construction = runtime
+        .prepare_construction(&store, ProjectId(11), construction(0, 5_000))
+        .unwrap();
+    let consumptions = construction
+        .effects()
+        .iter()
+        .filter_map(|effect| {
+            if let Effect::Consume {
+                source, quantity, ..
+            } = effect
+            {
+                Some((*source, *quantity))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut batch = Batch::new();
+    let cargo = game_cargo::prepare_consumptions(&store, &consumptions)
+        .unwrap()
+        .stage_guarded_into(&store, &mut batch)
+        .unwrap();
+    let projects = construction
+        .stage_into(&runtime, &store, &definitions, &mut batch)
+        .unwrap();
+    cargo.validate(&store, &batch).unwrap();
+    projects
+        .validate_batch(&runtime, &store, &definitions, &batch)
+        .unwrap();
+    store.apply_batch(batch).unwrap();
+    projects.finish(&mut runtime);
+    assert_eq!(
+        game_cargo::inventory(&store, InventoryId(4))
+            .unwrap()
+            .quantity,
+        Quantity(0)
+    );
+    runtime
+        .prepare_labor_advance(&store, SimTime(0), SimTime(100), &[])
+        .unwrap()
+        .commit(&mut runtime, &mut store)
+        .unwrap();
+    let completion = runtime
+        .prepare_completion(
+            &store,
+            &definitions,
+            PersonId(3),
+            CompletionFacts {
+                now: SimTime(100),
+                capable: true,
+                asset_available: true,
+                site: SiteId(12),
+                enterprise: EnterpriseId(13),
+            },
+        )
+        .unwrap();
+    let asset = completion
+        .effects()
+        .iter()
+        .find_map(|effect| {
+            if let Effect::Completed {
+                asset: AssetEffect::Workshop(asset),
+                ..
+            } = effect
+            {
+                Some(asset)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    let receiver = definitions
+        .prepare_site_establishment(
+            &store,
+            &asset.recipe,
+            game_workshop::SiteBindings {
+                id: asset.site,
+                area: asset.area,
+                input: game_cargo::inventory(&store, asset.input).unwrap(),
+                tool: game_cargo::inventory(&store, asset.tool).unwrap(),
+                output: game_cargo::inventory(&store, asset.output).unwrap(),
+                access: asset.access.clone(),
+            },
+        )
+        .unwrap();
+    let mut batch = Batch::new();
+    let receiver = receiver.stage(&definitions, &store, &mut batch).unwrap();
+    let projects = completion
+        .stage_into(&runtime, &store, &definitions, &mut batch)
+        .unwrap();
+    receiver.validate(&definitions, &store, &batch).unwrap();
+    projects
+        .validate_batch(&runtime, &store, &definitions, &batch)
+        .unwrap();
+    store.apply_batch(batch).unwrap();
+    projects.finish(&mut runtime);
+    assert_eq!(
+        game_workshop::site(&store, SiteId(12)).unwrap().recipe,
+        definitions.catalog.default_recipe
+    );
+    assert_eq!(
+        enterprise(&store, EnterpriseId(13)).unwrap().site,
+        SiteId(12)
+    );
+}
