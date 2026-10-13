@@ -469,6 +469,8 @@ impl<S: 'static, E: 'static> Registry<S, E> {
             due_owners: &self.due_owners,
             reads: ReadSet::new(),
             witnessed: BTreeSet::new(),
+            witnessed_entities: BTreeSet::new(),
+            provisional_entities: BTreeMap::new(),
             columns: BTreeMap::new(),
             overlay: BTreeMap::new(),
             runtimes: BTreeMap::new(),
@@ -591,6 +593,8 @@ struct Journal<'s, E> {
     due_owners: &'s BTreeMap<TypeId, TypeId>,
     reads: ReadSet,
     witnessed: BTreeSet<(StableId, TypeId)>,
+    witnessed_entities: BTreeSet<StableId>,
+    provisional_entities: BTreeMap<StableId, usize>,
     columns: BTreeMap<TypeId, BTreeSet<StableId>>,
     overlay: BTreeMap<(StableId, TypeId), Box<dyn Edit>>,
     runtimes: BTreeMap<SlotKey, RuntimeChange>,
@@ -743,6 +747,12 @@ impl<E: 'static> Journal<'_, E> {
         self.witness::<C>(id);
         self.projected::<C>(id)
     }
+    fn entity_exists(&mut self, id: StableId) -> bool {
+        if self.witnessed_entities.insert(id) {
+            self.reads.entity(self.store, id);
+        }
+        self.store.contains(id) || self.provisional_entities.contains_key(&id)
+    }
     fn iter<C: Component>(&mut self) -> Vec<(StableId, C)> {
         let mut ids = self
             .columns
@@ -780,8 +790,25 @@ impl<E: 'static> Journal<'_, E> {
             return Err(error);
         }
         self.witness::<C>(id);
-        self.overlay
-            .insert((id, TypeId::of::<C>()), Box::new(Row(value)));
+        let key = (id, TypeId::of::<C>());
+        let before = self
+            .overlay
+            .get(&key)
+            .is_some_and(|edit| edit.value().is_some());
+        let after = value.is_some();
+        if !before && after {
+            *self.provisional_entities.entry(id).or_default() += 1;
+        } else if before && !after {
+            let count = self
+                .provisional_entities
+                .get_mut(&id)
+                .expect("provisional entity row census");
+            *count -= 1;
+            if *count == 0 {
+                self.provisional_entities.remove(&id);
+            }
+        }
+        self.overlay.insert(key, Box::new(Row(value)));
         Ok(())
     }
 }
@@ -857,6 +884,11 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerTxn<'_, '_, O, E> {
     }
     pub fn read<C: Component>(&mut self, id: StableId) -> Option<&C> {
         self.journal.read::<C>(id)
+    }
+    /// Witness canonical entity presence and inspect the provisional row census.
+    /// Existing entities remain present after their last component is removed.
+    pub fn entity_exists(&mut self, id: StableId) -> bool {
+        self.journal.entity_exists(id)
     }
     /// Stable union of canonical and provisional rows, with removals excluded.
     /// Records complete column membership and the values returned to the caller.
@@ -1130,8 +1162,14 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerReadTxn<'_, '_, O, E> {
     pub fn next_event(&self) -> u64 {
         self.journal.opening.next_event + self.journal.events.len() as u64
     }
+    pub fn next_id(&self) -> u64 {
+        self.journal.opening.next_id + self.journal.ids
+    }
     pub fn read<C: Component>(&mut self, id: StableId) -> Option<&C> {
         self.journal.read::<C>(id)
+    }
+    pub fn entity_exists(&mut self, id: StableId) -> bool {
+        self.journal.entity_exists(id)
     }
     pub fn iter<C: Component>(&mut self) -> Vec<(StableId, C)> {
         self.journal.iter::<C>()

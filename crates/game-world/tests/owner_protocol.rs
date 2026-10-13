@@ -492,3 +492,81 @@ fn multiple_stateless_owners_need_no_canonical_runtime_fields() {
         [1]
     );
 }
+
+#[test]
+fn entity_presence_tracks_provisional_shapes_and_guards_bare_entity_absence() {
+    struct Fresh;
+    struct ReadPresence(StableId);
+    impl Request for ReadPresence {
+        type Response = (bool, u64);
+    }
+    impl OwnerSystem<()> for Fresh {
+        type Runtime = ();
+        type Input = ();
+        type Output = StableId;
+        fn execute(&self, tx: &mut OwnerTxn<'_, '_, Self, ()>, _: ()) -> Result<StableId, Error> {
+            assert!(tx.entity_exists(StableId(1)));
+            tx.remove::<u64>(StableId(1))?;
+            // Component removal does not despawn a canonical entity.
+            assert!(tx.entity_exists(StableId(1)));
+            assert!(!tx.entity_exists(StableId(42)));
+            let new = tx.reserve_ids(1)?;
+            assert!(!tx.entity_exists(new));
+            tx.write(new, 10_u64)?;
+            assert!(tx.entity_exists(new));
+            tx.write(new, 20_u32)?;
+            tx.remove::<u64>(new)?;
+            assert!(tx.entity_exists(new));
+            tx.remove::<u32>(new)?;
+            assert!(!tx.entity_exists(new));
+            tx.write(new, 30_u64)?;
+            assert_eq!(tx.request(ReadPresence(new))?, (true, tx.next_id()));
+            Ok(new)
+        }
+    }
+    fn read_presence(
+        _: &Fresh,
+        tx: &mut OwnerReadTxn<'_, '_, Fresh, ()>,
+        request: ReadPresence,
+    ) -> Result<(bool, u64), Error> {
+        Ok((tx.entity_exists(request.0), tx.next_id()))
+    }
+    for changed in [false, true] {
+        let mut schema = Schema::new();
+        schema.register::<u64>("entity/one", |_| Ok(())).unwrap();
+        schema.register::<u32>("entity/two", |_| Ok(())).unwrap();
+        let mut host = GenericHost::new(schema, 1, ());
+        // Previously reserved but unused IDs remain valid canonical identities.
+        host.allocate_ids(50).unwrap();
+        host.storage.insert_or_spawn(StableId(1), 1_u64).unwrap();
+        let mut registry = Registry::new();
+        registry.register_stateless(Fresh).unwrap();
+        registry.owns::<Fresh, u64>().unwrap();
+        registry.owns::<Fresh, u32>().unwrap();
+        registry
+            .register_read_request::<Fresh, ReadPresence>(read_presence)
+            .unwrap();
+        let prepared = registry
+            .prepare(&host, SimTime(1), None, |tx| tx.call::<Fresh>(()))
+            .unwrap();
+        if changed {
+            // No consulted component row changed, and this ID lies outside the
+            // new allocation interval. Entity presence alone must reject it.
+            host.storage.spawn(StableId(42)).unwrap();
+            let before = host.snapshot().unwrap();
+            assert_eq!(
+                registry.commit(&mut host, prepared),
+                Err(Error::Unavailable)
+            );
+            assert_eq!(host.snapshot().unwrap(), before);
+        } else {
+            let new = registry.commit(&mut host, prepared).unwrap();
+            assert_eq!(new, StableId(51));
+            assert!(host.storage.contains(StableId(1)));
+            assert_eq!(host.storage.get::<u64>(StableId(1)), None);
+            assert_eq!(host.storage.get::<u64>(new), Some(&30));
+            assert_eq!(host.storage.get::<u32>(new), None);
+            assert_eq!(host.next_id(), 52);
+        }
+    }
+}
