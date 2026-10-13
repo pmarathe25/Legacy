@@ -241,6 +241,10 @@ impl Runtime {
     }
 }
 impl PreparedRuleApplication {
+    /// Native receiving owners attach these already allocated physical duties.
+    pub fn duties(&self) -> &[game_agreements::InstitutionDuty] {
+        &self.duties
+    }
     pub fn agreement_transition(&self) -> Option<&game_agreements::PreparedTransition> {
         self.agreements.as_ref()
     }

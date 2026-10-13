@@ -49,12 +49,31 @@ pub fn prepare_start(
     action: SocialAction,
     now: SimTime,
 ) -> Result<StartDecision, Error> {
+    prepare_start_personal(
+        world,
+        social::personal(store, actor.actor),
+        actor,
+        partner,
+        action,
+        now,
+    )
+}
+
+/// Native transactions supply the current personal row directly.
+pub fn prepare_start_personal(
+    world: &World,
+    own: Option<&social::Personal>,
+    actor: &PersonFacts,
+    partner: Option<&PersonFacts>,
+    action: SocialAction,
+    now: SimTime,
+) -> Result<StartDecision, Error> {
     if !world.rules.valid() {
         return Err(Error::InvalidConfiguration(
             "invalid social development rules".into(),
         ));
     }
-    if !actor.speech || !social::personal(store, actor.actor).is_some() {
+    if !actor.speech || own.is_none() {
         return Err(Error::Unavailable);
     }
     let rules = &world.rules;
@@ -70,8 +89,8 @@ pub fn prepare_start(
                 return Err(Error::Unavailable);
             }
             let mut conversation = partner.conversation.ok_or(Error::Unavailable)?;
-            conversation.chosen_companionship = social::personal(store, actor.actor)
-                .is_some_and(|row| row.companionship.contains(&id));
+            conversation.chosen_companionship =
+                own.is_some_and(|row| row.companionship.contains(&id));
             if !social::conversation_willing(topic, conversation) {
                 return Ok(StartDecision::Refused {
                     recipient: id,
@@ -269,6 +288,20 @@ pub fn available_actions(
     roster: &[PersonFacts],
     combat_restricted: bool,
 ) -> Vec<SocialAction> {
+    available_actions_personal(
+        social::personal(store, actor.actor),
+        actor,
+        roster,
+        combat_restricted,
+    )
+}
+
+pub fn available_actions_personal(
+    own: Option<&social::Personal>,
+    actor: &PersonFacts,
+    roster: &[PersonFacts],
+    combat_restricted: bool,
+) -> Vec<SocialAction> {
     if !actor.speech {
         return Vec::new();
     }
@@ -285,10 +318,7 @@ pub fn available_actions(
             });
         }
     }
-    for offer in social::personal(store, actor.actor)
-        .into_iter()
-        .flat_map(|row| row.offers.values())
-    {
+    for offer in own.into_iter().flat_map(|row| row.offers.values()) {
         if roster
             .iter()
             .any(|other| other.actor == offer.teacher && local_pair(actor, other))

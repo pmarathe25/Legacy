@@ -12,6 +12,11 @@ game-core.workspace = true
 game-ecs.workspace = true
 game-agreements.workspace = true
 game-property.workspace = true
+game-physiology.workspace = true
+game-world.workspace = true
+game-skills.workspace = true
+game-conflict.workspace = true
+game-transport.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

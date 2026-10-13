@@ -11,6 +11,7 @@ mod resources;
 pub use resources::*;
 mod commands;
 mod validation;
+pub mod native;
 pub use commands::*;
 pub use validation::*;
 
@@ -997,11 +998,64 @@ impl Runtime {
         inventory: InventoryId,
         authority: &AuthorityFacts,
     ) -> bool {
-        crate::storage::institutions(store).map(|(_, row)| row).filter(|i|i.status==InstitutionStatus::Active).any(|i|i.concepts.iter().any(|id| {
-            let Some(rule)=crate::storage::concept(store, id) else{return false;};let Some(office)=i.charter.offices.iter().find(|o|o.slot==rule.authority) else{return false;};
-            matches!(rule.effect,SocialEffect::Access {inventory:target,allowed:true} if target==inventory) && i.office_effective(office,authority) && i.grants.get(id).is_some_and(|people|people.contains(&actor))
-        }))
+        let facts = AccessRuleFacts {
+            institutions: crate::storage::institutions(store)
+                .map(|(_, row)| row.clone())
+                .collect(),
+            concepts: crate::storage::concept_rows(store)
+                .map(|(id, row)| (id, row.clone()))
+                .collect(),
+        };
+        self.allows_access_in_facts(actor, inventory, authority, &facts)
     }
+
+    /// Evaluate grants from the owner rows visible to a native read transaction.
+    /// This shares the canonical policy with the full-Store convenience query.
+    pub fn allows_access_in_facts(
+        &self,
+        actor: PersonId,
+        inventory: InventoryId,
+        authority: &AuthorityFacts,
+        facts: &AccessRuleFacts,
+    ) -> bool {
+        facts
+            .institutions
+            .iter()
+            .filter(|institution| institution.status == InstitutionStatus::Active)
+            .any(|institution| {
+                institution.concepts.iter().any(|id| {
+                    let Some(concept) = facts.concepts.get(id) else {
+                        return false;
+                    };
+                    let rule = &concept.rule;
+                    let Some(office) = institution
+                        .charter
+                        .offices
+                        .iter()
+                        .find(|office| office.slot == rule.authority)
+                    else {
+                        return false;
+                    };
+                    matches!(
+                        rule.effect,
+                        SocialEffect::Access {
+                            inventory: target,
+                            allowed: true
+                        } if target == inventory
+                    ) && institution.office_effective(office, authority)
+                        && institution
+                            .grants
+                            .get(id)
+                            .is_some_and(|people| people.contains(&actor))
+                })
+            })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AccessRuleFacts {
+    pub institutions: Vec<Institution>,
+    pub concepts: BTreeMap<ConceptId, Concept>,
 }
 
 #[cfg(test)]
