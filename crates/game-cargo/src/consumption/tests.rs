@@ -33,6 +33,29 @@ fn store() -> Store {
         .unwrap();
     store
 }
+
+#[test]
+fn row_consumption_returns_conserved_clone_and_rejects_overdraw() {
+    let before = stock();
+    let mut expected = before.clone();
+    expected.quantity = Quantity(750);
+    assert_eq!(
+        consume_inventory_row(InventoryId(4), &before, Quantity(250)),
+        Ok(expected)
+    );
+    assert_eq!(before, stock());
+    assert_eq!(
+        consume_inventory_row(InventoryId(4), &before, Quantity(1_001)),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(before, stock());
+    assert_eq!(
+        consume_inventory_row(InventoryId(5), &before, Quantity(1)),
+        Err(Error::Unavailable)
+    );
+    assert_eq!(before, stock());
+}
+
 #[test]
 fn repeated_debits_preserve_stock_fields_and_cannot_overdraw() {
     let mut store = store();

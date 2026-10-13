@@ -3,6 +3,7 @@
 //! supplied by their owners. This crate owns their admission conjunction; it
 //! neither locates distant goods nor stores a second stock or activity ledger.
 use game_core::*;
+pub mod facts;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -16,14 +17,20 @@ pub use carried::{
 mod consumption;
 pub use consumption::{
     ConsumptionFacts, PreparedConsumptions, PreparedPortionConsumption, PreparedSpoilage,
-    portion_available, prepare_consumptions, prepare_food_consumption, prepare_portion_consumption,
-    prepare_spoilage,
+    consume_inventory_row, portion_available, prepare_consumptions, prepare_food_consumption,
+    prepare_portion_consumption, prepare_spoilage,
 };
 
 mod deposit;
 pub use deposit::{
     DepositBounds, PreparedDeposit, append_deposit_schema_bounds, deposit_available,
-    prepare_deposit,
+    deposit_inventory_row, prepare_deposit,
+};
+
+pub mod receiving;
+pub use receiving::{
+    CargoConsume, CargoDeposit, ReceivingSystems, receive_consume, receive_deposit,
+    register_cargo_receiving,
 };
 
 mod storage;
@@ -31,7 +38,8 @@ pub use storage::{
     InventoryCreationGuard, PreparedForcedSplit, PreparedInventoryCreation,
     PreparedNewbornInventory, insert_inventory, inventories, inventory, inventory_mut,
     prepare_forced_split, prepare_inventory_creation, prepare_inventory_split,
-    prepare_newborn_inventory, register_components, remove_inventory, validate_storage,
+    prepare_newborn_inventory, register_components, remove_inventory, split_inventory_rows,
+    validate_storage,
 };
 #[cfg(test)]
 mod storage_tests;
@@ -372,7 +380,7 @@ pub use arbitration::{
 };
 pub use transfers::{
     ClosingFacts, PreparedTransfers, TransferIntent, TransferRequest, ValidatedTransfers,
-    prepare_transfers,
+    prepare_transfers, prepare_transfers_rows,
 };
 
 mod access;

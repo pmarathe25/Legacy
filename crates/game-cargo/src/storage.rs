@@ -84,32 +84,42 @@ pub fn prepare_inventory_creation(
 pub fn prepare_inventory_split(
     store: &Store,
     source: InventoryId,
-    mut receiving: Inventory,
+    receiving: Inventory,
     quantity: game_core::Quantity,
 ) -> Result<PreparedInventoryCreation, Error> {
-    receiving.validate()?;
     let before = inventory(store, source).ok_or(Error::Unavailable)?;
-    before.validate()?;
-    if quantity.0 == 0
-        || receiving.quantity.0 != 0
-        || receiving.good != before.good
-        || store.contains(StableId(receiving.id.0))
-        || receiving.room()? < quantity
-    {
+    if store.contains(StableId(receiving.id.0)) {
         return Err(Error::Unavailable);
     }
-    let mut after = before.clone();
-    after.quantity.0 = after
-        .quantity
-        .0
-        .checked_sub(quantity.0)
-        .ok_or(Error::Unavailable)?;
-    receiving.quantity = quantity;
+    let (after, receiving) = split_inventory_rows(source, before, receiving, quantity)?;
     Ok(PreparedInventoryCreation {
         source: Some((before.clone(), after)),
         receiving,
     })
 }
+/// Checked exact conserved split over rows supplied by the native journal.
+/// Entity freshness is witnessed by the calling transaction, outside this transform.
+pub fn split_inventory_rows(
+    source: InventoryId,
+    before: &Inventory,
+    mut receiving: Inventory,
+    quantity: game_core::Quantity,
+) -> Result<(Inventory, Inventory), Error> {
+    receiving.validate()?;
+    before.validate()?;
+    if before.id != source
+        || quantity.0 == 0
+        || receiving.quantity.0 != 0
+        || receiving.good != before.good
+        || receiving.room()? < quantity
+    {
+        return Err(Error::Unavailable);
+    }
+    let after = crate::consume_inventory_row(source, before, quantity)?;
+    receiving.quantity = quantity;
+    Ok((after, receiving))
+}
+
 impl PreparedInventoryCreation {
     pub fn stage_guarded_into(
         self,

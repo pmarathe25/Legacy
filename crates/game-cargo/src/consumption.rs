@@ -8,6 +8,32 @@ use std::collections::BTreeMap;
 pub struct PreparedConsumptions {
     rows: BTreeMap<InventoryId, (Inventory, Inventory)>,
 }
+
+/// Return a checked debit of one already-selected inventory row.
+///
+/// Selection, access, reservations, and the reason for consuming remain with
+/// the requesting owner. Cargo validates the referenced row and conserves its
+/// quantity without reading or mutating a Store.
+pub fn consume_inventory_row(
+    id: InventoryId,
+    row: &Inventory,
+    quantity: Quantity,
+) -> Result<Inventory, Error> {
+    row.validate()?;
+    if row.id != id {
+        return Err(Error::Unavailable);
+    }
+    let mut after = row.clone();
+    after.quantity = Quantity(
+        after
+            .quantity
+            .0
+            .checked_sub(quantity.0)
+            .ok_or(Error::Unavailable)?,
+    );
+    Ok(after)
+}
+
 impl PreparedConsumptions {
     pub fn validate(&self, store: &Store) -> Result<(), Error> {
         if self
@@ -68,20 +94,10 @@ pub fn prepare_consumptions(
             std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::btree_map::Entry::Vacant(entry) => {
                 let before = inventory(store, *id).ok_or(Error::Unavailable)?;
-                before.validate()?;
-                if before.id != *id {
-                    return Err(Error::Unavailable);
-                }
                 entry.insert((before.clone(), before.clone()))
             }
         };
-        after.quantity = Quantity(
-            after
-                .quantity
-                .0
-                .checked_sub(quantity.0)
-                .ok_or(Error::Unavailable)?,
-        );
+        *after = consume_inventory_row(*id, after, *quantity)?;
     }
     Ok(PreparedConsumptions { rows })
 }

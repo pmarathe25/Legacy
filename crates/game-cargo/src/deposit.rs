@@ -48,18 +48,28 @@ impl PreparedDeposit {
         store.apply_batch(batch)
     }
 }
-fn admitted_deposit(
-    store: &Store,
+/// Return a checked credit to one already-selected inventory row.
+///
+/// Cargo owns receiving-good and compartment-capacity invariants here. Source
+/// selection, access, reservations, and the reason for receipt belong to the
+/// requesting owner; this transform does not read or mutate a Store.
+pub fn deposit_inventory_row(
     destination: InventoryId,
+    row: &Inventory,
     good: Good,
     amount: Quantity,
-) -> Result<&Inventory, Error> {
-    let before = inventory(store, destination).ok_or(Error::Unavailable)?;
-    before.validate()?;
-    if before.id != destination || before.good != good || amount.0 == 0 || before.room()? < amount {
+) -> Result<Inventory, Error> {
+    row.validate()?;
+    if row.id != destination || row.good != good || amount.0 == 0 || row.room()? < amount {
         return Err(Error::Unavailable);
     }
-    Ok(before)
+    let mut after = row.clone();
+    after.quantity.0 = after
+        .quantity
+        .0
+        .checked_add(amount.0)
+        .ok_or(Error::Overflow)?;
+    Ok(after)
 }
 pub fn deposit_available(
     store: &Store,
@@ -67,7 +77,8 @@ pub fn deposit_available(
     good: Good,
     amount: Quantity,
 ) -> bool {
-    admitted_deposit(store, destination, good, amount).is_ok()
+    inventory(store, destination)
+        .is_some_and(|row| deposit_inventory_row(destination, row, good, amount).is_ok())
 }
 pub fn prepare_deposit(
     store: &Store,
@@ -75,17 +86,11 @@ pub fn prepare_deposit(
     good: Good,
     amount: Quantity,
 ) -> Result<PreparedDeposit, Error> {
-    let before = admitted_deposit(store, destination, good, amount)?;
-    let mut after = before.clone();
-    after.quantity.0 = after
-        .quantity
-        .0
-        .checked_add(amount.0)
-        .ok_or(Error::Overflow)?;
-    Ok(PreparedDeposit {
-        before: before.clone(),
-        after,
-    })
+    let before = inventory(store, destination)
+        .cloned()
+        .ok_or(Error::Unavailable)?;
+    let after = deposit_inventory_row(destination, &before, good, amount)?;
+    Ok(PreparedDeposit { before, after })
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +145,37 @@ mod tests {
         insert_inventory(&mut store, row()).unwrap();
         store
     }
+    #[test]
+    fn row_deposit_returns_conserved_clone_and_enforces_good_and_capacity() {
+        let before = row();
+        let mut expected = before.clone();
+        expected.quantity = Quantity(350);
+        assert_eq!(
+            deposit_inventory_row(InventoryId(10), &before, Good::Food, Quantity(250)),
+            Ok(expected)
+        );
+        assert_eq!(before, row());
+        assert_eq!(
+            deposit_inventory_row(InventoryId(10), &before, Good::Water, Quantity(1)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            deposit_inventory_row(InventoryId(10), &before, Good::Food, Quantity(901)),
+            Err(Error::Unavailable)
+        );
+
+        // A valid row at the u64 ceiling cannot reach checked_add overflow:
+        // the capacity admission rejects any amount that would overflow.
+        let mut at_ceiling = before.clone();
+        at_ceiling.quantity = Quantity(u64::MAX - 1);
+        at_ceiling.capacity = Quantity(u64::MAX);
+        assert_eq!(
+            deposit_inventory_row(InventoryId(10), &at_ceiling, Good::Food, Quantity(2)),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(at_ceiling.quantity, Quantity(u64::MAX - 1));
+    }
+
     #[test]
     fn material_deposit_uses_actual_good_room_and_exact_opening_guard() {
         let mut store = setup();

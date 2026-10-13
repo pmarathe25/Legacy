@@ -171,6 +171,16 @@ impl ValidatedTransfers {
     }
 }
 impl PreparedTransfers {
+    /// Consume the prepared stable sequence as exact provisional row effects.
+    /// Native owner journals apply these rows without reconstructing a Store.
+    pub fn into_row_effects(
+        self,
+    ) -> Vec<(TransferIntent, Option<([Inventory; 2], [Inventory; 2])>)> {
+        self.effects
+            .into_iter()
+            .map(|effect| (effect.intent, effect.rows))
+            .collect()
+    }
     pub fn decisions(&self) -> &[(TransferIntent, bool)] {
         &self.decisions
     }
@@ -268,13 +278,30 @@ pub fn prepare_transfers(
     opening: Option<&BTreeMap<InventoryId, u64>>,
     requests: Vec<TransferRequest>,
     free_body_room: Option<&BTreeMap<PersonId, u64>>,
-    mut reserve_transport: impl FnMut(&TransferIntent) -> bool,
+    reserve_transport: impl FnMut(&TransferIntent) -> bool,
 ) -> Result<PreparedTransfers, Error> {
     let stocks: BTreeMap<_, _> = requests
         .iter()
         .flat_map(|request| [request.intent.source, request.intent.destination])
         .filter_map(|id| inventory(store, id).map(|row| (id, row)))
         .collect();
+    prepare_transfers_rows(
+        &stocks,
+        opening,
+        requests,
+        free_body_room,
+        reserve_transport,
+    )
+}
+/// Native transactions supply only the exact inventory rows they already read.
+/// The same stable arbitration and opening budget govern legacy and native callers.
+pub fn prepare_transfers_rows(
+    stocks: &BTreeMap<InventoryId, &Inventory>,
+    opening: Option<&BTreeMap<InventoryId, u64>>,
+    requests: Vec<TransferRequest>,
+    free_body_room: Option<&BTreeMap<PersonId, u64>>,
+    mut reserve_transport: impl FnMut(&TransferIntent) -> bool,
+) -> Result<PreparedTransfers, Error> {
     let balances: BTreeMap<_, _> = stocks
         .iter()
         .map(|(id, stock)| {
