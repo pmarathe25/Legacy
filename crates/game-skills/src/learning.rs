@@ -170,6 +170,21 @@ impl Runtime {
         actors: impl IntoIterator<Item = ActorFacts>,
         interactions: impl IntoIterator<Item = SocialFacts>,
     ) -> Result<EvaluatedLearning, Error> {
+        self.evaluate_learning_with_practice(from, next, actors, interactions, |actor, skill| {
+            self.practice(store, actor, skill)
+        })
+    }
+
+    /// Evaluate facts inside a native owner transaction. The caller supplies a
+    /// borrowed lookup into its journal instead of cloning or exposing a Store.
+    pub fn evaluate_learning_with_practice(
+        &self,
+        from: SimTime,
+        next: SimTime,
+        actors: impl IntoIterator<Item = ActorFacts>,
+        interactions: impl IntoIterator<Item = SocialFacts>,
+        mut practice: impl FnMut(PersonId, Skill) -> u64,
+    ) -> Result<EvaluatedLearning, Error> {
         self.rules.validate()?;
         let elapsed = next.0.checked_sub(from.0).ok_or(Error::Overflow)?;
         let mut pending = Vec::new();
@@ -199,7 +214,7 @@ impl Runtime {
                     topic,
                 } if student == facts.actor => match topic {
                     Lesson::Craft => {
-                        let cap = self.practice(store, teacher, Skill::Craft);
+                        let cap = practice(teacher, Skill::Craft);
                         teacher_caps.insert(teacher, cap);
                         Some((Skill::Craft, Some(cap)))
                     }

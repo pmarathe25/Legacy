@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 mod learning;
 mod practice;
 mod storage;
+pub mod systems;
 pub use learning::{
     ActivityFacts, ActorFacts, CareWork, EvaluatedLearning, InteractionFacts, LearningEvent,
     Lesson, PreparedLearningAcknowledgement, SocialFacts, scale_damage, validate_world,
@@ -15,6 +16,8 @@ pub use practice::{PreparedNewborn, PreparedPractice, StagedPractice};
 mod learning_tests;
 #[cfg(test)]
 mod practice_tests;
+#[cfg(test)]
+mod systems_tests;
 pub use storage::{
     all_skills, insert_skills, register_components, remove_skills, skills, skills_mut,
 };
@@ -139,6 +142,136 @@ impl Runtime {
             practice.milliseconds,
             practice.mastery_cap,
         )
+    }
+
+    /// Apply one evaluated delta to a borrowed owner row. Native systems use
+    /// this to prepare sparse row writes without copying the host Store.
+    pub fn apply_practice_row(
+        &self,
+        row: &mut Skills,
+        practice: &PracticeDelta,
+    ) -> Result<(), Error> {
+        self.rules.validate()?;
+        row.validate_progress(&self.rules)?;
+        row.credit(
+            practice.skill,
+            practice.milliseconds,
+            practice.mastery_cap,
+            &self.rules,
+        );
+        Ok(())
+    }
+
+    /// Apply an authored receiving event to one person's row. Person
+    /// membership is checked by the native owner before calling this method.
+    pub fn apply_learning_event_row(
+        &self,
+        row: &mut Skills,
+        actor: PersonId,
+        event: &LearningEvent,
+        now: SimTime,
+    ) -> Result<(), Error> {
+        self.rules.validate()?;
+        row.validate_progress(&self.rules)?;
+        if matches!(event, LearningEvent::Born { child } if *child == actor) {
+            *row = Skills::default();
+            return Ok(());
+        }
+        let receives_credit = match event {
+            LearningEvent::Born { .. } => false,
+            LearningEvent::AgreementActivated { accepted } => accepted.contains(&actor),
+            LearningEvent::AgreementAmended { proposer } => *proposer == actor,
+        };
+        if !receives_credit {
+            return Ok(());
+        }
+        let tick = now.0 / MINUTE.0;
+        if row
+            .semantic_ticks
+            .get(&Skill::Negotiation)
+            .is_some_and(|previous| *previous >= tick)
+        {
+            return Ok(());
+        }
+        row.semantic_ticks.insert(Skill::Negotiation, tick);
+        row.credit(
+            Skill::Negotiation,
+            self.rules.action_practice_ms,
+            None,
+            &self.rules,
+        );
+        Ok(())
+    }
+
+    /// Apply bounded semantic credit to a borrowed row using this owner's
+    /// canonical event tick rules.
+    pub fn credit_action_row(
+        &self,
+        row: &mut Skills,
+        skill: Skill,
+        milliseconds: u64,
+        now: SimTime,
+    ) -> Result<(), Error> {
+        if milliseconds == 0 {
+            return Ok(());
+        }
+        self.rules.validate()?;
+        row.validate_progress(&self.rules)?;
+        let semantic = matches!(skill, Skill::Negotiation | Skill::Leadership);
+        if semantic {
+            let tick = now.0 / MINUTE.0;
+            if row
+                .semantic_ticks
+                .get(&skill)
+                .is_some_and(|previous| *previous >= tick)
+            {
+                return Ok(());
+            }
+            row.semantic_ticks.insert(skill, tick);
+        }
+        row.credit(skill, milliseconds, None, &self.rules);
+        Ok(())
+    }
+
+    pub fn level_row(&self, row: &Skills, skill: Skill) -> u16 {
+        row.level(skill)
+    }
+
+    pub fn view_row(&self, row: Option<&Skills>) -> Vec<SkillView> {
+        Skill::ALL
+            .into_iter()
+            .map(|skill| {
+                let progress = row
+                    .and_then(|row| row.records.get(&skill))
+                    .cloned()
+                    .unwrap_or_default();
+                SkillView {
+                    skill,
+                    level: progress.level,
+                    practice_ms: progress.practice_ms,
+                    progress_ms: progress.progress_ms,
+                }
+            })
+            .collect()
+    }
+
+    pub fn validate_rows<'a>(
+        &self,
+        now: SimTime,
+        rows: impl IntoIterator<Item = (PersonId, &'a Skills)>,
+    ) -> Result<(), Error> {
+        self.rules.validate()?;
+        for (_, row) in rows {
+            row.validate_progress(&self.rules)?;
+            if row
+                .semantic_ticks
+                .values()
+                .any(|tick| *tick > now.0 / MINUTE.0)
+            {
+                return Err(Error::InvalidSave("future semantic skill credit".into()));
+            }
+        }
+        Ok(())
     }
 
     /// Social actions have a bounded learning rate even when several people

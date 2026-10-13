@@ -300,15 +300,38 @@ impl Runtime {
         limit: SimTime,
         deltas: &[PracticeDelta],
     ) -> Result<SimTime, Error> {
+        self.practice_boundary_with(from, limit, deltas, |actor, skill| {
+            self.practice(store, actor, skill)
+        })
+    }
+
+    /// Journal-native variant using an owner's borrowed canonical-row lookup.
+    pub fn practice_boundary_with(
+        &self,
+        from: SimTime,
+        limit: SimTime,
+        deltas: &[PracticeDelta],
+        mut practice: impl FnMut(PersonId, Skill) -> u64,
+    ) -> Result<SimTime, Error> {
+        self.rules.validate()?;
         if limit < from {
             return Err(Error::Unavailable);
         }
         let mut next = limit;
         for delta in deltas {
-            if let Some(remaining) =
-                self.until_next_level(store, delta.actor, delta.skill, delta.mastery_cap)?
-                && remaining <= delta.milliseconds
-            {
+            let current = practice(delta.actor, delta.skill);
+            let level = current / self.rules.per_level.0;
+            if level >= u64::from(self.rules.max_level) {
+                continue;
+            }
+            let threshold = (level + 1)
+                .checked_mul(self.rules.per_level.0)
+                .ok_or(Error::Overflow)?;
+            if delta.mastery_cap.is_some_and(|cap| cap < threshold) {
+                continue;
+            }
+            let remaining = threshold.saturating_sub(current);
+            if remaining <= delta.milliseconds {
                 next = next.min(SimTime(
                     from.0.checked_add(remaining).ok_or(Error::Overflow)?,
                 ));
