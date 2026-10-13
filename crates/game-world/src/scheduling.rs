@@ -89,7 +89,7 @@ fn due<O: OwnerSystem<E>, D: Clone + Eq + 'static, E: 'static>(
     Ok(())
 }
 
-trait OwnerHook<E> {
+trait OwnerHook<E>: Send + Sync {
     fn order(&self) -> Order;
     fn boundary(
         &self,
@@ -154,7 +154,7 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerHook<E> for Hooks<O, E> {
         self.execute(tx, span, self.close)
     }
 }
-trait DueHook<E> {
+trait DueHook<E>: Send + Sync {
     fn order(&self) -> Order;
     fn boundary(&self, tx: &mut TransactionContext<'_, '_, E>) -> Result<Option<SimTime>, Error>;
     fn consume(&self, tx: &mut TransactionContext<'_, '_, E>) -> Result<(), Error>;

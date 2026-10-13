@@ -12,7 +12,7 @@ use std::{
 };
 
 /// A native owner implements its workflow without importing application state.
-pub trait OwnerSystem<E>: Sized + 'static {
+pub trait OwnerSystem<E>: Sized + Send + Sync + 'static {
     type Runtime: Clone + Eq + 'static;
     type Input: 'static;
     type Output: 'static;
@@ -93,7 +93,7 @@ impl<T: Clone + Eq + 'static> Value for T {
         other.any().downcast_ref::<T>() == Some(self)
     }
 }
-trait Slot<S> {
+trait Slot<S>: Send + Sync {
     fn copy(&self, state: &S) -> Box<dyn Value>;
     fn matches(&self, state: &S, opening: &dyn Value) -> bool;
     fn install(&self, state: &mut S, value: Box<dyn Value>);
@@ -165,7 +165,7 @@ impl<C: Component> Edit for Row<C> {
     }
 }
 
-trait Handler<E> {
+trait Handler<E>: Send + Sync {
     fn owner(&self) -> TypeId;
     fn readonly(&self) -> bool {
         false
@@ -274,7 +274,7 @@ impl<O: OwnerSystem<E>, T: 'static, E: 'static> Handler<E> for SubscriberHandler
 pub struct Registry<S, E> {
     key: Arc<()>,
     generation: u64,
-    instances: BTreeMap<TypeId, Box<dyn Any>>,
+    instances: BTreeMap<TypeId, Box<dyn Any + Send + Sync>>,
     systems: BTreeMap<TypeId, Arc<dyn Handler<E>>>,
     requests: BTreeMap<TypeId, Arc<dyn Handler<E>>>,
     subscribers: BTreeMap<TypeId, Vec<Arc<dyn Handler<E>>>>,
@@ -616,6 +616,23 @@ struct SharedFact {
     value: Box<dyn Any>,
 }
 impl<E: 'static> Journal<'_, E> {
+    fn events_since(&self, cursor: u64) -> Vec<(u64, SimTime, &E)> {
+        let first = self.history.partition_point(|row| row.sequence <= cursor);
+        let mut records: Vec<_> = self.history[first..]
+            .iter()
+            .map(|row| (row.sequence, row.at, &row.event))
+            .collect();
+        records.extend(
+            self.events
+                .iter()
+                .enumerate()
+                .filter_map(|(offset, event)| {
+                    let sequence = self.opening.next_event + offset as u64;
+                    (sequence > cursor).then_some((sequence, self.at, event))
+                }),
+        );
+        records
+    }
     fn rejected<T>(&mut self, error: Error) -> Result<T, Error> {
         if self.failed.is_none() {
             self.failed = Some(error.clone());
@@ -921,6 +938,10 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerTxn<'_, '_, O, E> {
     pub fn request<Q: Request>(&mut self, input: Q) -> Result<Q::Response, Error> {
         self.journal.request(input)
     }
+    /// Inspect structural availability of an optional native receiving service.
+    pub fn has_request<Q: Request>(&self) -> bool {
+        self.journal.requests.contains_key(&TypeId::of::<Q>())
+    }
     /// Publish an INTERNAL typed topic notification. This queues receiving owner
     /// callbacks and consumes no public event sequence or revision. A source
     /// publishes its authoritative public gameplay record separately with emit.
@@ -1070,25 +1091,7 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerTxn<'_, '_, O, E> {
     }
     /// Borrow historical and newly staged records without copying the event log.
     pub fn events_since(&self, cursor: u64) -> Vec<(u64, SimTime, &E)> {
-        let first = self
-            .journal
-            .history
-            .partition_point(|row| row.sequence <= cursor);
-        let mut records: Vec<_> = self.journal.history[first..]
-            .iter()
-            .map(|row| (row.sequence, row.at, &row.event))
-            .collect();
-        records.extend(
-            self.journal
-                .events
-                .iter()
-                .enumerate()
-                .filter_map(|(offset, event)| {
-                    let sequence = self.journal.opening.next_event + offset as u64;
-                    (sequence > cursor).then_some((sequence, self.journal.at, event))
-                }),
-        );
-        records
+        self.journal.events_since(cursor)
     }
     fn due_queue<D: Clone + Eq + 'static>(&mut self) -> Result<&mut DueQueue<D>, Error> {
         if self.journal.due_owners.get(&TypeId::of::<D>()) != Some(&TypeId::of::<O>()) {
@@ -1153,6 +1156,10 @@ pub struct OwnerReadTxn<'a, 's, O, E> {
     marker: PhantomData<O>,
 }
 impl<O: OwnerSystem<E>, E: 'static> OwnerReadTxn<'_, '_, O, E> {
+    /// Borrow committed and provisional public records using their actual cursors.
+    pub fn events_since(&self, cursor: u64) -> Vec<(u64, SimTime, &E)> {
+        self.journal.events_since(cursor)
+    }
     pub fn now(&self) -> SimTime {
         self.journal.at
     }
@@ -1183,6 +1190,10 @@ impl<O: OwnerSystem<E>, E: 'static> OwnerReadTxn<'_, '_, O, E> {
     }
     pub fn request<Q: Request>(&mut self, input: Q) -> Result<Q::Response, Error> {
         self.journal.read_request(input)
+    }
+    /// Inspect registration presence; request still enforces readonly dispatch.
+    pub fn has_request<Q: Request>(&self) -> bool {
+        self.journal.requests.contains_key(&TypeId::of::<Q>())
     }
     pub fn fact<F: 'static>(&self) -> Option<&F> {
         self.journal
