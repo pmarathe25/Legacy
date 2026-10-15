@@ -55,7 +55,7 @@ impl Resource for Justice {
     }
     const KEY: &'static str = "justice.cases";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct File(pub Case);
 impl Request for File {
     const KEY: &'static str = "justice.file";
@@ -80,7 +80,7 @@ impl Request for Enforce {
     const KEY: &'static str = "justice.enforce";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct KnowPrecedent {
     pub person: PersonId,
     pub precedent: Precedent,

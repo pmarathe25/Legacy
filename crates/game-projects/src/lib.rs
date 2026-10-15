@@ -35,7 +35,7 @@ impl Resource for Projects {
         self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Propose(pub Project);
 impl Request for Propose {
     const KEY: &'static str = "projects.propose";
@@ -62,7 +62,7 @@ impl Request for Build {
     const KEY: &'static str = "projects.build";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Finish {
     project: ProjectId,
 }
@@ -70,7 +70,7 @@ impl Request for Finish {
     const KEY: &'static str = "projects.finish";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cancel {
     project: ProjectId,
 }

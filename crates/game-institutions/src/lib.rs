@@ -88,7 +88,7 @@ pub fn construct(
         })
         .collect()
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Found(pub Institution);
 impl Request for Found {
     const KEY: &'static str = "institutions.found";

@@ -1,6 +1,6 @@
 use game_api::*;
 use game_sim::*;
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Execute {
     command: Command,
 }

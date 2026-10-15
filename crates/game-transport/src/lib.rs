@@ -31,7 +31,7 @@ pub fn area(positions: &Positions, person: PersonId) -> Result<AreaId> {
         _ => Err(Error::Rejected("actor is not at an area".into())),
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Place {
     pub person: PersonId,
     pub area: AreaId,
@@ -49,7 +49,7 @@ impl Request for Move {
     const KEY: &'static str = "transport.move";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Arrive {
     person: PersonId,
     destination: AreaId,
@@ -58,7 +58,7 @@ impl Request for Arrive {
     const KEY: &'static str = "transport.arrive";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Cancel {
     pub person: PersonId,
 }

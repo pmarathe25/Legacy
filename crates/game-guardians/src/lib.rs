@@ -17,7 +17,7 @@ pub struct Guardians(pub Records<PersonId, Guardian>);
 impl Resource for Guardians {
     const KEY: &'static str = "guardians.mission";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Register {
     pub person: PersonId,
 }
@@ -25,7 +25,7 @@ impl Request for Register {
     const KEY: &'static str = "guardians.register";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Seek {
     pub guardian: PersonId,
 }
@@ -72,7 +72,7 @@ fn seek(tx: &mut Transaction<'_>, guardian: PersonId) -> Result<()> {
     })?;
     Ok(())
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct KnowDanger {
     pub guardian: PersonId,
     pub area: AreaId,
@@ -82,7 +82,7 @@ impl Request for KnowDanger {
     const KEY: &'static str = "guardians.know_danger";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TravelOrder {
     pub guardian: PersonId,
     pub destination: AreaId,

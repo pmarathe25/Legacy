@@ -46,7 +46,7 @@ impl Resource for Invocation {
         )
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Configure {
     pub costs: Vec<CostAt>,
@@ -65,7 +65,7 @@ impl Request for Invoke {
     const KEY: &'static str = "invocation.invoke";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Expose;
 impl Request for Expose {
     const KEY: &'static str = "invocation.expose";
@@ -86,7 +86,7 @@ impl Request for Dismiss {
     const KEY: &'static str = "invocation.dismiss";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct ControlEnd {
     pub until: SimTime,
 }

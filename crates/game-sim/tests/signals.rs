@@ -9,7 +9,7 @@ struct Count {
 impl Resource for Count {
     const KEY: &'static str = "signals.count";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 enum Operate {
     Start(bool),
     Finish,
@@ -20,7 +20,7 @@ impl Request for Operate {
     const KEY: &'static str = "signals.operate";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cancel(bool);
 impl Request for Cancel {
     const KEY: &'static str = "signals.cancel";
@@ -77,7 +77,7 @@ fn lifecycle_signals_are_atomic_private_and_not_duplicated_by_cancellation() {
 fn typed_hooks_and_private_signals_borrow_payloads_without_json_roundtrips() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static SERIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
-    #[derive(Deserialize)]
+    #[derive(Clone, Deserialize)]
     struct Numeric(u64);
     impl Serialize for Numeric {
         fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
@@ -92,7 +92,7 @@ fn typed_hooks_and_private_signals_borrow_payloads_without_json_roundtrips() {
     impl Event for Numeric {
         const KEY: &'static str = "signals.numeric.event";
     }
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct Exercise(bool);
     impl Request for Exercise {
         const KEY: &'static str = "signals.exercise";

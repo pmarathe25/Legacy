@@ -18,7 +18,7 @@ pub struct Opening {
 impl Resource for Opening {
     const KEY: &'static str = "openings.identity";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Remember(pub Opening);
 impl Request for Remember {
     const KEY: &'static str = "openings.remember";

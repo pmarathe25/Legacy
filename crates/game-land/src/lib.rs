@@ -29,7 +29,7 @@ impl Resource for Land {
         Ok(())
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CreateArea {
     pub name: String,
 }
@@ -37,7 +37,7 @@ impl Request for CreateArea {
     const KEY: &'static str = "land.create";
     type Response = AreaId;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Link {
     pub from: AreaId,
     pub to: AreaId,
@@ -47,7 +47,7 @@ impl Request for Link {
     const KEY: &'static str = "land.link";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CloseRoad {
     pub from: AreaId,
     pub to: AreaId,

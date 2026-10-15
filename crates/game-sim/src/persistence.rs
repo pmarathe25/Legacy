@@ -34,15 +34,14 @@ impl Host {
         }
         for action in self.get::<Actions>()?.0.values() {
             require(
-                self.registry.request_owners.get(&action.cancel.key) == Some(&action.owner),
+                self.registry
+                    .request_owners
+                    .get(action.cancel.key())
+                    .map(|id| &self.registry.owners[*id])
+                    == Some(&action.owner),
                 "invalid saved action owner",
             )?;
-            let decoder = self
-                .registry
-                .decoders
-                .get(&action.cancel.key)
-                .ok_or_else(|| Error::InvalidSave("unknown cancellation".into()))?;
-            decoder(action.cancel.payload.clone())?;
+            require(action.cancel.bound(), "unbound cancellation")?;
         }
         for receipt in self.receipts.values() {
             let decoder = self
@@ -50,7 +49,7 @@ impl Host {
                 .decoders
                 .get(&receipt.request.key)
                 .ok_or_else(|| Error::InvalidSave("unknown cached command".into()))?;
-            decoder(receipt.request.payload.clone())?;
+            decoder(pending::Input::Value(receipt.request.payload.clone()))?;
         }
         for check in &self.registry.save_checks {
             check(self)?;
@@ -102,16 +101,21 @@ impl Builder {
             host.data.insert(*id, (codec.decode)(value.get())?);
         }
         let mut seen = std::collections::BTreeSet::new();
-        for job in save.jobs {
+        // Resource decoding has no registry access. Bind action payloads once
+        // after all owners and resources exist, before exposing the loaded host.
+        let mut actions = host.get::<Actions>()?.clone();
+        let ids: Vec<_> = actions.0.keys().copied().collect();
+        for id in ids {
+            let action = actions.0.get_mut(&id).expect("loaded action");
+            action.cancel.bind(&host.registry)?;
+        }
+        host.data.insert(TypeId::of::<Actions>(), Arc::new(actions));
+        for mut job in save.jobs {
             require(
                 job.at >= save.time && job.id.0 < save.next_id && seen.insert(job.id),
                 "invalid saved schedule",
             )?;
-            require(
-                host.registry.handlers.contains_key(&job.request.key),
-                "unknown saved request",
-            )?;
-            host.registry.decoders[&job.request.key](job.request.payload.clone())?;
+            job.request.bind(&host.registry)?;
             let key = (job.at, job.priority, job.id);
             host.job_keys.insert(job.id, key);
             host.jobs.insert(key, job);

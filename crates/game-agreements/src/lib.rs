@@ -82,7 +82,7 @@ impl Request for Fulfill {
     const KEY: &'static str = "agreements.fulfill";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Due {
     agreement: AgreementId,
     term: usize,

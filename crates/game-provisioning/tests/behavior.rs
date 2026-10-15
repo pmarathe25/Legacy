@@ -4,13 +4,13 @@ use game_provisioning::*;
 use game_sim::*;
 use serde::{Deserialize, Serialize};
 use support::*;
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Choices(PersonId);
 impl Request for Choices {
     const KEY: &'static str = "test.choices";
     type Response = Vec<Plan>;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Step {
     person: PersonId,
     plan: Plan,

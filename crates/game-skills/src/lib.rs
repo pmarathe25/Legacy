@@ -13,7 +13,7 @@ pub struct Skills {
 impl Resource for Skills {
     const KEY: &'static str = "skills.practice";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Practice {
     pub person: PersonId,
     pub skill: String,

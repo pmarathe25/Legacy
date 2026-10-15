@@ -98,7 +98,7 @@ pub fn route(facts: &Facts, from: AreaId, to: AreaId) -> Result<game_spatial::Ro
     })
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ObserveSurroundings {
     pub person: PersonId,
 }
@@ -106,7 +106,7 @@ impl Request for ObserveSurroundings {
     const KEY: &'static str = "knowledge.observe_surroundings";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ObservePatch {
     pub person: PersonId,
     pub patch: u64,

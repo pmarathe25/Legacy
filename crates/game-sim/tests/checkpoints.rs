@@ -22,13 +22,13 @@ impl Clone for History {
 impl Resource for History {
     const KEY: &'static str = "checkpoint.history";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Empty;
 impl Request for Empty {
     const KEY: &'static str = "checkpoint.empty";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Run;
 impl Request for Run {
     const KEY: &'static str = "checkpoint.run";

@@ -11,7 +11,7 @@ impl Resource for Counter {
         require(self.amount < 100, "counter limit")
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Add {
     amount: u64,
     fail: bool,
@@ -20,7 +20,7 @@ impl Request for Add {
     const KEY: &'static str = "test.add";
     type Response = u64;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Schedule {
     at: SimTime,
 }
@@ -28,7 +28,7 @@ impl Request for Schedule {
     const KEY: &'static str = "test.schedule";
     type Response = ScheduleId;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Attempt;
 impl Request for Attempt {
     const KEY: &'static str = "test.attempt";
@@ -247,7 +247,7 @@ fn listener_order_uses_stable_names_not_registration_order() {
 }
 #[test]
 fn aliases_cannot_bypass_resource_ownership() {
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct Foreign;
     impl Request for Foreign {
         const KEY: &'static str = "foreign.edit";
@@ -274,25 +274,25 @@ fn aliases_cannot_bypass_resource_ownership() {
 }
 #[test]
 fn foreign_actions_must_be_canceled_through_the_owner() {
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct BeginAction;
     impl Request for BeginAction {
         const KEY: &'static str = "counter.begin_action";
         type Response = ();
     }
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct CancelAction;
     impl Request for CancelAction {
         const KEY: &'static str = "counter.cancel_action";
         type Response = ();
     }
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct FinishForeign;
     impl Request for FinishForeign {
         const KEY: &'static str = "foreign.finish";
         type Response = ();
     }
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct AskCancel;
     impl Request for AskCancel {
         const KEY: &'static str = "foreign.ask_cancel";
@@ -322,7 +322,7 @@ fn foreign_actions_must_be_canceled_through_the_owner() {
 }
 #[test]
 fn queries_are_passive_and_effectful_handlers_are_rejected() {
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     struct Read;
     impl Request for Read {
         const KEY: &'static str = "counter.read";

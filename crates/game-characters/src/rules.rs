@@ -46,7 +46,7 @@ impl Rules {
         )
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Configure(pub Rules);
 impl Request for Configure {
     const KEY: &'static str = "characters.configure";

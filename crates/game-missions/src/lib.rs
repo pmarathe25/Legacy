@@ -31,7 +31,7 @@ impl Resource for Missions {
     }
     const KEY: &'static str = "missions.parties";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Prepare {
     pub leader: PersonId,
     pub members: BTreeSet<PersonId>,
@@ -95,7 +95,7 @@ fn onward(tx: &mut Transaction<'_>, person: PersonId, mission: MissionId) -> Res
     }
     Ok(())
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Continue {
     person: PersonId,
     mission: MissionId,

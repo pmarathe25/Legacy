@@ -38,7 +38,7 @@ impl Request for Interpret {
     const KEY: &'static str = "relationships.interpret";
     type Response = Relationship;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LearnValue {
     pub person: PersonId,
     pub concept: String,
@@ -59,7 +59,7 @@ pub fn reaction(beliefs: &Beliefs, event: &Interpret) -> i32 {
         0
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DefineBeliefs {
     pub person: PersonId,
     pub beliefs: Beliefs,

@@ -13,7 +13,7 @@ struct Workload {
 impl Resource for Workload {
     const KEY: &'static str = "benchmark.workload";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Initialize {
     count: usize,
 }
@@ -21,13 +21,13 @@ impl Request for Initialize {
     const KEY: &'static str = "benchmark.initialize";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Step;
 impl Request for Step {
     const KEY: &'static str = "benchmark.step";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Claim;
 impl Request for Claim {
     const KEY: &'static str = "benchmark.claim";

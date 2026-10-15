@@ -8,7 +8,7 @@ Persistent ordered tables keep transaction snapshots cheap while preserving stab
 
 Borrowed-key lookups, `insert`, `remove`, `entry`, ordered ranges, and `changed(previous)` support owner requests and incremental validation. `changed` conservatively includes numeric rows from touched leaves; sparse records filter unchanged shared values. Removed records are absent, so cross-record constraints involving deletion need owner checks. Save loading validates complete resources.
 
-Empty tables allocate nothing. `modify` updates an existing row with one search and creates its default only when absent. `changed_pairs` supplies previous values by merging aligned leaves; structural changes fall back to keyed lookup. Validation avoids searching the previous tree for every unchanged neighbour.
+Empty tables allocate nothing. `modify` updates an existing row with one search and creates its default only when absent. `changed_pairs` supplies previous values by merging aligned leaves; structural changes fall back to keyed lookup. Validation avoids searching the previous tree for every unchanged neighbour. Callers of `changed` that only need current values skip old-value pairing entirely.
 
 `version` returns a weak cache token. Writes invalidate it, including writes made without a strong snapshot. It keeps the allocation identity available for comparison without retaining records. Tokens are process-local and excluded from saves and game ordering.
 

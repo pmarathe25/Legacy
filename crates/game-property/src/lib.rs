@@ -52,7 +52,7 @@ impl Property {
             .is_some_and(|p| p.contains_key(&person))
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ClaimInventory {
     pub claimant: PersonId,
     pub inventory: InventoryId,
@@ -62,7 +62,7 @@ impl Request for ClaimInventory {
     const KEY: &'static str = "property.claim";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Permit {
     pub issuer: PersonId,
     pub person: PersonId,

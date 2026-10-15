@@ -87,7 +87,7 @@ impl Resource for Knowledge {
         Ok(())
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ObserveStore {
     pub person: PersonId,
     pub inventory: InventoryId,
@@ -108,7 +108,7 @@ impl Request for Report {
     type Response = SimTime;
 }
 /// Spoken information requires both people to be physically together.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Tell {
     pub sender: PersonId,
     pub recipient: PersonId,
@@ -118,7 +118,7 @@ impl Request for Tell {
     const KEY: &'static str = "knowledge.tell";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Deliver {
     recipient: PersonId,
     key: String,

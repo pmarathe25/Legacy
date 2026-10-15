@@ -27,7 +27,7 @@ The CLI and performance fixtures default to bundled [mimalloc](https://github.co
 
 **Latency:** A real `Session` receives 100 pauses and public look commands during catch-up in the shared-store fixture. It reports acknowledgement p50/p95/p99 and maximum latency. The session services input after each committed request. A single request still determines the longest possible wait.
 
-**Perception:** The runner uses 1,000 people with either no historical facts, or 1,000 shared historical accounts and 1,000 obsolete maps per person, plus one or 10,000 world patches. One patch is local. Ten rounds inspect surroundings, generate actual provisioning options, and route along a known road. It checks exact choices, quantities, fact counts, and canonical hashes across workers. The development comparison also checked complete logical state against a temporary frozen checkout. Shared cold histories test bounded updates and namespace indexes; they do not establish memory use for unique personal histories.
+**Perception:** The runner uses 1,000 people with either no historical facts, or 1,000 shared historical accounts and 1,000 obsolete maps per person, plus one or 10,000 world patches. It also measures 64 local patches with and without histories. `LEGACY_LOCAL_PATCHES` defaults to one and cannot exceed `LEGACY_PATCHES`. Ten rounds inspect surroundings, generate actual provisioning options, and route along a known road. It checks exact choices, quantities, fact counts, and canonical hashes across workers. The development comparison also checked complete logical state against a temporary frozen checkout. Shared cold histories test bounded updates and namespace indexes; they do not establish memory use for unique personal histories.
 
 **Traits:** The actual trait owner installs 1,000 definitions and 1,000 profiles with every attribute populated. Ten rounds read the effective weights, compare them with an independent integer reference, then verify rebuilding after save/load. Profile construction is outside the timed read phase.
 
@@ -55,29 +55,31 @@ Measured on the i7-8550U laptop, 4 cores/8 threads, 7.15 GiB RAM, Linux, Rust 1.
 
 | People | Layout | Simulated minutes/s | Active RSS MiB | Peak RSS through save/load MiB |
 | --- | --- | ---: | ---: | ---: |
-| 1,000 | Shared store | 2,570.6 | 16.9 | 43.0 |
-| 1,000 | 32 settlements | 2,439.3 | 16.9 | 35.1 |
-| 10,000 | Shared store | 201.3 | 44.9 | 144.9 |
-| 10,000 | 32 settlements | 196.9 | 44.9 | 143.7 |
-| 20,000 | Shared store | 93.1 | 72.4 | 261.3 |
-| 20,000 | 32 settlements | 90.9 | 72.4 | 268.1 |
-| 100,000 | Shared store | 15.7 | 301.3 | 1,114.3 |
+| 1,000 | Shared store | 2,926.0 | 17.3 | 39.5 |
+| 1,000 | 32 settlements | 2,700.0 | 17.3 | 35.5 |
+| 10,000 | Shared store | 221.0 | 29.3 | 115.3 |
+| 10,000 | 32 settlements | 213.5 | 29.3 | 105.2 |
+| 20,000 | Shared store | 103.7 | 47.3 | 191.6 |
+| 20,000 | 32 settlements | 96.5 | 44.7 | 199.1 |
+| 100,000 | Shared store | 17.3 | 167.6 | 804.8 |
 
-Commit `9d2d042` measured 137.1 minutes/s at 10,000 people and 62.2 at 20,000. This pass improves ordinary survival throughput by roughly 50%. A frozen executable also checked the 100,000-person case: 11.1 → 15.7 minutes/s, with identical saved state and continued execution. The 100,000-person run is a stress case, not the 10,000-person design target.
+A paired frozen executable from `f7c4cb5` measured 205.1/91.7/15.5 minutes/s at 10,000/20,000/100,000 people. This pass raises throughput by about 8–13%, while active RSS falls from 44.9/72.3/301.4 MiB to 29.3/47.3/167.6 MiB. Requested live heap roughly halves. All paired saved states match exactly, including continued execution after loading. The 100,000-person case is a stress test; the design target remains 10,000.
 
-Empty persistent tables allocate nothing; aligned validation pairs avoid repeated tree searches. Observation refreshes update provenance without replacing unchanged payloads. Completed container discovery uses weak permission-version tokens. Provisioning reads locations once per query and reuses routes to a destination. Typed internal hooks and signals avoid JSON conversion and temporary subscriber lists. Content, observation cadence, stale knowledge, transaction boundaries, and arbitration order retain their tested behavior.
+**Changes:** Pending jobs and action cancellations retain compact typed payloads, binding JSON only at save/client boundaries. Transaction-private jobs, cancellation records, and notices use append-only logs with length checkpoints. Resource owners use registry-local numeric IDs. Request handlers are borrowed, and validators that need only current rows skip old-value pairing. Feature state still uses persistent tables. Content, observation cadence, stale knowledge, transaction boundaries, and arbitration order retain their tested behavior.
 
-A same-source allocator comparison measured approximately 153/69 minutes/s with the system allocator and 200/94 with mimalloc at 10,000/20,000 people. Thus the allocator accounts for much of the improvement. A separate dynamic-library probe found TCMalloc faster than mimalloc on this machine, with greater retained and peak RSS. Mimalloc is the bundled portable default; the system allocator remains a build option. At 20,000 people the default raises active RSS by about 3 MiB and save/load peak by about 45 MiB compared with the preceding commit. At 100,000, active RSS falls from 307.5 to 301.3 MiB. These are workload-dependent allocator tradeoffs.
+Intermediate three-run comparisons found most retained-memory savings in typed requests, and most throughput gains in the log/validation changes. A further five-run comparison of numeric owners, raw payload loading, and vector reuse against that intermediate build was approximately neutral for advancement: 222.7 versus 224.5 minutes/s at 10,000, and 103.8 versus 102.4 at 20,000. These final changes remove runtime name/reference-count operations and temporary load structures; they do not establish an additional whole-game speedup by themselves.
 
-The matrix checked 96 economy runs at 1, 2, 4, and 8 workers, exact meals and live bodies, actual births/deaths, in-flight shipments and reservations, and continued canonical state after loading. All corresponding hashes match the preceding executable. The largest committed boundary through 20,000 people was 5.5 ms. Across measured workers and repeats, pause p99 stayed below 3.1 ms and look-command p99 below 0.43 ms at 10,000 and 20,000. These were 100 queued samples per run, not every possible command. Maximum individual pause latency was 3.8 ms. At 100,000 people the largest advancement boundary was 14.1 ms; session acknowledgement latency was not measured there.
+Both sides use the same bundled allocator. The earlier allocator comparison, before these representation changes, measured roughly 153/69 minutes/s with the system allocator and 200/94 with mimalloc at 10,000/20,000. Mimalloc remains the portable default, and the system allocator remains a build option. Small populations stay near the fixed process-memory floor; the 1,000-person active RSS rose from 16.9 to 17.3 MiB.
 
-Shared-store save/load medians were 50/137 ms at 10,000 people, 110/261 ms at 20,000, and 881/1,473 ms at 100,000. Peak RSS across the ordinary population matrix stayed below 282 MiB. Save/load temporarily retains both simulations and serialized snapshots.
+**Checks:** The matrix covers 96 current economy runs at 1, 2, 4, and 8 workers, plus paired one-worker reference runs for both layouts. It checks exact meals, live bodies, actual births/deaths, in-flight shipments, reservations, and continued canonical state after loading. Corresponding hashes match the preceding executable. The largest current committed boundary through 20,000 people was 6.8 ms. Pause p99 stayed below 2.4 ms and ordinary look-command p99 below 0.28 ms in twelve session runs at 10,000/20,000 people and one/four workers, with 100 samples per operation per run. Maximum pause latency was 3.4 ms. At 100,000 people the largest current advancement boundary was 12.4 ms; session acknowledgement latency was not measured there.
 
-Optional allocation instrumentation preserved all six corresponding economy hashes. At 10,000 people, advancement made 1.77 million allocations, down from 1.90 million, with 25.8 MiB requested live heap and 26.5 MiB peak. At 20,000 people those values were 51.4/52.8 MiB. Save/load/continued execution peaked at 104.9/210.3 MiB requested heap at 10,000/20,000. Instrumentation adds atomic accounting overhead; throughput above comes from uninstrumented builds.
+Shared-store save/load medians were 46/123 ms at 10,000 people, 94/247 ms at 20,000, and 552/1,376 ms at 100,000. Peak RSS across the ordinary current population matrix stayed below 217 MiB. Save/load temporarily retains both simulations and serialized snapshots.
+
+**Allocation accounting:** Fourteen instrumented reference/current runs retained their corresponding hashes. At 10,000 people, advancement allocations fall from 1.77 to 1.46 million; requested live/peak heap falls from 25.8/26.5 to 12.6/13.3 MiB. At 20,000, allocations fall from 3.69 to 3.07 million and live/peak heap from 51.4/52.8 to 25.2/26.6 MiB. At 100,000, live heap falls from 256.5 to 125.5 MiB. Current save/load/continuation peak heap is 72.1/144.7/727.6 MiB at those populations. Save/load makes about 1% more allocations despite lower peak heap. Instrumentation adds atomic accounting overhead; throughput above uses uninstrumented builds.
 
 ### Headroom for richer records
 
-Three-run medians against commit `9fc5f07`, with the same fixture and integer rules:
+Earlier three-run medians at `f7c4cb5` against commit `9fc5f07`, with the same fixture and integer rules:
 
 | Workload | Before ms | After ms |
 | --- | ---: | ---: |
@@ -96,6 +98,6 @@ See the compute tool for measured arithmetic, packing, GPU transfers, resident d
 
 ## Fundamental architecture evaluation
 
-The [architecture experiments](ARCHITECTURE.md) compare persistent hot tables with packed columns and row-level undo, exact analytical physiology, and compact typed pending messages. They retain stable IDs and test rollback, structural changes, retained readers, and continued execution after a checkpoint. These isolated kernels establish promising directions; they are not whole-game speedups or a second production engine.
+The [architecture experiments](ARCHITECTURE.md) compare persistent hot tables with packed columns and row-level undo, exact analytical physiology, and compact typed pending messages. They retain stable IDs and test rollback, structural changes, retained readers, and continued execution after a checkpoint. The typed-request design now runs in production, alongside append-only transaction logs and numeric runtime owner IDs. Packed component state and analytical intervals remain isolated experiments; their ratios are not whole-game speedups.
 
-**Limits:** Extra workers still produce little whole-survival scaling. Shared-store medians at 10,000 people were 201.3, 200.5, 200.0, and 195.6 minutes/s at 1, 2, 4, and 8 workers; at 20,000 they were 93.1, 91.5, 90.7, and 91.4. Decisions, observations, and receiver commits remain mostly serial. Full late-game production, tactical load, unique long histories, campaign catch-up, and mass-death latency remain unmeasured. The configured memory and ordinary-input budgets are met for these fixtures, not established for the complete design.
+**Limits:** Extra workers still produce little whole-survival scaling. Current shared-store medians at 10,000 people are 221.0, 221.2, 224.9, and 221.2 minutes/s at 1, 2, 4, and 8 workers; at 20,000 they are 103.7, 104.8, 93.1, and 102.2. Decisions, observations, and receiver commits remain mostly serial. Full late-game production, tactical load, unique long histories, campaign catch-up, and mass-death latency remain unmeasured. The configured memory and ordinary-input budgets hold for these fixtures; they are not established for the complete design.

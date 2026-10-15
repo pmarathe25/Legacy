@@ -12,12 +12,13 @@ pub(crate) struct Changes {
 }
 pub struct Transaction<'a> {
     host: &'a Host,
-    owner: Arc<str>,
+    owner: usize,
     at: SimTime,
     writes: Table<TypeId, Stored>,
-    jobs: Records<ScheduleId, Job>,
+    jobs: Vec<Job>,
     cancelled: Vec<ScheduleId>,
-    notices: Records<u64, Notice>,
+    cancelled_jobs: Vec<usize>,
+    notices: Vec<Notice>,
     next_id: u64,
     next_notice: u64,
     calls: usize,
@@ -27,12 +28,13 @@ impl<'a> Transaction<'a> {
     pub(crate) fn new(host: &'a Host, at: SimTime) -> Self {
         Self {
             host,
-            owner: "sim".into(),
+            owner: 0,
             at,
             writes: Table::new(),
-            jobs: Records::new(),
+            jobs: vec![],
             cancelled: vec![],
-            notices: Records::new(),
+            cancelled_jobs: vec![],
+            notices: vec![],
             next_id: host.next_id,
             next_notice: host.next_notice,
             calls: 0,
@@ -41,10 +43,10 @@ impl<'a> Transaction<'a> {
     }
     pub(crate) fn with_owner<T>(
         &mut self,
-        owner: &Arc<str>,
+        owner: usize,
         operation: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
-        let previous = std::mem::replace(&mut self.owner, owner.clone());
+        let previous = std::mem::replace(&mut self.owner, owner);
         let result = operation(self);
         self.owner = previous;
         result
@@ -82,7 +84,7 @@ impl<'a> Transaction<'a> {
     }
     /// Stage a resource snapshot. Persistent tables copy only changed paths and records.
     pub fn edit<T: Resource>(&mut self) -> Result<&mut T> {
-        let owner = &self
+        let owner = self
             .host
             .registry
             .resources
@@ -90,7 +92,7 @@ impl<'a> Transaction<'a> {
             .ok_or_else(|| Error::Missing(T::KEY.into()))?
             .owner;
         require(
-            owner == &self.owner,
+            owner == self.owner,
             "only the registered resource owner may mutate it",
         )?;
         self.edit_owned::<T>()
@@ -129,14 +131,13 @@ impl<'a> Transaction<'a> {
             self.calls <= MAX_CALLS && self.depth < 32,
             "request dispatch limit exceeded",
         )?;
-        let handler = self
-            .host
+        let host = self.host;
+        let handler = host
             .registry
             .typed
             .get(&TypeId::of::<R>())
-            .cloned()
             .ok_or_else(|| Error::Missing(R::KEY.into()))?
-            .downcast::<registry::Typed<R>>()
+            .downcast_ref::<registry::Typed<R>>()
             .expect("registered request type");
         self.depth += 1;
         let result = (|| {
@@ -146,7 +147,7 @@ impl<'a> Transaction<'a> {
                     check(self, &request)?;
                 }
             }
-            self.with_owner(&handler.owner, |tx| (handler.run)(tx, request))
+            self.with_owner(handler.owner, |tx| (handler.run)(tx, request))
         })();
         self.depth -= 1;
         result
@@ -155,34 +156,24 @@ impl<'a> Transaction<'a> {
     pub fn attempt<R: Request>(&mut self, request: R) -> Result<R::Response> {
         let checkpoint = (
             self.writes.clone(),
-            self.jobs.clone(),
-            self.cancelled.clone(),
-            self.notices.clone(),
+            self.jobs.len(),
+            self.cancelled.len(),
+            self.notices.len(),
+            self.cancelled_jobs.len(),
             self.next_id,
             self.next_notice,
         );
         let result = self.call(request);
         if result.is_err() {
-            (
-                self.writes,
-                self.jobs,
-                self.cancelled,
-                self.notices,
-                self.next_id,
-                self.next_notice,
-            ) = checkpoint;
+            self.writes = checkpoint.0;
+            self.jobs.truncate(checkpoint.1);
+            self.cancelled.truncate(checkpoint.2);
+            self.notices.truncate(checkpoint.3);
+            self.cancelled_jobs.truncate(checkpoint.4);
+            self.next_id = checkpoint.5;
+            self.next_notice = checkpoint.6;
         }
         result
-    }
-    pub(crate) fn call_envelope(&mut self, request: Envelope) -> Result<Value> {
-        let handler = self
-            .host
-            .registry
-            .handlers
-            .get(&request.key)
-            .ok_or_else(|| Error::Missing(request.key.clone()))?
-            .clone();
-        handler(self, request.payload)
     }
     pub fn schedule<R: Request>(
         &mut self,
@@ -191,52 +182,44 @@ impl<'a> Transaction<'a> {
         request: R,
     ) -> Result<ScheduleId> {
         require(at >= self.at, "cannot schedule in the past")?;
-        require(
-            self.host.registry.handlers.contains_key(R::KEY),
-            "unregistered scheduled request",
-        )?;
+        require(self.registered::<R>(), "unregistered scheduled request")?;
         let id = ScheduleId(self.allocate()?);
-        self.jobs.insert(
+        self.jobs.push(Job {
             id,
-            Job {
-                id,
-                at,
-                priority,
-                request: Envelope {
-                    key: R::KEY.into(),
-                    payload: serde_json::to_value(request).map_err(registry::json_error)?,
-                },
-            },
-        );
+            at,
+            priority,
+            request: Pending::new(request)?,
+        });
         Ok(id)
     }
     pub(crate) fn cancelled(&self, id: ScheduleId) -> bool {
         self.cancelled.contains(&id)
     }
     pub(crate) fn precedes(&self, key: (SimTime, u8, ScheduleId)) -> bool {
-        self.jobs
-            .values()
-            .any(|job| (job.at, job.priority, job.id) < key)
+        self.jobs.iter().enumerate().any(|(i, job)| {
+            (job.at, job.priority, job.id) < key && !self.cancelled_jobs.contains(&i)
+        })
     }
     pub fn unschedule(&mut self, id: ScheduleId) {
         self.cancelled.push(id);
-        self.jobs.remove(&id);
+        // Allocated IDs increase in append order. Only work already staged at
+        // this call is cancelled; an unknown future ID cannot cancel a later job.
+        if let Ok(index) = self.jobs.binary_search_by_key(&id, |job| job.id) {
+            self.cancelled_jobs.push(index);
+        }
     }
     pub fn emit<E: Event>(&mut self, event: E, witnesses: Vec<PersonId>) -> Result<()> {
         self.notification_budget()?;
         let data = serde_json::to_value(&event).map_err(registry::json_error)?;
         let sequence = self.next_notice;
         self.next_notice = sequence.checked_add(1).ok_or(Error::Overflow)?;
-        self.notices.insert(
+        self.notices.push(Notice {
             sequence,
-            Notice {
-                sequence,
-                at: self.at,
-                kind: E::KEY.into(),
-                data,
-                witnesses,
-            },
-        );
+            at: self.at,
+            kind: E::KEY.into(),
+            data,
+            witnesses,
+        });
         self.notify_event(&event)
     }
     /// Notify feature subscribers without publishing a notice.
@@ -283,16 +266,13 @@ impl<'a> Transaction<'a> {
             "cancellation must belong to the action owner",
         )?;
         let action = Action {
-            owner: self.owner.clone(),
+            owner: self.host.registry.owners[self.owner].clone(),
             kind: kind.into(),
             until,
-            cancel: Envelope {
-                key: R::KEY.into(),
-                payload: serde_json::to_value(cancel).map_err(registry::json_error)?,
-            },
+            cancel: Pending::new(cancel)?,
         };
         require(
-            self.host.registry.handlers.contains_key(&action.cancel.key),
+            self.registered::<R>(),
             "missing action cancellation handler",
         )?;
         self.edit_owned::<Actions>()?.0.insert(person, action);
@@ -300,10 +280,9 @@ impl<'a> Transaction<'a> {
     }
     pub fn finish_action(&mut self, person: PersonId, kind: &str) -> Result<()> {
         require(
-            self.get::<Actions>()?
-                .0
-                .get(&person)
-                .is_some_and(|a| a.kind == kind && a.owner == self.owner),
+            self.get::<Actions>()?.0.get(&person).is_some_and(|a| {
+                a.kind == kind && a.owner == self.host.registry.owners[self.owner]
+            }),
             "action has changed",
         )?;
         self.edit_owned::<Actions>()?.0.remove(&person);
@@ -311,7 +290,7 @@ impl<'a> Transaction<'a> {
     }
     pub fn cancel_action(&mut self, person: PersonId) -> Result<()> {
         if let Some(action) = self.get::<Actions>()?.0.get(&person).cloned() {
-            self.call_envelope(action.cancel)?;
+            action.cancel.invoke(self)?;
             if self.edit_owned::<Actions>()?.0.remove(&person).is_some() {
                 self.notify(ActionFinished { person })?;
             }
@@ -327,12 +306,22 @@ impl<'a> Transaction<'a> {
         self.host.revision.checked_add(1).ok_or(Error::Overflow)?;
         Ok(())
     }
-    pub(crate) fn finish(self) -> Changes {
+    pub(crate) fn finish(mut self) -> Changes {
+        if !self.cancelled_jobs.is_empty() {
+            self.cancelled_jobs.sort_unstable();
+            self.cancelled_jobs.dedup();
+            let mut i = 0;
+            self.jobs.retain(|_| {
+                let keep = self.cancelled_jobs.binary_search(&i).is_err();
+                i += 1;
+                keep
+            });
+        }
         Changes {
             writes: self.writes,
-            jobs: self.jobs.values().cloned().collect(),
+            jobs: self.jobs,
             cancelled: self.cancelled,
-            notices: self.notices.values().cloned().collect(),
+            notices: self.notices,
             next_id: self.next_id,
             next_notice: self.next_notice,
         }

@@ -35,7 +35,7 @@ impl Request for Treat {
     const KEY: &'static str = "health.treat";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Finish {
     caregiver: PersonId,
     patient: PersonId,
@@ -44,7 +44,7 @@ impl Request for Finish {
     const KEY: &'static str = "health.finish";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cancel {
     job: ScheduleId,
 }
@@ -85,7 +85,7 @@ pub fn load(
     rules.validate()?;
     Ok(rules)
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Configure(pub TreatmentRules);
 impl Request for Configure {
     const KEY: &'static str = "health.configure";

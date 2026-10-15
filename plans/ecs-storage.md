@@ -1,6 +1,6 @@
 # Plan: evaluate ECS storage for Legacy
 
-**Status:** The initial Bevy/Legion/custom comparison is complete; production uses persistent ordered leaves and sparse records. See the [retained results](../tools/performance/README.md#storage-choice). The follow-up [architecture evaluation](../tools/performance/ARCHITECTURE.md) finds larger gains in compact runtime requests, packed hot data, and row-level undo. Its prototypes are benchmark-only; full-game migration remains to be measured. The sections below record the original evaluation procedure.
+**Status:** The initial Bevy/Legion/custom comparison is complete; production uses persistent ordered leaves and sparse records. See the [retained results](../tools/performance/README.md#storage-choice). The follow-up [architecture evaluation](../tools/performance/ARCHITECTURE.md) finds larger gains in compact runtime requests, packed hot data, and row-level undo. Typed pending requests and append-only transaction logs are now measured in the full game. Packed component state and analytical intervals remain benchmark-only; their full-game migration remains to be measured. The sections below record the original evaluation procedure.
 
 **Original recommendation:** Evaluate standalone `bevy_ecs` as the leading candidate for frequently updated entity state. Compare it with dense custom tables and the small Legion candidate required by the [performance design](../docs/design/performance.md). Keep one production implementation after the comparison.
 

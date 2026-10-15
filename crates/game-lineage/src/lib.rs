@@ -22,7 +22,7 @@ impl Resource for Lineage {
     }
     const KEY: &'static str = "lineage.continuity";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Begin {
     pub person: PersonId,
 }

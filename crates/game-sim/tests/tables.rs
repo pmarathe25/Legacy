@@ -16,7 +16,7 @@ impl Resource for Rows {
         )
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Change {
     key: u64,
     amount: u64,
@@ -26,13 +26,13 @@ impl Request for Change {
     const KEY: &'static str = "test.change";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Attempt;
 impl Request for Attempt {
     const KEY: &'static str = "test.attempt_rows";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Panic;
 impl Request for Panic {
     const KEY: &'static str = "test.panic";

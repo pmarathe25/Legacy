@@ -57,7 +57,7 @@ impl Ecology {
             .ok_or_else(|| Error::Rejected("patch reservations exceed stock".into()))
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Create(pub Patch);
 impl Request for Create {
     const KEY: &'static str = "ecology.create";
@@ -74,7 +74,7 @@ impl Request for Gather {
     const KEY: &'static str = "ecology.gather";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Finish {
     person: PersonId,
 }
@@ -82,7 +82,7 @@ impl Request for Finish {
     const KEY: &'static str = "ecology.finish";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cancel {
     person: PersonId,
 }
@@ -90,13 +90,13 @@ impl Request for Cancel {
     const KEY: &'static str = "ecology.cancel";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StartRenewal;
 impl Request for StartRenewal {
     const KEY: &'static str = "ecology.start_renewal";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Renew;
 impl Request for Renew {
     const KEY: &'static str = "ecology.renew";

@@ -65,7 +65,7 @@ impl Request for Conceive {
     const KEY: &'static str = "lifecycle.conceive";
     type Response = u64;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Deliver {
     pregnancy: u64,
 }

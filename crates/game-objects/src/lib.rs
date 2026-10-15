@@ -134,7 +134,7 @@ pub fn load(store: &mut Store) -> Result<Objects> {
 pub fn standard() -> Result<Objects> {
     load(&mut Store::standard())
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Install(pub Objects);
 impl Request for Install {
     const KEY: &'static str = "objects.install";

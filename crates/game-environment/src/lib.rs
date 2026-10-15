@@ -43,7 +43,7 @@ impl Climate {
         unreachable!("positive checked year")
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Configure(pub Climate);
 impl Request for Configure {
     const KEY: &'static str = "environment.configure";

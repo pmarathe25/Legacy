@@ -45,7 +45,7 @@ impl Resource for Battles {
         self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Start(pub Battle);
 impl Request for Start {
     const KEY: &'static str = "conflict.start";
@@ -61,7 +61,7 @@ impl Request for Order {
     const KEY: &'static str = "conflict.order";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Round {
     battle: u64,
 }
@@ -69,7 +69,7 @@ impl Request for Round {
     const KEY: &'static str = "conflict.round";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cancel {
     battle: u64,
     person: PersonId,
@@ -79,7 +79,7 @@ impl Request for Cancel {
     type Response = ();
 }
 /// The optional invocation owner serves this fact, avoiding a reverse dependency.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HasPlayerControl {
     pub person: PersonId,
 }
@@ -87,7 +87,7 @@ impl Request for HasPlayerControl {
     const KEY: &'static str = "conflict.player_control";
     type Response = bool;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RefreshTurns;
 impl Request for RefreshTurns {
     const KEY: &'static str = "conflict.refresh_turns";

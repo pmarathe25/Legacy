@@ -52,7 +52,7 @@ impl Resource for Minds {
         self.rules.validate()
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Register {
     pub person: PersonId,
     pub mind: Mind,
@@ -61,13 +61,13 @@ impl Request for Register {
     const KEY: &'static str = "characters.register";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Start;
 impl Request for Start {
     const KEY: &'static str = "characters.start";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Review {
     after: Option<PersonId>,
 }

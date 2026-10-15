@@ -1,6 +1,8 @@
 //! One transactional host. Plugins own all gameplay state and requests.
 use game_storage::Records;
+mod pending;
 mod persistence;
+pub use pending::Pending;
 mod registry;
 mod transaction;
 use game_core::*;
@@ -27,7 +29,7 @@ pub struct Job {
     pub id: ScheduleId,
     pub at: SimTime,
     pub priority: u8,
-    pub request: Envelope,
+    pub request: Pending,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notice {
@@ -42,7 +44,7 @@ pub struct Action {
     pub owner: Arc<str>,
     pub kind: String,
     pub until: Option<SimTime>,
-    pub cancel: Envelope,
+    pub cancel: Pending,
 }
 /// An internal lifecycle signal; it does not append a player notice.
 #[derive(Serialize, Deserialize)]
@@ -91,7 +93,7 @@ pub struct Host {
 }
 impl Host {
     pub fn registered<R: Request>(&self) -> bool {
-        self.registry.handlers.contains_key(R::KEY)
+        self.registry.typed.contains_key(&TypeId::of::<R>())
     }
     /// Queries use owner handlers but may not write, schedule, emit, or allocate.
     pub fn query<R: Request>(&self, request: R) -> Result<R::Response> {
@@ -125,11 +127,7 @@ impl Host {
     }
     /// Internal requests and due work share exactly the same transaction path.
     pub fn dispatch<R: Request>(&mut self, request: R) -> Result<R::Response> {
-        let envelope = Envelope {
-            key: R::KEY.into(),
-            payload: serde_json::to_value(request).map_err(registry::json_error)?,
-        };
-        let result = self.run(envelope, None)?;
+        let result = self.run(Pending::new(request)?, None)?;
         serde_json::from_value(result).map_err(registry::json_error)
     }
     /// Client sequence numbers are durable: retrying identical input returns its first result.
@@ -149,7 +147,7 @@ impl Host {
         for guard in &self.registry.guards {
             guard(self, &envelope)?;
         }
-        let response = self.run(envelope.clone(), None)?;
+        let response = self.run(self.registry.bind(envelope.clone())?, None)?;
         self.receipts.insert(
             sequence,
             Receipt {
@@ -161,32 +159,32 @@ impl Host {
     }
     fn run(
         &mut self,
-        envelope: Envelope,
+        request: Pending,
         remove: Option<(SimTime, u8, ScheduleId)>,
     ) -> Result<Value> {
         let at = remove.map_or(self.time, |key| key.0);
         let limit = self
             .registry
             .batches
-            .get(&envelope.key)
+            .get(request.key())
             .copied()
             .unwrap_or(1);
-        let registered_key = self
+
+        let request_key = self
             .registry
-            .handlers
-            .get_key_value(&envelope.key)
+            .decoders
+            .get_key_value(request.key())
             .map(|(key, _)| key.as_str());
         let jobs = &self.jobs;
         let extra = remove.into_iter().flat_map(|first| {
             jobs.range((std::ops::Bound::Excluded(first), std::ops::Bound::Unbounded))
                 .take(limit - 1)
                 .take_while(move |(key, job)| {
-                    (key.0, key.1) == (first.0, first.1)
-                        && Some(job.request.key.as_str()) == registered_key
+                    (key.0, key.1) == (first.0, first.1) && Some(job.request.key()) == request_key
                 })
                 .map(|(key, job)| (Some(*key), job.request.clone()))
         });
-        let requests = std::iter::once((remove, envelope)).chain(extra);
+        let requests = std::iter::once((remove, request)).chain(extra);
         let mut removed = 0;
         let mut tx = Transaction::new(self, at);
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -203,7 +201,7 @@ impl Host {
                         continue;
                     }
                 }
-                response = tx.call_envelope(request)?;
+                response = request.invoke(&mut tx)?;
             }
             tx.validate()?;
             Ok(response)

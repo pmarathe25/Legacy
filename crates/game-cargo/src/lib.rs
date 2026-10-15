@@ -85,7 +85,7 @@ pub fn locality(tx: &Transaction<'_>, id: InventoryId) -> Result<AreaId> {
         Custody::Road { .. } => Err(Error::Rejected("inventory is on a road".into())),
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Create {
     pub custody: Custody,
     pub capacity: u64,
@@ -125,7 +125,7 @@ impl Request for Transfer {
     const KEY: &'static str = "cargo.transfer";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DropCarried {
     pub person: PersonId,
 }
@@ -133,7 +133,7 @@ impl Request for DropCarried {
     const KEY: &'static str = "cargo.drop_carried";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ReserveSpace {
     pub good: GoodId,
     pub inventory: InventoryId,
@@ -143,7 +143,7 @@ impl Request for ReserveSpace {
     const KEY: &'static str = "cargo.reserve_space";
     type Response = u64;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ReleaseSpace {
     pub inventory: InventoryId,
     pub reservation: u64,
@@ -152,7 +152,7 @@ impl Request for ReleaseSpace {
     const KEY: &'static str = "cargo.release_space";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DepositReserved {
     pub inventory: InventoryId,
     pub reservation: u64,

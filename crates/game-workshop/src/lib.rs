@@ -37,7 +37,7 @@ impl Resource for Workshop {
         self.validate_recipes(self.recipes.changed(&previous.recipes).map(|(_, r)| r))
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Define {
     pub name: String,
     pub recipe: Recipe,
@@ -56,7 +56,7 @@ impl Request for Craft {
     const KEY: &'static str = "workshop.craft";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Complete {
     person: PersonId,
 }
@@ -64,7 +64,7 @@ impl Request for Complete {
     const KEY: &'static str = "workshop.complete";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cancel {
     person: PersonId,
 }

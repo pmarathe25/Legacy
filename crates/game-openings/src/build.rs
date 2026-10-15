@@ -253,7 +253,7 @@ pub(super) fn initialize(host: &mut Host, d: &Definition, assets: Assets, seed: 
     }
     Ok(())
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct SetNames(BTreeMap<String, u64>);
 impl Request for SetNames {
     const KEY: &'static str = "openings.names";

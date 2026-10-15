@@ -82,7 +82,7 @@ pub fn load(store: &mut Store, objects: &Objects) -> Result<Crops> {
     crops.validate()?;
     Ok(crops)
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InstallCrops(pub Crops);
 impl Request for InstallCrops {
     const KEY: &'static str = "agriculture.install_crops";

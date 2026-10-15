@@ -100,7 +100,7 @@ pub fn capable(tx: &Transaction<'_>, person: PersonId) -> Result<()> {
         .ok_or_else(|| Error::Missing("body".into()))?;
     require(p.alive && p.health > 0, "actor cannot act")
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Create {
     pub kind: Kind,
     pub born: SimTime,
@@ -109,13 +109,13 @@ impl Request for Create {
     const KEY: &'static str = "physiology.create";
     type Response = PersonId;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Start;
 impl Request for Start {
     const KEY: &'static str = "physiology.start";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Tick;
 impl Request for Tick {
     const KEY: &'static str = "physiology.tick";
@@ -138,7 +138,7 @@ impl Request for Rest {
     const KEY: &'static str = "physiology.rest";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Wake {
     person: PersonId,
 }
@@ -146,7 +146,7 @@ impl Request for Wake {
     const KEY: &'static str = "physiology.wake";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct CancelRest {
     person: PersonId,
     job: ScheduleId,
@@ -189,7 +189,7 @@ fn death(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     }
     Ok(())
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Heal {
     pub person: PersonId,
     pub amount: u64,
@@ -198,7 +198,7 @@ impl Request for Heal {
     const KEY: &'static str = "physiology.heal";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Strain {
     pub person: PersonId,
     pub amount: u64,
@@ -207,7 +207,7 @@ impl Request for Strain {
     const KEY: &'static str = "physiology.strain";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ShortenLife {
     pub person: PersonId,
     pub duration: SimDuration,
@@ -216,7 +216,7 @@ impl Request for ShortenLife {
     const KEY: &'static str = "physiology.shorten_life";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Configure(pub Rules);
 impl Request for Configure {
     const KEY: &'static str = "physiology.configure";

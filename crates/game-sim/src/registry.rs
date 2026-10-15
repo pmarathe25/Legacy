@@ -16,7 +16,8 @@ pub trait Resource: Clone + Default + Serialize + DeserializeOwned + Send + Sync
         Ok(())
     }
 }
-pub trait Request: Serialize + DeserializeOwned + Send + Sync + 'static {
+/// Requests clone independent immutable values; shared mutable aliases are unsupported.
+pub trait Request: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
     const KEY: &'static str;
     type Response: Serialize + DeserializeOwned;
 }
@@ -26,17 +27,17 @@ pub trait Event: Serialize + DeserializeOwned + 'static {
 type TypedOperation<R> =
     dyn Fn(&mut Transaction<'_>, R) -> Result<<R as Request>::Response> + Send + Sync;
 pub(crate) struct Typed<R: Request> {
-    pub owner: Arc<str>,
+    pub owner: usize,
     pub run: Box<TypedOperation<R>>,
 }
 pub(crate) type Stored = Arc<dyn Any + Send + Sync>;
-type Handler = Arc<dyn Fn(&mut Transaction<'_>, Value) -> Result<Value> + Send + Sync>;
 type Listener = Arc<dyn Fn(&mut Transaction<'_>, &dyn Any) -> Result<()> + Send + Sync>;
+type Decoder = for<'a> fn(pending::Input<'a>) -> Result<Pending>;
 type Guard = Box<dyn Fn(&Host, &Envelope) -> Result<()> + Send + Sync>;
 type Stopper = Box<dyn Fn(&Host) -> Result<Option<String>> + Send + Sync>;
 pub(crate) struct Codec {
     pub key: &'static str,
-    pub owner: Arc<str>,
+    pub owner: usize,
     pub encode: fn(&Stored) -> Result<Box<serde_json::value::RawValue>>,
     pub decode: fn(&str) -> Result<Stored>,
     pub ids: fn(&Stored) -> Vec<u64>,
@@ -46,28 +47,38 @@ pub(crate) struct Codec {
 #[derive(Default)]
 pub(crate) struct Registry {
     pub resources: HashMap<TypeId, Codec>,
-    pub handlers: BTreeMap<String, Handler>,
+    pub owners: Vec<Arc<str>>,
     pub typed: HashMap<TypeId, Stored>,
     pub batches: BTreeMap<String, usize>,
-    pub request_owners: BTreeMap<String, Arc<str>>,
+    pub request_owners: BTreeMap<String, usize>,
     pub listeners: BTreeMap<String, BTreeMap<String, Listener>>,
     pub save_checks: Vec<fn(&Host) -> Result<()>>,
     pub guards: Vec<Guard>,
     pub stops: Vec<Stopper>,
     pub plugins: BTreeMap<String, u32>,
     pub before: BTreeMap<String, BTreeMap<String, Listener>>,
-    pub decoders: BTreeMap<String, fn(Value) -> Result<()>>,
+    pub decoders: BTreeMap<String, Decoder>,
+}
+impl Registry {
+    pub fn bind(&self, envelope: Envelope) -> Result<Pending> {
+        self.bind_payload(&envelope.key, pending::Input::Value(envelope.payload))
+    }
+    pub fn bind_payload(&self, key: &str, payload: pending::Input<'_>) -> Result<Pending> {
+        self.decoders
+            .get(key)
+            .ok_or_else(|| Error::Missing(key.into()))?(payload)
+    }
 }
 pub struct Builder {
     pub(crate) registry: Registry,
-    owner: Arc<str>,
+    owner: usize,
     data: HashMap<TypeId, Stored>,
 }
 impl Builder {
     pub fn new() -> Self {
         let mut b = Self {
             registry: Registry::default(),
-            owner: "sim".into(),
+            owner: 0,
             data: HashMap::default(),
         };
         b.plugin("sim", 1).expect("fresh builder");
@@ -80,7 +91,8 @@ impl Builder {
             return Err(Error::Duplicate(name.into()));
         }
         self.registry.plugins.insert(name.into(), version);
-        self.owner = name.into();
+        self.owner = self.registry.owners.len();
+        self.registry.owners.push(name.into());
         Ok(())
     }
     pub fn resource<T: Resource>(&mut self) -> Result<()> {
@@ -93,7 +105,7 @@ impl Builder {
             TypeId::of::<T>(),
             Codec {
                 key: T::KEY,
-                owner: self.owner.clone(),
+                owner: self.owner,
                 encode: |s| {
                     serde_json::value::to_raw_value(s.downcast_ref::<T>().expect("registered type"))
                         .map_err(json_error)
@@ -125,28 +137,20 @@ impl Builder {
         &mut self,
         handler: impl Fn(&mut Transaction<'_>, R) -> Result<R::Response> + Send + Sync + 'static,
     ) -> Result<()> {
-        if self.registry.handlers.contains_key(R::KEY) {
+        if self.registry.decoders.contains_key(R::KEY) {
             return Err(Error::Duplicate(R::KEY.into()));
         }
-        self.registry.decoders.insert(R::KEY.into(), |value| {
-            serde_json::from_value::<R>(value).map_err(json_error)?;
-            Ok(())
-        });
+        self.registry
+            .decoders
+            .insert(R::KEY.into(), |value| value.decode::<R>());
         self.registry
             .request_owners
-            .insert(R::KEY.into(), self.owner.clone());
+            .insert(R::KEY.into(), self.owner);
         let typed = Arc::new(Typed::<R> {
-            owner: self.owner.clone(),
+            owner: self.owner,
             run: Box::new(handler),
         });
         self.registry.typed.insert(TypeId::of::<R>(), typed);
-        self.registry.handlers.insert(
-            R::KEY.into(),
-            Arc::new(move |tx, value| {
-                let request: R = serde_json::from_value(value).map_err(json_error)?;
-                serde_json::to_value(tx.call(request)?).map_err(json_error)
-            }),
-        );
         Ok(())
     }
     /// Opt into atomic, ordered batches of adjacent due requests. Public commands
@@ -169,11 +173,11 @@ impl Builder {
         if listeners.contains_key(name) {
             return Err(Error::Duplicate(name.into()));
         }
-        let owner = self.owner.clone();
+        let owner = self.owner;
         listeners.insert(
             name.into(),
             Arc::new(move |tx, value| {
-                tx.with_owner(&owner, |tx| {
+                tx.with_owner(owner, |tx| {
                     listener(
                         tx,
                         value
@@ -194,11 +198,11 @@ impl Builder {
         if checks.contains_key(name) {
             return Err(Error::Duplicate(name.into()));
         }
-        let owner = self.owner.clone();
+        let owner = self.owner;
         checks.insert(
             name.into(),
             Arc::new(move |tx, value| {
-                tx.with_owner(&owner, |tx| {
+                tx.with_owner(owner, |tx| {
                     check(
                         tx,
                         value.downcast_ref::<R>().expect("registered request type"),

@@ -37,8 +37,8 @@ fn small_crates_and_dependency_direction_are_enforced() {
             .map(|p| fs::read_to_string(p).unwrap().lines().count())
             .sum();
         let budget = match name {
-            "game-sim" => 1100,
-            "game-storage" => 850,
+            "game-sim" => 1150,
+            "game-storage" => 875,
             "game-knowledge" => 650,
             _ => 600,
         };

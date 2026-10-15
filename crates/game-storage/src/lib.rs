@@ -94,11 +94,17 @@ impl<K: Ord, V> Table<K, V> {
     /// Visits only leaves on changed paths. Structural changes are safe: values
     /// from a changed leaf may be reported conservatively, never omitted.
     pub fn changed<'a>(&'a self, previous: &'a Self) -> impl Iterator<Item = (&'a K, &'a V)> {
-        self.changed_pairs(previous).map(|(k, v, _)| (k, v))
+        self.changes::<false>(previous).map(|(k, v, _)| (k, v))
     }
     /// Pair changed rows with their previous values. Aligned leaves merge in
     /// order, avoiding a second tree search per row during owner validation.
     pub fn changed_pairs<'a>(
+        &'a self,
+        previous: &'a Self,
+    ) -> impl Iterator<Item = (&'a K, &'a V, Option<&'a V>)> {
+        self.changes::<true>(previous)
+    }
+    fn changes<'a, const PAIRS: bool>(
         &'a self,
         previous: &'a Self,
     ) -> impl Iterator<Item = (&'a K, &'a V, Option<&'a V>)> {
@@ -109,7 +115,9 @@ impl<K: Ord, V> Table<K, V> {
         std::iter::from_fn(move || {
             loop {
                 if let Some((k, v)) = rows.next() {
-                    let old = if let Some(rows) = &mut old_rows {
+                    let old = if !PAIRS {
+                        None
+                    } else if let Some(rows) = &mut old_rows {
                         let rows: &mut std::iter::Peekable<std::slice::Iter<'a, (K, V)>> = rows;
                         while rows.peek().is_some_and(|(key, _)| key < k) {
                             rows.next();
@@ -136,7 +144,8 @@ impl<K: Ord, V> Table<K, V> {
                         rows = leaf.iter();
                         old_rows = match old {
                             Some(Node::Leaf(old))
-                                if !old.is_empty()
+                                if PAIRS
+                                    && !old.is_empty()
                                     && old[0].0 <= leaf[0].0
                                     && old.last().unwrap().0 >= leaf.last().unwrap().0 =>
                             {

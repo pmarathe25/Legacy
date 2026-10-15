@@ -1,10 +1,10 @@
 # Architectural headroom
 
-**Decision:** Pursue compact typed pending requests first, then packed hot component stores with row-level undo. Keep persistent sparse records for histories, relationships, and other cold data. The experiments below support this direction; the production engine still uses its current storage and scheduling contracts.
+**Decision:** Typed pending requests and append-only transaction logs are now in production. Continue toward packed hot component stores with row-level undo, retaining persistent sparse records for histories, relationships, and other cold data. Production feature state still uses persistent tables; the packed-state and temporal kernels below remain experiments.
 
 ## Where time remains
 
-A sampled 20,000-person production run attributes about 76% of advancement samples to character reviews, including 28.5% in observation. Physiology ticks account for about 7.5%. These are inclusive samples, not additive phase timers. Whole-game throughput barely changes with additional workers.
+Before the typed-request migration, a sampled 20,000-person production run attributed about 76% of advancement samples to character reviews, including 28.5% in observation. Physiology ticks accounted for about 7.5%. These are inclusive samples, not additive phase timers. A follow-up profile after the production changes below, with 1,248 advancement samples, attributes about 81% to reviews, 32% to observation, 19% to remembering facts, and 8% to physiology. Position lookup accounts for about 8% of flat samples; permission lookup and knowledge-tree copying remain visible. Relative shares are not absolute phase timings. Whole-game throughput barely changes with additional workers.
 
 The next architectural gain therefore needs to remove copying, lookups, and dispatch from observation and decisions, and expose independent preparation batches. A faster arithmetic kernel alone leaves most current work intact.
 
@@ -26,7 +26,7 @@ The [shared kernel](benches/architecture.rs) uses the actual `Body`, `Fact`, phy
 
 Every logical review phase processes at most 128 stable IDs. The workload includes selective reconsideration, scarce stock, nested failed attempts after writes, an injected phase panic, structural removal and insertion with ID rollback, a retained committed reader, a checkpoint, and continued execution. Structural changes occur both before and after loading. Packed physical order is reversed initially; deletion compacts slots, and loading rebuilds the ID index. Outcomes and event hashes match across layouts, repeats, and one/four workers. No storage slot becomes a game identity.
 
-Three-run medians, one worker, 120 kernel steps, same laptop and release settings as the production benchmarks:
+Original `f7c4cb5` three-run medians, one worker, 120 kernel steps, same laptop and release settings as the production benchmarks:
 
 | People | History per person | Reconsidering per step | Layout of stock | Persistent ms | Packed journal ms | Ratio |
 | --- | ---: | ---: | --- | ---: | ---: | ---: |
@@ -64,7 +64,34 @@ Three-run medians:
 
 Instrumented construction retains 13.7 MiB with JSON and 1.22 MiB with typed payloads. Allocation counts fall from 80,001 to 20,001. Invocation omits host owner checks and handler lookup in both cases; it isolates payload representation. The simple typed encoder materializes JSON on save, and the decoder binds after parsing, so this probe trades some serialization time for lower runtime cost. Streaming erased serialization is a further option, not measured here.
 
-The production host already borrows typed internal hooks and signals. Pending jobs and action cancellation still retain JSON envelopes. Moving those to typed runtime payloads is a smaller migration than replacing all transaction storage, and targets repeated allocations and retained memory directly. Keep JSON at persistence and client boundaries, retain decoder registration per feature, and use the same owner-checked request executor.
+The production host now retains typed pending jobs and action cancellations in a two-word shared handle. Invocation clones the immutable request and enters the existing owner-checked executor; hooks and signals continue borrowing typed inputs. Each feature registers its decoder. JSON remains at save/client boundaries; loading binds raw payload JSON before exposing the host. Construction checks serializability without retaining JSON. The table above records the original isolated probe; composed measurements are in the [performance results](README.md#production-measurements).
+
+Transaction-private jobs, cancellations, and notices now use append-only vectors with saved lengths for nested rollback. Cancelling an existing staged job records its vector index; rollback restores cancellation-log length, and commit removes cancelled rows while retaining order. Resource writes still use persistent snapshots. Owners use registry-local numeric IDs for runtime checks and retain names in saves; tests load identical state under reversed plugin registration order.
+
+## Parallel preparation on a committed view
+
+The [perception workload](benches/perception.rs) now compares serial and parallel calls to the actual provisioning owner on one immutable transaction view. It uses the host's bounded Rayon pool, alternates serial/parallel measurement order, preserves person/result order, compares every returned plan, and verifies that the complete saved state stays unchanged. The runner checks 60 cases: five knowledge/ecology layouts, one/two/four/eight workers, and three repeats.
+
+```sh
+python3 tools/performance/run.py --workload perception
+LEGACY_PATCHES=64 LEGACY_LOCAL_PATCHES=64 LEGACY_WORKERS=4 cargo bench -p game-performance --bench perception --locked --offline
+```
+
+Three-run medians for 10,000 preparations, 1,000 people, fixed batches of at most 128 people:
+
+| Knowledge | Food choices/person | Workers | Serial ms | Parallel ms | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Small | 2 | 4 | 6.88 | 8.49 | 0.81× |
+| Small | 65 | 4 | 125.63 | 49.99 | 2.51× |
+| Small | 65 | 8 | 125.13 | 40.85 | 3.06× |
+| 1,000 accounts + 1,000 maps | 65 | 4 | 197.65 | 70.32 | 2.81× |
+| 1,000 accounts + 1,000 maps | 65 | 8 | 199.97 | 51.74 | 3.86× |
+
+The small two-choice workload loses to serial at one, two, and four workers in 128-person batches. Single-worker parallel dispatch offers no consistent gain even for rich choices. A 512-person experiment reaches 4.43× with rich history and eight workers, but exceeds the current logical 128-person review boundary; it is not a substitute for that boundary.
+
+Timing includes owner query dispatch, actual immutable knowledge/object/position reads, and result construction. Person IDs are already batched before timing. It excludes observation refresh, arbitration, action effects, and GPU conversion. Histories are shared templates, as in the ordinary perception fixture.
+
+**Decision:** Retain serial preparation for tiny workloads. A production phase pilot should prepare sufficiently rich independent queries in bounded workers, then apply receiver effects in stable order. It needs an explicit read-view contract or revalidation when earlier effects alter a prepared query's inputs. The experiment establishes preparation headroom, not whole-game parallelism; it is not wired into character reviews yet.
 
 ## Analytical intervals
 
@@ -72,11 +99,11 @@ The [temporal probe](benches/architecture/temporal.rs) replaces repeated linear 
 
 For 20,000 passive bodies over one day, the pure fold took about 89–96 ms and exact projection 0.27–0.40 ms. Harm is disabled in that timing fixture so no death interrupts the interval. At 100,000 bodies the values were 438.9/1.32 ms. This is a several-hundred-fold arithmetic gain on an uninterrupted interval; it does not skip intervening actions or events in a running game.
 
-Physiology is only about 7.5% of the current advancement profile. Removing that cost entirely would improve this fixture by at most about 8%, before replacement overhead. Wider gains require event forecasts and materialization at every rate change, action, injury, meal, recovery, and death boundary. Passive queries must read the owning physiology phase's logical tick; another request reaching the same host timestamp must not advance needs early. Skipping character reviews without preserving their observations and provenance would change gameplay.
+Physiology accounts for about 8% of the follow-up advancement profile. Removing that cost entirely would improve this fixture by at most about 9%, before replacement overhead. Wider gains require event forecasts and materialization at every rate change, action, injury, meal, recovery, and death boundary. Passive queries must read the owning physiology phase's logical tick; another request reaching the same host timestamp must not advance needs early. Skipping character reviews without preserving their observations and provenance would change gameplay.
 
 ## Migration sequence
 
-1. **Typed pending messages:** Preserve one request executor and the existing wire shape. Validate loading/binding, unregistered types, atomic failures, cancellation, receipts, and retained snapshots. Measure composed survival and memory before choosing the production representation.
+1. **Typed pending messages — complete:** One request executor and the existing wire shape remain. Loading/binding, unregistered types, failed-job retries, cancellation, receipts, and retained snapshots are checked. Composed survival and memory measurements justify the production representation.
 2. **Hot row journal:** Pilot body rows and observation provenance. Feature-owned edit guards record old rows before returning mutable access. Nested savepoints retain inner undo until the enclosing phase commits; panic or validation failure reverses all writes and metadata. Cold records keep persistent snapshots. Avoid two authoritative copies of a component.
 3. **Feature-owned phases:** Collect due IDs once, borrow packed read views, prepare independent observations/candidates in bounded workers, then resolve claims and receiver-owned effects in stable order. Keep logical phase boundaries fixed across CPU/GPU backends and worker counts. Content remains immutable runtime catalogs referenced by IDs.
 4. **Forecast passive intervals:** Adopt analytical updates where the owning mechanic can enumerate every invalidating event. Keep cadence and knowledge semantics explicit. Keep inert/dead records out of hot sweeps. Region partitioning can follow declared cross-region reads and effects; it is not a substitute for those declarations.

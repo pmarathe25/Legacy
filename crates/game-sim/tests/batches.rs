@@ -9,7 +9,7 @@ struct Log {
 impl Resource for Log {
     const KEY: &'static str = "batch.log";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Step {
     value: u64,
     fail: bool,
@@ -20,13 +20,13 @@ impl Request for Step {
     const KEY: &'static str = "batch.step";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Marker(u64);
 impl Request for Marker {
     const KEY: &'static str = "batch.marker";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Seed {
     count: u64,
     fail: bool,
@@ -146,4 +146,49 @@ fn newly_scheduled_earlier_work_and_cancelled_members_keep_queue_order() {
         before + 1,
         "direct requests stay individual"
     );
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct CancelEarly(u64);
+impl Request for CancelEarly {
+    const KEY: &'static str = "batch.cancel_early";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct SeedEarly;
+impl Request for SeedEarly {
+    const KEY: &'static str = "batch.seed_early";
+    type Response = ();
+}
+#[test]
+fn cancelling_new_earlier_work_does_not_split_the_captured_batch() {
+    let mut b = builder();
+    b.request::<CancelEarly>(|tx, r| {
+        tx.edit::<Log>()?.values.push(r.0);
+        if r.0 == 0 {
+            let id = tx.schedule(tx.now(), 0, Marker(99))?;
+            tx.unschedule(id);
+        }
+        Ok(())
+    })
+    .unwrap();
+    b.batch::<CancelEarly>(128).unwrap();
+    b.request::<SeedEarly>(|tx, _| {
+        for i in 0..10 {
+            tx.schedule(SimTime(5), 10, CancelEarly(i))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let mut host = b.build(1, 1).unwrap();
+    host.dispatch(SeedEarly).unwrap();
+    let revision = host.revision();
+    host.advance(SimTime(5), 1).unwrap();
+    assert_eq!(host.revision(), revision + 1);
+    assert_eq!(
+        host.get::<Log>().unwrap().values,
+        (0..10).collect::<Vec<_>>()
+    );
+    host.advance(SimTime(5), 100).unwrap();
+    assert_eq!(host.get::<Log>().unwrap().values.len(), 10);
 }

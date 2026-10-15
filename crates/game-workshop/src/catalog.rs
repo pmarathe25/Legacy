@@ -15,7 +15,7 @@ struct Spec {
 struct Definitions {
     recipes: BTreeMap<String, Spec>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InstallRecipes {
     pub recipes: BTreeMap<String, Recipe>,
     pub stamps: Vec<Stamp>,

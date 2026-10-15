@@ -19,7 +19,7 @@ impl Resource for Armies {
     }
     const KEY: &'static str = "armies.units";
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Create {
     pub commander: PersonId,
     pub supply: InventoryId,

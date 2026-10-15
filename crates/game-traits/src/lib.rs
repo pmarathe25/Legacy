@@ -186,13 +186,13 @@ pub fn load(store: &mut Store) -> Result<Traits> {
     traits.validate()?;
     Ok(traits)
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Install(pub Traits);
 impl Request for Install {
     const KEY: &'static str = "traits.install";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Set {
     pub person: PersonId,
     pub profile: BTreeMap<String, i32>,

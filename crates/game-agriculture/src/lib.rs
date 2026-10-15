@@ -46,7 +46,7 @@ impl Resource for Farms {
         self.validate_rows(self.plots.changed(&previous.plots).map(|(_, row)| row))
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Create(pub Plot);
 impl Request for Create {
     const KEY: &'static str = "agriculture.create";
@@ -62,7 +62,7 @@ impl Request for Sow {
     const KEY: &'static str = "agriculture.sow";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Planted {
     person: PersonId,
 }
@@ -70,7 +70,7 @@ impl Request for Planted {
     const KEY: &'static str = "agriculture.planted";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Ripe {
     plot: PlotId,
 }
@@ -88,7 +88,7 @@ impl Request for Harvest {
     const KEY: &'static str = "agriculture.harvest";
     type Response = SimTime;
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Finish {
     person: PersonId,
 }
@@ -96,7 +96,7 @@ impl Request for Finish {
     const KEY: &'static str = "agriculture.finish";
     type Response = ();
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cancel {
     person: PersonId,
 }

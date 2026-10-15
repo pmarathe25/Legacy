@@ -65,13 +65,13 @@ for name in ["storage", "ledger", "traits", "architecture"]:
         run(name, {})
 
 if args.workload in ["all", "perception"]:
-    for memories, patches, roads in [(0, 1, 0), (1000, 1, 1000), (1000, 10000, 1000)]:
+    for memories, patches, roads, local in [(0, 1, 0, 1), (1000, 1, 1000, 1), (1000, 10000, 1000, 1), (0, 64, 0, 64), (1000, 64, 1000, 64)]:
         for workers in args.workers:
             for repeat in range(args.repeats):
-                print(f"workload=perception repeat={repeat} memories={memories} patches={patches}", flush=True)
-                output = run("perception", {"LEGACY_POPULATION": "1000", "LEGACY_WORKERS": str(workers), "LEGACY_MEMORIES": str(memories), "LEGACY_PATCHES": str(patches), "LEGACY_ROADS": str(roads)})
+                print(f"workload=perception repeat={repeat} memories={memories} patches={patches} local_patches={local}", flush=True)
+                output = run("perception", {"LEGACY_POPULATION": "1000", "LEGACY_WORKERS": str(workers), "LEGACY_MEMORIES": str(memories), "LEGACY_PATCHES": str(patches), "LEGACY_ROADS": str(roads), "LEGACY_LOCAL_PATCHES": str(local)})
                 state = re.search(r"hash=([0-9a-f]+)", output)[1]
-                key = ("perception", memories, patches, roads)
+                key = ("perception", memories, patches, roads, local)
                 if key in canonical and canonical[key] != state:
                     raise SystemExit(f"perception canonical state differs for {key}, workers={workers}")
                 canonical[key] = state
